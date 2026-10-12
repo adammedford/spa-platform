@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Browser suite for the deployed stack. Owner: workstream 6. It references no project: it drives a running gateway. -->
+
+</Project>

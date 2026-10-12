@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Functional suite, F-01 to F-11. Owner: workstream 6. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../Gateway.TestHarness/Gateway.TestHarness.csproj" />
+  </ItemGroup>
+
+</Project>

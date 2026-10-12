@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Registry and release command line. Owner: workstream 2. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Platform.Registry/Platform.Registry.csproj" />
+  </ItemGroup>
+
+</Project>

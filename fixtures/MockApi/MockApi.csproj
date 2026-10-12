@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Validates tokens on its own. Owner: workstream 5. It references no Platform.* project (check A-02). -->
+
+</Project>

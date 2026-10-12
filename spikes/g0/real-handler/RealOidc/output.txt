@@ -1,0 +1,87 @@
+runtime .NET 10.0.12; handler Review.AspNetCore.Authentication.OpenIdConnect; IdentityModel 8.19.2.0
+
+A. Host-scoped provider with the real OpenIdConnectHandler
+OK      A1    app1 challenge: own client, own redirect_uri, code flow, PKCE S256, nonce, scope, resource; no response_mode
+              [302; params: client_id,redirect_uri,resource,response_type,scope,code_challenge,code_challenge_method,nonce,state,x-client-SKU,x-client-ver]
+OK      A2    app2 challenge: client-2 and its own redirect_uri on the same callback path
+note    A2b   login-state cookies as the real handler sets them
+              [.AspNetCore.OpenIdConnect.Nonce.Cf… path=/signin-oidc | .AspNetCore.Correlation.-JTdtLLsp1… path=/signin-oidc]
+OK      A3    full login on app1 with the real handler (discovery, JWKS, PKCE, signed ID token, nonce) ends on app1's shell
+              [200 'shell app=app1 sub=alice' via https://app1.spa.test/ > http://127.0.0.1:40931/authorize > https://app1.spa.test/signin-oidc > https://app1.spa.test/]
+OK      A4    full login on app2 (same callback path) ends on app2's shell
+              [shell app=app2 sub=alice]
+OK      A5    each host authenticates through its own default scheme; tokens issued to its own client; resource reached the provider
+OK      A6    exactly one real OpenIdConnectHandler is created per request
+              [1 per request]
+OK      A7    discovery and JWKS were fetched once for both apps (one shared ConfigurationManager)
+              [discovery 1, jwks 1]
+OK      A8    SaveTokens + ITicketStore: cookie holds only the session id; access, refresh and ID token sit in the store
+              [cookie length 326; stored tokens: access_token,id_token,refresh_token,token_type,expires_at; claims: sub,name]
+OK      A9    browser holds only the session cookie after login (correlation and nonce cookies deleted by the callback)
+              [__Host-spa-session]
+OK      A10   app1's cookie on app2 is anonymous; app2's scheme cannot unprotect it
+
+B. Substitution attempts against the real handler
+OK      B1    app1's callback (code, state, correlation and nonce cookies) replayed on app2 is rejected
+              [login failed: Unable to unprotect the message.State.]
+OK      B2    a code issued to client-1 injected into app2's own login is refused at the token endpoint
+              [login failed: Message contains error: 'invalid_grant', error_description: 'error_description is null', error_uri: 'error_uri is null'. (provider said invalid_grant)]
+OK      B3    a valid callback without the correlation cookie is rejected
+              [login failed: Correlation failed.]
+OK      B4    a valid callback without the nonce cookie is rejected by the protocol validator
+              [login failed: IDX21323: RequireNonce is 'True'. OpenIdConnectProtocolValidationContext.Nonce was null, OpenIdConnectProtocol.ValidatedIdToken.Payload.Nonce was …]
+OK      B5    none of the rejected callbacks created a session
+              [0 sessions]
+OK      B6    on app1's host, app2's scheme name does not resolve
+
+C. Runtime registry changes with the real handler's options
+OK      C1    third app onboarded at runtime: 404 before, full login after; app1's cached OpenIdConnectOptions instance untouched
+OK      C2    secret rotated at runtime: stale secret fails closed, new secret picked up after eviction, existing session survives
+              [login failed: Message contains error: 'invalid_client', error_description: 'error_description is null', error_uri: 'erro…]
+OK      C3    a login started before a reload completes after it (state, correlation, nonce and PKCE verifier survive eviction)
+OK      C4    client replaced mid-login, no custom guard: code exchange is refused by the provider; old-client sessions stop; fresh login works
+              [callback 400, provider said invalid_grant]
+OK      C5    app removed at runtime: host and its callback path 404, sessions purged, others unaffected
+OK      C6    logout: session removed, redirect to end_session_endpoint with id_token_hint, state and post_logout_redirect_uri=/signout-callback-oidc, then back to /
+              [http://127.0.0.1:40931/endsession > https://app1.spa.test/signout-callback-oidc > https://app1.spa.test/]
+OK      C7    plan trap 1 holds: /signout-callback-oidc without state answers 200 with an empty body
+              [200, 0 bytes]
+
+D. Probes
+FINDING D1    GET /signout-oidc (framework default RemoteSignOutPath) signs the user out: no token, no Origin check, not in the plan's reserved paths
+              [GET /signout-oidc -> 200; app1 sessions 1 -> 0; /bff/user -> 401]
+OK      D2    correction: with RemoteSignOutPath = default the path is not claimed and the session survives
+              [GET /signout-oidc -> 404]
+FINDING D3    login CSRF: a callback carrying the attacker's code and state is accepted from a browser that only holds planted correlation and nonce cookies
+              [cookie names: .AspNetCore.OpenIdConnect.Nonc…, .AspNetCore.Correlation.h8a0UY…; callback -> 302; victim's browser is now signed in as 'mallory']
+OK      D4    correction: correlation and nonce cookies renamed with a __Host- prefix and Path=/ still complete a login with the real handler
+              [__host-spa-nonce.cfdj8io90gd…; expires=sun, 11 oct 2026 05:41:54 gmt; path=/; secure; samesite=lax; httponly | __host-spa-corr.azt6mcmr2093…; expires=sun, 11 oct 2026 05:41:54 gmt; path=/; secure; samesite=lax; httponly]
+FINDING D5    session fixation survives the plan's mitigation: /bff/login signs out first, but the callback still renews a session key planted before it returns
+              [old session discarded by /bff/login: True; keys after callback: 1 (attacker's key reused: True); attacker's own cookie now reads sub='alice', token 'at~client-1~alice~15~a…']
+OK      D6    correction: hiding the session cookie from the cookie handler on the callback path makes sign-in mint a new key
+              [keys after callback: 2; attacker's cookie still reads sub='mallory']
+FINDING D7    stock provider + real handler: with SkipUnrecognizedRequests=true every app completes login on the shared callback path (the spike's control F3 is a default-option result, not a framework limit)
+              [SkipUnrecognizedRequests=False: app-0 200, app-4 400 'login failed: Unable to unprotect the message.State.', 5 handlers/request || SkipUnrecognizedRequests=True: app-0 200, app-4 200 'shell app=app-4 sub=alice', 5 handlers/request]
+FINDING D8    leaving ResponseMode at the framework default sends response_mode=form_post; the provider's cross-site POST arrives without the Lax correlation cookie and the login fails
+              [response_mode=form_post; POST without Lax cookies -> 400 login failed: Correlation failed.]
+OK      D9    plan claim holds: no validation runs for a dynamically named scheme (Get succeeds with ClientId null); calling Validate() yourself throws
+FINDING D10   a one-off exception while building named options is cached with the entry: every later Get rethrows it until the name is evicted
+              [3 Gets -> 3 failures from 1 factory run; after TryRemove -> ok]
+
+E. Antiforgery
+OK      E1    antiforgery works with the host-scoped provider: token issued on /bff/session, header token accepted, body left unread, missing token refused, anonymous gets no token
+              [path=/; secure; samesite=strict; httponly]
+OK      E2    app1's request token alone on app2 is refused (it does not pair with app2's cookie token)
+FINDING E4    a request token issued in the user's previous session is still accepted in her next one: the token is bound to the user and the cookie token, not to the session (N-06 'another session's token' as worded)
+              [old-session token after logout and re-login -> 200]
+FINDING E3    without app binding, app1's cookie-token/request-token pair validates on app2 for the same user: the antiforgery protector purpose is process-wide, only the host-only cookie keeps apps apart
+              [app1 pair on app2 -> 200]
+OK      E3b   plan task 4.4 closes it: with the app id in the token's additional data the same pair is refused on app2, and app2's own pair still works
+              [app1 pair on app2 -> 403]
+OK      E5    framework default (Cookie.SecurePolicy = None) emits __Host-spa-csrf WITHOUT Secure even over https, which browsers discard: SecurePolicy.Always is mandatory, as the contract says
+              [path=/; samesite=strict; httponly]
+OK      E6    SuppressReadingTokenFromFormBody=true: form bodies are never read and a form-field token is refused; a header token is honoured either way
+FINDING E7    with the flag off, a request that carries the header token still reaches the proxy with its body intact; the body is consumed only when the header is absent (and then a form-field token is accepted)
+              [suppress=True, header token: 200, body left 35/35 | suppress=True, no token: 403, body left 35/35 | suppress=True, form-field token: 403, body left 261/261 | suppress=False, header token: 200, body left 35/35 | suppress=False, no token: 403, body left 0/35 | suppress=False, form-field token: 200, body left 0/261]
+
+32 expectations held, 0 did not, 9 findings confirmed, 0 probes not reproduced

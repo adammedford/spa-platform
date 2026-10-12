@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Gate G0, items 4 and 5: Duende.AccessTokenManagement under derived schemes, and YARP 2.3 on .NET 10.
+       The mechanism is the hardened real-handler harness: Registry.cs, Auth.cs and Browser.cs are compiled
+       from ../real-handler/RealOidcHardened unchanged.
+       The three versions match Directory.Packages.props at the repository root, so G0 tests what the gateway will run.
+       This folder must have no nuget.config of its own: it restores from the one at the repository root. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseAppHost>false</UseAppHost>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../real-handler/RealOidcHardened/Registry.cs" Link="Shared/Registry.cs" />
+    <Compile Include="../real-handler/RealOidcHardened/Auth.cs" Link="Shared/Auth.cs" />
+    <Compile Include="../real-handler/RealOidcHardened/Browser.cs" Link="Shared/Browser.cs" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
+    <PackageReference Include="Duende.AccessTokenManagement.OpenIdConnect" Version="4.2.0" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+  </ItemGroup>
+</Project>

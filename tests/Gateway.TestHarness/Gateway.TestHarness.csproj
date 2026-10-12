@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared harness for the composed suites: gateway factory, test browser. Owner: workstream 6. Not a test project itself. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Gateway/Gateway.csproj" />
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
+    <ProjectReference Include="../../fixtures/TestIdp/TestIdp.csproj" />
+    <ProjectReference Include="../../fixtures/MockApi/MockApi.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Contract and schema tests. Owner: integrator. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

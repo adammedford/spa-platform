@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Review-only: builds Microsoft.AspNetCore.Authentication.OpenIdConnect from unmodified release/10.0 source,
+       because the NuGet package cannot be downloaded in this sandbox. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Review.AspNetCore.Authentication.OpenIdConnect</AssemblyName>
+    <RootNamespace>Microsoft.AspNetCore.Authentication.OpenIdConnect</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>$(NoWarn);CS1591;CS0618;CS0436;IL2026;IL3050;SYSLIB1100;SYSLIB1101</NoWarn>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NuGetAudit>false</NuGetAudit>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../aspnetcore/src/Security/Authentication/OpenIdConnect/src/**/*.cs" />
+    <Compile Include="Shared/StringHelpers.cs" />
+    <Compile Include="Resources.cs" />
+    <ProjectReference Include="../Protocols/Protocols.csproj" />
+    <Reference Include="../lib/*.dll" />
+  </ItemGroup>
+</Project>

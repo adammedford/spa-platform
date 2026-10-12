@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for everything under fixtures/. Owner: workstream 5. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../MockApi/MockApi.csproj" />
+    <ProjectReference Include="../TestIdp/TestIdp.csproj" />
+  </ItemGroup>
+
+</Project>

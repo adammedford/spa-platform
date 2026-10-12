@@ -1,0 +1,46 @@
+# .NET
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+.vs/
+.idea/
+
+# Terraform. The provider lock file, .terraform.lock.hcl, is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
+*.pem
+*.key
+*.p12
+*.pfx
+*.srl
+.certs/
+
+# Local settings and secrets
+.env
+.env.*
+*.local.json
+
+# Test output
+playwright-report/
+test-results/
+*.trx
+
+# G0 harness inputs fetched by hand: upstream source and Microsoft binaries
+spikes/g0/real-handler/vendor/aspnetcore/
+spikes/g0/real-handler/vendor/idm/
+spikes/g0/real-handler/vendor/lib/
+spikes/g0/real-handler/vendor/ref/
+
+# Agent issue tracker (docs/agents/issue-tracker.md)
+.scratch/
+
+# macOS and editors
+.DS_Store
+*.swp

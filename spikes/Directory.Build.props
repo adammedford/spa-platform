@@ -1,0 +1,4 @@
+<Project>
+  <!-- Stops MSBuild's upward search here, so nothing under spikes/ inherits the solution's build settings.
+       Spikes are throwaway proofs. They sit outside the solution and build on their own. -->
+</Project>

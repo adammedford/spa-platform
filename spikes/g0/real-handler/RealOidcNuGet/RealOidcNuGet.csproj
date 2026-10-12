@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Gate G0, item 1: the hardened harness against the shipped NuGet package.
+       First run on 11 October 2026: 32 expectations held. output-nuget.txt is that run.
+       It compiles the sources in ../RealOidcHardened unchanged.
+       The version matches Directory.Packages.props at the repository root, so G0 tests what the gateway will run.
+       This folder must have no nuget.config of its own: it restores from the one at the repository root. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseAppHost>false</UseAppHost>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../RealOidcHardened/*.cs" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
+  </ItemGroup>
+</Project>

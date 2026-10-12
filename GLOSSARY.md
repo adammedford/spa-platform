@@ -1,0 +1,148 @@
+# Glossary
+
+The vocabulary of the Enterprise SPA Platform. Use these terms in issue titles, test names, commit
+messages and code. Where a term has a tempting synonym, the entry says which word to avoid.
+
+Definitions are drawn from `docs/plan/` and the decisions in `docs/adr/`. The plan is the frozen
+export; a term that changes meaning should be changed here and in the ADR that moved it.
+
+## The unit of deployment and the unit of tenancy
+
+**Cell** — the whole stack: ALB, service, bucket, registry, secrets prefix and session store. The
+deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, and the name is part
+of every resource name and of the data-protection application name. Phase 1 runs one cell. See
+ADR-0012.
+
+**App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
+client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
+a logical boundary inside one.
+
+**appId** — an app's identifier: 3 to 40 lowercase letters, digits or hyphens, unique in the
+registry. It names the app's scheme pair, its S3 prefix and its log field.
+
+**Host** — the exact authority the browser sends, lowercase, with the port when one is used. A
+request's authority must equal a registry `host` exactly or it gets 404 before routing runs. Not
+"domain" and not "hostname" where the port matters.
+
+**Logical boundary** — what an app gets: its host, OAuth client, scheme names, encryption purposes,
+session records, S3 prefix, API list and content security policy. Deliberately weaker than
+isolation: the process, memory, task role, key ring and registry are shared.
+
+## The registry
+
+**Registry** — one JSON document at `registry/registry.json`, holding every app's routing, OAuth and
+policy configuration. Accepted or rejected whole. See ADR-0002.
+
+**Snapshot** — a validated registry document that is live in the gateway, with its secrets resolved.
+The gateway pins one snapshot per request. "The registry" is the document; "the snapshot" is what a
+request sees.
+
+**Revision** — the registry's monotonic version (`revision`). Must exceed the live one. A rollback is
+the old content published under a new revision, never a decrement.
+
+**Fingerprint** — a per-entry hash of an app's canonical JSON. When it changes, that app's cached
+options are evicted.
+
+**Swap** — replacing the live snapshot with a new one, whole. The order is fixed: swap, then evict
+cached options.
+
+**Last known good** — the live snapshot that keeps serving when a new document fails validation or
+its secrets cannot be read. At a cold start there is none, so affected apps are left out and
+reported and the rest go live.
+
+**App definition** — a registry entry without `clientId`, `clientSecretRef` and `release`. Terraform
+reads it to create the OAuth client; `spactl app add` completes it from the infrastructure outputs.
+So each app is described once.
+
+**Platform configuration** — settings from the task environment (`Policy:*`, `Issuers:*`,
+`Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them.
+
+**Release** — an immutable S3 prefix, `apps/{appId}/releases/{release}/`. The registry names the live
+one, so activation and rollback are registry changes. See ADR-0009.
+
+## The request path
+
+**Request gate** — the stage that accepts same-origin browser requests only on `/api` and `/bff`,
+judged by `Sec-Fetch-Site` and `Origin`, and refuses a cookie name that imitates a platform cookie.
+See ADR-0007.
+
+**Shell gate** — the stage that requires a session before any asset is served: an unauthenticated
+navigation is challenged, an unauthenticated fetch gets 401. See ADR-0008. Distinct from the request
+gate; don't use "gate" alone for either.
+
+**Scheme pair** — an app's two derived scheme names, `oidc:{appId}` and `cookie:{appId}`. The
+framework keys protector purposes on the scheme name, so the pair is what makes apps
+cryptographically separate.
+
+**Scheme provider** — `RegistrySchemeProvider`, the replacement `IAuthenticationSchemeProvider` that
+resolves the app from the request host and returns only that app's scheme pair. See ADR-0001.
+
+**Options invalidator** — the component that evicts cached named options after a swap, for entries
+whose fingerprint changed or disappeared.
+
+**Sentinel scheme** — the fixed scheme registered so the token-management library's options hook can
+be built outside a request. Every call still passes both `ChallengeScheme` and `SignInScheme`. See
+ADR-0005.
+
+**IdP profile** — `IIdpProfile`, the seam holding provider differences (notably Cognito's
+non-standard logout). Chosen per issuer in platform configuration, never per app. See ADR-0011.
+
+**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, named in the
+registry and bounded by `Policy:AllowedUpstreams`. Not "backend" and not "service".
+
+**API name** — the `{name}` segment in `/api/{name}/*`, 1 to 32 lowercase letters, digits or hyphens,
+unique within an app.
+
+**Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
+identifier. One audience per app in Phase 1.
+
+## Sessions
+
+**Session record** — the serialized ticket and saved tokens held server-side behind `ITicketStore`,
+bound to app and client. The browser cookie carries a session id and nothing else. See ADR-0004.
+
+**Session key** — the identifier in the cookie's session-id claim. Every sign-in creates a new one,
+because the session cookie is not read on the callback path.
+
+**session_ref** — the first 12 hex characters of a SHA-256 of the session key, used in logs. It
+correlates a session's requests without being usable as a credential. Log this, never the session
+key.
+
+## Work, gates and evidence
+
+**Workstream** — one of the six parallel lanes (1 AWS and IaC, 2 Hosting and registry, 3 OAuth and
+sessions, 4 API and security, 5 Fixtures, 6 Verification and operations), each with its own paths in
+`CODEOWNERS`. Not "team".
+
+**Integrator** — the owner of the shared skeleton: contracts, abstractions, test doubles, the
+composition root, `docs/adr/`, `docs/plan/`, CI and package versions.
+
+**Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
+asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
+
+**Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
+identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
+Phase 1 accepted. Phase 2 adds G6 to G8.
+
+**Hermetic (H)** — the test tier that runs in process on every change, against the test identity
+provider, an in-memory object store, the real mock API and an echo upstream.
+
+**Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
+task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client.
+
+**Test ids** — `F-` functional, `N-` negative security, `P-` infrastructure and architecture
+properties, `A-` architecture reference rules. A test id in a task names a behaviour: the owning
+workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
+
+**Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
+harness (G0 items 4 and 5). Listed in `docs/plan/07-evidence.md`. Separate from test ids.
+
+**Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
+sandbox could not reach NuGet. 34 of 34 checks passed.
+
+**Real-handler run** — the run against `OpenIdConnectHandler` compiled from unmodified `release/10.0`
+source, then repeated on the shipped package with the overrides on. 32 of 32 expectations held.
+
+**Reserve design** — the gateway-owned locking over the library's refresh call, proven in the harness
+but **not adopted**. It reopens only if G0 item 2 finds Cognito's grace window insufficient, or at
+the PingFederate gate. See ADR-0005.

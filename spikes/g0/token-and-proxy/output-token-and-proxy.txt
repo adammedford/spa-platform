@@ -1,0 +1,143 @@
+runtime .NET 10.0.12
+  Microsoft.AspNetCore.Authentication.OpenIdConnect 10.0.12, built for .NETCoreApp,Version=v10.0
+  Duende.AccessTokenManagement.OpenIdConnect 4.2.0, built for .NETCoreApp,Version=v10.0
+  Duende.AccessTokenManagement 4.2.0, built for .NETCoreApp,Version=v10.0
+  Duende.IdentityModel 8.1.0, built for .NETCoreApp,Version=v10.0
+  Yarp.ReverseProxy 2.3.0, built for .NETCoreApp,Version=v8.0
+
+A. Duende.AccessTokenManagement under derived schemes (G0 item 4)
+OK      A0    the token-management assemblies in this process are the shipped 4.2.0 builds for .NET 10
+              [Duende.AccessTokenManagement.OpenIdConnect 4.2.0, built for .NETCoreApp,Version=v10.0]
+OK      A1    the gate's pinning test holds: the first request is on app 2, then a refresh on app 1 uses client 1 and app 1's refresh token. B3 shows it holds without the sentinel as well
+              [#2 refresh_token by client-2 (basic) with rt#1 client-2 -> ok: at#2 client-2, rt#2 client-2 | #4 refresh_token by client-1 (basic) with rt#3 client-1 -> ok: at#4 client-1, rt#4 client-1]
+OK      A2    with the sentinel, the library's options hook attaches to no app, and its refresh uses the one shared backchannel and metadata manager
+              [all 4 token requests came from the shared backchannel; discovery was fetched 1 time(s)]
+OK      A3    with the sentinel, the options hook and an app's options build outside any request
+OK      A4    the session keeps the rotated refresh token: the next refresh presents it and is granted (F-03)
+              [#5 refresh_token by client-1 (basic) with rt#4 client-1 -> ok: at#5 client-1, rt#5 client-1]
+OK      A5    no grant while the token has more than a minute left: two more calls return the same token
+OK      A6    refresh rewrites the same server-side session: same key, same absolute expiry, and the cookie issued at login still identifies it (S-E2)
+              [expires 2026-10-12 11:50:48Z at login and 2026-10-12 11:50:48Z after two refreshes made more than a second later]
+FINDING A7    the cost of the sentinel: a call that leaves the scheme names off works only until a refresh is due. It is served while the token is fresh, then it throws, and nothing reaches the provider
+              [InvalidOperationException: Unable to load OpenID configuration for configured scheme: Object reference not set to an instance of an object.]
+OK      A8    a refresh the provider refuses comes back as a failed result whose error is invalid_grant; the token step then ends the session, and the next request is anonymous
+              [the library itself left 1 session in place after the refusal; ending it is the gateway's step]
+OK      A9    a provider that answers 503 has not refused anything: the call fails, the session stays, and the next call refreshes as usual. The library reports both cases the same way, and only the error text tells them apart
+              [the library's error for the 503 was "Service Unavailable"]
+OK      A10   logout revokes the session's current refresh token with app 2's own client, removes the session, and redirects to the provider with an ID token hint (F-04)
+              [revocation by client-2 (basic), hint refresh_token]
+OK      A11   a client secret rotated at runtime is what the next refresh sends, on a session that began before the rotation (S-D3, for refresh)
+              [#14 refresh_token by client-1 (basic) with rt#10 client-1 -> ok: at#11 client-1, rt#11 client-1]
+OK      A12   an app onboarded at runtime refreshes with its own client, with no restart: the library holds nothing per app
+              [#16 refresh_token by client-3 (basic) with rt#12 client-3 -> ok: at#13 client-3, rt#13 client-3]
+OK      A13   against a provider that does not rotate, the session keeps its refresh token and the next refresh presents it again
+              [#18 refresh_token by client-3 (basic) with rt#14 client-3 -> ok: at#15 client-3, (none) | #19 refresh_token by client-3 (basic) with rt#14 client-3 -> ok: at#16 client-3, (none)]
+OK      A14   the longest app id the registry contract allows, 40 characters, fits the library's limit on a scheme name
+              [the limit is 50, so "cookie:" leaves 43 characters for the app id]
+OK      A15   with the provider unreachable, a refresh that is due fails with 503 and the session stays
+              [the library's error was "Connection refused (127.0.0.1:57667)"]
+
+B. Probes: the library's defaults and edges
+FINDING B1    without the sentinel the library's options hook cannot be built outside a request: it asks for the default challenge scheme, and the host-scoped provider has none to give
+              [No OpenID Connect authentication scheme configured for getting client configuration. Either set the scheme name explicitly or set the default challenge scheme]
+FINDING B2    built inside a request instead, the hook binds to the app that request was for: app 2 gets the library's DPoP and client-assertion wiring, and app 1 never does
+              [hook on oidc:app2: True; on oidc:app1: False]
+FINDING B3    the pinning stops there: with no sentinel and no scheme names, a refresh on each app still used that app's own client, because the client is looked up through the default challenge scheme at call time
+              [#3 refresh_token by client-1 (basic) with rt#2 client-1 -> ok: at#3 client-1, rt#3 client-1 | #4 refresh_token by client-2 (basic) with rt#1 client-2 -> ok: at#4 client-2, rt#4 client-2]
+FINDING B4    the two callers of the token endpoint authenticate differently: the handler's code exchange puts the secret in the form body, the library's refresh in a Basic header
+              [authorization_code: post; refresh_token: basic]
+OK      B5    ClientCredentialStyle.PostBody makes the refresh authenticate the way the code exchange does
+              [#2 refresh_token by client-1 (post) with rt#1 client-1 -> ok: at#2 client-1, rt#2 client-1]
+FINDING B6    the library's single-flight does not cover a request that read the session before another request's refresh finished: it presents the rotated-out refresh token, a provider with no grace window refuses it, and the plan's rule then ends a session whose refresh had just succeeded
+              [#2 refresh_token by client-1 (basic) with rt#1 client-1 -> ok: at#2 client-1, rt#2 client-1 | #3 refresh_token by client-1 (basic) with rt#1 client-1 -> invalid_grant; sessions left for app1: 0]
+FINDING B7    a provider that still honours a rotated-out refresh token inside a grace window, the way this test provider does, grants the late request and the session survives. Whether Cognito's 10-second window works that way is for G0 item 2 to show
+              [#5 refresh_token by client-1 (basic) with rt#3 client-1 -> ok: at#4 client-1, rt#4 client-1 | #6 refresh_token by client-1 (basic) with rt#3 client-1 -> ok: at#5 client-1, rt#5 client-1]
+OK      B8    a guard keeps the session with no grace window: on a refusal the token step re-reads the session, finds a newer refresh token there, and uses that session's access token
+              [#2 refresh_token by client-1 (basic) with rt#1 client-1 -> ok: at#2 client-1, rt#2 client-1 | #3 refresh_token by client-1 (basic) with rt#1 client-1 -> invalid_grant. The provider still saw a rotated-out token replayed; one that revokes the whole family on replay would end the session at its next refresh]
+FINDING B9    every refresh re-issues the session cookie and marks the response no-store: the library's default store saves the new tokens by signing the user in again. A call that does not refresh sets neither
+              [on the refreshing call: Set-Cookie: __Host-spa-session=...; Cache-Control: no-store, no-cache]
+FINDING B10   the decision to refresh follows the injected TimeProvider, but the new token's expiry is computed from the system clock: once a test clock is moved past the token lifetime, every call refreshes
+              [refresh grants after each of three calls: 0, 1, 2]
+FINDING B11   the library refuses a refresh token longer than 4,096 characters. With one from login in the session, every token call throws, even while the access token is fresh. One returned by a refresh is thrown away after the provider has rotated, and the next call ends the session. G0 item 2 must measure Cognito's, from login and from refresh
+              [limits: refresh token 4096, access token 32768, ID token 32768. The call failed with InvalidOperationException: Received an invalid RefreshToken. Errors: - The string exceeds maximum length 4096.]
+FINDING B12   naming the resource on the token call makes the library pass over the token from login: the first call after each login costs a refresh grant, which carries the resource parameter, and the session then holds two access tokens
+              [#2 refresh_token by client-1 (basic) with rt#1 client-1 -> ok: at#2 client-1, rt#2 client-1; access tokens in the session: 2. Left off, as in section A, the refresh request carries no resource]
+FINDING B13   a refresh response that carries no ID token blanks the one stored at login, so the logout that follows gives the provider an empty id_token_hint
+              [ID token in the session at login: present; after the refresh: blank; id_token_hint on the logout redirect: present and empty. Cognito returns an ID token on refresh]
+FINDING B14   when discovery lists no revocation endpoint the library's revoke call throws: a logout that revokes first fails before it has removed the session
+              [Revocation endpoint is null; sessions left for app1: 1]
+FINDING B15   handing the request's cancellation token to the token call ties a refresh to one browser: if it disconnects while the provider is answering, the provider has rotated the refresh token and the gateway has stored nothing. At a provider with no grace window the next call is refused and the session ends
+              [the provider issued rt#2 client-1; the session still held rt#1 client-1]
+OK      B16   without that token, and with a ticket store that ignores cancellation as this in-memory one does, the refresh finishes after the browser has gone: the rotated refresh token is stored and the next call is served
+              [the provider issued rt#2 client-1; the session holds rt#2 client-1]
+FINDING B17   leaving that token off the call is not enough on the library's path: it saves by signing in again, and the cookie handler hands the request's cancellation token to the ticket store. A store that honours it drops the save once the browser has gone
+              [the provider issued rt#2 client-1; the session still held rt#1 client-1]
+FINDING B18   a logout that arrives while a refresh's answer is on its way revokes the refresh token in its own ticket, which the provider has just rotated out. Nobody revokes the successor, and this provider would still redeem it. Whether Cognito revokes a successor with its predecessor is for G0 item 2 to show
+              [revoked: rt#1 client-1; issued by the refresh and still redeemable: rt#2 client-1]
+
+C. Yarp.ReverseProxy on the .NET 10 runtime (G0 item 5)
+OK      C0    the YARP assembly in this process is the shipped 2.3.0 build, whose newest target is .NET 8, loaded on a .NET 10 runtime
+              [Yarp.ReverseProxy 2.3.0, built for .NETCoreApp,Version=v8.0; runtime 10.0.12]
+OK      C1    a GET goes through: host and /api/{name} select the route, the prefix is removed, the query is kept, and the upstream's status and body come back
+              [upstream saw GET /whoami?x=1&y=two]
+OK      C2    a POST with the antiforgery header is checked in the proxy pipeline and its body is forwarded whole; without the header it is refused and nothing is forwarded
+              [5022 of 5022 characters arrived]
+OK      C3    the upstream gets the session's token and none of what this request tried to pass it: no Cookie, no CSRF header, no browser Authorization, and none of the 9 other forwarding headers the browser sent. X-Forwarded-For, -Host and -Proto are the gateway's own, and nothing names the hop in front of it (N-11)
+              [headers the upstream received: Authorization, Host, X-Forwarded-For, X-Forwarded-Host, X-Forwarded-Proto; X-Forwarded-For: 198.51.100.7]
+OK      C4    request headers the gateway has no business with reach the upstream exactly as sent. A transform that enumerates the outgoing request's typed headers would rewrite some of them, so the one that removes forwarding headers reads them unvalidated
+              [4 headers unchanged]
+FINDING C5    removing forwarding headers by name is only as good as the list: headers of the same kind that are not on it go upstream as the browser sent them. Which names upstream APIs may trust, and which the gateway removes, is for the contract to say
+              [sent and received unchanged: True-Client-IP, X-Client-IP, X-HTTP-Method-Override]
+OK      C6    each app's call carries a token issued to that app's own client, with app 1's bound audience (S-E3)
+              [orders saw at#1 client-1 for audience https://orders.spa.test; reports saw at#2 client-2]
+OK      C7    an upstream's Set-Cookie and Access-Control-* headers never reach the browser, on success or on an upstream error, and the gateway's CSP replaces the upstream's (N-12)
+              [Content-Security-Policy: default-src 'self']
+OK      C8    an API call with no session gets 401 and a problem body from the pipeline step, never a redirect, and nothing reaches the upstream (N-19)
+OK      C9    an API name the app does not list matches no route, even when another app lists it: 404 unknown_api, and no upstream is called (the first half of N-10)
+FINDING C10   YARP forwards the rest of a path as it arrives: with an encoded slash or backslash, a "..;" segment or a doubled slash, the request reaches the app's own upstream. Dot segments, plain or written %2e, are resolved before routing, and none of these reaches another app's upstream. Refusing such paths is the request gate's work, ahead of the proxy (the second half of N-10)
+              [/api/orders/../reports/whoami -> 404, no upstream | /api/orders/%2e%2e/reports/whoami -> 404, no upstream | /api/orders/..%2freports/whoami -> 200, orders as /..%2freports/whoami | /api/orders/a%5c..%5c..%5cb -> 200, orders as /a\..\..\b | /api/orders/a/..;/b -> 200, orders as /a/..;/b | /api/orders//whoami -> 200, orders as //whoami]
+OK      C11   the route table follows the registry with no restart: an API added to an app is proxied, the same API removed again is 404 unknown_api, and a new app on a host with a port is proxied with its own client's token (task 4.1)
+              [routes now: app1/dead, app1/orders, app1/slow, app2/reports, app3/reports]
+OK      C12   fifty parallel API calls on a token due for refresh, at a provider that takes 200 ms to answer: one refresh grant, none refused, and all fifty are forwarded with the new token (F-10, S-E1)
+              [1 grant(s) at a provider with no grace window; 1 distinct token(s) reached the upstream]
+FINDING C13   on a proxied call that refreshes, the session cookie the library re-issues is removed together with the upstream's cookies, and its no-store is merged with the upstream's caching header. The cookie the browser already holds keeps working, because it carries only the session key
+              [Cache-Control on the refreshing call: no-store, no-cache, max-age=60]
+not-rep C14   the same fifty calls at a provider that answers at once: in some rounds a call that read the session before the refresh was stored asks for its token after the flight has ended, and presents the rotated-out refresh token. With no grace window that grant is refused and the plan's rule ends the session. This is B6 happening unprompted
+              [100 rounds: 0 with a second grant, 0 with none, 0 grant(s) refused, 0 call(s) not answered 200, 0 forwarded with a token other than the new one, 0 session(s) ended]
+OK      C15   an upstream redirect is passed to the browser as it is, not followed
+OK      C16   an unreachable upstream gives 502, and the pipeline step can still write the contract's problem body
+              [YARP reported Request]
+OK      C17   an upstream that sends nothing for longer than the API's timeout gives 504 when the timeout expires
+              [1001 ms with a 1-second ActivityTimeout; YARP reported RequestTimedOut]
+FINDING C18   that timeout limits silence, not the whole exchange, and 504 covers only silence before the upstream's headers: an upstream that sends headers and then stalls gets 502, and one that sends a byte every 400 ms runs well past the limit and is answered 200
+              [headers then silence: 502, YARP reported ResponseBodyDestination; six bytes over 2408 ms with a 1-second limit: 200]
+OK      C19   with tracing on, the upstream receives a W3C traceparent from the gateway's own span, in the gateway request's trace (groundwork for F-11). That trace continues the trace id the browser sent
+              [trace id kept; span replaced]
+FINDING C20   YARP's header-removal transform acts on successful responses only unless told otherwise: left at its default, an upstream's 500 delivers its Set-Cookie to the browser
+              [task 4.2 needs ResponseCondition.Always, which the gateway in C7 uses]
+OK      C21   the alternative works too: a YARP request transform can fetch the token itself and stop the request with a 401 before anything is sent
+              [either placement meets the contract; the pipeline step answers before YARP has picked a destination or built a request]
+FINDING C22   left to YARP's defaults, only X-Forwarded-For, -Host, -Proto and -Prefix and Forwarded are replaced or dropped. Every other forwarding header goes upstream exactly as the browser sent it, and the forwarded-headers middleware adds X-Original-For and X-Original-Proto, which name the hop in front of the gateway
+              [as the browser sent them: Via, X-Forwarded-Port, X-Forwarded-Scheme, X-Forwarded-Server, X-Original-Host, X-Original-URL, X-Real-IP; added on the way: X-Original-For, X-Original-Proto]
+
+D. The library's refresh and revoke calls under orchestration the gateway owns (G0 item 4, the alternative)
+OK      D1    the library's refresh call, given the challenge scheme, uses each app's own client through the shared backchannel. The gateway writes the new tokens into the same session record, so the response carries no cookie and no caching header
+              [#2 refresh_token by client-2 (basic) with rt#1 client-2 -> ok: at#2 client-2, rt#2 client-2 | #4 refresh_token by client-1 (basic) with rt#3 client-1 -> ok: at#4 client-1, rt#4 client-1]
+OK      D2    a request that read the session before another request's refresh (B6) refreshes with what the store holds now, not with what its own ticket held: its grant presents the refresh token the first refresh returned, and a provider with no grace window grants it
+              [#6 refresh_token by client-1 (basic) with rt#5 client-1 -> ok: at#6 client-1, rt#6 client-1 | #7 refresh_token by client-1 (basic) with rt#6 client-1 -> ok: at#7 client-1, rt#7 client-1]
+OK      D3    fifty parallel API calls at a provider that answers at once and allows no grace (C14): exactly one refresh grant in every round, none refused, and every call forwarded with the new token
+              [100 rounds: 0 with a second grant, 0 with none, 0 grant(s) refused, 0 call(s) not answered 200, 0 forwarded with a token other than the new one, 0 session(s) ended]
+OK      D4    a browser that disconnects while its refresh is at the provider (B15, B17) loses nothing: the rotated refresh token is stored, and the next call is served without another grant
+              [#209 refresh_token by client-1 (basic) with rt#208 client-1 -> ok: at#209 client-1, rt#209 client-1]
+OK      D5    a provider that answers 503 has not refused anything here either: the call fails with 503, the session stays, and a later call refreshes as usual
+OK      D6    an outage is shared by the calls already waiting: fifty parallel API calls on a due token, at a provider that answers 503 after 200 ms, ask the provider once and fail together. Nothing is forwarded and the session stays
+              [1 refresh request(s) reached the provider; the fifty calls took 202 ms]
+OK      D7    a logout that arrives while a refresh's answer is on its way (B18) waits for it, revokes the refresh token the provider has just issued, and removes the session. The ID token from login, which no refresh response replaced (B13), is still there for the hint
+              [revoked: rt#214 client-1, the one the in-flight refresh returned; id_token_hint: the login's ID token]
+OK      D8    a refresh the provider refuses ends the session here as in A8: 401 session_ended, the record removed, the cookie cleared, and the next request anonymous
+OK      D9    the refresh call has a deadline of its own: a provider that takes longer is cut off, the call fails with 503 and the session stays
+              [cut off after 505 ms with a 500 ms deadline, at a provider that takes 1,200 ms. The retry, inside this test provider's 10-second grace window: 200]
+FINDING D10   a refresh the gateway gave up on may still have been carried out: the provider rotated the refresh token and the gateway never saw the answer. The retry presents the rotated-out token, and a provider with no grace window refuses it, which ends the session. A deadline is only safe with a grace window that covers the retry
+              [#2 refresh_token by client-1 (basic) with rt#1 client-1 -> ok: at#2 client-1, rt#2 client-1 | #3 refresh_token by client-1 (basic) with rt#1 client-1 -> invalid_grant]
+
+43 expectations held, 0 did not, 23 findings confirmed, 1 probes not reproduced

@@ -1,0 +1,49 @@
+runtime .NET 10.0.12; gateway http://127.0.0.1:34045; idp http://127.0.0.1:35345
+
+A. Host-based scheme selection, challenge and callback dispatch
+PASS  A1   app1 host challenges with client-1 and its own redirect_uri
+PASS  A2   app2 host challenges with client-2 and its own redirect_uri
+PASS  A3   unknown host gets 404 on every path, including the callback path  [404,404,404]
+PASS  A4   full login on app1 ends on app1's shell  [4 hops; 200 'shell app=app1 sub=alice' via https://app1.spa.test/ > http://127.0.0.1:35345/authorize > https://app1.spa.test/signin-oidc > https://app1.spa.test/]
+PASS  A5   full login on app2 (same callback path) ends on app2's shell
+PASS  A6   each host authenticates through its own default scheme and client
+PASS  A7   exactly one remote handler is created per request  [1 per request]
+
+B. Cookies, server-side sessions and cross-app substitution
+PASS  B1   session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/, no Domain
+PASS  B2   after login the browser holds one cookie per host: the session cookie  [__Host-spa-session]
+PASS  B3   the cookie ticket carries a session id and nothing else (no tokens, no identity claims)  [cookie length 326]
+PASS  B4   tokens live in the server-side session, bound to app and client
+PASS  B5   app2's scheme cannot decrypt app1's cookie (per-scheme protector purpose)
+PASS  B6   app1's cookie presented to app2 is anonymous (401 on API, fresh challenge on navigation)
+PASS  B7   a validly encrypted app2 cookie naming app1's session key is still anonymous (store is app-bound)
+PASS  B8   on app1's host, app2's scheme names do not resolve at all
+
+C. Callback, state and code substitution
+PASS  C1   app1's callback (code, state, correlation cookie) replayed on app2 is rejected  [login failed: state invalid for this scheme]
+PASS  C2   a code issued to client-1 injected into app2's own login is refused by the authorization server  [login failed: token endpoint rejected the code: 400]
+PASS  C3   a valid callback without the browser's correlation cookie is rejected  [login failed: Correlation failed.]
+PASS  C4   none of the rejected callbacks created a session  [2 sessions]
+
+D. Onboarding, rotation and removal with no restart
+PASS  D1   third app onboarded at runtime: 404 before, full login after, same process and server instance
+PASS  D2   apps that did not change keep their cached options instance
+PASS  D3   client secret rotated at runtime: stale secret fails, new secret is picked up, existing sessions survive
+PASS  D4   a login started before a reload completes after it (state and correlation survive)
+PASS  D5   client replaced mid-login: the in-flight callback fails closed, a fresh login uses the new client  [login failed: client changed during login; restart]
+PASS  D6   sessions issued under the replaced client stop authenticating
+PASS  D7   app removed at runtime: host 404s, its sessions are purged, its cookie is useless elsewhere, others unaffected  [2 app2 sessions purged]
+PASS  D8   a registry that claims an existing host twice is rejected whole; last-known-good stays live
+
+E. Server-side tokens: refresh under concurrency, logout
+PASS  E1   25 concurrent calls on an expired token cause exactly one refresh grant and all succeed with the new token  [1 refresh grant(s), 0 rejected, token #7 -> #8]
+PASS  E2   refresh rewrites the same server-side session; the cookie issued at login still identifies it  [stored token #9]
+PASS  E3   the token attached for each app was issued to that app's client
+PASS  E4   logout deletes the server-side session; replaying the old (still decryptable) cookie is anonymous
+
+F. 300 apps: host-scoped provider vs stock provider with every scheme registered
+PASS  F1   host-scoped provider with 303 apps: one handler per request, any app can log in  [1 handler/request, 172 µs mean]
+PASS  F2   control, stock provider with 303 apps: every request instantiates every remote handler  [303 handlers/request, 510 µs mean (3.0x)]
+PASS  F3   control, stock provider with a shared callback path: only the first-registered app can complete login  [app-000: 200; app-299: 400 login failed: state invalid for this scheme]
+
+34/34 checks passed

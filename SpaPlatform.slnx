@@ -1,0 +1,37 @@
+<Solution>
+  <Folder Name="/fixtures/">
+    <Project Path="fixtures/Fixtures.Tests/Fixtures.Tests.csproj" />
+    <Project Path="fixtures/MockApi/MockApi.csproj" />
+    <Project Path="fixtures/TestIdp/TestIdp.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Gateway/Gateway.csproj" />
+    <Project Path="src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <Project Path="src/Platform.Hosting/Platform.Hosting.csproj" />
+    <Project Path="src/Platform.Identity/Platform.Identity.csproj" />
+    <Project Path="src/Platform.Proxy/Platform.Proxy.csproj" />
+    <Project Path="src/Platform.Registry/Platform.Registry.csproj" />
+    <Project Path="src/Platform.Security/Platform.Security.csproj" />
+    <Project Path="src/Platform.Telemetry/Platform.Telemetry.csproj" />
+    <Project Path="src/Platform.Testing/Platform.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/e2e/Gateway.E2ETests.csproj" />
+    <Project Path="tests/Gateway.ArchitectureTests/Gateway.ArchitectureTests.csproj" />
+    <Project Path="tests/Gateway.IntegrationTests/Gateway.IntegrationTests.csproj" />
+    <Project Path="tests/Gateway.SecurityTests/Gateway.SecurityTests.csproj" />
+    <Project Path="tests/Gateway.TestHarness/Gateway.TestHarness.csproj" />
+    <Project Path="tests/Platform.Abstractions.Tests/Platform.Abstractions.Tests.csproj" />
+    <Project Path="tests/Platform.Hosting.Tests/Platform.Hosting.Tests.csproj" />
+    <Project Path="tests/Platform.Identity.Tests/Platform.Identity.Tests.csproj" />
+    <Project Path="tests/Platform.Proxy.Tests/Platform.Proxy.Tests.csproj" />
+    <Project Path="tests/Platform.Registry.Tests/Platform.Registry.Tests.csproj" />
+    <Project Path="tests/Platform.Security.Tests/Platform.Security.Tests.csproj" />
+    <Project Path="tests/Platform.Telemetry.Tests/Platform.Telemetry.Tests.csproj" />
+    <Project Path="tests/Platform.Testing.Tests/Platform.Testing.Tests.csproj" />
+    <Project Path="tests/Spactl.Tests/Spactl.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/spactl/spactl.csproj" />
+  </Folder>
+</Solution>

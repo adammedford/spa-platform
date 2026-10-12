@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The composition root. Owner: integrator. The only project that references every workstream. It never references fixtures/TestIdp (check A-01). -->
+
+  <ItemGroup>
+    <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
+    <ProjectReference Include="../Platform.Registry/Platform.Registry.csproj" />
+    <ProjectReference Include="../Platform.Hosting/Platform.Hosting.csproj" />
+    <ProjectReference Include="../Platform.Identity/Platform.Identity.csproj" />
+    <ProjectReference Include="../Platform.Proxy/Platform.Proxy.csproj" />
+    <ProjectReference Include="../Platform.Security/Platform.Security.csproj" />
+    <ProjectReference Include="../Platform.Telemetry/Platform.Telemetry.csproj" />
+  </ItemGroup>
+
+</Project>

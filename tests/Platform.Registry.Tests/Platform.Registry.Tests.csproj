@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Component tests for Platform.Registry, owned with it. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Platform.Registry/Platform.Registry.csproj" />
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
+  </ItemGroup>
+
+</Project>

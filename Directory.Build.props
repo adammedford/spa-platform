@@ -1,0 +1,28 @@
+<Project>
+
+  <!-- Build settings shared by every project in the solution. Owner: integrator.
+       Projects under spikes/ do not inherit this file: spikes/Directory.Build.props stops the search. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- A newly published package advisory warns. It must not stop every agent's build. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+
+  <!-- A project whose name ends in "Tests" is an xUnit v3 test project, set up as the xUnit template does:
+       an executable that references xunit.v3 and runs on Microsoft Testing Platform (see global.json). -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('Tests'))">
+    <SpaTestProject>true</SpaTestProject>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(SpaTestProject)' == 'true'">
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

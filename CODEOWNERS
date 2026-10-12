@@ -1,0 +1,45 @@
+# Path ownership. One owner per path. The last matching line wins.
+#
+# The owners are the roles in the plan (docs/plan/03-workstreams-and-tasks.md), written as team handles.
+# The handles are placeholders: point them at real GitHub teams or users before turning on branch protection.
+# Check A-05, written in task I-5, fails a change that touches a path outside its owner's set.
+# Anyone may add a file under contracts/changes/. That is how a change to an integrator path is requested.
+
+*                                     @spa-platform/integrator
+
+# 1 AWS and IaC
+/infra/                               @spa-platform/ws1-infra
+/tools/scripts/                       @spa-platform/ws1-infra
+
+# 2 Hosting and registry
+/src/Platform.Registry/               @spa-platform/ws2-hosting
+/src/Platform.Hosting/                @spa-platform/ws2-hosting
+/tools/spactl/                        @spa-platform/ws2-hosting
+/tests/Platform.Registry.Tests/       @spa-platform/ws2-hosting
+/tests/Platform.Hosting.Tests/        @spa-platform/ws2-hosting
+/tests/Spactl.Tests/                  @spa-platform/ws2-hosting
+
+# 3 OAuth and sessions
+/src/Platform.Identity/               @spa-platform/ws3-identity
+/tests/Platform.Identity.Tests/       @spa-platform/ws3-identity
+/spikes/g0/                           @spa-platform/ws3-identity
+
+# 4 API and security
+/src/Platform.Proxy/                  @spa-platform/ws4-proxy
+/src/Platform.Security/               @spa-platform/ws4-proxy
+/tests/Platform.Proxy.Tests/          @spa-platform/ws4-proxy
+/tests/Platform.Security.Tests/       @spa-platform/ws4-proxy
+
+# 5 Fixtures
+/fixtures/                            @spa-platform/ws5-fixtures
+
+# 6 Verification and operations
+/src/Platform.Telemetry/              @spa-platform/ws6-verification
+/tests/Platform.Telemetry.Tests/      @spa-platform/ws6-verification
+/tests/Gateway.TestHarness/           @spa-platform/ws6-verification
+/tests/Gateway.IntegrationTests/      @spa-platform/ws6-verification
+/tests/Gateway.SecurityTests/         @spa-platform/ws6-verification
+/tests/Gateway.ArchitectureTests/     @spa-platform/ws6-verification
+/tests/e2e/                           @spa-platform/ws6-verification
+/docs/runbooks/                       @spa-platform/ws6-verification
+/docs/gaps.md                         @spa-platform/ws6-verification

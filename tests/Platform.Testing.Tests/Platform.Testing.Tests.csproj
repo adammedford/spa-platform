@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for the doubles. Owner: integrator. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
+  </ItemGroup>
+
+</Project>

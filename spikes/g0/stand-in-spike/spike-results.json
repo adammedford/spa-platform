@@ -1,0 +1,209 @@
+{
+  "runtime": ".NET 10.0.12",
+  "checks": [
+    {
+      "Id": "A1",
+      "Name": "app1 host challenges with client-1 and its own redirect_uri",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "A2",
+      "Name": "app2 host challenges with client-2 and its own redirect_uri",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "A3",
+      "Name": "unknown host gets 404 on every path, including the callback path",
+      "Pass": true,
+      "Detail": "404,404,404"
+    },
+    {
+      "Id": "A4",
+      "Name": "full login on app1 ends on app1's shell",
+      "Pass": true,
+      "Detail": "4 hops; 200 'shell app=app1 sub=alice' via https://app1.spa.test/ > http://127.0.0.1:35345/authorize > https://app1.spa.test/signin-oidc > https://app1.spa.test/"
+    },
+    {
+      "Id": "A5",
+      "Name": "full login on app2 (same callback path) ends on app2's shell",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "A6",
+      "Name": "each host authenticates through its own default scheme and client",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "A7",
+      "Name": "exactly one remote handler is created per request",
+      "Pass": true,
+      "Detail": "1 per request"
+    },
+    {
+      "Id": "B1",
+      "Name": "session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/, no Domain",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "B2",
+      "Name": "after login the browser holds one cookie per host: the session cookie",
+      "Pass": true,
+      "Detail": "__Host-spa-session"
+    },
+    {
+      "Id": "B3",
+      "Name": "the cookie ticket carries a session id and nothing else (no tokens, no identity claims)",
+      "Pass": true,
+      "Detail": "cookie length 326"
+    },
+    {
+      "Id": "B4",
+      "Name": "tokens live in the server-side session, bound to app and client",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "B5",
+      "Name": "app2's scheme cannot decrypt app1's cookie (per-scheme protector purpose)",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "B6",
+      "Name": "app1's cookie presented to app2 is anonymous (401 on API, fresh challenge on navigation)",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "B7",
+      "Name": "a validly encrypted app2 cookie naming app1's session key is still anonymous (store is app-bound)",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "B8",
+      "Name": "on app1's host, app2's scheme names do not resolve at all",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "C1",
+      "Name": "app1's callback (code, state, correlation cookie) replayed on app2 is rejected",
+      "Pass": true,
+      "Detail": "login failed: state invalid for this scheme"
+    },
+    {
+      "Id": "C2",
+      "Name": "a code issued to client-1 injected into app2's own login is refused by the authorization server",
+      "Pass": true,
+      "Detail": "login failed: token endpoint rejected the code: 400"
+    },
+    {
+      "Id": "C3",
+      "Name": "a valid callback without the browser's correlation cookie is rejected",
+      "Pass": true,
+      "Detail": "login failed: Correlation failed."
+    },
+    {
+      "Id": "C4",
+      "Name": "none of the rejected callbacks created a session",
+      "Pass": true,
+      "Detail": "2 sessions"
+    },
+    {
+      "Id": "D1",
+      "Name": "third app onboarded at runtime: 404 before, full login after, same process and server instance",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "D2",
+      "Name": "apps that did not change keep their cached options instance",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "D3",
+      "Name": "client secret rotated at runtime: stale secret fails, new secret is picked up, existing sessions survive",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "D4",
+      "Name": "a login started before a reload completes after it (state and correlation survive)",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "D5",
+      "Name": "client replaced mid-login: the in-flight callback fails closed, a fresh login uses the new client",
+      "Pass": true,
+      "Detail": "login failed: client changed during login; restart"
+    },
+    {
+      "Id": "D6",
+      "Name": "sessions issued under the replaced client stop authenticating",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "D7",
+      "Name": "app removed at runtime: host 404s, its sessions are purged, its cookie is useless elsewhere, others unaffected",
+      "Pass": true,
+      "Detail": "2 app2 sessions purged"
+    },
+    {
+      "Id": "D8",
+      "Name": "a registry that claims an existing host twice is rejected whole; last-known-good stays live",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "E1",
+      "Name": "25 concurrent calls on an expired token cause exactly one refresh grant and all succeed with the new token",
+      "Pass": true,
+      "Detail": "1 refresh grant(s), 0 rejected, token #7 -> #8"
+    },
+    {
+      "Id": "E2",
+      "Name": "refresh rewrites the same server-side session; the cookie issued at login still identifies it",
+      "Pass": true,
+      "Detail": "stored token #9"
+    },
+    {
+      "Id": "E3",
+      "Name": "the token attached for each app was issued to that app's client",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "E4",
+      "Name": "logout deletes the server-side session; replaying the old (still decryptable) cookie is anonymous",
+      "Pass": true,
+      "Detail": ""
+    },
+    {
+      "Id": "F1",
+      "Name": "host-scoped provider with 303 apps: one handler per request, any app can log in",
+      "Pass": true,
+      "Detail": "1 handler/request, 172 µs mean"
+    },
+    {
+      "Id": "F2",
+      "Name": "control, stock provider with 303 apps: every request instantiates every remote handler",
+      "Pass": true,
+      "Detail": "303 handlers/request, 510 µs mean (3.0x)"
+    },
+    {
+      "Id": "F3",
+      "Name": "control, stock provider with a shared callback path: only the first-registered app can complete login",
+      "Pass": true,
+      "Detail": "app-000: 200; app-299: 400 login failed: state invalid for this scheme"
+    }
+  ]
+}
