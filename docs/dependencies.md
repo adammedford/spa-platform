@@ -41,7 +41,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 
 | Package | Version | Licence | Expected in | Note |
 | --- | --- | --- | --- | --- |
-| Microsoft.AspNetCore.Authentication.OpenIdConnect | 10.0.12 | MIT | `Platform.Identity` | Depends on IdentityModel 8.19.2, the version the G0 source build ran on |
+| Microsoft.AspNetCore.Authentication.OpenIdConnect | 10.0.12 | MIT | `Platform.Identity`, and `Platform.Abstractions` since task I-3 | Depends on IdentityModel 8.19.2, the version the G0 source build ran on. `IIdpProfile` is written in terms of `OpenIdConnectOptions` and the handler's `RedirectContext`, so the contract cannot be expressed without it; every project referencing `Platform.Abstractions` therefore carries it transitively. It is the stock handler, not the token-management package A-04 restricts. |
 | Duende.AccessTokenManagement.OpenIdConnect | 4.2.0 | Apache-2.0 | `Platform.Identity` only (A-04) | Has a `net10.0` build. Brings Duende.IdentityModel 8.1.0, HybridCache and Http.Resilience. G0 item 4 passed on it on 11 October 2026. |
 | Duende.IdentityModel | 8.1.0 | Apache-2.0 | Fallback for G0 item 4, which passed without it | Already a transitive dependency of the package above |
 | Yarp.ReverseProxy | 2.3.0 | MIT | `Platform.Proxy` | The newest release. Its newest target is `net8.0`; G0 item 5 ran it on .NET 10.0.12 on 11 October 2026. |
@@ -55,6 +55,8 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | Microsoft.AspNetCore.Authentication.JwtBearer | 10.0.12 | MIT | `fixtures/MockApi` |  |
 | Microsoft.IdentityModel.JsonWebTokens | 8.19.2 | MIT | `fixtures/TestIdp` | Signing for the test identity provider |
 | xunit.v3 | 4.0.2 | Apache-2.0 | Every `*Tests` project | Added by `Directory.Build.props`. Runs on Microsoft Testing Platform v2. |
+| xunit.v3.extensibility.core | 4.0.2 | Apache-2.0 | `Platform.Testing` | The attributes without the runner. xUnit refuses `xunit.v3` on a library that is not an executable and names this instead. Already a transitive dependency of `xunit.v3`. |
+| xunit.v3.assert | 4.0.2 | Apache-2.0 | `Platform.Testing` | `Assert`, for the store contract suites that each implementation subclasses (task 3.4). Same 4.0.2 set. |
 | Microsoft.AspNetCore.Mvc.Testing | 10.0.12 | MIT | `Gateway.TestHarness` |  |
 | Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing` | The fake clock |
 | Microsoft.Playwright | 1.63.0 | MIT | `tests/e2e`, `Fixtures.Tests` |  |

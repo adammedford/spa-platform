@@ -42,6 +42,12 @@
 
   <ItemGroup Label="Tests">
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <!-- Platform.Testing carries the store contract suites as xUnit base classes, so it needs the
+         attributes and Assert without being an executable test project. xUnit refuses xunit.v3 on a
+         library and names these two instead. Both ship in the same 4.0.2 set as xunit.v3 above and
+         are already transitive dependencies of it. -->
+    <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3.assert" Version="4.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />

@@ -6,4 +6,11 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <!-- IIdpProfile is written in terms of the shipped handler's own options and redirect context
+       (ADR-0011, ADR-0001), so the contract cannot be expressed without this package. It is the
+       stock OIDC handler, not the token-management package that check A-04 restricts. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+  </ItemGroup>
+
 </Project>

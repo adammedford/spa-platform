@@ -6,4 +6,18 @@
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
 
+  <!-- The store contract suites (ObjectStoreContract, SessionStoreContract) are xUnit base classes
+       that each implementation subclasses, so this library carries the test framework even though it
+       is not itself a test project. Task 3.4: "the Phase 2 store must pass the same suite." -->
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.extensibility.core" />
+    <PackageReference Include="xunit.v3.assert" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- The fake clock, shared so every workstream's tests start at the same instant. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
 </Project>
