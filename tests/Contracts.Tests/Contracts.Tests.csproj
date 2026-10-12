@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Schema tests for contracts/. Owner: integrator. Task I-2.
+       It references no platform project: a contract is proved against its own example documents,
+       not against an implementation. -->
+
+  <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" />
+  </ItemGroup>
+
+</Project>
