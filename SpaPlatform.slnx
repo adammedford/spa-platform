@@ -16,6 +16,7 @@
     <Project Path="src/Platform.Testing/Platform.Testing.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Contracts.Tests/Contracts.Tests.csproj" />
     <Project Path="tests/e2e/Gateway.E2ETests.csproj" />
     <Project Path="tests/Gateway.ArchitectureTests/Gateway.ArchitectureTests.csproj" />
     <Project Path="tests/Gateway.IntegrationTests/Gateway.IntegrationTests.csproj" />

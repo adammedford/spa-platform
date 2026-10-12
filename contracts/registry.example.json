@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "revision": 42,
+  "apps": [
+    {
+      "appId": "app1",
+      "host": "app1.spa-poc.test:8443",
+      "release": "2026-10-10.1",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "clientId": "1example23456789",
+        "clientSecretRef": "ssm:/spa-platform/poc/apps/app1/client-secret:1",
+        "scopes": ["openid", "profile", "https://orders.spa-poc.test/read"],
+        "resource": "https://orders.spa-poc.test"
+      },
+      "apis": [
+        { "name": "orders", "upstream": "http://127.0.0.1:5080", "timeoutSeconds": 30 }
+      ],
+      "csp": { "img-src": ["data:"] },
+      "session": { "lifetimeMinutes": 480 }
+    }
+  ]
+}

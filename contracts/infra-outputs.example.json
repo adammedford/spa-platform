@@ -1,0 +1,24 @@
+{
+  "region": "us-east-1",
+  "cell": "poc",
+  "bucket": "spa-platform-poc",
+  "albDnsName": "internal-spa-poc-123456789.us-east-1.elb.amazonaws.com",
+  "ecsCluster": "spa-poc",
+  "ecsService": "gateway",
+  "ecrGateway": "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/gateway",
+  "ecrMockApi": "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api",
+  "gatewayImage": "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/gateway@sha256:0123abcd",
+  "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE",
+  "cognitoDomain": "spa-poc.auth.us-east-1.amazoncognito.com",
+  "clients": {
+    "app1": {
+      "clientId": "1example23456789",
+      "secretParameter": "/spa-platform/poc/apps/app1/client-secret",
+      "secretVersion": 1
+    }
+  },
+  "testUsers": {
+    "alice": { "passwordParameter": "/spa-platform/poc/test-users/alice" }
+  },
+  "logGroup": "/spa-platform/poc/gateway"
+}
