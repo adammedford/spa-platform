@@ -20,12 +20,18 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
 | S3 layout | [`s3-layout.md`](s3-layout.md) | G1a | Workstreams 1 and 2 |
 | Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | Workstream 1, the scripts, workstream 6 |
+| Resource tags | [`resource-tags.md`](resource-tags.md) | G1a | Workstream 1, `teardown.sh`, workstream 6 |
 | Telemetry | [`telemetry.md`](telemetry.md) | G1a | Everyone |
 | Records and interfaces | `src/Platform.Abstractions` (task I-3) | G1a, except the identity interfaces at G1b | Workstreams 2, 3, 4, 6 |
 | Test doubles | `src/Platform.Testing` (task I-3) | With the interface each one stands in for | Everyone |
 
 The integrator writes every file in this table. Workstreams 1 and 6 propose the infrastructure
-outputs and telemetry contracts; they do not edit them.
+outputs and telemetry contracts, and workstream 1 proposed the resource tags; they do not edit them.
+
+`resource-tags.md` is the one file here that did not come from `docs/plan/02-contracts.md`. The plan
+names "the platform tag" three times without defining it, and three parties have to agree on the
+string for teardown's emptiness check to mean anything. Change request
+`changes/1.6a-platform-tag-convention.md` raised it; ADR-0013 decides it.
 
 `docs/plan/02-contracts.md` gives the request gate its own section under the browser contract's
 freeze. Here it is its own file, because workstream 4 owns the gate and `http-contract.md` is what

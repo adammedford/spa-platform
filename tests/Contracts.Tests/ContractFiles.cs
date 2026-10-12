@@ -40,6 +40,7 @@ internal static class ContractFiles
         "upstream-contract.md",
         "s3-layout.md",
         "telemetry.md",
+        "resource-tags.md",
     ];
 
     /// <summary>
