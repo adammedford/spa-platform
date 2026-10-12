@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is not ignored by
+# .gitignore, so keep nothing secret in it. Nothing here is secret: the file names
+# a cell, a region and the principals allowed to run plans.
+
+cell   = "poc"
+region = "us-east-1"
+
+# The repository whose workflows run the plans, and the refs allowed to do it.
+github_repository     = "your-org/spa-platform"
+github_subject_claims = ["ref:refs/heads/main", "pull_request"]
+
+# Set false, and give the ARN, when the account already has a GitHub Actions OIDC
+# provider. An account may have only one.
+create_github_oidc_provider = true
+# github_oidc_provider_arn  = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+
+# A deployer's role or another runner, if plans run outside GitHub Actions.
+additional_trusted_principal_arns = []
+
+# Leave off unless a CI plan must block a concurrent apply. See the README.
+allow_state_lock = false
