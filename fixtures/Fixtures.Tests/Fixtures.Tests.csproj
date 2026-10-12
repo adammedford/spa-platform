@@ -3,6 +3,15 @@
   <!-- Tests for everything under fixtures/. Owner: workstream 5. -->
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A fake clock, so the rotation grace window is tested without waiting for it. -->
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../MockApi/MockApi.csproj" />
     <ProjectReference Include="../TestIdp/TestIdp.csproj" />
   </ItemGroup>
