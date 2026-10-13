@@ -58,6 +58,11 @@ dotnet test --project tests/Platform.Registry.Tests
 - **Packages:** add `<PackageReference Include="Name" />` with no version to your own project file. The version comes from `Directory.Packages.props`.
 - **Warnings are errors.** Package advisories are the exception: they warn.
 - **`spikes/` is outside the solution** and does not inherit the solution's build settings.
+- **Reach the gateway over a raw socket when the `Host` header matters.** In an agent sandbox, HTTP
+  through `curl` is proxied and answered on the `Host` header, so a spoofed host never reaches the
+  process: it returns 400 even with nothing listening. Everything here routes by host, so test it
+  with a socket that sends the request line and `Host` itself. CI is a plain Linux runner and does
+  not proxy, so `curl` is right there.
 
 ## Rules that hold everywhere
 
@@ -69,6 +74,11 @@ dotnet test --project tests/Platform.Registry.Tests
 
 ## Where the work stands
 
-- **Done:** the plan, and this skeleton (task I-1).
-- **Open on day one:** I-2, 1.0, 1.6a and 5.4. The dispatch table in `docs/plan/03-workstreams-and-tasks.md` says what opens next.
+Read it, do not take it from here. This file does not track progress, because a copy of the state
+goes stale and then misleads every session that loads it.
+
+- **Which gates have closed:** `git tag`, and the checklist per gate in `docs/gates/`.
+- **What has landed:** `git log --oneline`, where each task's merge names its id.
+- **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
+  tags.
 - **Gate G0 is open, with three of its five items passed.** The shipped handler, token management and YARP passed on 11 October 2026. Cognito remains: items 2 and 3. Nothing in `src/Platform.Identity` starts before task I-6 tags `contracts-v1`.
