@@ -41,6 +41,9 @@ spikes/g0/real-handler/vendor/ref/
 # Agent issue tracker (docs/agents/issue-tracker.md)
 .scratch/
 
+# Agent session scratch: worktrees, local agent settings. Never the repository's business.
+.claude/
+
 # macOS and editors
 .DS_Store
 *.swp
