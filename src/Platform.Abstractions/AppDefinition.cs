@@ -25,6 +25,7 @@ public sealed record AppDefinition(
 /// The entry's OAuth client. <paramref name="Issuer"/> names an issuer in platform configuration; it
 /// is not an authority URL. <paramref name="Resource"/> is null for an app with no resource binding.
 /// </summary>
+[Freeze("G1b")]
 public sealed record OAuthDefinition(
     string Issuer,
     string ClientId,

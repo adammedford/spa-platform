@@ -46,13 +46,15 @@ public sealed class PublicSurfaceTests
 
     /// <summary>
     /// The parts that wait for G0. contracts/README.md -> "What is draft until G1b": scheme names,
-    /// the session record, IAccessTokenSource and IIdpProfile. Task I-6 folds the G0 findings in,
-    /// removes these markers and tags contracts-v1.
+    /// the session record, IAccessTokenSource and IIdpProfile, plus the oauth section of a registry
+    /// entry, whose code form is OAuthDefinition. Task I-6 folds the G0 findings in, removes these
+    /// markers and tags contracts-v1.
     /// </summary>
     private static readonly string[] DraftUntilG1b =
     [
         "IAccessTokenSource",
         "IIdpProfile",
+        "OAuthDefinition",
         "SchemeNames",
         "SessionRecord",
     ];

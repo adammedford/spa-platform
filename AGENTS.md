@@ -81,4 +81,8 @@ goes stale and then misleads every session that loads it.
 - **What has landed:** `git log --oneline`, where each task's merge names its id.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
   tags.
-- **Gate G0 is open, with three of its five items passed.** The shipped handler, token management and YARP passed on 11 October 2026. Cognito remains: items 2 and 3. Nothing in `src/Platform.Identity` starts before task I-6 tags `contracts-v1`.
+- **Which gate is open, and how far it has got:** the checklist in `docs/gates/`, against `git tag`.
+
+One rule does not depend on progress, so it is safe to state here: nothing in
+`src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because everything identity is
+draft until then. `contracts/README.md` -> "What is draft until G1b" lists what that covers.
