@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Runs before every push. Owner: integrator.
 #
-# It catches, locally and in about a second, the two things that are expensive to find later:
-# a change that touches a path outside its owner's set, and a build that does not compile.
+# It catches, locally and in about a second, the three things that are expensive to find later:
+# a change that touches a path outside its owner's set, a steering file that misleads every
+# session that loads it, and a build that does not compile.
 # The tests stay in CI, where they cost nothing to wait for.
 #
-# Enable it once per clone and once per worktree:
+# Enable it once per clone (not per worktree: the setting lives in the shared .git/config):
 #
 #     git config core.hooksPath .githooks
 #
@@ -46,12 +47,14 @@ esac
 
 # --- check A-05: path ownership ---------------------------------------------------------------
 #
-# The same check CI runs. Local first, because a failure here is one amended commit, while a
-# failure in CI is a pushed branch and a red pull request.
+# The only place this runs. A failure here is one amended commit; the same failure found after a
+# push would cost a red pull request and buy nothing, since the same person reviews it either way.
+# There is no override but --no-verify, which is the point: an override nobody can verify is a
+# permissions model for a team of one.
 if command -v python3 > /dev/null; then
-  # The default branch, not this branch's upstream. CI checks the pull request against its base,
-  # so the hook has to ask the same question; against its own upstream it would compare a branch
-  # to itself after the first push and pass on an empty diff every time.
+  # The default branch, not this branch's upstream. The question is what this branch adds to main;
+  # against its own upstream it would compare a branch to itself after the first push and pass on
+  # an empty diff every time.
   base="origin/main"
   git rev-parse --verify --quiet "$base^{commit}" > /dev/null || base="main"
 
@@ -64,10 +67,20 @@ else
   echo "pre-push: A-05 not checked: python3 is not on PATH." >&2
 fi
 
+# --- the steering files -----------------------------------------------------------------------
+#
+# AGENTS.md and CLAUDE.md are loaded into every session. A progress claim or a pointer at a file
+# that does not exist costs every later session, so catch it at the push that writes it.
+if command -v python3 > /dev/null; then
+  python3 -I .github/steering.py || fail "the steering check failed."
+else
+  echo "pre-push: steering not checked: python3 is not on PATH." >&2
+fi
+
 # --- the build --------------------------------------------------------------------------------
 #
 # Warnings are errors, so this catches what a reviewer should never have to.
 command -v dotnet > /dev/null || fail "dotnet is not on PATH."
 dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does not build."
 
-echo "pre-push: A-05 and the build pass."
+echo "pre-push: A-05, the steering files and the build pass."

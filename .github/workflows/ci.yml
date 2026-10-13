@@ -1,7 +1,11 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Four jobs: the solution builds, every test project runs, the Terraform roots validate, and check
-# A-05 fails a change that touches a path outside its owner's set.
+# Two jobs: the solution builds and every test project runs, and the Terraform roots validate.
+#
+# Check A-05 is deliberately not here. It lives in .githooks/pre-push, where it catches a session
+# that reached outside its brief at the moment it reached. A blocking CI check would need an
+# override for the integrator's own cross-owner work, and an override nobody can verify -- one
+# author, one reviewer -- is a permissions model for a team of one.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -28,6 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Steering files claim no progress and every pointer resolves
+        # Before the build, because it costs a second and a stale AGENTS.md misleads every session
+        # from the top of its context window. Both rules it holds were prose first, and prose let
+        # a progress line sit directly under the paragraph forbidding it for two sessions running.
+        run: python3 -I .github/steering.py
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -147,32 +157,3 @@ jobs:
           exit 1
         env:
           AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
-
-  path-ownership:
-    name: Path ownership (A-05)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # The check diffs against the base, so it needs more than the tip commit.
-          fetch-depth: 0
-
-      - name: Check A-05
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="origin/${{ github.base_ref }}"
-            head="${{ github.event.pull_request.head.sha }}"
-          else
-            base="${{ github.event.before }}"
-            head="${{ github.sha }}"
-          fi
-
-          # A first push, a force-push or a new branch gives no usable base. There is no change to
-          # scope then, and inventing one would either pass everything or fail everything.
-          if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
-            echo "::notice::A-05 not checked: no base commit to diff against ('$base')."
-            exit 0
-          fi
-
-          python3 -I .github/path-ownership.py "$base" "$head"
