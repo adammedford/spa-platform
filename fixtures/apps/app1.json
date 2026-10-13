@@ -1,0 +1,14 @@
+{
+  "appId": "app1",
+  "host": "app1.spa-poc.test:8443",
+  "oauth": {
+    "issuer": "cognito-poc",
+    "scopes": ["openid", "profile", "https://orders.spa-poc.test/read"],
+    "resource": "https://orders.spa-poc.test"
+  },
+  "apis": [
+    { "name": "orders", "upstream": "http://127.0.0.1:5080", "timeoutSeconds": 30 },
+    { "name": "reports", "upstream": "http://127.0.0.1:5081", "timeoutSeconds": 30 }
+  ],
+  "session": { "lifetimeMinutes": 480 }
+}

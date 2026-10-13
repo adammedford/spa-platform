@@ -1,0 +1,14 @@
+{
+  "appId": "app2",
+  "host": "app2.spa-poc.test:8443",
+  "oauth": {
+    "issuer": "cognito-poc",
+    "scopes": ["openid", "profile", "https://reports.spa-poc.test/read"]
+  },
+  "apis": [
+    { "name": "reports", "upstream": "http://127.0.0.1:5081", "timeoutSeconds": 30 },
+    { "name": "orders", "upstream": "http://127.0.0.1:5080", "timeoutSeconds": 30 }
+  ],
+  "csp": { "img-src": ["data:"] },
+  "session": { "lifetimeMinutes": 480 }
+}
