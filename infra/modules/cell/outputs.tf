@@ -9,11 +9,6 @@ output "vpc_id" {
   value       = aws_vpc.cell.id
 }
 
-output "vpc_cidr" {
-  description = "The cell's address range, which is what ForwardedHeaders:TrustedNetworks names."
-  value       = aws_vpc.cell.cidr_block
-}
-
 output "public_subnet_ids" {
   description = "The two public subnets, one per zone. The load balancer needs both."
   value       = [for subnet in aws_subnet.public : subnet.id]
@@ -41,10 +36,10 @@ output "bucket_arn" {
 
 output "ecr_gateway" {
   description = "The gateway repository's URL, as the contract's `ecrGateway`."
-  value       = aws_ecr_repository.image["gateway"].repository_url
+  value       = aws_ecr_repository.repository["gateway"].repository_url
 }
 
 output "ecr_mock_api" {
   description = "The mock API repository's URL, as the contract's `ecrMockApi`."
-  value       = aws_ecr_repository.image["mock-api"].repository_url
+  value       = aws_ecr_repository.repository["mock-api"].repository_url
 }

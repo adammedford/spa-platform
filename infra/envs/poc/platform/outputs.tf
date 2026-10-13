@@ -27,22 +27,7 @@ output "ecr_mock_api" {
   value       = module.cell.ecr_mock_api
 }
 
-output "vpc_id" {
-  description = "The cell's VPC, for the tunnel and for anyone reading the plan."
-  value       = module.cell.vpc_id
-}
-
-output "public_subnet_ids" {
-  description = "The two public subnets the load balancer and the service use."
-  value       = module.cell.public_subnet_ids
-}
-
-output "alb_security_group_id" {
-  description = "The load balancer's security group."
-  value       = module.cell.alb_security_group_id
-}
-
-output "task_security_group_id" {
-  description = "The task's security group."
-  value       = module.cell.task_security_group_id
-}
+# Nothing else. contracts/infra-outputs.schema.json is additionalProperties: false,
+# so an output this root publishes that the contract has no field for is a trap for
+# whatever assembles outputs.json in task 1.7. The network and the security groups
+# are module outputs, which is where tasks 1.3 and 1.4 read them.

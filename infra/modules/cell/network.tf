@@ -15,6 +15,10 @@ locals {
   # needs, since there is one task.
   zones = slice(data.aws_availability_zones.available.names, 0, 2)
 
+  # How many bits to add to the VPC's prefix to reach a /24. The variable's
+  # validation keeps this at 1 or more.
+  subnet_newbits = 24 - tonumber(split("/", var.vpc_cidr)[1])
+
   name_prefix = "spa-platform-${var.cell}"
 }
 
@@ -40,7 +44,7 @@ resource "aws_subnet" "public" {
 
   vpc_id            = aws_vpc.cell.id
   availability_zone = each.key
-  cidr_block        = cidrsubnet(var.vpc_cidr, 24 - tonumber(split("/", var.vpc_cidr)[1]), each.value)
+  cidr_block        = cidrsubnet(var.vpc_cidr, local.subnet_newbits, each.value)
 
   # The task needs a public address to reach Cognito, S3, Parameter Store, ECR and
   # logs with no NAT gateway. The load balancer is internal even so: it is reached
@@ -56,7 +60,7 @@ resource "aws_route_table" "public" {
   tags = { Name = "${local.name_prefix}-public" }
 }
 
-resource "aws_route" "default" {
+resource "aws_route" "internet" {
   route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = aws_internet_gateway.cell.id

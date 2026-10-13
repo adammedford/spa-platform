@@ -18,7 +18,7 @@ locals {
   # Everything under apps/ is a release. The registry object is not: spactl writes it
   # conditional on the live version, which is If-Match and not If-None-Match, and
   # rolling back reads its version history.
-  releases = "${aws_s3_bucket.platform.arn}/apps/*"
+  release_objects_arn = "${aws_s3_bucket.platform.arn}/apps/*"
 }
 
 resource "aws_s3_bucket" "platform" {
@@ -127,6 +127,13 @@ data "aws_iam_policy_document" "platform_bucket" {
   # reached here; it is kept because reaching it would otherwise deny a part rather
   # than fail the write, which is the harder failure to read.
   #
+  # Both condition keys and this Deny shape are AWS's own, from "Enforce conditional
+  # writes on Amazon S3 buckets" in the S3 user guide, example 2. Enforcement for
+  # general purpose buckets shipped in November 2024. It is written down here because
+  # a reader who cannot find the second key assumes the statement never fires, and
+  # the failure mode if that were true is a bucket that looks compliant and fails
+  # P-04 at G3.
+  #
   # One consequence, from the AWS documentation: a bucket policy that enforces
   # conditional writes refuses copy operations into the prefix it covers. Nothing
   # copies into apps/ — spactl puts objects there and nothing else writes at all.
@@ -134,7 +141,7 @@ data "aws_iam_policy_document" "platform_bucket" {
     sid       = "DenyReleaseWriteWithoutIfNoneMatch"
     effect    = "Deny"
     actions   = ["s3:PutObject"]
-    resources = [local.releases]
+    resources = [local.release_objects_arn]
 
     principals {
       type        = "*"
@@ -166,7 +173,7 @@ data "aws_iam_policy_document" "platform_bucket" {
       "s3:DeleteObjectVersion",
     ]
 
-    resources = [local.releases]
+    resources = [local.release_objects_arn]
 
     principals {
       type        = "*"
@@ -198,7 +205,7 @@ locals {
   repositories = toset(["gateway", "mock-api"])
 }
 
-resource "aws_ecr_repository" "image" {
+resource "aws_ecr_repository" "repository" {
   for_each = local.repositories
 
   name = "spa-${var.cell}/${each.key}"
@@ -212,10 +219,6 @@ resource "aws_ecr_repository" "image" {
   # tag query (P-05). A repository with images in it refuses to be destroyed, so the
   # proof would never pass.
   force_delete = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
 
   tags = { Name = "spa-${var.cell}/${each.key}" }
 }

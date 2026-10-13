@@ -18,7 +18,7 @@ variable "vpc_cidr" {
   description = <<-EOT
     The cell's address range. ForwardedHeaders:TrustedNetworks in platform
     configuration names this range, so the gateway trusts the load balancer's
-    X-Forwarded-For and nothing else's.
+    X-Forwarded-For and nothing else's. The module validates the shape.
   EOT
   type        = string
   default     = "10.20.0.0/16"

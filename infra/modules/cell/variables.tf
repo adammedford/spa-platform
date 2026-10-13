@@ -17,13 +17,20 @@ variable "vpc_cidr" {
     The cell's address range. Two /24 subnets are carved out of it, one per zone.
     Platform configuration's ForwardedHeaders:TrustedNetworks names this range, so
     the gateway trusts X-Forwarded-For from the load balancer and from nowhere else.
+
+    No default: the root decides the range, and this module is called by each cell's
+    root. The poc root's default is 10.20.0.0/16.
   EOT
   type        = string
-  default     = "10.20.0.0/16"
 
   validation {
-    condition     = can(cidrnetmask(var.vpc_cidr)) && tonumber(split("/", var.vpc_cidr)[1]) <= 24
-    error_message = "vpc_cidr is an IPv4 CIDR block of /24 or larger, because two /24 subnets are carved out of it."
+    # The whole condition is inside can(), because a value with no "/" would make
+    # split(...)[1] raise an evaluation error instead of showing error_message.
+    #
+    # /23 is the floor, not /24: two /24 subnets are carved out, and at /24 there are
+    # no bits left to carve with, so cidrsubnet would fail at apply rather than here.
+    condition     = can(cidrnetmask(var.vpc_cidr)) && can(tonumber(split("/", var.vpc_cidr)[1]) <= 23) && tonumber(split("/", var.vpc_cidr)[1]) <= 23
+    error_message = "vpc_cidr is an IPv4 CIDR block of /23 or larger, because two /24 subnets are carved out of it."
   }
 }
 
