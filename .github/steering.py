@@ -12,7 +12,7 @@ for the rule is not the same as a check enforcing it.
 
 **No dangling pointer.** These files are mostly context pointers, and a pointer at something that
 does not exist costs a session the search before it finds nothing. `docs/gates/` was named twice
-while absent. A path that is promised rather than broken goes in PLANNED below, which fails once
+while absent, and was later dropped rather than written. A path that is promised rather than broken goes in PLANNED below, which fails once
 the path appears, so the list cannot outlive its entries.
 
 Run: python3 -I .github/steering.py
@@ -29,7 +29,6 @@ FILES = ["AGENTS.md", "CLAUDE.md"]
 # Paths named before they exist. Each is a planned artifact, and this check fails when one appears,
 # so landing it forces the entry out rather than leaving a stale exemption behind.
 PLANNED = {
-    "docs/gates/": "written by the G1a checklist ticket; AGENTS.md points at it for gate state",
     "docs/gaps.md": "workstream 6 owns it and has not started; the row declares ownership",
 }
 
@@ -110,7 +109,7 @@ def main() -> int:
         print("STEERING FAILED: AGENTS.md and CLAUDE.md state progress.")
         print("They are loaded into every session from the top of the window, so a stale claim")
         print("misleads from the first token. Point at the source instead: git tag, git log, the")
-        print("dispatch table, docs/gates/.")
+        print("dispatch table, the gates table in docs/plan/01-plan.md.")
 
     for line in missing:
         print(f"  {line}")

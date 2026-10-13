@@ -6,7 +6,7 @@
 # session that loads it, and a build that does not compile.
 # The tests stay in CI, where they cost nothing to wait for.
 #
-# Enable it once per clone and once per worktree:
+# Enable it once per clone (not per worktree: the setting lives in the shared .git/config):
 #
 #     git config core.hooksPath .githooks
 #
@@ -47,12 +47,14 @@ esac
 
 # --- check A-05: path ownership ---------------------------------------------------------------
 #
-# The same check CI runs. Local first, because a failure here is one amended commit, while a
-# failure in CI is a pushed branch and a red pull request.
+# The only place this runs. A failure here is one amended commit; the same failure found after a
+# push would cost a red pull request and buy nothing, since the same person reviews it either way.
+# There is no override but --no-verify, which is the point: an override nobody can verify is a
+# permissions model for a team of one.
 if command -v python3 > /dev/null; then
-  # The default branch, not this branch's upstream. CI checks the pull request against its base,
-  # so the hook has to ask the same question; against its own upstream it would compare a branch
-  # to itself after the first push and pass on an empty diff every time.
+  # The default branch, not this branch's upstream. The question is what this branch adds to main;
+  # against its own upstream it would compare a branch to itself after the first push and pass on
+  # an empty diff every time.
   base="origin/main"
   git rev-parse --verify --quiet "$base^{commit}" > /dev/null || base="main"
 

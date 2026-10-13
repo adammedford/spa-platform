@@ -20,7 +20,8 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 
 ## Rules for every task
 
-- **Write only inside your owner's paths.** Reading anywhere is fine. `CODEOWNERS` lists the paths.
+- **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
+  and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
 - **The integrator's paths are off limits**, even for a one-line fix. The one exception is adding a change request.
 - **Need a contract changed?** Add `contracts/changes/<task-id>-<slug>.md` describing the change, and stop. The integrator decides and edits.
 - **Need a new project, a new package or a different version?** Same route. `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
@@ -77,11 +78,12 @@ dotnet test --project tests/Platform.Registry.Tests
 Read it, do not take it from here. This file does not track progress, because a copy of the state
 goes stale and then misleads every session that loads it.
 
-- **Which gates have closed:** `git tag`, and the checklist per gate in `docs/gates/`.
+- **Which gates have closed:** `git tag`. Each annotated tag names the gate and the CI run that
+  proves its exit test.
 - **What has landed:** `git log --oneline`, where each task's merge names its id.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
   tags.
-- **Which gate is open, and how far it has got:** the checklist in `docs/gates/`, against `git tag`.
+- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read against `git tag`.
 
 One rule does not depend on progress, so it is safe to state here: nothing in
 `src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because everything identity is

@@ -112,7 +112,7 @@ key.
 
 **Workstream** — one of the six parallel lanes (1 AWS and IaC, 2 Hosting and registry, 3 OAuth and
 sessions, 4 API and security, 5 Fixtures, 6 Verification and operations), each with its own paths in
-`CODEOWNERS`. Not "team".
+`OWNERSHIP.md`. Not "team".
 
 **Integrator** — the owner of the shared skeleton: contracts, abstractions, test doubles, the
 composition root, `docs/adr/`, `docs/plan/`, CI and package versions.

@@ -39,7 +39,7 @@ Task I-1 is done. On 11 October 2026 `dotnet build` passed on an Apple silicon M
 | Solution, 27 projects, reference rules | Built |
 | Test projects on xUnit v3 | The 14 test projects built as executables on `xunit.v3` 4.0.2 and Microsoft Testing Platform 2.5.1. `dotnet test` has not been run yet. |
 | Central package versions | `xunit.v3` is restored. The other 17 are confirmed to exist on nuget.org and first restore when a project references them. |
-| `AGENTS.md`, `CODEOWNERS` | Written. The handles in `CODEOWNERS` are placeholders for real teams. |
+| `AGENTS.md`, `OWNERSHIP.md` | Written. Owners are role names, not GitHub handles: one author, nothing to resolve. |
 | Git | Not initialised |
 
 Three of Gate G0's five items passed the same day: the real handler, token management and
