@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -46,7 +45,7 @@ public sealed class ProxyRouteTests
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
-        Assert.Equal("unknown_api", await CodeOf(response));
+        Assert.Equal("unknown_api", await Problem.CodeOf(response));
         Assert.Empty(orders.Requests);
     }
 
@@ -67,7 +66,7 @@ public sealed class ProxyRouteTests
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/reports/items"), Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Equal("unknown_api", await CodeOf(response));
+        Assert.Equal("unknown_api", await Problem.CodeOf(response));
         Assert.Empty(reports.Requests);
     }
 
@@ -122,6 +121,43 @@ public sealed class ProxyRouteTests
     }
 
     [Fact]
+    public async Task A_redirect_from_the_upstream_is_passed_through_and_never_followed()
+    {
+        // ADR-0006: "Redirects are passed through, never followed." It rides on the forwarder's own
+        // default, so it is pinned here rather than asserted nowhere.
+        EchoUpstream orders = new();
+        orders.Respond = _ => new EchoResponse(HttpStatusCode.Found, Body: "moved");
+        await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
+        await using ProxyHost gateway = await ProxyHost.StartAsync(
+            Ct, TestApps.Entry("app1", apis: [TestApps.Api("orders", listener.BaseAddress.AbsoluteUri)]));
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+
+        HttpResponseMessage response = await client.SendAsync(
+            gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
+
+        Assert.Equal(HttpStatusCode.Found, response.StatusCode);
+        Assert.Single(orders.Requests);
+    }
+
+    [Fact]
+    public async Task The_prefix_with_nothing_after_it_still_reaches_the_upstream()
+    {
+        // The catch-all segment matches an empty remainder, so /api/orders is the app's upstream at
+        // its own root. Worth pinning: it is the one path where removing the prefix leaves nothing.
+        EchoUpstream orders = new();
+        await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
+        await using ProxyHost gateway = await ProxyHost.StartAsync(
+            Ct, TestApps.Entry("app1", apis: [TestApps.Api("orders", listener.BaseAddress.AbsoluteUri)]));
+        using HttpClient client = new();
+
+        HttpResponseMessage response = await client.SendAsync(
+            gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders"), Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("/", Assert.Single(orders.Requests).Path);
+    }
+
+    [Fact]
     public async Task With_no_apps_at_all_an_api_call_is_still_refused_with_unknown_api()
     {
         // The skeleton, and G1a's exit test runs it: no registry, so no route, and /api must still
@@ -133,13 +169,8 @@ public sealed class ProxyRouteTests
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Equal("unknown_api", await CodeOf(response));
+        Assert.Equal("unknown_api", await Problem.CodeOf(response));
     }
-
-    private static async Task<string?> CodeOf(HttpResponseMessage response) =>
-        (await response.Content.ReadFromJsonAsync<Problem>())?.Code;
-
-    private sealed record Problem(int Status, string Code);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 }

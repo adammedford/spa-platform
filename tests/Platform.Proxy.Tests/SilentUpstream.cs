@@ -1,10 +1,5 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Platform.Proxy.Tests;
 
@@ -28,20 +23,14 @@ public sealed class SilentUpstream : IAsyncDisposable
 
     public static async Task<SilentUpstream> StartAsync(CancellationToken ct)
     {
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
+        WebApplicationBuilder builder = Loopback.Builder();
 
         WebApplication app = builder.Build();
         app.Run(context => Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted));
 
         await app.StartAsync(ct);
 
-        string address = app.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the silent upstream started without an address.");
-
-        return new SilentUpstream(app, new Uri(address));
+        return new SilentUpstream(app, Loopback.AddressOf(app, "silent upstream"));
     }
 
     public async ValueTask DisposeAsync()

@@ -1,10 +1,6 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -43,9 +39,7 @@ public sealed class ProxyHost : IAsyncDisposable
     {
         InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"etag\"", apps));
 
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
+        WebApplicationBuilder builder = Loopback.Builder();
         builder.Services.AddSingleton<IRegistry>(registry);
         builder.AddPlatformProxy();
 
@@ -58,11 +52,7 @@ public sealed class ProxyHost : IAsyncDisposable
 
         await web.StartAsync(ct);
 
-        string address = web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the gateway started without an address.");
-
-        return new ProxyHost(web, new Uri(address), registry);
+        return new ProxyHost(web, Loopback.AddressOf(web, "gateway"), registry);
     }
 
     /// <summary>A request to this gateway, addressed to one app's host.</summary>

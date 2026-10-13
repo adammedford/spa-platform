@@ -13,6 +13,11 @@ namespace Platform.Proxy;
 /// when the failure happened before the upstream's first body byte; once the response has started,
 /// the status is already on the wire and there is nothing to say (finding T-C18: headers followed by
 /// silence give 502, and that one has started).
+///
+/// Only those two statuses get a body. YARP answers some failures with a status of its own, 400 when
+/// the client gave up mid-body among them, and the browser contract gives 400 a different code
+/// (<c>invalid_request</c>) that belongs to the request gate. Writing <c>upstream_unavailable</c>
+/// over any status that is not 502 would say the upstream failed when the client did.
 /// </summary>
 internal static class UpstreamFailure
 {
@@ -27,11 +32,16 @@ internal static class UpstreamFailure
             return;
         }
 
-        await Problems.WriteAsync(
-            context,
-            context.Response.StatusCode,
-            context.Response.StatusCode == StatusCodes.Status504GatewayTimeout
-                ? "upstream_timeout"
-                : "upstream_unavailable");
+        string? code = context.Response.StatusCode switch
+        {
+            StatusCodes.Status504GatewayTimeout => "upstream_timeout",
+            StatusCodes.Status502BadGateway => "upstream_unavailable",
+            _ => null,
+        };
+
+        if (code is not null)
+        {
+            await Problems.WriteAsync(context, context.Response.StatusCode, code);
+        }
     });
 }

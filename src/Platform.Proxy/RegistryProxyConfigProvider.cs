@@ -13,6 +13,13 @@ namespace Platform.Proxy;
 /// </summary>
 public sealed class RegistryProxyConfigProvider : IProxyConfigProvider, IDisposable
 {
+    /// <summary>
+    /// Held across the replace and the revoke together. Two swaps in quick succession would
+    /// otherwise interleave, publish one configuration and revoke the other, and leave YARP
+    /// reloading to a snapshot that is no longer live.
+    /// </summary>
+    private readonly object swap = new();
+
     private readonly IDisposable? subscription;
     private volatile RegistryProxyConfig config;
 
@@ -25,7 +32,7 @@ public sealed class RegistryProxyConfigProvider : IProxyConfigProvider, IDisposa
     public RegistryProxyConfigProvider(IRegistry? registry)
     {
         config = registry is null
-            ? RegistryProxyConfig.Empty
+            ? RegistryProxyConfig.NoRoutes()
             : RegistryProxyConfig.From(registry.Current);
 
         // IRegistry raises this after the swap, so Current is already the new snapshot. The argument
@@ -40,8 +47,11 @@ public sealed class RegistryProxyConfigProvider : IProxyConfigProvider, IDisposa
 
     private void Replace(RegistrySnapshot next)
     {
-        RegistryProxyConfig replaced = config;
-        config = RegistryProxyConfig.From(next);
-        replaced.Revoke();
+        lock (swap)
+        {
+            RegistryProxyConfig replaced = config;
+            config = RegistryProxyConfig.From(next);
+            replaced.Revoke();
+        }
     }
 }

@@ -35,7 +35,7 @@ public sealed class RegistryProxyConfig : IProxyConfig
     public IChangeToken ChangeToken { get; }
 
     /// <summary>No apps, and so no routes. The skeleton, before task 2.2 registers a registry.</summary>
-    internal static RegistryProxyConfig Empty => new([], []);
+    internal static RegistryProxyConfig NoRoutes() => new([], []);
 
     /// <summary>The configuration for a snapshot, built once and never mutated.</summary>
     public static RegistryProxyConfig From(RegistrySnapshot snapshot)
@@ -80,7 +80,7 @@ public sealed class RegistryProxyConfig : IProxyConfig
     internal void Revoke() => revoked.Cancel();
 
     /// <summary>An app and one of its API names. Unique, because both parts are.</summary>
-    public static string RouteId(string appId, string apiName) => appId + "/" + apiName;
+    private static string RouteId(string appId, string apiName) => appId + "/" + apiName;
 
     /// <summary>The prefix the browser contract puts an API behind, and the proxy removes.</summary>
     private static string PrefixFor(string apiName) => "/api/" + apiName;

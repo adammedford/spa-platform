@@ -78,5 +78,4 @@ public sealed class RegistryProxyConfigTests
     private static RegistrySnapshot SnapshotOf(params AppDefinition[] apps) =>
         InMemoryRegistry.SnapshotOf(1, "\"etag\"", apps);
 
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 }

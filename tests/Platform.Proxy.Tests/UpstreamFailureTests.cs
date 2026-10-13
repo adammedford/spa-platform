@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using Platform.Testing;
 
 namespace Platform.Proxy.Tests;
@@ -25,7 +24,7 @@ public sealed class UpstreamFailureTests
 
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
-        Assert.Equal("upstream_unavailable", await CodeOf(response));
+        Assert.Equal("upstream_unavailable", await Problem.CodeOf(response));
     }
 
     [Fact]
@@ -43,13 +42,8 @@ public sealed class UpstreamFailureTests
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
 
         Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
-        Assert.Equal("upstream_timeout", await CodeOf(response));
+        Assert.Equal("upstream_timeout", await Problem.CodeOf(response));
     }
-
-    private static async Task<string?> CodeOf(HttpResponseMessage response) =>
-        (await response.Content.ReadFromJsonAsync<Problem>())?.Code;
-
-    private sealed record Problem(int Status, string Code);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 }
