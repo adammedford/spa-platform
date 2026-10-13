@@ -1,0 +1,33 @@
+{
+  "//": "The user pool's resource servers and test users, read by the identity root (task 1.1) and by the mock API (task 5.3). No password is here: task 1.1 generates them into Parameter Store. Nothing in this file is a contract; the shape is this fixture's own, and fixtures/Fixtures.Tests holds it to what the plan asks of it.",
+  "resourceServers": [
+    {
+      "identifier": "https://orders.spa-poc.test",
+      "name": "orders",
+      "scopes": [
+        { "name": "read", "description": "Read orders" },
+        { "name": "admin", "description": "Administer orders. No test app asks for it, so /admin is refused (F-08)." }
+      ]
+    },
+    {
+      "identifier": "https://reports.spa-poc.test",
+      "name": "reports",
+      "scopes": [
+        { "name": "read", "description": "Read reports" },
+        { "name": "admin", "description": "Administer reports. No test app asks for it, so /admin is refused (F-08)." }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@spa-poc.test",
+      "name": "Alice Example"
+    },
+    {
+      "username": "bob",
+      "email": "bob@spa-poc.test",
+      "name": "Bob Example"
+    }
+  ]
+}
