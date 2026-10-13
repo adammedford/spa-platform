@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs before every push. Owner: integrator.
 #
-# It catches, locally and in about a second, the two things that are expensive to find later:
-# a change that touches a path outside its owner's set, and a build that does not compile.
+# It catches, locally and in about a second, the three things that are expensive to find later:
+# a change that touches a path outside its owner's set, a steering file that misleads every
+# session that loads it, and a build that does not compile.
 # The tests stay in CI, where they cost nothing to wait for.
 #
 # Enable it once per clone and once per worktree:
@@ -64,10 +65,20 @@ else
   echo "pre-push: A-05 not checked: python3 is not on PATH." >&2
 fi
 
+# --- the steering files -----------------------------------------------------------------------
+#
+# AGENTS.md and CLAUDE.md are loaded into every session. A progress claim or a pointer at a file
+# that does not exist costs every later session, so catch it at the push that writes it.
+if command -v python3 > /dev/null; then
+  python3 -I .github/steering.py || fail "the steering check failed."
+else
+  echo "pre-push: steering not checked: python3 is not on PATH." >&2
+fi
+
 # --- the build --------------------------------------------------------------------------------
 #
 # Warnings are errors, so this catches what a reviewer should never have to.
 command -v dotnet > /dev/null || fail "dotnet is not on PATH."
 dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does not build."
 
-echo "pre-push: A-05 and the build pass."
+echo "pre-push: A-05, the steering files and the build pass."

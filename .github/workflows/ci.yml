@@ -29,6 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Steering files claim no progress and every pointer resolves
+        # Before the build, because it costs a second and a stale AGENTS.md misleads every session
+        # from the top of its context window. Both rules it holds were prose first, and prose let
+        # a progress line sit directly under the paragraph forbidding it for two sessions running.
+        run: python3 -I .github/steering.py
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json

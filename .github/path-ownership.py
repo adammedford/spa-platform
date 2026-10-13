@@ -45,7 +45,16 @@ ALWAYS_ALLOWED = ("contracts/changes/",)
 # The only role that may declare itself the owner of a change spanning several owners' paths.
 DECLARABLE_OWNER = "integrator"
 
-DECLARATION = re.compile(r"^Path-Ownership:[ \t]*(?P<owner>[\w-]+)[ \t]*(?P<reason>.*)$", re.MULTILINE)
+# The reason runs to the end of the line, and on over any following lines that are indented, which
+# is how a git trailer continues. Without that it stopped at the first newline and a wrapped reason
+# reached the log truncated mid-sentence -- and the reason is the whole audit record, so a
+# truncated one defeats the point of asking for it. A continuation line has to be indented; an
+# unindented second line is a new paragraph as far as git is concerned, and guessing otherwise
+# would swallow the rest of the message.
+DECLARATION = re.compile(
+    r"^Path-Ownership:[ \t]*(?P<owner>[\w-]+)[ \t]*(?P<reason>.*(?:\n[ \t]+\S.*)*)$",
+    re.MULTILINE,
+)
 
 
 def rules() -> list[tuple[str, str]]:
@@ -105,7 +114,8 @@ def declaration(base: str, head: str) -> tuple[str, str] | None:
     if found is None:
         return None
 
-    return found.group("owner"), found.group("reason").strip()
+    # Collapse the continuation lines' indentation into single spaces, so the reason logs as one line.
+    return found.group("owner"), " ".join(found.group("reason").split())
 
 
 def run(command: list[str]) -> str:
