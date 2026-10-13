@@ -67,7 +67,7 @@ public sealed class CognitoPoolFixtureTests
             server["scopes"]!.AsArray().Select(scope =>
                 $"{server["identifier"]!.GetValue<string>()}/{scope!["name"]!.GetValue<string>()}"))];
 
-        foreach (string path in FixtureFiles.AppDefinitions.Concat(FixtureFiles.OnboardingDefinitions))
+        foreach (string path in FixtureFiles.AllDefinitions)
         {
             IEnumerable<string> requested = FixtureFiles.Read(path)["oauth"]!["scopes"]!
                 .AsArray()
@@ -89,7 +89,7 @@ public sealed class CognitoPoolFixtureTests
         // resource server would bind the token to an audience the API never checks for.
         HashSet<string> identifiers = [.. ResourceServers.Select(server => server["identifier"]!.GetValue<string>())];
 
-        foreach (string path in FixtureFiles.AppDefinitions.Concat(FixtureFiles.OnboardingDefinitions))
+        foreach (string path in FixtureFiles.AllDefinitions)
         {
             if (FixtureFiles.Read(path)["oauth"]!["resource"] is { } resource)
             {
@@ -98,7 +98,7 @@ public sealed class CognitoPoolFixtureTests
         }
     }
 
-    private static JsonNode Pool => FixtureFiles.Read(FixtureFiles.Path("fixtures", "cognito", "pool.json"));
+    private static JsonNode Pool => FixtureFiles.CognitoPool;
 
     private static IEnumerable<JsonNode> ResourceServers =>
         Pool["resourceServers"]!.AsArray().Select(server => server!);

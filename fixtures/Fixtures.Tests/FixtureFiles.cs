@@ -11,13 +11,27 @@ namespace Fixtures.Tests;
 /// file's own path, as <c>tests/Contracts.Tests/ContractFiles.cs</c> does it, with the output
 /// directory's ancestors as the fallback for a build that rewrote the path.
 ///
-/// Every schema goes into one registry, because the schemas <c>$ref</c> each other by <c>$id</c>:
-/// <c>app-definition.schema.json</c> is almost entirely <c>$ref</c>s into
-/// <c>registry.schema.json</c>, so loading it alone would resolve nothing.
+/// Every schema goes into one registry, as contracts/README.md -> "Using the schemas" requires: the
+/// schemas <c>$ref</c> each other by <c>$id</c>, and <c>app-definition.schema.json</c> is almost
+/// entirely <c>$ref</c>s into <c>registry.schema.json</c>, so loading it alone would resolve
+/// nothing. All four are loaded rather than the two this suite evaluates, so a <c>$ref</c> added
+/// later resolves instead of failing here.
 /// </summary>
 internal static class FixtureFiles
 {
-    internal const string AppDefinitionSchema = "app-definition.schema.json";
+    private const string AppDefinitionSchema = "app-definition.schema.json";
+
+    /// <summary>
+    /// The registry document comes first: the others <c>$ref</c> its <c>$defs</c>, so it has to be
+    /// in the registry before they are built.
+    /// </summary>
+    private static readonly string[] SchemaFiles =
+    [
+        "registry.schema.json",
+        AppDefinitionSchema,
+        "platform-config.schema.json",
+        "infra-outputs.schema.json",
+    ];
 
     private static readonly string Root = FindRepositoryRoot();
 
@@ -33,6 +47,23 @@ internal static class FixtureFiles
     /// <summary>App 3, which stays out of the apps root until F-07 onboards it.</summary>
     internal static IEnumerable<string> OnboardingDefinitions => Definitions("onboarding");
 
+    /// <summary>Every app definition, wherever it waits.</summary>
+    internal static IEnumerable<string> AllDefinitions => AppDefinitions.Concat(OnboardingDefinitions);
+
+    /// <summary>The user pool's resource servers and test users.</summary>
+    internal static JsonNode CognitoPool => Read(Path("fixtures", "cognito", "pool.json"));
+
+    /// <summary>
+    /// The contract's own example of the task environment task 1.4 supplies. The bounds a schema
+    /// cannot express are in its <c>Policy</c> and <c>Issuers</c> sections.
+    /// </summary>
+    internal static JsonNode PlatformConfiguration => Read(Path("contracts", "platform-config.example.json"));
+
+    /// <summary>One definition, by the appId it carries.</summary>
+    internal static JsonNode Definition(string appId) =>
+        Read(AllDefinitions.FirstOrDefault(path => System.IO.Path.GetFileName(path) == appId + ".json")
+             ?? throw new FileNotFoundException($"no definition for {appId}."));
+
     internal static string Path(params string[] parts) =>
         System.IO.Path.Combine([Root, .. parts]);
 
@@ -41,10 +72,11 @@ internal static class FixtureFiles
         JsonNode.Parse(File.ReadAllText(path))
         ?? throw new InvalidOperationException($"{path} parsed to JSON null.");
 
-    internal static (bool IsValid, string Report) Evaluate(string schemaFile, JsonNode document)
+    /// <summary>Whether a definition validates, with the schema's own report when it does not.</summary>
+    internal static (bool IsValid, string Report) ValidatesAsAppDefinition(JsonNode definition)
     {
-        JsonElement instance = JsonSerializer.SerializeToElement(document);
-        EvaluationResults results = Schemas[schemaFile].Evaluate(instance, Options);
+        JsonElement instance = JsonSerializer.SerializeToElement(definition);
+        EvaluationResults results = Schemas[AppDefinitionSchema].Evaluate(instance, Options);
 
         return (results.IsValid, Describe(results));
     }
@@ -54,10 +86,8 @@ internal static class FixtureFiles
 
     private static Dictionary<string, JsonSchema> LoadSchemas()
     {
-        // The registry document comes first: the others $ref its $defs, so it has to be in the
-        // registry before they are built.
         Dictionary<string, JsonSchema> schemas = [];
-        foreach (string name in (string[])["registry.schema.json", AppDefinitionSchema])
+        foreach (string name in SchemaFiles)
         {
             JsonSchema schema = JsonSchema.FromText(File.ReadAllText(Path("contracts", name)), Build);
             Build.SchemaRegistry.Register(schema);

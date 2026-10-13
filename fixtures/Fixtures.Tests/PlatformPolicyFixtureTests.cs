@@ -47,7 +47,7 @@ public sealed class PlatformPolicyFixtureTests
     [Fact]
     public void Every_issuer_names_a_configured_issuer()
     {
-        IEnumerable<string> issuers = Configuration["Issuers"]!.AsObject().Select(issuer => issuer.Key);
+        IEnumerable<string> issuers = FixtureFiles.PlatformConfiguration["Issuers"]!.AsObject().Select(issuer => issuer.Key);
 
         foreach (string path in Definitions)
         {
@@ -55,13 +55,9 @@ public sealed class PlatformPolicyFixtureTests
         }
     }
 
-    private static IEnumerable<string> Definitions =>
-        FixtureFiles.AppDefinitions.Concat(FixtureFiles.OnboardingDefinitions);
+    private static IEnumerable<string> Definitions => FixtureFiles.AllDefinitions;
 
-    private static JsonNode Configuration =>
-        FixtureFiles.Read(FixtureFiles.Path("contracts", "platform-config.example.json"));
-
-    private static JsonObject Policy => Configuration["Policy"]!.AsObject();
+    private static JsonObject Policy => FixtureFiles.PlatformConfiguration["Policy"]!.AsObject();
 
     private static IEnumerable<string> Strings(JsonNode array) =>
         array.AsArray().Select(value => value!.GetValue<string>());
