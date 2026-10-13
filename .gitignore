@@ -41,8 +41,12 @@ spikes/g0/real-handler/vendor/ref/
 # Agent issue tracker (docs/agents/issue-tracker.md)
 .scratch/
 
-# Agent session scratch: worktrees, local agent settings. Never the repository's business.
-.claude/
+# Agent session scratch: worktrees and anything else a session leaves behind.
+# settings.json is the exception: the permission allowlist is shared, like CI config is.
+# A negation cannot reach inside an ignored directory, so the directory's contents are listed
+# rather than the directory itself.
+.claude/*
+!.claude/settings.json
 
 # macOS and editors
 .DS_Store
