@@ -1,0 +1,178 @@
+# CI. Owner: integrator, written at task I-5.
+#
+# Four jobs: the solution builds, every test project runs, the Terraform roots validate, and check
+# A-05 fails a change that touches a path outside its owner's set.
+#
+# Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
+# (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
+# and neither exists yet. They skip with a notice rather than passing silently.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write # For the AWS plan role, once task 1.9 wires it.
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Package versions are central, so one key covers the whole solution.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Build
+        # Warnings are errors, set in Directory.Build.props. Package advisories warn (NU1901-NU1904).
+        run: dotnet build --configuration Release
+
+      - name: Tests
+        # Every test project in the solution: the component tests, the hermetic gateway suites and
+        # the architecture tests A-01 to A-04. They are one step because the whole suite runs in
+        # seconds; split it per tier when workstream 6's suites make that worth separate signal.
+        #
+        # A test project with no tests exits 8 on Microsoft Testing Platform. On the skeleton most of
+        # them have none, so 8 is suppressed. It stops being suppressed when it stops being normal.
+        run: dotnet test --solution SpaPlatform.slnx --configuration Release --ignore-exit-code 8
+
+      - name: The gateway starts and answers 404 to an unknown host
+        # G1a's exit test, and nothing else here proves it: the suite never starts the gateway, so a
+        # composition root that throws, or a settings file the configuration binder rejects, builds
+        # and tests clean. Both have happened.
+        #
+        # Host-based, because host resolution is what answers 404. curl is fine on a runner: no
+        # proxy sits in front of it, unlike an agent sandbox (see AGENTS.md).
+        run: |
+          set -euo pipefail
+          dotnet publish src/Gateway/Gateway.csproj --configuration Release --no-build -o /tmp/gw
+
+          ASPNETCORE_HTTP_PORTS=5080 dotnet /tmp/gw/Gateway.dll &
+          gateway=$!
+          trap 'kill $gateway 2> /dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:5080/healthz 2> /dev/null; then break; fi
+            sleep 1
+          done
+
+          probe() {
+            curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" "http://127.0.0.1:5080$2"
+          }
+
+          expect() {
+            got="$(probe "$1" "$2")"
+            if [ "$got" != "$3" ]; then
+              echo "::error::Host $1 $2 answered $got, expected $3"
+              exit 1
+            fi
+            echo "  $1 $2 -> $got"
+          }
+
+          # /healthz answers on any host, because it runs before host resolution. /readyz is 503
+          # until a snapshot is live, which cannot happen on stubs. Every app path is 404 while the
+          # registry is empty: with no registry, every host is an unknown host.
+          expect nope.example      /healthz       200
+          expect nope.example      /readyz        503
+          expect nope.example      /              404
+          expect app1.spa-poc.test /              404
+          expect app1.spa-poc.test /assets/app.js 404
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # 1.11 is the floor: that release gave the S3 backend its native lock file, which is why
+          # no DynamoDB table exists anywhere in this platform.
+          terraform_version: 1.11.0
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive infra
+
+      - name: Validate every root
+        # A root is any directory holding .tf files. Discovered rather than listed, so the roots
+        # tasks 1.1 to 1.5 and 1.8 add are validated the day they land.
+        #
+        # -backend=false: validation needs no state and no credentials.
+        run: |
+          set -euo pipefail
+          roots=$(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u)
+          if [ -z "$roots" ]; then
+            echo "::error::no Terraform roots found under infra/"
+            exit 1
+          fi
+          for root in $roots; do
+            echo "--- $root"
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate
+          done
+
+      - name: Plan policy (P-01 to P-03)
+        # The allowlist of resource types and counts, plus the assertions on the two security groups
+        # and the task role. Task 1.9 writes it at tools/scripts/plan-policy.sh, taking a root as its
+        # argument, and it needs the read-only plan role from task 1.0 in vars.AWS_PLAN_ROLE_ARN.
+        run: |
+          set -euo pipefail
+          if [ ! -x tools/scripts/plan-policy.sh ]; then
+            echo "::notice::P-01 to P-03 not checked: tools/scripts/plan-policy.sh does not exist yet (task 1.9)."
+            exit 0
+          fi
+          if [ -z "${AWS_PLAN_ROLE_ARN}" ]; then
+            echo "::notice::P-01 to P-03 not checked: vars.AWS_PLAN_ROLE_ARN is not set (task 1.0 creates the role)."
+            exit 0
+          fi
+          echo "::error::plan-policy.sh exists and the role is set, but task I-5 left no step to run them."
+          exit 1
+        env:
+          AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
+
+  path-ownership:
+    name: Path ownership (A-05)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check diffs against the base, so it needs more than the tip commit.
+          fetch-depth: 0
+
+      - name: Check A-05
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          # A first push, a force-push or a new branch gives no usable base. There is no change to
+          # scope then, and inventing one would either pass everything or fail everything.
+          if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+            echo "::notice::A-05 not checked: no base commit to diff against ('$base')."
+            exit 0
+          fi
+
+          python3 -I .github/path-ownership.py "$base" "$head"

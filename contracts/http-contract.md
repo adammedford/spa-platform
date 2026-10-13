@@ -42,6 +42,17 @@ login as another user.
 Two cookies persist in the browser, the session cookie and the antiforgery cookie, and neither holds
 token material. Correlation and nonce cookies exist only while a login is in flight.
 
+## Request headers the SPA sends
+
+| Header | On | Value |
+| --- | --- | --- |
+| `X-CSRF-TOKEN` | Every unsafe method on `/api/**`: anything but `GET`, `HEAD` and `OPTIONS` | The request token, read from `csrfToken` in the `GET /bff/session` response |
+
+The token travels in this header and nowhere else. It is never a form field, because the gateway
+would then have to read a request body it is about to proxy, so antiforgery runs with form-body
+reading suppressed (`contracts/request-gate.md`, rule `csrf.token`). A request missing it, or
+carrying another app's, is refused with 403 and `csrf_failed`.
+
 ## Response headers
 
 Set on every response, including proxied ones, where they overwrite what the upstream sent.

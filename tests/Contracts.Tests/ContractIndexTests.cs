@@ -21,14 +21,36 @@ public sealed class ContractIndexTests
 
     [Theory]
     [MemberData(nameof(EveryProseContract))]
-    public void Every_written_contract_names_its_gate_and_its_source(string fileName)
+    public void Every_written_contract_names_its_gate(string fileName)
     {
-        string text = ContractFiles.ReadText(fileName);
-        Assert.Contains("Freezes at:", text);
-        Assert.Contains("docs/plan/02-contracts.md", text);
+        Assert.Contains("Freezes at:", ContractFiles.ReadText(fileName));
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryProseContractExportedFromThePlan))]
+    public void Every_written_contract_exported_from_the_plan_names_it(string fileName)
+    {
+        Assert.Contains("docs/plan/02-contracts.md", ContractFiles.ReadText(fileName));
+    }
+
+    [Fact]
+    public void The_resource_tags_contract_names_the_change_request_and_the_ADR_instead_of_the_plan()
+    {
+        // The one contract with no plan section behind it: the plan names "the platform tag" three
+        // times without defining it. Change request 1.6a raised that, ADR-0013 decided it. The
+        // provenance still has to be on the page, so workstream 6 can see where the string came
+        // from rather than inferring it from Terraform.
+        string text = ContractFiles.ReadText("resource-tags.md");
+
+        Assert.Contains("1.6a-platform-tag-convention.md", text);
+        Assert.Contains("ADR-0013", text);
     }
 
     public static TheoryData<string> EveryProseContract() => new(
+        "pipeline.md", "http-contract.md", "request-gate.md", "upstream-contract.md", "s3-layout.md",
+        "telemetry.md", "resource-tags.md");
+
+    public static TheoryData<string> EveryProseContractExportedFromThePlan() => new(
         "pipeline.md", "http-contract.md", "request-gate.md", "upstream-contract.md", "s3-layout.md", "telemetry.md");
 
     [Theory]

@@ -25,6 +25,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0010](0010-wildcard-ingress-with-no-listener-rules.md) | Serve every host from one wildcard listener with no listener rules | D10 |
 | [0011](0011-idp-differences-behind-iidpprofile.md) | Put identity-provider differences behind `IIdpProfile`, chosen per issuer | D11 |
 | [0012](0012-cell-as-deployment-unit.md) | Make the cell the deployment unit | D12 |
+| [0013](0013-platform-tag-and-bootstrap-exemption.md) | Name the platform tag `Platform = spa-platform`, and exempt the bootstrap root | — |
 
 Three decisions carry open gate work: ADR-0001 (G0 items 2 and 3, Cognito), ADR-0005 (the reserve
 refresh design reopens if G0 item 2 finds Cognito's grace window insufficient) and ADR-0011 (G0
