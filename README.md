@@ -29,7 +29,7 @@ in `AGENTS.md` and why this block is generated.
 <!-- BEGIN GENERATED summary -->
 **Closed gates:** G1a (`skeleton-v1`).
 **Where the gateway is:** S2 The mechanism holds on the shipped parts, which closes at gate G0.
-**Plan rows landed:** 10 of 62, with 2 part-landed. S2 still owes `1.1`, `1.8`, `3.0`.
+**Plan rows landed:** 25 of 62, with 5 part-landed. S2 still owes `1.1`, `3.0`.
 <!-- END GENERATED summary -->
 
 `docs/roadmap.md` has the same figures per stage, and what each stage still owes. For the detail

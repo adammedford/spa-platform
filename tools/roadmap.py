@@ -38,7 +38,7 @@ import sys
 ROADMAP = "docs/roadmap.md"
 PLAN_TASKS = "docs/plan/03-workstreams-and-tasks.md"
 PLAN_PHASE2 = "docs/plan/06-phase-2-and-risks.md"
-TARGETS = ["README.md", ROADMAP]
+TARGETS = {"README.md": ("summary",), ROADMAP: ("stages",)}
 
 # A plan row's id: I-4, 2.1, 1.6a, P2-7. The letter suffix is a plan row of its own (1.6a and 1.6b
 # are separate rows); a suffix on an id the plan does not list is a split made while working, which
@@ -253,7 +253,9 @@ def shallow(root: pathlib.Path) -> bool:
 # said "part of" to landed on the strength of the commit beneath it.
 LANDED_SUBJECT = re.compile(r"^Merge\s+(part of\s+)?tasks?\s+(.+?):", re.IGNORECASE)
 # GitHub's own merge subject, where the branch name carries the id: task/i-3-abstractions.
-LANDED_BRANCH = re.compile(r"^Merge pull request #\d+ from \S+?/task/([A-Za-z0-9.\-]+?)-")
+LANDED_BRANCH = re.compile(
+    r"^Merge pull request #\d+ from \S+?/task/([Ii]-\d+|[Pp]2-\d+|\d+\.\d+[a-z]?)-"
+)
 # "I-5: CI, and check A-05" and "Import skeleton (I-1), plan export, ...". The integrator's own rows
 # landed on the trunk directly, with no branch and no merge to name them; a workstream row never
 # does, because landing-work.md gives it a branch and a merge. Restricted to I- ids for that reason.
@@ -299,8 +301,12 @@ def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
             continue
         match = LANDED_BRANCH.match(subject)
         if match:
-            # Branch names are lower case: task/i-3-... is I-3.
-            record(match.group(1).upper(), "landed")
+            # Normalize named prefixes only: 1.6a and 1.6b are distinct lowercase plan rows.
+            # Capture the complete I-/P2- id above, including its hyphen, before the branch slug.
+            id_ = match.group(1)
+            if id_.startswith(("i-", "p2-")):
+                id_ = id_.upper()
+            record(id_, "landed")
             continue
         match = LANDED_INTEGRATOR.match(subject) or LANDED_PARENTHESISED.search(subject)
         if match:
@@ -390,7 +396,8 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
 
 def replace(text: str, name: str, body: str) -> tuple[str, bool]:
     begin, end = MARKER.format("BEGIN", name), MARKER.format("END", name)
-    if begin not in text or end not in text:
+    # The guard must survive deletion of both markers, and reject duplicate or reversed pairs.
+    if text.count(begin) != 1 or text.count(end) != 1 or text.index(begin) >= text.index(end):
         return text, False
     head, rest = text.split(begin, 1)
     _, tail = rest.split(end, 1)
@@ -429,10 +436,10 @@ def main(argv: list[str]) -> int:
         path = root / name
         before = path.read_text()
         after = before
-        for block, body in blocks.items():
-            after, found = replace(after, block, body)
-            if not found and block in before:
-                print(f"  {name}: a '{block}' marker is unpaired")
+        for block in TARGETS[name]:
+            after, found = replace(after, block, blocks[block])
+            if not found:
+                print(f"  {name}: '{block}' requires exactly one ordered BEGIN/END marker pair")
                 return 1
         if after == before:
             continue

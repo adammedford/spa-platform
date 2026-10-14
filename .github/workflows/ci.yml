@@ -49,7 +49,9 @@ jobs:
         # fails when the block is not what the repository says, and when the ladder stops covering
         # every plan row exactly once. Beside the steering check for the same reason -- a document
         # that states progress is a document that will state it wrongly.
-        run: python3 -I tools/roadmap.py --check
+        run: |
+          python3 -I tools/roadmap_tests.py
+          python3 -I tools/roadmap.py --check
 
       - uses: actions/setup-dotnet@v4
         with:
