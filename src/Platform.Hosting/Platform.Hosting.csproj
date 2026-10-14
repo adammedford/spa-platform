@@ -6,4 +6,10 @@
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- N-13 is proved against AssetPath directly as well as over the socket: Kestrel collapses dot
+         segments and refuses a NUL before the endpoint runs, so those rows would test Kestrel alone. -->
+    <InternalsVisibleTo Include="Platform.Hosting.Tests" />
+  </ItemGroup>
+
 </Project>

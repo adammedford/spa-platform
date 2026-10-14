@@ -9,11 +9,15 @@ namespace Platform.Hosting;
 ///
 /// <c>Platform.Security</c> and <c>Platform.Proxy</c> each have their own copy writing the same two
 /// fields, because check A-03 keeps a workstream project from referencing another one. Every stage
-/// this project owns writes through this one; task 2.4's missing asset will too.
+/// this project owns writes through this one, the asset endpoint's included.
 /// </summary>
 internal static class Problems
 {
     public const string NotFound = "not_found";
+
+    public const string InvalidRequest = "invalid_request";
+
+    public const string MethodNotAllowed = "method_not_allowed";
 
     public static Task WriteAsync(HttpContext context, int status, string code)
     {
