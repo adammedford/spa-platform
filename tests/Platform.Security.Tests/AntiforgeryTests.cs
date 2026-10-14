@@ -19,7 +19,11 @@ public sealed class AntiforgeryTests
 
     private static readonly Platform.Abstractions.AppDefinition App1 = AntiforgeryHost.App1;
 
-    private static async Task AssertRefusedAsync(AntiforgeryHost host, HttpResponseMessage response, params string[] canaries)
+    private static Task AssertRefusedAsync(AntiforgeryHost host, HttpResponseMessage response, params string[] canaries) =>
+        AssertRefusedAfterAsync(host, response, reachedBefore: 0, canaries);
+
+    /// <param name="reachedBefore">How many earlier requests in the test reached the terminal, as a control.</param>
+    private static async Task AssertRefusedAfterAsync(AntiforgeryHost host, HttpResponseMessage response, int reachedBefore, params string[] canaries)
     {
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
@@ -30,7 +34,7 @@ public sealed class AntiforgeryTests
         // The terminal sends Access-Control-Allow-Origin and counts itself, so either fails if the
         // request got past stage 9.
         Assert.DoesNotContain(response.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(0, host.Reached);
+        Assert.Equal(reachedBefore, host.Reached);
         Assert.Single(host.LinesFor("csrf.token"));
 
         // N-16: neither half of the pair is ever logged.
@@ -194,9 +198,7 @@ public sealed class AntiforgeryTests
         using HttpResponseMessage response = await host.SendAsync("POST", "/api/orders/items", AntiforgeryHost.App2, "alice", Ct,
             cookie: onApp1.Cookie, csrfHeader: onApp1.RequestToken, content: AntiforgeryHost.Json("{}"));
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal(1, host.Reached);
-        Assert.Single(host.LinesFor("csrf.token"));
+        await AssertRefusedAfterAsync(host, response, reachedBefore: 1, onApp1.RequestToken, onApp1.Cookie!);
     }
 
     [Fact]
@@ -258,9 +260,7 @@ public sealed class AntiforgeryTests
         using HttpResponseMessage response = await host.SendAsync("POST", "/api/orders/items", App1, "alice", Ct,
             cookie: after.Cookie, csrfHeader: before.RequestToken, content: AntiforgeryHost.Json("{}"));
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal(1, host.Reached);
-        Assert.Single(host.LinesFor("csrf.token"));
+        await AssertRefusedAfterAsync(host, response, reachedBefore: 1, before.RequestToken, after.RequestToken, before.Cookie!, after.Cookie!);
     }
 
     // ---- R-E5: the cookie a browser will keep ----

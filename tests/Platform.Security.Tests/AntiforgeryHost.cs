@@ -31,7 +31,8 @@ namespace Platform.Security.Tests;
 /// real gateway: a refusal across apps is then the app binding's doing, not a key mismatch (R-E3b).</item>
 /// <item>Stage 7's stand-in signs in the user named in <c>X-Test-User</c>, with a <c>sub</c> claim and an
 /// authentication type, because the framework binds a token to the user only when the identity is
-/// authenticated.</item>
+/// authenticated, and then by its <c>sub</c> claim first
+/// (https://github.com/dotnet/aspnetcore/blob/main/src/Antiforgery/src/Internal/DefaultClaimUidExtractor.cs).</item>
 /// <item><c>GET /bff/session</c> stands for workstream 3's endpoint, calling <see cref="ICsrfTokens.Issue"/>,
 /// and <c>POST /bff/logout</c> for logout, calling <see cref="ICsrfTokens.Clear"/>.</item>
 /// <item>Every other request reaches a terminal standing for the proxy. It reports how many body bytes

@@ -88,13 +88,16 @@ internal static class PlatformAntiforgery
             // Header only: with SuppressReadingTokenFromFormBody the token store never reads the form
             // (R-E6). The framework answers true for GET, HEAD, OPTIONS and TRACE itself, and turns a
             // missing or mismatched token into false rather than an exception; it throws only on a
-            // request that is not https, which is a misconfigured stage 1 and should be loud.
+            // request that is not https, which is a misconfigured stage 1 and should be loud. TRACE
+            // never gets here: stage 1's method allowlist answers it 405 (N-20).
+            // https://github.com/dotnet/aspnetcore/blob/main/src/Antiforgery/src/Internal/DefaultAntiforgery.cs
             antiforgery.IsRequestValidAsync(context);
 
         public void Clear(HttpContext context) =>
             // IAntiforgery has no way to remove its cookie. A browser deletes a __Host- cookie only when
             // the deletion carries Secure and Path=/, so it is built from the same options that set it.
             // R-E4: a token from before logout then pairs with no cookie in the next session.
+            // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-the-__host-prefix
             context.Response.Cookies.Delete(options.Value.Cookie.Name!, options.Value.Cookie.Build(context));
     }
 }
@@ -108,6 +111,9 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
     // Case-insensitive, as the request gate's match and endpoint routing are, so /API/... cannot
     // reach the proxy route without a token.
     private static readonly PathString Api = "/api";
+
+    /// <summary><c>contracts/request-gate.md</c> -> Rule ids.</summary>
+    private const string Rule = "csrf.token";
 
     internal async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
@@ -123,7 +129,7 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
         // signed-in user, so no anonymous pair exists to pass.
         if (!await tokens.IsValidAsync(context))
         {
-            Refused(logger, "csrf.token");
+            Refused(logger, Rule);
             await Problems.WriteAsync(context, StatusCodes.Status403Forbidden, "csrf_failed");
             return;
         }

@@ -87,6 +87,13 @@ public static class PlatformSecurityExtensions
     /// antiforgery metadata, such as a minimal API that binds a form, and it would then demand a token
     /// of a form-bound <c>/bff/logout</c>, which the contract says takes none. Every check this
     /// platform needs is the one below, by path and method.
+    ///
+    /// Leaving it out does not free such an endpoint: endpoint routing refuses to run one that carries
+    /// antiforgery metadata when <c>UseAntiforgery</c> did not run ("contains anti-forgery metadata,
+    /// but a middleware was not found that supports anti-forgery", an InvalidOperationException, so a
+    /// 500). A form-bound <c>/bff/logout</c> therefore has to opt out with <c>DisableAntiforgery()</c>
+    /// or read the form itself.
+    /// https://learn.microsoft.com/aspnet/core/security/anti-request-forgery#antiforgery-with-minimal-apis
     /// </summary>
     public static IApplicationBuilder UsePlatformAntiforgery(this IApplicationBuilder app)
     {
