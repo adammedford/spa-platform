@@ -23,7 +23,7 @@ public sealed class AssetTests
 
     private static string Prefix(AppDefinition app) => $"apps/{app.AppId}/releases/{app.Release}/";
 
-    private static async Task<(HostingHost Gateway, RecordingObjectStore Store)> StartAsync()
+    private static async Task<(HostingHost Gateway, RecordingObjectStore Store)> StartAsync(RecordingLoggerProvider? logs = null)
     {
         RecordingObjectStore store = new();
         await store.SeedAsync(Prefix(App1) + "index.html", "<p>shell one</p>");
@@ -41,7 +41,7 @@ public sealed class AssetTests
         await store.SeedAsync("apps/app1/secret.txt", Leak + "app1 root");
         await store.SeedAsync(Prefix(App2) + "assets/app-3f2a.js", Leak + "app2 asset");
 
-        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store);
+        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store, logs);
         return (gateway, store);
     }
 
@@ -285,6 +285,36 @@ public sealed class AssetTests
 
         Assert.Equal(200, response.Status);
         Assert.Equal("mine", response.Body);
+    }
+
+    /// <summary>
+    /// A refusal is logged under its rule id (contracts/request-gate.md, Rule ids: "Tests assert on both
+    /// the code and the rule id"), and the line carries the rule id only, never the client's path. The
+    /// canary in each path is what a line that logged the path would contain. Only the platform's own
+    /// categories are held to that: ASP.NET Core's request-start line carries the URL at Information,
+    /// and which framework lines the gateway keeps is workstream 6's to configure (Platform.Telemetry).
+    /// </summary>
+    [Theory]
+    [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request", "path.invalid")]
+    [InlineData("/bff/canary-7f3e.js", 404, "not_found", "path.reserved")]
+    public async Task A_refusal_logs_its_rule_id_and_not_the_path(string path, int status, string code, string rule)
+    {
+        RecordingLoggerProvider logs = new();
+        (HostingHost gateway, RecordingObjectStore store) = await StartAsync(logs);
+        await using HostingHost _ = gateway;
+
+        RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
+
+        Assert.Equal(status, response.Status);
+        AssertProblem(response, code);
+        Assert.Empty(store.KeysRead);
+        Assert.Contains(logs.Lines, line =>
+            line.Category == "Platform.Hosting.Assets"
+            && line.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+            && line.Message == $"Asset request refused under {rule}");
+        Assert.DoesNotContain(logs.Lines, line =>
+            line.Category.StartsWith("Platform.", StringComparison.Ordinal)
+            && line.Message.Contains("canary-7f3e", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

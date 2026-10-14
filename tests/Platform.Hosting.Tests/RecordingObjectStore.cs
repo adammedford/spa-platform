@@ -19,8 +19,6 @@ internal sealed class RecordingObjectStore : IObjectStore
 
     public IReadOnlyList<string?> IfNoneMatchSent => [.. reads.Select(read => read.IfNoneMatch)];
 
-    public void Clear() => reads.Clear();
-
     public async Task SeedAsync(string key, string body)
     {
         using MemoryStream stream = new(Encoding.UTF8.GetBytes(body));

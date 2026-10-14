@@ -59,10 +59,13 @@ internal static class AssetPath
     ///
     /// Refused: no leading slash; an empty segment anywhere but the end (a doubled slash); a
     /// <c>.</c> or <c>..</c> segment; a backslash, which some servers and S3 tooling read as a
-    /// separator; a <c>%</c>, because Kestrel decodes every escape but <c>%2F</c> before the path
-    /// reaches here, so a <c>%</c> that remains is an encoded slash or a second round of encoding
-    /// (https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/endpoints); and any
-    /// control character, NUL included.
+    /// separator; a <c>%</c>, because the server decodes every escape but <c>%2F</c> before the path
+    /// reaches here ("The path is fully decoded by the server except for '%2F'",
+    /// https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.http.features.ihttprequestfeature.path),
+    /// so a <c>%</c> that remains is an encoded slash, a second round of encoding such as
+    /// <c>%252e</c>, or a literal <c>%</c> sent as <c>%25</c>. The first two are N-13's shapes; the
+    /// third costs a release the use of <c>%</c> in a file name, which is refused rather than told
+    /// apart from them; and any control character, NUL included.
     /// </summary>
     public static string? Validate(string? path)
     {

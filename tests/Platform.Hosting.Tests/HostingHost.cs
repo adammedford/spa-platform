@@ -53,11 +53,16 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>Runs in the terminal before it reads the feature: a swap mid-request goes here.</summary>
     public Action? DuringRequest { get; set; }
 
-    public static async Task<HostingHost> StartAsync(RegistrySnapshot initial, CancellationToken ct, IObjectStore? store = null)
+    public static async Task<HostingHost> StartAsync(
+        RegistrySnapshot initial, CancellationToken ct, IObjectStore? store = null, ILoggerProvider? logs = null)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
+        if (logs is not null)
+        {
+            builder.Logging.AddProvider(logs);
+        }
 
         InMemoryRegistry registry = new(initial);
         builder.Services.AddSingleton<IRegistry>(registry);
