@@ -60,7 +60,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | Microsoft.AspNetCore.Mvc.Testing | 10.0.12 | MIT | `Gateway.TestHarness` |  |
 | Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing` | The fake clock |
 | Microsoft.Playwright | 1.63.0 | MIT | `tests/e2e`, `Fixtures.Tests` |  |
-| JsonSchema.Net | 8.0.5 | MIT | Schema tests, `spactl` | Decision D-1 |
+| JsonSchema.Net | 8.0.5 | MIT | Schema tests, `Fixtures.Tests`, `Platform.Registry` (the gateway and `spactl`) | Decision D-1, decided |
 
 The skeleton adds only `xunit.v3` to projects. Each owner adds the other references to their own project files as the work needs them.
 
@@ -73,20 +73,24 @@ The skeleton adds only `xunit.v3` to projects. Each owner adds the other referen
 
 The provider documents both Cognito features task 1.8 relies on: the `refresh_token_rotation` block on `aws_cognito_user_pool_client`, and the `aws_cognito_managed_login_branding` resource.
 
-## Open decisions
+## Decided
 
-### D-1: the JSON Schema validator
+### D-1: the JSON Schema validator. JsonSchema.Net 8.0.5, in the gateway
 
-The plan asks for "a JSON Schema validator" and names none. The usual choice is JsonSchema.Net. Its current package, 9.4.0, ships under a maintenance-fee licence: any user that generates revenue must pay a monthly fee to use the binaries. The 8.0.5 package still declares MIT.
+Decided by the integrator on 14 October 2026, on change request 2.1. The plan asks for "a JSON Schema validator" and names none. The usual choice is JsonSchema.Net. Its current package, 9.4.0, ships under a maintenance-fee licence: any user that generates revenue must pay a monthly fee to use the binaries. The 8.0.5 package still declares MIT.
 
 | Option | Licence | Trade-off |
 | --- | --- | --- |
-| JsonSchema.Net 8.0.5, pinned | MIT | No fee. An older release line, so fixes may stop reaching it. **The skeleton's default.** |
+| **JsonSchema.Net 8.0.5, pinned** | MIT | No fee. An older release line, so fixes may stop reaching it. **Chosen.** |
 | JsonSchema.Net 9.4.0 | Maintenance fee | Current and supported. Needs a paid sponsorship once the platform is in commercial use. |
 | NJsonSchema 11.6.1 | MIT | Widely used. Brings Newtonsoft.Json with it. |
 | LateApexEarlySpeed.Json.Schema 4.2.0 | BSD-3-Clause | Built on System.Text.Json, covers draft 2020-12. One maintainer. |
 
-Recommendation: whichever is chosen, keep it in tests and `spactl`, and out of the gateway process. The gateway can check a registry document through its typed model and the rule validator of task 2.1. That would narrow task 2.1's "schema check", so it is a change for the integrator to accept.
+The engine runs in the gateway process, through `src/Platform.Registry`, and the earlier recommendation to keep it out is rejected. `contracts/README.md` -> "Rules that JSON Schema cannot express" makes the one shared library the guarantee that the gateway and `spactl` cannot disagree, and several security rules live only in the schema: the source `'*'` and `'unsafe-eval'` in every content security policy directive, `'unsafe-inline'` and `data:` in `script-src`, `additionalProperties: false`, and the `host`, `upstream` and `clientSecretRef` patterns. Keeping the engine out of the gateway would leave it weaker than `spactl` on those rules, or duplicate them in C#. The engine parses a registry document, which the plan already has the gateway trust.
+
+**Revisit when** 8.x stops receiving a fix we need. Then pick a permissively licensed engine from the table above. In shipping code the engine is touched in one file, `src/Platform.Registry/RegistrySchemas.cs`, which is the whole of the gateway's and `spactl`'s exposure to it; the two test projects in the row above call it directly as well, and they are not what a swap has to keep working. A one-file change in the code that ships is why this is recorded here and not as an ADR.
+
+## Open decisions
 
 ### D-2: the container engine
 
