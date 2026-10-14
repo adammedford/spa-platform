@@ -32,12 +32,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history and every tag. The roadmap check below derives how far the work has
+          # got from the tags and the merge subjects, and the default depth-1 checkout has neither.
+          fetch-depth: 0
 
       - name: Steering files claim no progress and every pointer resolves
         # Before the build, because it costs a second and a stale AGENTS.md misleads every session
         # from the top of its context window. Both rules it holds were prose first, and prose let
         # a progress line sit directly under the paragraph forbidding it for two sessions running.
         run: python3 -I .github/steering.py
+
+      - name: The roadmap says what the tags, the merges and the plan say
+        # docs/roadmap.md carries the gateway's capability ladder and a generated block saying how
+        # far along it the work has got. The block is derived, and this is what keeps it derived: it
+        # fails when the block is not what the repository says, and when the ladder stops covering
+        # every plan row exactly once. Beside the steering check for the same reason -- a document
+        # that states progress is a document that will state it wrongly.
+        run: |
+          python3 -I tools/roadmap_tests.py
+          python3 -I tools/roadmap.py --check
 
       - uses: actions/setup-dotnet@v4
         with:

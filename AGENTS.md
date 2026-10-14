@@ -10,6 +10,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 
 | You need | Read |
 | --- | --- |
+| Why your task exists: what gateway capability it is part of | `docs/roadmap.md` |
 | Architecture, gates, decisions, assumptions | `docs/plan/01-plan.md` |
 | Interfaces, schemas, the request pipeline order | `docs/plan/02-contracts.md`, and `contracts/` once task I-2 has landed |
 | Your task: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
@@ -85,6 +86,8 @@ goes stale and then misleads every session that loads it.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
   tags.
 - **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read against `git tag`.
+- **All three at once, per gateway capability:** the generated block in `docs/roadmap.md`, which
+  `tools/roadmap.py` derives from exactly those sources. Land a row, then run that script.
 
 One rule does not depend on progress, so it is safe to state here: nothing in
 `src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because everything identity is

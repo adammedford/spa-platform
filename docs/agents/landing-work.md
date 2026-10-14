@@ -44,6 +44,10 @@ Merge task(s) <id...>: <what landed>      the row is done
 Merge part of task <id>: <what landed>    more to come on the same branch
 ```
 
+The subject is read by a check: `tools/roadmap.py` derives the roadmap's state from these
+subjects, so "Merge task 2.4: ..." lands the row and "Merge part of task 2.4: ..." does not. Run the
+script before the push and commit what it writes, or `.githooks/pre-push` will say so.
+
 The body says what was verified and how. If the row landed without being finished, add an
 `Outstanding:` line saying what it still owes, and an `Outstanding test ids:` line for any test id
 the row names that is not yet proven. The claim branch is deleted when the **task** is done, not
@@ -69,4 +73,6 @@ A gate closes when its exit test in `docs/plan/01-plan.md` passes. Tag it:
 git tag -a <name> -m "<gate>: <exit test>, proved by <CI run URL>"
 ```
 
-The tag is the record. There is no separate checklist.
+The tag is the record. There is no separate checklist. The name each gate's tag takes is in the
+ladder table in `docs/roadmap.md`, which is where `tools/roadmap.py` reads it to tell a closed gate
+from an open one.
