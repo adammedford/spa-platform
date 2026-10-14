@@ -7,8 +7,10 @@ namespace Platform.Registry;
 
 /// <summary>
 /// The registry source of plan row 2.2: a conditional GET of the registry object, then secret preload,
-/// validate, swap, then notify. <see cref="RegistryPoller"/> calls <see cref="RefreshAsync"/> on a
-/// jittered interval; a test calls it directly, one poll at a time.
+/// validate, swap, then notify. The document is validated before its secrets are preloaded, because
+/// the references come from it; the preload is the I/O half of validation (contracts/README.md,
+/// <c>clientSecretRef</c>), and both finish before the swap. <see cref="RegistryPoller"/> calls
+/// <see cref="RefreshAsync"/> on a jittered interval; a test calls it directly, one poll at a time.
 ///
 /// <b>Any failure keeps the last good snapshot</b> (GLOSSARY.md, Last known good; threat T16). A
 /// document is accepted or rejected whole (ADR-0002), and so is a snapshot whose secrets cannot all be

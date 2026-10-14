@@ -230,6 +230,8 @@ public sealed class RegistrySourceTests
         Assert.Equal(42, registry.Current.Revision);
         Assert.Empty(source.LeftOut);
         Assert.Same(partial, Assert.Single(seen).Old);
+        // The only test where app2's secret has a value: it must not reach a log line either (N-16).
+        Assert.DoesNotContain(logs.Lines, line => line.Contains(App2Secret, StringComparison.Ordinal));
 
         // Complete now, so the next unchanged poll is a plain 304 again.
         Assert.Equal(RefreshOutcome.NotModified, await source.RefreshAsync(Ct));
