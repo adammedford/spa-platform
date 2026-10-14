@@ -18,9 +18,16 @@ public static class RegistryValidator
 {
     /// <summary>
     /// A duplicate member name is refused rather than resolved, because the schema engine and the
-    /// model below could otherwise each read a different one of the two values.
+    /// model below could otherwise each read a different one of the two values
+    /// (https://learn.microsoft.com/dotnet/api/system.text.json.jsondocumentoptions.allowduplicateproperties).
     /// </summary>
     private static readonly JsonDocumentOptions Strict = new() { AllowDuplicateProperties = false };
+
+    /// <summary>
+    /// The schema bounds <c>timeoutSeconds</c> below only ("the plan states no upper bound"), but the
+    /// model is a <see cref="TimeSpan"/>, and <see cref="TimeSpan.FromSeconds(long)"/> throws above this.
+    /// </summary>
+    private static readonly long MaximumTimeoutSeconds = TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond;
 
     /// <summary>
     /// Checks a registry document against <c>contracts/registry.schema.json</c>, then every rule the
@@ -41,8 +48,11 @@ public static class RegistryValidator
         }
 
         Findings findings = new();
-        long revision = root["revision"]!.GetValue<long>();
-        if (liveRevision is long live && revision <= live)
+        if (!JsonInteger.TryRead(root["revision"]!, out long revision))
+        {
+            findings.Error(RegistryRules.IntegerOutOfRange, "/revision", "Revision is not an integer between 1 and 9223372036854775807.");
+        }
+        else if (liveRevision is long live && revision <= live)
         {
             findings.Error(RegistryRules.RevisionNotGreater, "/revision",
                 $"Revision {revision} is not greater than the live revision {live}.");
@@ -158,6 +168,12 @@ public static class RegistryValidator
             string apiAt = $"{at}/apis/{index}";
             Unique(findings, names, api["name"]!.GetValue<string>(), index, RegistryRules.DuplicateApiName, $"{apiAt}/name", "apis[].name", $"{at}/apis");
 
+            if (!JsonInteger.TryRead(api["timeoutSeconds"]!, out long timeout) || timeout > MaximumTimeoutSeconds)
+            {
+                findings.Error(RegistryRules.IntegerOutOfRange, $"{apiAt}/timeoutSeconds",
+                    $"timeoutSeconds is above {MaximumTimeoutSeconds}, the longest timeout a TimeSpan holds.");
+            }
+
             string upstream = api["upstream"]!.GetValue<string>();
             if (HostPolicy.PortAboveMaximum(upstream[(upstream.IndexOf("://", StringComparison.Ordinal) + 3)..]))
             {
@@ -219,13 +235,13 @@ public static class RegistryValidator
                 ? [.. apis.Select(api => new ApiDefinition(
                     api!["name"]!.GetValue<string>(),
                     new Uri(api["upstream"]!.GetValue<string>(), UriKind.Absolute),
-                    TimeSpan.FromSeconds(api["timeoutSeconds"]!.GetValue<long>())))]
+                    TimeSpan.FromSeconds(JsonInteger.Read(api["timeoutSeconds"]!))))]
                 : [],
             // Absent csp: an app that adds nothing to the baseline content security policy.
             Csp: entry["csp"] is JsonObject csp
                 ? csp.ToImmutableDictionary(directive => directive.Key, directive => Strings(directive.Value!.AsArray()), StringComparer.Ordinal)
                 : ImmutableDictionary<string, ImmutableArray<string>>.Empty,
-            SessionLifetime: TimeSpan.FromMinutes(entry["session"]!["lifetimeMinutes"]!.GetValue<long>()),
+            SessionLifetime: TimeSpan.FromMinutes(JsonInteger.Read(entry["session"]!["lifetimeMinutes"]!)),
             Fingerprint: EntryFingerprint.Of(entry));
     }
 

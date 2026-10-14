@@ -60,6 +60,21 @@ public sealed class FingerprintTests
         Assert.Equal(Only(Examples.Text("registry.example.json")).Fingerprint, Only(escaped).Fingerprint);
     }
 
+    [Theory]
+    [InlineData("30.0")]
+    [InlineData("3e1")]
+    public void Another_spelling_of_the_same_integer_gives_the_same_fingerprint(string spelling)
+    {
+        // Draft 2020-12 calls 30.0 and 3e1 integers, so the schema accepts them; the entry says the same thing.
+        string text = Examples.Text("registry.example.json");
+        string respelled = text.Replace("\"timeoutSeconds\": 30", $"\"timeoutSeconds\": {spelling}", StringComparison.Ordinal);
+        Assert.Contains(spelling, respelled, StringComparison.Ordinal);
+
+        Assert.Equal(Only(text).Fingerprint, Only(respelled).Fingerprint);
+        Assert.NotEqual(Only(text).Fingerprint,
+            Only(text.Replace("\"timeoutSeconds\": 30", "\"timeoutSeconds\": 31", StringComparison.Ordinal)).Fingerprint);
+    }
+
     [Fact]
     public void A_changed_value_changes_the_fingerprint()
     {

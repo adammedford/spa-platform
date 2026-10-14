@@ -11,7 +11,8 @@ namespace Platform.Registry;
 ///
 /// Canonical here means: object members sorted by name (ordinal), array order kept (the order of
 /// <c>scopes</c> or <c>apis</c> is the author's), no insignificant whitespace, and one fixed string
-/// escaping. Entries carry only strings and integers, so number formatting is not a question.
+/// escaping. Entries carry only strings and integers, but an integer has more than one spelling the
+/// schema accepts (<c>30</c>, <c>30.0</c>, <c>3e1</c>), so an integer is written from its value.
 /// </summary>
 public static class EntryFingerprint
 {
@@ -56,7 +57,15 @@ public static class EntryFingerprint
                 writer.WriteNullValue();
                 break;
             default:
-                // A scalar is written from its parsed value, so "a" and "a" agree.
+                if (JsonInteger.TryRead(node, out long integer))
+                {
+                    writer.WriteNumberValue(integer);
+                    break;
+                }
+
+                // A string is written from its parsed value, so "a" and "\u0061" agree: JsonElement.WriteTo
+                // unescapes a string before the writer escapes it again
+                // (https://learn.microsoft.com/dotnet/api/system.text.json.jsonelement.writeto).
                 node.AsValue().WriteTo(writer);
                 break;
         }

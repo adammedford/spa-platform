@@ -248,6 +248,63 @@ public sealed class RegistryValidatorTests
             Examples.RegistryEntry(e => e["apis"]![0]!["upstream"] = "http://127.0.0.1:99999999999"), "an upstream port too long to parse");
     }
 
+    // ---- Integers the schema accepts and the model must hold. Before the review these threw out of
+    // Validate instead of returning a result.
+
+    [Theory]
+    [InlineData("revision", "42.0")]
+    [InlineData("timeoutSeconds", "3e1")]
+    [InlineData("lifetimeMinutes", "480.0")]
+    public void An_integer_spelled_with_a_fraction_or_exponent_is_accepted(string property, string spelling)
+    {
+        RegistryValidation result = RegistryValidator.Validate(Respell(property, spelling), Examples.Policy(), null);
+
+        Assert.True(result.IsValid, string.Join('\n', result.Errors));
+        Assert.Equal(42, result.Revision);
+        AppDefinition app = Assert.Single(result.Apps);
+        Assert.Equal(TimeSpan.FromSeconds(30), Assert.Single(app.Apis).Timeout);
+        Assert.Equal(TimeSpan.FromMinutes(480), app.SessionLifetime);
+    }
+
+    [Theory]
+    [InlineData("revision", "9223372036854775808", "/revision")]
+    [InlineData("revision", "1e30", "/revision")]
+    [InlineData("timeoutSeconds", "922337203686", "/apps/0/apis/0/timeoutSeconds")]
+    public void An_integer_the_model_cannot_hold_is_an_error_not_an_exception(string property, string spelling, string path)
+    {
+        RegistryValidation result = RegistryValidator.Validate(Respell(property, spelling), Examples.Policy(), null);
+
+        Assert.False(result.IsValid);
+        Assert.Empty(result.Apps);
+        RegistryIssue error = Assert.Single(result.Errors);
+        Assert.Equal((RegistryRules.IntegerOutOfRange, path), (error.Rule, error.Path));
+    }
+
+    [Fact]
+    public void The_longest_timeout_a_TimeSpan_holds_is_accepted()
+    {
+        RegistryValidation result = RegistryValidator.Validate(Respell("timeoutSeconds", "922337203685"), Examples.Policy(), null);
+
+        Assert.True(result.IsValid, string.Join('\n', result.Errors));
+        Assert.Equal(TimeSpan.FromSeconds(922337203685), Assert.Single(Assert.Single(result.Apps).Apis).Timeout);
+    }
+
+    /// <summary>The contract example's text with one integer's spelling changed and nothing else.</summary>
+    private static string Respell(string property, string spelling)
+    {
+        string text = Examples.Text("registry.example.json");
+        JsonObject example = Examples.Registry();
+        long value = property switch
+        {
+            "revision" => example["revision"]!.GetValue<long>(),
+            "timeoutSeconds" => Examples.Entry(example, 0)["apis"]![0]!["timeoutSeconds"]!.GetValue<long>(),
+            _ => Examples.Entry(example, 0)["session"]!["lifetimeMinutes"]!.GetValue<long>(),
+        };
+        string from = $"\"{property}\": {value}";
+        Assert.Contains(from, text, StringComparison.Ordinal);
+        return text.Replace(from, $"\"{property}\": {spelling}", StringComparison.Ordinal);
+    }
+
     // ---- Errors and warnings kept apart.
 
     [Fact]
