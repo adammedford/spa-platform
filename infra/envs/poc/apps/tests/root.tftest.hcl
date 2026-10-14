@@ -215,13 +215,16 @@ run "a_third_definition_adds_exactly_three_resources" {
 
   variables {
     definition_dirs = ["../../../../fixtures/apps", "../../../../fixtures/onboarding"]
+    # The onboarding definition's own appId, read from the file rather than repeated here.
+    onboarded_app = jsondecode(file("../../../../fixtures/onboarding/app3.json")).appId
   }
 
   assert {
     condition = (
-      toset(keys(aws_cognito_user_pool_client.app)) == setunion(keys(var.fixture_apps), ["app3"])
-      && toset(keys(aws_cognito_managed_login_branding.app)) == setunion(keys(var.fixture_apps), ["app3"])
-      && toset(keys(aws_ssm_parameter.client_secret)) == setunion(keys(var.fixture_apps), ["app3"])
+      !contains(keys(var.fixture_apps), var.onboarded_app)
+      && toset(keys(aws_cognito_user_pool_client.app)) == setunion(keys(var.fixture_apps), [var.onboarded_app])
+      && toset(keys(aws_cognito_managed_login_branding.app)) == setunion(keys(var.fixture_apps), [var.onboarded_app])
+      && toset(keys(aws_ssm_parameter.client_secret)) == setunion(keys(var.fixture_apps), [var.onboarded_app])
     )
     error_message = "A third definition adds exactly its client, branding style and parameter (P-02)."
   }

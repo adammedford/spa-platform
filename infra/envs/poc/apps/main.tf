@@ -41,8 +41,7 @@ locals {
   # definition to create the client, and spactl app add completes it from the outputs.
   apps = merge([
     for dir in var.definition_dirs : {
-      for f in fileset(dir, "*.json") :
-      jsondecode(file("${dir}/${f}")).appId => jsondecode(file("${dir}/${f}"))
+      for d in [for f in fileset(dir, "*.json") : jsondecode(file("${dir}/${f}"))] : d.appId => d
     }
   ]...)
 
