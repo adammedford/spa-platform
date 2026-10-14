@@ -77,6 +77,26 @@ public sealed class RegistryCommandTests : IDisposable
         Assert.Equal(42, (await spactl.LiveRegistry())["revision"]!.GetValue<long>());
     }
 
+    [Theory]
+    [InlineData("42.0")]
+    [InlineData("4.2e1")]
+    public async Task Schema_integer_spellings_round_trip_through_live_and_history_reads(string spelling)
+    {
+        // Task 2.6: use the validator's integer semantics for subsequent writes and rollback too.
+        await PublishExampleRelease();
+        JsonObject document = Harness.ExampleJson("registry.example.json");
+        document["revision"] = JsonNode.Parse(spelling);
+        string initial = spactl.WriteFile("initial.json", document.ToJsonString());
+        Assert.Equal(0, await spactl.Run("registry", "apply", initial));
+
+        Assert.Equal(0, await spactl.Run("registry", "apply", RegistryFile(d => d["revision"] = 43)));
+        Assert.Equal(0, await spactl.Run("registry", "rollback", "--to-revision", "42"));
+        Assert.Equal(44, (await spactl.LiveRegistry())["revision"]!.GetValue<long>());
+        Assert.Equal(0, await spactl.Run("app", "remove", "app1"));
+        Assert.Equal(45, (await spactl.LiveRegistry())["revision"]!.GetValue<long>());
+        Assert.Empty((await spactl.LiveRegistry())["apps"]!.AsArray());
+    }
+
     [Fact]
     public async Task Apply_refuses_a_revision_not_greater_than_the_live_one()
     {
