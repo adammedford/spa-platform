@@ -63,8 +63,17 @@ public static class PlatformSecurityExtensions
     /// <summary>
     /// The rules in <c>contracts/request-gate.md</c>, one rule id per rejection. It runs before
     /// authentication, because no rule in it needs the user. Task 4.3.
+    ///
+    /// The session the contract asks of an asset request is stage 8's, and the token on an unsafe
+    /// <c>/api</c> method is stage 9's: both need the user, which this stage runs before.
     /// </summary>
-    public static IApplicationBuilder UsePlatformRequestGate(this IApplicationBuilder app) => app;
+    public static IApplicationBuilder UsePlatformRequestGate(this IApplicationBuilder app)
+    {
+        RequestGate gate = new(app.ApplicationServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(RequestGate).FullName!));
+        app.Use((context, next) => gate.InvokeAsync(context, next));
+        return app;
+    }
 
     /// <summary>
     /// Unsafe methods on <c>/api</c> need a valid <c>X-CSRF-TOKEN</c>. It runs after the request gate
