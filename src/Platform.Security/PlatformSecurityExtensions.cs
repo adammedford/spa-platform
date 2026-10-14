@@ -21,12 +21,15 @@ namespace Platform.Security;
 public static class PlatformSecurityExtensions
 {
     /// <summary>
-    /// The forwarded-header options stage 1 applies, and Kestrel's request limits. Task 4.6.
+    /// The forwarded-header options stage 1 applies, and Kestrel's request limits (task 4.6). The
+    /// framework's antiforgery with the platform's options, the app binding and <see cref="Platform.Abstractions.ICsrfTokens"/>,
+    /// which workstream 3 calls to issue the token and to clear it at logout (task 4.4).
     /// </summary>
     public static IHostApplicationBuilder AddPlatformSecurity(this IHostApplicationBuilder builder)
     {
         PlatformForwardedHeaders.Add(builder.Services);
         builder.Services.Configure<KestrelServerOptions>(PlatformSecurityLimits.Apply);
+        PlatformAntiforgery.Add(builder.Services);
         return builder;
     }
 
@@ -79,6 +82,18 @@ public static class PlatformSecurityExtensions
     /// Unsafe methods on <c>/api</c> need a valid <c>X-CSRF-TOKEN</c>. It runs after the request gate
     /// because the token check needs the user. Header tokens only, so a request body is never read
     /// (finding R-E7). Task 4.4.
+    ///
+    /// The framework's own <c>UseAntiforgery</c> is not called. It validates only endpoints that carry
+    /// antiforgery metadata, such as a minimal API that binds a form, and it would then demand a token
+    /// of a form-bound <c>/bff/logout</c>, which the contract says takes none. Every check this
+    /// platform needs is the one below, by path and method.
     /// </summary>
-    public static IApplicationBuilder UsePlatformAntiforgery(this IApplicationBuilder app) => app;
+    public static IApplicationBuilder UsePlatformAntiforgery(this IApplicationBuilder app)
+    {
+        AntiforgeryStage stage = new(
+            app.ApplicationServices.GetRequiredService<Platform.Abstractions.ICsrfTokens>(),
+            app.ApplicationServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(AntiforgeryStage).FullName!));
+        app.Use((context, next) => stage.InvokeAsync(context, next));
+        return app;
+    }
 }
