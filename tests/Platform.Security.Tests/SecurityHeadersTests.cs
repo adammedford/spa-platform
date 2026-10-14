@@ -112,6 +112,21 @@ public sealed class SecurityHeadersTests
     }
 
     [Fact]
+    public async Task A_none_directive_whose_every_addition_is_dropped_keeps_none()
+    {
+        // 'none' gives way only to a source that is actually sent. Cleared first and then left empty,
+        // the directive would read "frame-ancestors ;", which says nothing a reader can check.
+        AppDefinition app = TestApps.Entry("app1", csp: Csp(
+            ("frame-ancestors", ["https://intranet.example.test;script-src"]),
+            ("object-src", ["https://media.example.test,x"])));
+        await using HeadersHost host = await HeadersHost.StartAsync(Ct, [app]);
+
+        using HttpResponseMessage response = await host.SendAsync(app, "GET", "/", Ct);
+
+        Assert.Equal(Baseline, Single(response, "Content-Security-Policy"));
+    }
+
+    [Fact]
     public async Task An_issuer_with_no_browser_origin_fails_the_request_rather_than_send_a_policy_without_it()
     {
         // The validator admits only issuers that configuration names, so this is a misconfigured

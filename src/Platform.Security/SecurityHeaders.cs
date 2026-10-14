@@ -134,22 +134,27 @@ internal sealed partial class SecurityHeaders(IConfiguration configuration, ILog
                 // https://example.com » ... would match https://example.com/". So the additions replace
                 // it, and the header reads as the browser applies it.
                 // https://w3c.github.io/webappsec-csp/#match-url-to-source-list
-                if (baseline == None)
-                {
-                    sources.Clear();
-                }
-
+                // Only a source that survives CanSplice replaces it: with every addition dropped, the
+                // directive keeps 'none' rather than going out as an empty list.
+                List<string> kept = [];
                 foreach (string source in additions)
                 {
                     if (CanSplice(source))
                     {
-                        sources.Add(source);
+                        kept.Add(source);
                     }
                     else
                     {
                         SourceDropped(logger, app.AppId, directive);
                     }
                 }
+
+                if (baseline == None && kept.Count > 0)
+                {
+                    sources.Clear();
+                }
+
+                sources.AddRange(kept);
             }
 
             if (policy.Length > 0)
