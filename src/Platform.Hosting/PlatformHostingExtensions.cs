@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 
 namespace Platform.Hosting;
@@ -11,8 +12,7 @@ namespace Platform.Hosting;
 /// Workstream 2's entry points: stages 3 and 4 of <c>contracts/pipeline.md</c>, and the asset
 /// endpoint at stage 10. Keep these signatures and add no others.
 ///
-/// Task 2.3 filled stages 3 and 4. <see cref="MapPlatformAssets"/> is still task I-4's stub, and task
-/// 2.4 fills it in.
+/// Task 2.3 filled stages 3 and 4; task 2.4 filled the asset endpoint.
 /// </summary>
 public static class PlatformHostingExtensions
 {
@@ -48,9 +48,27 @@ public static class PlatformHostingExtensions
     }
 
     /// <summary>
-    /// Everything that is not <c>/bff/*</c> or <c>/api/*</c>, served from S3. Task 2.4 fills it in:
-    /// the key built from registry values and a validated path, conditional requests passed through,
-    /// content type by extension, the cache policy and the fallback rules.
+    /// Stage 10's third endpoint: everything that is not <c>/bff/*</c> or <c>/api/*</c>, served from
+    /// the app's live release in S3 (plan row 2.4; contracts/s3-layout.md). The key is built from
+    /// registry values and a validated path, <c>If-None-Match</c> is passed through, the content type
+    /// comes from the extension, the cache policy from the path, an extensionless path that accepts
+    /// HTML gets <c>index.html</c>, and the platform's reserved paths are never read.
     /// </summary>
-    public static IEndpointRouteBuilder MapPlatformAssets(this IEndpointRouteBuilder endpoints) => endpoints;
+    public static IEndpointRouteBuilder MapPlatformAssets(this IEndpointRouteBuilder endpoints)
+    {
+        // The object store is resolved per request, not here: in the gateway it is AddPlatformRegistry's
+        // S3 store (task 2.2), whose client throws on construction with no region or bucket configured,
+        // and RegistryPoller defers it for that reason so the gateway starts with no Registry:* at all
+        // (CI's G1a smoke test). Resolving it at map time would undo that.
+        Assets assets = new(endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Platform.Hosting.Assets"));
+
+        // A catch-all with every method, ordered last. Not the parameterless MapFallback: its pattern is
+        // {*path:nonfile}, which never matches a path with an extension, so /app.js would miss
+        // (https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.builder.endpointroutebuilderextensions.mapfallback).
+        // Every method, so a POST to an asset path gets the contract's 405 problem rather than routing's
+        // empty one. Order int.MaxValue, as MapFallback sets it, so /bff and /api endpoints always win.
+        endpoints.MapFallback("/{**path}", assets.InvokeAsync);
+
+        return endpoints;
+    }
 }

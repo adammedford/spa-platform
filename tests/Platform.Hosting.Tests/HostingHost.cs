@@ -21,6 +21,10 @@ namespace Platform.Hosting.Tests;
 /// The terminal stands for stages 5 to 10. It records the <see cref="IAppFeature"/> it was handed and
 /// answers 200 with <see cref="Passed"/>, so a test that asserts a refusal can fail if stage 4 let the
 /// request through. A test can give it work to do mid-request through <see cref="DuringRequest"/>.
+///
+/// Given an <see cref="IObjectStore"/>, the terminal is stage 10's asset endpoint instead:
+/// <c>UseRouting</c> then <c>MapPlatformAssets</c> over that store (task 2.4). Stages 5 to 9 are other
+/// workstreams' and are left out, so what the endpoint refuses it refuses on its own.
 /// </summary>
 public sealed class HostingHost : IAsyncDisposable
 {
@@ -49,14 +53,24 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>Runs in the terminal before it reads the feature: a swap mid-request goes here.</summary>
     public Action? DuringRequest { get; set; }
 
-    public static async Task<HostingHost> StartAsync(RegistrySnapshot initial, CancellationToken ct)
+    public static async Task<HostingHost> StartAsync(
+        RegistrySnapshot initial, CancellationToken ct, IObjectStore? store = null, ILoggerProvider? logs = null)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
+        if (logs is not null)
+        {
+            builder.Logging.AddProvider(logs);
+        }
 
         InMemoryRegistry registry = new(initial);
         builder.Services.AddSingleton<IRegistry>(registry);
+        if (store is not null)
+        {
+            builder.Services.AddSingleton(store);
+        }
+
         builder.AddPlatformHosting();
 
         WebApplication web = builder.Build();
@@ -64,6 +78,16 @@ public sealed class HostingHost : IAsyncDisposable
 
         web.UsePlatformHealth();
         web.UsePlatformHostResolution();
+
+        if (store is not null)
+        {
+            // Explicit, and after stage 4 as in src/Gateway/Program.cs: a WebApplication with endpoints
+            // and no UseRouting call puts routing at the front of the pipeline, before stages 3 and 4.
+            web.UseRouting();
+            web.MapPlatformAssets();
+            return await StartedAsync(web, registry, ct);
+        }
+
         web.Run(context =>
         {
             Interlocked.Increment(ref self!.reached);
@@ -73,14 +97,19 @@ public sealed class HostingHost : IAsyncDisposable
             return context.Response.WriteAsync(Passed, ct);
         });
 
+        self = await StartedAsync(web, registry, ct);
+        return self;
+    }
+
+    private static async Task<HostingHost> StartedAsync(WebApplication web, InMemoryRegistry registry, CancellationToken ct)
+    {
         await web.StartAsync(ct);
 
         Uri address = new(web.Services.GetRequiredService<IServer>().Features
             .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
             ?? throw new InvalidOperationException("the host started without an address."));
 
-        self = new HostingHost(web, address, registry);
-        return self;
+        return new HostingHost(web, address, registry);
     }
 
     /// <summary>
@@ -89,13 +118,20 @@ public sealed class HostingHost : IAsyncDisposable
     /// (AGENTS.md: reach the gateway over a raw socket when the Host header matters), and
     /// <see cref="HttpClient"/> writes it from the URI.
     /// </summary>
-    public async Task<RawResponse> GetAsync(string host, string path, CancellationToken ct, string extraHeaders = "")
+    public Task<RawResponse> GetAsync(string host, string path, CancellationToken ct, string extraHeaders = "") =>
+        SendAsync("GET", host, path, ct, extraHeaders);
+
+    /// <summary>
+    /// <see cref="GetAsync"/> with any method. The request line is sent byte for byte as given, so a
+    /// test can put a dot segment, a backslash or a NUL in it that no HTTP client would send.
+    /// </summary>
+    public async Task<RawResponse> SendAsync(string method, string host, string path, CancellationToken ct, string extraHeaders = "")
     {
         using TcpClient tcp = new();
         await tcp.ConnectAsync(BaseAddress.Host, BaseAddress.Port, ct);
         NetworkStream stream = tcp.GetStream();
 
-        string head = $"GET {path} HTTP/1.1\r\nHost: {host}\r\n{extraHeaders}Connection: close\r\n\r\n";
+        string head = $"{method} {path} HTTP/1.1\r\nHost: {host}\r\n{extraHeaders}Connection: close\r\n\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(head), ct);
 
         using MemoryStream received = new();
