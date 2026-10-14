@@ -55,7 +55,8 @@ public sealed partial class Redactor
     [GeneratedRegex(@"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")]
     private static partial Regex Jwt();
 
-    [GeneratedRegex(@"(?i)[?&;\s](code|state|access_token|refresh_token|id_token|client_secret|password)=[^&\s;]{6,}")]
+    // A query or form parameter (code=...), at the start of a line too, or a JSON member ("refresh_token": "...").
+    [GeneratedRegex(@"(?i)(^|[?&;\s""'{,])""?(code|state|access_token|refresh_token|id_token|client_secret|password)""?\s*[=:]\s*""?[^&\s;"",}]{6,}")]
     private static partial Regex CredentialParameter();
 }
 

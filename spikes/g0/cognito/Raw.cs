@@ -8,6 +8,8 @@ public sealed record RawResult(bool Ok, int Status, string? Error, string? Acces
 {
     /// <summary>For a revocation: which client authentication style the provider took.</summary>
     public string? Note { get; init; }
+    /// <summary>For a revocation the provider accepted: "form body" or "Basic header".</summary>
+    public string? AcceptedStyle { get; init; }
     public string Outcome => Note is not null ? (Ok ? "accepted (" + Note + ")" : "refused (" + Note + ")") : Ok ? "granted" : $"refused {Status} {Error}";
 }
 
@@ -35,18 +37,19 @@ public sealed class Raw(HttpClient http, string tokenEndpoint, string revocation
 
     public async Task<RawResult> RevokeAsync(AppEntry app, string refreshToken)
     {
-        var (ok, status, outcome) = await Revocation.SendAsync(http, revocationEndpoint, app.ClientId, app.ClientSecret, refreshToken);
-        return new RawResult(ok, status, ok ? null : outcome, null, null, null) { Note = outcome };
+        var (ok, status, outcome, style) = await Revocation.SendAsync(http, revocationEndpoint, app.ClientId, app.ClientSecret, refreshToken);
+        return new RawResult(ok, status, ok ? null : outcome, null, null, null) { Note = outcome, AcceptedStyle = style };
     }
 }
 
 /// <summary>
 /// RFC 7009 through Duende.IdentityModel. The form body first, as task 3.8 authenticates everywhere; if the provider
-/// refuses the client that way, once more with a Basic header, and the outcome says which style it took.
+/// refuses the client that way, once more with a Basic header, and the outcome says which style it took. A revocation
+/// that needed the Basic header is a Q17 answer: C-2.21 reports it, so the retry cannot hide a refused form body.
 /// </summary>
 public static class Revocation
 {
-    public static async Task<(bool Ok, int Status, string Outcome)> SendAsync(HttpClient http, string endpoint, string clientId, string secret, string token)
+    public static async Task<(bool Ok, int Status, string Outcome, string? AcceptedStyle)> SendAsync(HttpClient http, string endpoint, string clientId, string secret, string token)
     {
         TokenRevocationResponse Last = default!;
         var tried = new List<string>();
@@ -62,11 +65,11 @@ public static class Revocation
                 TokenTypeHint = "refresh_token",
             });
             var name = style == ClientCredentialStyle.PostBody ? "form body" : "Basic header";
-            if (!Last.IsError) { tried.Add($"{name} {(int)Last.HttpStatusCode}"); return (true, (int)Last.HttpStatusCode, string.Join(", then ", tried)); }
+            if (!Last.IsError) { tried.Add($"{name} {(int)Last.HttpStatusCode}"); return (true, (int)Last.HttpStatusCode, string.Join(", then ", tried), name); }
             tried.Add($"{name} refused {(int)Last.HttpStatusCode} {Last.Error}");
             if (!(Last.HttpStatusCode == System.Net.HttpStatusCode.Unauthorized || Last.Error == "invalid_client")) break;   // refused for another reason: no second style
         }
-        return (false, (int)Last.HttpStatusCode, string.Join(", then ", tried));
+        return (false, (int)Last.HttpStatusCode, string.Join(", then ", tried), null);
     }
 }
 

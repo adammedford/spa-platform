@@ -32,7 +32,7 @@ public sealed record IdpProfile(string Name, string BrowserOrigin, string Revoke
 /// <summary>What the gateway saw, for the checks to read. Nothing here is printed as it stands: tokens go to the redactor.</summary>
 public sealed class GatewayLog
 {
-    public sealed record Logout(string AppId, string RevokeRoute, string RevokeOutcome, bool SessionRemoved, string? RevokedToken);
+    public sealed record Logout(string AppId, string RevokeRoute, string RevokeOutcome, bool SessionRemoved, string? RevokedToken, string? RevokeAcceptedStyle = null);
     public sealed record CodeExchange(string AppId, string Style, string Outcome);
 
     public readonly ConcurrentQueue<Logout> Logouts = new();
@@ -163,6 +163,7 @@ public sealed class CognitoGateway
             {
                 var refreshToken = TicketSerializer.Default.Deserialize(record.Ticket)!.Properties.GetTokenValue("refresh_token");
                 string route = "none", outcome = "no refresh token";
+                string? acceptedStyle = null;
                 if (refreshToken is { Length: > 0 })
                 {
                     try
@@ -177,14 +178,15 @@ public sealed class CognitoGateway
                     {
                         // T-B14: no revocation endpoint in discovery, so the library throws. The profile supplies one.
                         route = "profile";
-                        var (_, _, sent) = await Revocation.SendAsync(ctx.RequestServices.GetRequiredService<SharedOidc>().Backchannel,
+                        var (_, _, sent, style) = await Revocation.SendAsync(ctx.RequestServices.GetRequiredService<SharedOidc>().Backchannel,
                             profile.RevocationEndpoint, entry.ClientId, entry.ClientSecret, refreshToken);
                         outcome = sent;
+                        acceptedStyle = style;
                     }
                     catch (OperationCanceledException) { route = "library"; outcome = "no answer in 10 s"; }
                 }
                 var removed = store.Remove(key);
-                log.Logouts.Enqueue(new GatewayLog.Logout(entry.AppId, route, outcome, removed, refreshToken));
+                log.Logouts.Enqueue(new GatewayLog.Logout(entry.AppId, route, outcome, removed, refreshToken, acceptedStyle));
             }
             await ctx.SignOutAsync(SchemeNames.Cookie(entry.AppId));
             await ctx.SignOutAsync(SchemeNames.Oidc(entry.AppId), new AuthenticationProperties { RedirectUri = "/" });

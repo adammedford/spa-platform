@@ -4,7 +4,8 @@
        ../real-handler/RealOidcHardened, and Gateway.cs from ../token-and-proxy for TokenFlow and TokenSwitches.
        token-and-proxy's Idp.cs is not compiled. The dry run uses the test identity provider in fixtures/TestIdp.
        Versions match Directory.Packages.props at the repository root where it pins one. AWSSDK.CognitoIdentityProvider
-       is not pinned there; this spike pins its own (spikes/Directory.Packages.props), and it only describes.
+       is not pinned there; this spike pins its own version below, as spikes/Directory.Packages.props lets every spike do,
+       and uses it only to describe the OAuth clients (read only: Q23).
        This folder has no nuget.config of its own: it restores from the one at the repository root. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

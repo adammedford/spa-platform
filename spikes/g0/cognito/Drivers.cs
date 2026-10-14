@@ -254,7 +254,9 @@ public sealed class ManualDriver(GatewayLog log, string backDoor, string idpOrig
                 foreach (var pair in now.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 {
                     var eq = pair.IndexOf('=');
-                    if (eq > 0) browser.Plant(app.Host, pair[..eq], pair[(eq + 1)..]);
+                    if (eq <= 0) continue;
+                    output.Redactor.Add(pair[(eq + 1)..]);   // each cookie value, as the Playwright driver adds them
+                    browser.Plant(app.Host, pair[..eq], pair[(eq + 1)..]);
                 }
                 return new LoginResult(true, null, null, [], null);
             }

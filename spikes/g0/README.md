@@ -214,7 +214,7 @@ each to its rule in the contract. `outputs.local.json` is ignored by git, and it
 
 Other switches: `--manual` (a person signs in, in their own browser, when Chromium will not install), `--headed`
 (watch Chromium), `--user` and `--second-user` (default `alice` and `bob`), `--skip-natural-expiry` (drops the
-five-minute wait, and C-2.11 with it), `--certs-dir`.
+five-minute wait, and C-2.11 with it, so item 2 reads "not decided": Q20 asks for one natural expiry), `--certs-dir`.
 
 The run writes `output-cognito.txt` and `report-cognito.md` itself, after a final check that the output holds no
 credential (Q4), and replaces the table between the markers in "Gate G0, as run" below. Do not pipe it through
@@ -245,7 +245,7 @@ What differs from `token-and-proxy`'s gateway:
 | The browser reaches the gateway over TLS on 8443, and the harness on a plain loopback port as the load balancer would | Cognito sends the browser back to `https://app1.spa-poc.test:8443` (item 3) |
 | Logout goes to `{BrowserOrigin}/logout?client_id=..&logout_uri=https://{host}/` | ADR-0011's cognito profile: Cognito's discovery lists no `end_session_endpoint`, and its logout returns no state (R-C7) |
 | Logout revokes the refresh token read from the session record, through the library or, when discovery lists no revocation endpoint, through `{BrowserOrigin}/oauth2/revoke`, then removes the session whether or not that worked | Task 3.9, with Q12's and Q16's routes |
-| Revocation tries the form body, then a Basic header if the client is refused | Cognito's revocation endpoint may want the header; the outcome says which it took |
+| Revocation tries the form body, then a Basic header if the client is refused | Cognito's revocation endpoint may want the header; the outcome says which it took, and a revocation that needed the header confirms C-2.21 (Q17), so the retry cannot hide it |
 | A switch makes one code exchange send the secret in a Basic header | Q17 |
 | No YARP routes and no upstream API | Item 5 is cited, not run again (Q8) |
 
@@ -259,7 +259,7 @@ names the route the grilling settled (`->`), so a surprising answer is a route, 
 Nothing secret is printed (Q4): tokens appear as lengths and eight-hex-character hashes (`h:1a2b3c4d`), URLs lose
 their query, and an access token's `aud`, `client_id` presence, `scope` and `token_use` are the only claims shown.
 Every line is checked against every secret, password, token, code, state and cookie value the run has seen, and
-withheld if it holds one; the whole output is checked again before the file is written. H-1 to H-4 show the check
+withheld if it holds one; the whole output is checked again before the file is written. H-1 to H-5 show the check
 working at the top of every run.
 
 Evidence ids are `C-<item>.<n>` (Q6). Browser A is Alice's: app1, then app2, in one browser (Q19). Browser R holds
@@ -268,7 +268,7 @@ code exchange.
 
 | Id | Kind | What it shows | Verdict it maps to |
 | --- | --- | --- | --- |
-| C-2.1 | expectation | Discovery loads from the outputs' issuer, and authorization is at the managed-login origin | Item 2 |
+| C-2.1 | expectation | Discovery loads from the outputs' issuer, and authorization is at the managed-login origin | None: it fails the run, not item 2 (Q21) |
 | C-2.2 | finding | Discovery lists no `end_session_endpoint` | The cognito profile's logout (ADR-0011) |
 | C-2.3 | finding | Discovery lists no `revocation_endpoint` (Q16, T-B14) | I-6 adds an `IIdpProfile` member; the cognito profile supplies `{BrowserOrigin}/oauth2/revoke`; task 3.9 deletes the session regardless |
 | C-2.4, C-2.5 | expectation | app1, then app2 in the same browser: login and callback complete, two session records | Item 2 |
@@ -281,24 +281,26 @@ code exchange.
 | C-2.13 | finding | The refresh token logout revoked still refreshes | Task 3.9 records the outcome; the token is held by no one |
 | C-2.14 | finding | After app1's logout, the next login asks for a password: the provider's logout is global (Q19) | None for the gateway |
 | C-2.15 | expectation | app2's session and refresh survive app1's logout (Q19) | Item 2 |
-| C-2.17 | finding | Grace window outcome (i): a replay inside the window is refused, or leaves the successor unusable (Q11) | Insufficient: ADR-0005's reserve design reopens |
-| C-2.18 | finding | Grace window outcome (ii): a replay after the window makes the successor unusable (Q11) | Insufficient: ADR-0005's reserve design reopens |
-| C-2.19 | finding | Revoking a rotated-out token leaves its successor alive (Q12, T-B18) | Task 3.9 revokes the token re-read from the session record; the T-B18 race stays a documented residual |
+| C-2.17 | finding | Grace window outcome (i): a replay inside the window is refused, or leaves the successor unusable (Q11). `BAD` instead if the first refresh did not rotate, because then nothing was measured | Insufficient: ADR-0005's reserve design reopens |
+| C-2.18 | finding | Grace window outcome (ii): a replay after the window makes the successor unusable (Q11). `BAD` instead if the first refresh did not rotate | Insufficient: ADR-0005's reserve design reopens |
+| C-2.19 | finding | Revoking a rotated-out token leaves its successor alive (Q12, T-B18). `BAD` instead if the refresh did not rotate or the revocation was refused, because then Q12 was not asked | Task 3.9 revokes the token re-read from the session record; the T-B18 race stays a documented residual |
 | C-2.20 | finding | A refresh token is over 4,096 characters, at login, after one refresh or after five (Q13, T-B11) | Q13(a): item 4's way out, an in-house refresh class over `Duende.IdentityModel` |
-| C-2.21 | finding | Only one client credential style works, for the code exchange or the refresh (Q17, T-B4, T-B5) | That style becomes the cognito profile's setting; if both work, `PostBody` stays |
+| C-2.21 | finding | Only one client credential style works, for the code exchange or the refresh, or a revocation needed the Basic header (Q17, T-B4, T-B5) | That style becomes the cognito profile's setting; if both work, `PostBody` stays |
 | C-3.1 | expectation | Each OAuth client, as created, lists the callback and sign-out URLs with the port | Item 3, the port |
 | C-3.2 | expectation | Every authorize call carried that callback, and Cognito sent the browser back to it | Item 3, the port |
 | C-3.3 | expectation | Cognito accepted each app's sign-out URL | Item 3, the port |
 | C-3.4 | expectation | Each OAuth client has the branding style Terraform created | Item 3, managed login |
 | C-3.5 | expectation | Managed login renders, asks for a password, and completes, for both apps | Item 3, managed login |
 
-**Verdicts.** Item 2 passes when C-2.1, C-2.4, C-2.5, C-2.8, C-2.10, C-2.11, C-2.12, C-2.15 and C-2.16 hold: both
-OAuth clients complete login, callback, refresh and logout (Q21). If item 2 fails, identity work stops and the
+**Verdicts.** Item 2 passes when C-2.4, C-2.5, C-2.8, C-2.10, C-2.11, C-2.12, C-2.15 and C-2.16 hold: both
+OAuth clients complete login, callback, refresh and logout (Q21). Nothing else fails item 2: not discovery, not an
+item 2 question, and not a section that stopped after those checks ran, which the verdict names instead. With
+C-2.11 skipped, item 2 is not decided. If item 2 fails, identity work stops and the
 integrator compares Finbuckle's per-tenant options, Duende BFF v4 and a dedicated tenant-aware OIDC client stack.
 Item 3 passes when C-3.1 to C-3.5 hold for both apps (Q18). If it fails, its way out is the plan's (local port
-443, or a branding style made through the AWS CLI), but task 3.0b does not take it (Q22): it records the failure,
-opens a ticket for workstream 1 and for workstream 5, and adds a change request for the host examples in
-`contracts/`.
+443, or a branding style made through the AWS CLI), but task 3.0b does not take it (Q22): it records the failure.
+For the port it opens a ticket for workstream 1 and for workstream 5 and adds a change request for the host
+examples in `contracts/`; for the branding style it opens a ticket for workstream 1. The verdict line names which.
 
 ### The dry run (not evidence)
 
@@ -324,8 +326,8 @@ Recorded on 14 October 2026 on a Mac with Apple silicon, .NET 10.0.12, Chromium 
 `output-dry-run.txt` and `report-dry-run.md` are that run.
 
 ```
-OK      H-1 .. H-4  the redactor withholds a client secret, an unknown JWT and a callback's code; it prints hashes
-OK      C-2.1       discovery
+OK      H-1 .. H-5  the redactor withholds a client secret, an unknown JWT, a callback's code and a token in JSON; it prints hashes
+OK      C-2.1       discovery                        (fails the run if it does not hold, not item 2)
 FINDING C-2.2       no end_session_endpoint          (the test provider set to Cognito style)
 FINDING C-2.3       no revocation_endpoint           (set so; the profile's revocation route ran at logout)
 OK      C-2.4       app1 login and callback          OK      C-2.5   app2 in the same browser
@@ -340,12 +342,13 @@ not-rep C-2.17      a replay at 2.0 s is granted, and the successor still works
 not-rep C-2.18      a replay at 12.0 s is refused, and the successor still works
 FINDING C-2.19      revoking the rotated-out token leaves its successor alive (the provider's rule, T-B18)
 not-rep C-2.20      refresh tokens of 38 characters
-not-rep C-2.21      both credential styles work, for the code exchange and the refresh
+not-rep C-2.21      both credential styles work, for the code exchange and the refresh; every revocation took the form body
 OK      C-3.1 .. C-3.3   callback and sign-out URLs with the port, registered, used and accepted
 skip    C-3.4, C-3.5     no branding styles and no login page at the test provider
 
-16 expectations held, 0 did not, 4 findings confirmed, 8 probes not reproduced, 2 skipped
-G0 item 2: passed            G0 item 3: not decided: C-3.4, C-3.5 did not run in this mode
+17 expectations held, 0 did not, 4 findings confirmed, 8 probes not reproduced, 2 skipped
+G0 item 2 (DRY RUN, not evidence): passed
+G0 item 3 (DRY RUN, not evidence): not decided: C-3.4, C-3.5 skipped in this mode
 redaction: 149 credential values held as canaries; 0 line(s) withheld
 ```
 

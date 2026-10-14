@@ -311,6 +311,8 @@ public sealed class Harness
         => query is not null && query.TryGetValue(name, out var v) ? v.ToString() : null;
 
     private static string Len(string? token) => token is null ? "(none)" : $"{token.Length:N0} chars";
+    /// <summary>Whether a refresh rotated: it was granted and returned a refresh token other than the one sent.</summary>
+    private static bool Rotated(RawResult r, string sent) => r.Ok && r.RefreshToken is { } t && t != sent;
     private static string Version(Assembly a)
     {
         var informational = a.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0];
@@ -335,6 +337,9 @@ public sealed class Harness
         _out.Check("H-2", "a line holding a JWT the harness was never told about is withheld", _r.Leak("probe " + jwt) is not null);
         _out.Check("H-3", "a line holding a callback URL's code or state is withheld", _r.Leak("probe https://app1.spa-poc.test:8443/signin-oidc?code=" + WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(12))) is not null);
         _out.Check("H-4", "a line holding only lengths, hashes and URLs without a query is printed", _r.Leak($"probe {Redactor.Hash(secret)} {secret.Length} chars {Redactor.Strip("https://example.test/a?state=" + secret)}") is null);
+        _out.Check("H-5", "a line holding a token in a JSON member, or a code parameter at the start of a line, is withheld",
+            _r.Leak("probe {\"refresh_token\": \"" + WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(12)) + "\"}") is not null
+            && _r.Leak("code=" + WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(12))) is not null);
         return Task.CompletedTask;
     }
 
@@ -500,6 +505,7 @@ public sealed class Harness
     private async Task ItemTwoQuestions()
     {
         const ClientCredentialStyle Post = ClientCredentialStyle.PostBody;
+        RawResult? q12Revoke = null;
 
         // Q11 (i): replay the rotated-out token inside the 10-second window, then check the successor.
         {
@@ -515,8 +521,9 @@ public sealed class Harness
             var returned = !replay.Ok ? "an error" : replay.RefreshToken is null ? "new tokens and no refresh token" : replay.RefreshToken == rot.RefreshToken ? "new tokens and the same successor" : "new tokens and a different refresh token";
             var successor = rot.RefreshToken is null ? null : await _raw.RefreshAsync(App1, rot.RefreshToken, Post);
             Hold("app1", successor?.RefreshToken);
-            _out.Finding("C-2.17", "Cognito's grace window is insufficient, outcome (i): a replay inside the window is refused, or it leaves the successor unusable (Q11)",
-                !rot.Ok || !replay.Ok || successor is not { Ok: true },
+            if (!Rotated(rot, rt1)) _out.Check("C-2.17", "the rotation Q11 (i) needs: a refresh that returns a new refresh token", false, $"rotation {rot.Outcome}; so the window was not measured");
+            else _out.Finding("C-2.17", "Cognito's grace window is insufficient, outcome (i): a replay inside the window is refused, or it leaves the successor unusable (Q11)",
+                !replay.Ok || successor is not { Ok: true },
                 $"rotation {rot.Outcome}, a new refresh token: {Yn(rot.RefreshToken is not null && rot.RefreshToken != rt1)}; the replay at {at.TotalSeconds:N1} s: {replay.Outcome}, returning {returned}; the successor afterwards: {successor?.Outcome ?? "(no successor)"}",
                 "Q11: insufficient. ADR-0005's reserve design reopens (gateway-owned locking over the library's refresh call), and I-6 records it",
                 "the window covers a replay: task 3.8 stays on the library's token manager");
@@ -536,11 +543,13 @@ public sealed class Harness
             Hold("app1", late.RefreshToken);
             var successor = rot.RefreshToken is null ? null : await _raw.RefreshAsync(App1, rot.RefreshToken, Post);
             Hold("app1", successor?.RefreshToken);
-            _out.Finding("C-2.18", "Cognito's grace window is insufficient, outcome (ii): a replay after the window makes the successor unusable, which is token-family revocation (Q11)",
-                !rot.Ok || successor is not { Ok: true },
+            if (!Rotated(rot, rt1)) _out.Check("C-2.18", "the rotation Q11 (ii) needs: a refresh that returns a new refresh token", false, $"rotation {rot.Outcome}; so the window was not measured");
+            else _out.Finding("C-2.18", "Cognito's grace window is insufficient, outcome (ii): a replay after the window makes the successor unusable, which is token-family revocation (Q11)",
+                successor is not { Ok: true },
                 $"rotation {rot.Outcome}; the replay at {at.TotalSeconds:N1} s: {late.Outcome}{(late.Ok ? " (honoured after the 10-second window: recorded, not a route)" : "")}; the successor afterwards: {successor?.Outcome ?? "(no successor)"}",
                 "Q11: insufficient. ADR-0005's reserve design reopens, and I-6 records it",
-                "a late replay is refused and the successor keeps working: the expected behaviour, not a finding");
+                late.Ok ? "the successor keeps working; the late replay was honoured, which Q11 records and does not route"
+                        : "a late replay is refused and the successor keeps working: the expected behaviour, not a finding");
         }
 
         // Q12: revoke the rotated-out token, then try its successor (T-B18).
@@ -549,11 +558,14 @@ public sealed class Harness
             if (rt1 is null) throw new InvalidOperationException("no refresh token for Q12: " + error);
             var rot = await _raw.RefreshAsync(App1, rt1, Post);
             Hold("app1", rot.RefreshToken);
-            var revoke = await _raw.RevokeAsync(App1, rt1);
+            var revoke = q12Revoke = await _raw.RevokeAsync(App1, rt1);
             var successor = rot.RefreshToken is null ? null : await _raw.RefreshAsync(App1, rot.RefreshToken, Post);
             Hold("app1", successor?.RefreshToken);
-            _out.Finding("C-2.19", "revoking a rotated-out refresh token leaves its successor alive (Q12, T-B18)",
-                rot.Ok && successor is { Ok: true },
+            if (!Rotated(rot, rt1) || !revoke.Ok)
+                _out.Check("C-2.19", "the rotation and the revocation Q12 needs: a new refresh token, and the rotated-out one revoked", false,
+                    $"rotation {rot.Outcome}; revoking the rotated-out token: {revoke.Outcome}; so Q12 was not answered");
+            else _out.Finding("C-2.19", "revoking a rotated-out refresh token leaves its successor alive (Q12, T-B18)",
+                successor is { Ok: true },
                 $"rotation {rot.Outcome}; revoking the rotated-out token at {Redactor.Strip(_raw.RevocationEndpoint)}: {revoke.Outcome}; the successor afterwards: {successor?.Outcome ?? "(no successor)"}",
                 "Q12: task 3.9 revokes the refresh token it reads from the session record at logout time, not the one held at the start of the request. The T-B18 race stays a documented residual: the successor lives until it expires, held only by the server, whose session record is deleted",
                 "revocation reaches the successor: recorded, and nothing changes");
@@ -597,10 +609,15 @@ public sealed class Harness
         var postLogins = _logins.Where(kv => kv.Key.Context != "C").Select(kv => kv.Value).ToList();
         bool codePost = postLogins.Count > 0 && postLogins.All(l => l.Completed), codeBasic = basicLogin.Completed && basicExchange?.Outcome == "ok";
         bool refreshPost = postRefreshes.Count > 0 && postRefreshes.All(r => r.Ok), refreshBasic = basicRefresh is { Ok: true };
-        _out.Finding("C-2.21", "only one client credential style works at the token endpoint (Q17, T-B4, T-B5)",
-            !(codePost && codeBasic && refreshPost && refreshBasic),
-            $"code exchange in the form body (the handler, every login): {Yn(codePost)}; in a Basic header: {Yn(codeBasic)} ({basicExchange?.Outcome ?? "not attempted"}); refresh in the form body (the library and raw): {Yn(refreshPost)}; in a Basic header: {Yn(refreshBasic)} ({basicRefresh?.Outcome ?? "not attempted"})",
-            "Q17: the style that works becomes the cognito profile's setting, for the code exchange and the refresh alike",
+        // Revocation retries with a Basic header when the form body is refused (Raw.cs). A revocation that needed it is
+        // the same Q17 answer for task 3.9, so it confirms the finding rather than passing unseen.
+        var revokeStyles = _gw.Log.Logouts.Where(l => l.RevokeRoute == "profile").Select(l => l.RevokeAcceptedStyle).ToList();
+        if (q12Revoke is not null) revokeStyles.Add(q12Revoke.AcceptedStyle);
+        var revokeNeededBasic = revokeStyles.Any(s => s == "Basic header");
+        _out.Finding("C-2.21", "only one client credential style works at the token or revocation endpoint (Q17, T-B4, T-B5)",
+            !(codePost && codeBasic && refreshPost && refreshBasic) || revokeNeededBasic,
+            $"code exchange in the form body (the handler, every login): {Yn(codePost)}; in a Basic header: {Yn(codeBasic)} ({basicExchange?.Outcome ?? "not attempted"}); refresh in the form body (the library and raw): {Yn(refreshPost)}; in a Basic header: {Yn(refreshBasic)} ({basicRefresh?.Outcome ?? "not attempted"}); revocations through the profile route and Q12 accepted with: {(revokeStyles.Count == 0 ? "(none sent)" : string.Join(", ", revokeStyles.Select(s => s ?? "refused")))}",
+            "Q17: the style that works becomes the cognito profile's setting, for the code exchange, the refresh and the revocation alike",
             "both styles work: task 3.8 keeps ClientCredentialStyle.PostBody, so the code exchange and the refresh agree");
     }
 
@@ -671,13 +688,15 @@ public sealed class Harness
             notRep = r.Count(x => x.Kind == "not-rep"), skipped = r.Count(x => x.Kind == "skip");
         var verdicts = Report.Verdicts(r);
         _out.Line($"{held} expectations held, {bad} did not, {found} findings confirmed, {notRep} probes not reproduced, {skipped} skipped");
+        if (_o.DryRun) _out.Line("DRY RUN: the verdicts below describe the harness against the test identity provider, not Cognito.");
         if (_o.LeakTest) _out.Line("LEAK TEST: a partial run that plants a token in the output; it gives no verdict.");
         else
         {
-            _out.Line($"G0 item 2: {verdicts.Item2}");
-            _out.Line($"G0 item 3: {verdicts.Item3}");
+            // Each verdict line carries the label itself, so a line found by searching for "G0 item" cannot read as evidence.
+            var label = _o.DryRun ? " (DRY RUN, not evidence)" : "";
+            _out.Line($"G0 item 2{label}: {verdicts.Item2}");
+            _out.Line($"G0 item 3{label}: {verdicts.Item3}");
         }
-        if (_o.DryRun) _out.Line("DRY RUN: these verdicts describe the harness against the test identity provider, not Cognito.");
         _out.Line($"redaction: {_r.Count} credential values held as canaries; {_out.Withheld} line(s) withheld");
 
         var dir = Path.Combine(_root, "spikes", "g0", "cognito");
