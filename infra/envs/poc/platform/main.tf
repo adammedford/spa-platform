@@ -1,9 +1,9 @@
 # The platform root: the cell's runtime resources, one instance of modules/cell.
 #
-# Tasks 1.2 and 1.5 are in place here: the network, the bucket and the two image
-# repositories. The load balancer (task 1.3) and the ECS cluster, task definition
-# and service (task 1.4) are added to the same module and appear here without this
-# file changing shape.
+# Tasks 1.2, 1.3 and 1.5 are in place here: the network, the internal load
+# balancer with its one listener and target group, the bucket and the two image
+# repositories. The ECS cluster, task definition and service (task 1.4) are added to
+# the same module.
 #
 # What this root never contains is a per-app resource. Cognito clients, branding
 # styles and secret parameters belong to envs/poc/apps, which is what makes
@@ -35,4 +35,6 @@ module "cell" {
   cell                    = var.cell
   vpc_cidr                = var.vpc_cidr
   teardown_principal_arns = var.teardown_principal_arns
+  certificate_domain      = var.certificate_domain
+  health_check_path       = var.health_check_path
 }

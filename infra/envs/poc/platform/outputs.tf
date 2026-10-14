@@ -1,6 +1,6 @@
 # The fields of contracts/infra-outputs.schema.json this root can answer so far.
-# Task 1.7's seed.sh and deploy.sh assemble outputs.json from these; the ALB, ECS
-# and log-group fields arrive with tasks 1.3 and 1.4.
+# Task 1.7's seed.sh and deploy.sh assemble outputs.json from these; the ECS and
+# log-group fields arrive with task 1.4.
 
 output "region" {
   description = "The contract's `region`."
@@ -15,6 +15,11 @@ output "cell" {
 output "bucket" {
   description = "The contract's `bucket`: the platform's one private bucket."
   value       = module.cell.bucket
+}
+
+output "alb_dns_name" {
+  description = "The contract's `albDnsName`: the internal load balancer the tunnel forwards to."
+  value       = module.cell.alb_dns_name
 }
 
 output "ecr_gateway" {

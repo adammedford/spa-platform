@@ -10,17 +10,20 @@ name carries `var.cell`.
 | --- | --- | --- |
 | `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, and the two security groups |
 | `storage.tf` | 1.5 | The platform bucket and its policy, and the two image repositories |
+| `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
 
-Tasks 1.3 and 1.4 add the load balancer, the listener and the target group, and then
-the ECS cluster, task definition, service and log group, to this same module.
+Task 1.4 adds the ECS cluster, task definition, service and log group to this same
+module.
 
 ## Names and tags
 
 Resources are named `spa-platform-{cell}` and its derivatives, matching
-`infra/bootstrap`'s `name_prefix`. The two exceptions come from
+`infra/bootstrap`'s `name_prefix`. The exceptions come from
 `contracts/infra-outputs.example.json`, which fixes them: the bucket is
-`spa-platform-{cell}` and the image repositories are `spa-{cell}/gateway` and
-`spa-{cell}/mock-api`.
+`spa-platform-{cell}`, the image repositories are `spa-{cell}/gateway` and
+`spa-{cell}/mock-api`, and the load balancer and its target group are `spa-{cell}`.
+The last is also forced: both names are capped at 32 characters, and
+`spa-platform-{cell}` reaches 35 at the cell name's maximum length.
 
 The module sets no provider and so no tags. The calling root applies `Platform`,
 `Cell` and `ManagedBy` through `default_tags`, as `contracts/resource-tags.md`
@@ -34,6 +37,22 @@ requires; resources here add only `Name`, which merges with those three.
   from the task group alone, which is the Session Manager tunnel's path. Test P-01
   reads the plan and fails on a NAT gateway, a bastion, a database or any other
   ingress rule; P-06 shows a connection from outside to the task's port timing out.
+
+## The load balancer
+
+One listener, one target group, no listener rules (ADR-0010). Every host reaches the
+gateway, which resolves the app by exact authority match.
+
+- **Internal, HTTPS on 443 only.** No port 80 listener and no redirect: only the
+  tunnel reaches it. The policy allows TLS 1.2 and 1.3.
+- **Host header preserved, invalid header fields dropped.** The gateway reads the
+  `Host` the browser sent, port included.
+- **The certificate is found, not created.** `tools/scripts/certs.sh import` puts
+  `*.{certificate_domain}` into ACM tagged with this cell, and `alb.tf` looks it up by
+  that domain and the `Cell` tag, the same filter `certs.sh` uses. Run it before the
+  first apply, or the plan fails on the lookup.
+- **The health-check path follows the image.** `health_check_path` is `/` for the
+  sample image and `/readyz` for the gateway.
 
 ## The two things the bucket enforces that no code does
 

@@ -36,3 +36,23 @@ variable "teardown_principal_arns" {
   EOT
   type        = list(string)
 }
+
+variable "certificate_domain" {
+  description = <<-EOT
+    The domain of the wildcard certificate tools/scripts/certs.sh imported, without
+    the wildcard. The listener presents *.{certificate_domain}, found in ACM by that
+    name and this cell's Cell tag. Run `certs.sh issue` and `certs.sh import` before
+    the first apply of this root, or the lookup fails the plan.
+  EOT
+  type        = string
+  default     = "spa-poc.test"
+}
+
+variable "health_check_path" {
+  description = <<-EOT
+    The load balancer's health-check path, which follows the image: / for the
+    public sample image the service starts on, and /readyz once the gateway runs.
+  EOT
+  type        = string
+  default     = "/"
+}

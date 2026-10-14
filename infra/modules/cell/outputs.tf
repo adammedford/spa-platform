@@ -1,8 +1,8 @@
-# What the platform root publishes, and what tasks 1.3 and 1.4 build on.
+# What the platform root publishes, and what task 1.4 builds on.
 #
 # The names follow contracts/infra-outputs.schema.json where that contract has a
-# field for them. The rest are the module's own seams: the load balancer of task 1.3
-# and the service of task 1.4 take the network and the repositories from here.
+# field for them. The rest are the module's own seams: the service of task 1.4 takes
+# the network, the repositories and the target group from here.
 
 output "vpc_id" {
   description = "The cell's VPC."
@@ -42,4 +42,24 @@ output "ecr_gateway" {
 output "ecr_mock_api" {
   description = "The mock API repository's URL, as the contract's `ecrMockApi`."
   value       = aws_ecr_repository.repository["mock-api"].repository_url
+}
+
+output "alb_dns_name" {
+  description = "The internal load balancer's DNS name, as the contract's `albDnsName`. The tunnel forwards to it."
+  value       = aws_lb.cell.dns_name
+}
+
+output "alb_arn" {
+  description = "The internal load balancer."
+  value       = aws_lb.cell.arn
+}
+
+output "target_group_arn" {
+  description = "The one target group, which task 1.4's service registers its task in."
+  value       = aws_lb_target_group.gateway.arn
+}
+
+output "https_listener_arn" {
+  description = "The one HTTPS listener. Task 1.4's service depends on it, so the target group is attached to the load balancer before the service registers a task."
+  value       = aws_lb_listener.https.arn
 }
