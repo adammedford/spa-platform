@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Platform.Security.Tests;
 
@@ -101,5 +102,33 @@ public sealed class RequestLimitsTests
             $"GET / HTTP/1.1\r\nHost: {host.BaseAddress.Authority}\r\nConnection: close\r\nX-Big: {new string('a', PlatformSecurityLimits.MaxRequestHeadersTotalSize - 1024)}", Ct);
 
         Assert.StartsWith("HTTP/1.1 200 ", response);
+    }
+
+    [Fact]
+    public void AddPlatformSecurity_applies_the_limits_to_kestrel()
+    {
+        // The socket tests above bracket the configured values, but those values are Kestrel's own
+        // defaults, so they would pass with the limits never applied. Here every limit starts
+        // somewhere else, and only AddPlatformSecurity can bring it back.
+        Microsoft.AspNetCore.Builder.WebApplicationBuilder builder =
+            Microsoft.AspNetCore.Builder.WebApplication.CreateSlimBuilder();
+        builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options =>
+        {
+            options.Limits.MaxRequestHeadersTotalSize = 1;
+            options.Limits.MaxRequestHeaderCount = 1;
+            options.Limits.MaxRequestLineSize = 1;
+            options.Limits.MaxRequestBodySize = 1;
+        });
+
+        builder.AddPlatformSecurity();
+
+        using ServiceProvider services = builder.Services.BuildServiceProvider();
+        var limits = services
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>>()
+            .Value.Limits;
+        Assert.Equal(32 * 1024, limits.MaxRequestHeadersTotalSize);
+        Assert.Equal(100, limits.MaxRequestHeaderCount);
+        Assert.Equal(8 * 1024, limits.MaxRequestLineSize);
+        Assert.Equal(30_000_000, limits.MaxRequestBodySize);
     }
 }
