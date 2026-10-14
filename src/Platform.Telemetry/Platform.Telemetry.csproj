@@ -6,4 +6,17 @@
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
 
+  <!-- contracts/telemetry.md -> What Phase 1 exports: tracing and metrics wired in, the OTLP exporter
+       switched on by OTEL_EXPORTER_OTLP_ENDPOINT. Versions come from Directory.Packages.props. -->
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Platform.Telemetry.Tests" />
+  </ItemGroup>
+
 </Project>

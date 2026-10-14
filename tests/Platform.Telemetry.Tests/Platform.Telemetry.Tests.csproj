@@ -8,4 +8,9 @@
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 
+  <!-- Spans and metrics are read through the in-memory exporter (contracts/telemetry.md). -->
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Exporter.InMemory" />
+  </ItemGroup>
+
 </Project>
