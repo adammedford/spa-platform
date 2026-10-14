@@ -99,10 +99,17 @@
     });
   }
 
-  // "returnUrl must be a local path, or it becomes /". One leading slash and no second slash or
-  // backslash after it: "//host" and "/\host" are read by browsers as another origin.
+  // "returnUrl must be a local path, or it becomes /". The value must start with one slash and
+  // resolve, the way a browser resolves it, to this origin. A pattern on the raw string is not
+  // enough: the URL parser treats "\" as "/" and strips tabs and newlines anywhere in the input
+  // (WHATWG URL Standard, https://url.spec.whatwg.org/#concept-basic-url-parser), so "/\host" and
+  // "/<tab>/host" both become "//host", another origin. What goes on the wire is the resolved form.
   function localPath(value) {
-    return typeof value === "string" && /^\/(?![\/\\])/.test(value) ? value : "/";
+    if (typeof value !== "string" || value.charAt(0) !== "/") {
+      return "/";
+    }
+    var url = new URL(value, window.location.origin);
+    return url.origin === window.location.origin ? url.pathname + url.search + url.hash : "/";
   }
 
   // GET /bff/login?returnUrl=/path, made as a navigation: the gateway answers with a redirect to

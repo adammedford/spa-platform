@@ -164,6 +164,7 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
     [InlineData("'https://elsewhere.test/steal'", "/")]
     [InlineData("'//elsewhere.test/steal'", "/")]
     [InlineData("'/\\\\elsewhere.test/steal'", "/")]
+    [InlineData("'/\\t/elsewhere.test/steal'", "/")]
     [InlineData("'reports'", "/")]
     public async Task Login_navigates_to_bff_login_with_a_local_return_path(string argument, string expected)
     {
@@ -191,7 +192,7 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
         Assert.Equal("/bff/logout", new Uri(logout.Url).AbsolutePath);
         Assert.Equal("POST", logout.Method);
         Assert.True(logout.IsNavigationRequest, "Logout is a navigation, not a fetch.");
-        Assert.DoesNotContain(Token, logout.PostData ?? "", StringComparison.Ordinal);
+        Assert.True(string.IsNullOrEmpty(logout.PostData), $"The logout form posted fields: {logout.PostData}");
         Assert.Null(HeaderOf(logout, Contract.Header));
     }
 
