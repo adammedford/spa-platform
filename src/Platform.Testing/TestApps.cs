@@ -4,11 +4,14 @@ using Platform.Abstractions;
 namespace Platform.Testing;
 
 /// <summary>
-/// Registry entries for tests. Every workstream needs an <see cref="AppDefinition"/> and none of
-/// them should spell out eight constructor arguments to get one.
+/// Registry entries for tests. <see cref="Entry"/> builds a registry entry: an app definition plus
+/// the client id, the client secret reference and the release. Every workstream needs one, and none of
+/// them should spell out eight constructor arguments to get it.
 ///
-/// The defaults mirror <c>fixtures/apps/app1.json</c>: a host under the allowed suffix, one upstream,
-/// no content security policy additions, an eight-hour session. Pass only what the test cares about.
+/// The defaults build the smallest registry entry the record accepts, not one platform policy would
+/// necessarily admit, and not a copy of any fixture: no upstream, no content security policy additions,
+/// an eight-hour session. Pass only what the test cares about. Real app definitions live under
+/// <c>fixtures/apps/</c>.
 /// </summary>
 public static class TestApps
 {
