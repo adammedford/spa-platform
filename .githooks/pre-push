@@ -92,6 +92,20 @@ else
   echo "pre-push: steering not checked: python3 is not on PATH." >&2
 fi
 
+# --- the roadmap ------------------------------------------------------------------------------
+#
+# docs/roadmap.md states how far the work has got, which is the one thing a document must never
+# state from memory. Its block is derived from the tags, the merge subjects and the plan's task
+# tables, so the push that lands a row is the push that updates it: one command, and nobody has to
+# remember a number. The check also fails if the ladder stops covering every plan row exactly once,
+# which is what a fresh plan export would do.
+if command -v python3 > /dev/null; then
+  python3 -I tools/roadmap.py --check \
+    || fail "the roadmap is out of date. Run tools/roadmap.py and commit what it writes."
+else
+  echo "pre-push: the roadmap not checked: python3 is not on PATH." >&2
+fi
+
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
 # iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
@@ -121,7 +135,7 @@ fi
 # Warnings are errors, so this catches what a reviewer should never have to. Skipped when nothing
 # that compiles changed: the solution's projects live under src, tests, fixtures and tools/spactl,
 # and the build settings in the root files.
-ran="A-05, the steering files, the artifacts"
+ran="A-05, the steering files, the roadmap, the artifacts"
 
 if touches '^(src|tests|fixtures|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^global\.json$'; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."

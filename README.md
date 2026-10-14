@@ -4,46 +4,60 @@ An internal-only AWS platform that serves many SPAs from one private S3 bucket, 
 internal ALB and one ASP.NET Core 10 gateway. Each SPA has its own OAuth client, and tokens
 stay on the server.
 
-This is the repository skeleton, task I-1 of the plan. It holds no product code yet.
+**The gateway is the product.** One process resolves the app from the request host, holds that app's
+OAuth client and server-side session, and is the only thing in the platform that handles a browser
+request. The Terraform, the fixtures, the test identity provider and the suites all exist to prove
+something about it. `docs/roadmap.md` is the path from the mechanism that was proved on a spike to a
+release an enterprise could adopt.
 
 | Read | For |
 | --- | --- |
+| `docs/roadmap.md` | The gateway's capability ladder, what each stage is proved by, and what a mature release still needs |
 | `docs/plan/` | The plan: architecture, contracts, tasks, tests, infrastructure, evidence |
 | `AGENTS.md` | The rules every coding agent works under, and who owns which path |
-| `docs/dependencies.md` | Tools, package versions, licences and two open decisions |
+| `docs/agents/landing-work.md` | How a task gets from the dispatch table into `main` |
+| `docs/dependencies.md` | Tools, package versions, licences and the open decisions |
 | `spikes/g0/README.md` | The feasibility harness, and the runs of Gate G0 so far |
+
+## Where the gateway stands
+
+Derived from `git tag`, from the merge subjects that name each task, and from the plan's own task
+tables, by `tools/roadmap.py`. Never typed by hand: a progress line written into a file read at the
+top of every session misleads from the first token, which is why `.github/steering.py` forbids one
+in `AGENTS.md` and why this block is generated.
+
+<!-- BEGIN GENERATED summary -->
+**Closed gates:** G1a (`skeleton-v1`).
+**Where the gateway is:** S2 The mechanism holds on the shipped parts, which closes at gate G0.
+**Plan rows landed:** 10 of 62, with 2 part-landed. S2 still owes `1.1`, `1.8`, `3.0`.
+<!-- END GENERATED summary -->
+
+`docs/roadmap.md` has the same figures per stage, and what each stage still owes. For the detail
+behind them: `git tag` for gates, `git log --oneline` for what landed, and the dispatch table in
+`docs/plan/03-workstreams-and-tasks.md` read against both for what opens next.
 
 ## First steps on a workstation
 
 ```bash
 tools/preflight.sh        # 1. what this machine is missing
 brew bundle               # 2. install the tools in the Brewfile, or only the missing ones
-git init -b main          # 3. the first commit is yours to make
-dotnet build              # 4. expect 27 projects and no warnings
+git config core.hooksPath .githooks   # 3. once per clone: the pre-push checks
+dotnet build              # 4. the whole solution, with no warnings
 ```
 
-Then run the first item of Gate G0, the real handler from the shipped package:
+Then the tests, and the gateway's own exit test for Gate G1a:
+
+```bash
+dotnet test --solution SpaPlatform.slnx --ignore-exit-code 8   # 8 = a project with no tests yet
+tools/smoke.sh Debug 5180                                      # starts, and 404s an unknown host
+```
+
+The first item of Gate G0, the real handler from the shipped package, runs on its own:
 
 ```bash
 cd spikes/g0/real-handler/RealOidcNuGet
 dotnet run -c Release     # expect the last line to start "32 expectations held, 0 did not"
 ```
-
-## State of the skeleton
-
-Task I-1 is done. On 11 October 2026 `dotnet build` passed on an Apple silicon Mac with
-.NET SDK 10.0.401: 27 projects, restored from nuget.org, no warnings.
-
-| Part of task I-1 | State |
-| --- | --- |
-| Solution, 27 projects, reference rules | Built |
-| Test projects on xUnit v3 | The 14 test projects built as executables on `xunit.v3` 4.0.2 and Microsoft Testing Platform 2.5.1. `dotnet test` has not been run yet. |
-| Central package versions | `xunit.v3` is restored. The other 17 are confirmed to exist on nuget.org and first restore when a project references them. |
-| `AGENTS.md`, `OWNERSHIP.md` | Written. Owners are role names, not GitHub handles: one author, nothing to resolve. |
-| Git | Not initialised |
-
-Three of Gate G0's five items passed the same day: the real handler, token management and
-YARP, each from its shipped package. Cognito remains. `spikes/g0/README.md` has the details.
 
 ## Layout
 
@@ -52,10 +66,11 @@ src/            the gateway and its libraries, one project per owner
 tests/          component tests beside each owner, and the composed suites
 fixtures/       two sample SPAs and a third for onboarding, the mock API, the test identity provider
 infra/          Terraform: bootstrap, modules, and the three roots of the proof of concept
-tools/          spactl, the scripts, and preflight.sh
-contracts/      schemas and written contracts, from task I-2
+tools/          spactl, the scripts, preflight.sh, smoke.sh and roadmap.py
+contracts/      schemas and written contracts, frozen at G1a and G1b
 spikes/g0/      the feasibility harness, outside the solution
-docs/           the plan, dependencies, decision records, runbooks
+docs/           the roadmap, the plan, dependencies, decision records, runbooks
 ```
 
-`AGENTS.md` has the owner of every path.
+`AGENTS.md` and `OWNERSHIP.md` have the owner of every path, and `.githooks/pre-push` enforces it as
+check A-05.
