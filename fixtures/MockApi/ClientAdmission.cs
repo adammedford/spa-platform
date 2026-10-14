@@ -28,13 +28,4 @@ public sealed class ClientAdmission(IEnumerable<string> admitted)
             clients = clients.Add(clientId);
         }
     }
-
-    /// <summary>Withdraws a client, so a test can take admission away again.</summary>
-    public void Withdraw(string clientId)
-    {
-        lock (gate)
-        {
-            clients = clients.Remove(clientId);
-        }
-    }
 }

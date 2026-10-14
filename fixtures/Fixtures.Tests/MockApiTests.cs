@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MockApi;
 
 namespace Fixtures.Tests;
@@ -18,7 +19,9 @@ public sealed class MockApiTests
         // on orders."
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
 
-        HttpResponseMessage response = await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync());
+        string token = await harness.App1TokenAsync();
+
+        HttpResponseMessage response = await harness.CallAsync("orders", "/whoami", token);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         JsonElement body = await MockApiHarness.BodyOf(response);
@@ -26,6 +29,11 @@ public sealed class MockApiTests
         Assert.Equal(IdpHarness.Client1, body.GetProperty("clientId").GetString());
         Assert.Contains(MockApiHarness.OrdersRead, body.GetProperty("scopes").EnumerateArray().Select(s => s.GetString()));
         Assert.Equal(MockApiHarness.Orders, body.GetProperty("audience").GetString());
+
+        // The subject the token carries, read from the token itself rather than from the API's
+        // answer. The default claim mapping renames sub, so a lookup for "sub" quietly found
+        // nothing until MapInboundClaims was turned off.
+        Assert.Equal(IdpHarness.Claim(token, "sub"), body.GetProperty("subject").GetString());
     }
 
     [Fact]
@@ -41,22 +49,45 @@ public sealed class MockApiTests
         JsonElement body = await MockApiHarness.BodyOf(response);
         Assert.Equal("reports", body.GetProperty("api").GetString());
         Assert.Equal(IdpHarness.Client2, body.GetProperty("clientId").GetString());
+        Assert.Contains(MockApiHarness.ReportsRead, body.GetProperty("scopes").EnumerateArray().Select(s => s.GetString()));
         Assert.Null(body.GetProperty("audience").GetString());
     }
 
-    [Fact]
-    public async Task Echo_returns_what_arrived()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task Echo_returns_what_arrived(string listener)
     {
         // The deployed negative tests read this to check the gateway stripped what the upstream
         // contract forbids, so what it reports has to be what actually arrived.
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
 
-        HttpResponseMessage response = await harness.CallAsync("orders", "/echo?page=2", await harness.App1TokenAsync());
+        HttpResponseMessage response = await harness.CallOwnAppAsync(listener, "/echo?page=2");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         JsonElement body = await MockApiHarness.BodyOf(response);
+        Assert.Equal(listener, body.GetProperty("api").GetString());
         Assert.Equal("/echo", body.GetProperty("path").GetString());
         Assert.Equal("?page=2", body.GetProperty("query").GetString());
+    }
+
+    [Fact]
+    public async Task Echo_reports_the_authorization_header_as_present_without_its_value()
+    {
+        // F-05 dumps every response body and refuses to find a token-shaped string in any of them.
+        // The echo body travels back through the gateway to the page, so echoing the session's
+        // bearer token verbatim would hand it to the one place the architecture keeps it from.
+        await using MockApiHarness harness = await MockApiHarness.StartAsync();
+        string token = await harness.App1TokenAsync();
+
+        HttpResponseMessage response = await harness.CallAsync("orders", "/echo", token);
+
+        string text = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(token, text, StringComparison.Ordinal);
+        Assert.Equal(
+            ["(redacted)"],
+            (await MockApiHarness.BodyOf(response)).GetProperty("headers").GetProperty("Authorization")
+                .EnumerateArray().Select(value => value.GetString()));
     }
 
     [Fact]
@@ -106,60 +137,62 @@ public sealed class MockApiTests
 
     // ---- each kind of wrong token, in turn --------------------------------------------------------
 
-    [Fact]
-    public async Task No_token_is_refused()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task No_token_is_refused(string listener)
     {
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallAsync("orders", "/whoami", token: null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallAsync(listener, "/whoami", token: null)).StatusCode);
     }
 
-    [Fact]
-    public async Task A_token_from_the_wrong_issuer_is_refused()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task A_token_from_the_wrong_issuer_is_refused(string listener)
     {
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
         harness.Idp.Idp.Faults.IssuerOverride = "https://not-the-issuer.example";
 
-        Assert.Equal(
-            HttpStatusCode.Unauthorized,
-            (await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallOwnAppAsync(listener, "/whoami")).StatusCode);
     }
 
-    [Fact]
-    public async Task A_token_signed_with_an_unpublished_key_is_refused()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task A_token_signed_with_an_unpublished_key_is_refused(string listener)
     {
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
         harness.Idp.Idp.Faults.SignWithUnpublishedKey = true;
 
-        Assert.Equal(
-            HttpStatusCode.Unauthorized,
-            (await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallOwnAppAsync(listener, "/whoami")).StatusCode);
     }
 
-    [Fact]
-    public async Task An_expired_token_is_refused()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task An_expired_token_is_refused(string listener)
     {
         // The provider issues an already-expired token rather than a test waiting for one, and the
         // listener runs with no clock skew, or the library's five-minute default would accept it.
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
         harness.Idp.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(-5);
 
-        Assert.Equal(
-            HttpStatusCode.Unauthorized,
-            (await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallOwnAppAsync(listener, "/whoami")).StatusCode);
     }
 
-    [Fact]
-    public async Task An_id_token_presented_as_a_bearer_token_is_refused()
+    [Theory]
+    [InlineData("orders")]
+    [InlineData("reports")]
+    public async Task An_id_token_presented_as_a_bearer_token_is_refused(string listener)
     {
         // token_use is the only check that separates the two: an ID token carries the same issuer
         // and the same signature.
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
         harness.Idp.Idp.Faults.AccessTokenUse = "id";
 
-        Assert.Equal(
-            HttpStatusCode.Unauthorized,
-            (await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await harness.CallOwnAppAsync(listener, "/whoami")).StatusCode);
     }
 
     [Fact]
@@ -173,6 +206,23 @@ public sealed class MockApiTests
         Assert.Equal(
             HttpStatusCode.Unauthorized,
             (await harness.CallAsync("orders", "/whoami", await harness.App1TokenAsync())).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_token_bound_to_another_api_is_refused_by_orders()
+    {
+        // The other half of the audience check, and the one the absent-aud tests do not reach: a
+        // token with an aud that is present and wrong. "aud equals the API's identifier when
+        // resource binding is on" (contracts/upstream-contract.md).
+        await using MockApiHarness harness = await MockApiHarness.StartAsync();
+
+        Login login = await harness.Idp.LoginAsync(
+            IdpHarness.Client1, IdpHarness.Secret1, IdpHarness.Redirect1,
+            resource: MockApiHarness.Reports, scope: "openid profile " + MockApiHarness.OrdersRead);
+
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await harness.CallAsync("orders", "/whoami", login.AccessToken)).StatusCode);
     }
 
     [Fact]
@@ -214,16 +264,27 @@ public sealed class MockApiTests
     }
 
     [Fact]
-    public async Task The_default_listeners_are_the_ports_the_app_definitions_name()
+    public void The_default_listeners_are_the_ports_the_app_definitions_name()
     {
-        // fixtures/apps/app1.json and app2.json name http://127.0.0.1:5080 and :5081 as their
-        // upstreams. The harness lets the system pick a port, so nothing else would notice if these
-        // two drifted apart.
+        // The harness lets the operating system pick a port, so nothing else would notice if the
+        // defaults and the fixtures drifted apart. The expected values are read from the app
+        // definitions rather than written here twice.
         MockApiOptions options = MockApiOptions.Default("https://issuer.example", "https://issuer.example/x", "c1", "c2");
 
-        Assert.Equal([5080, 5081], options.Listeners.Select(listener => listener.Port));
         Assert.Equal(["orders", "reports"], options.Listeners.Select(listener => listener.Name));
         Assert.Equal(MockApiHarness.Orders, options.Listeners[0].Audience);
         Assert.Null(options.Listeners[1].Audience);
+
+        foreach (ApiListenerOptions listener in options.Listeners)
+        {
+            Assert.Equal(
+                $"http://127.0.0.1:{listener.Port}",
+                UpstreamOf(listener.Name == "orders" ? "app1" : "app2", listener.Name));
+        }
     }
+
+    /// <summary>The upstream one app definition names for one of its APIs.</summary>
+    private static string UpstreamOf(string appId, string api) =>
+        FixtureFiles.Definition(appId)["apis"]!.AsArray()
+            .Single(entry => entry!["name"]!.GetValue<string>() == api)!["upstream"]!.GetValue<string>();
 }

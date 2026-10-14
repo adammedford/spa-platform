@@ -13,12 +13,28 @@ namespace MockApi;
 /// </summary>
 internal static class Routes
 {
+    /// <summary>
+    /// Headers /echo reports as present without reporting their value. The echo body travels back
+    /// through the gateway to the browser, and F-05 dumps every response body and refuses to find a
+    /// token-shaped string in any of them. Returning the session's bearer token here would hand it
+    /// to the page the whole architecture keeps it away from.
+    ///
+    /// Presence is what the negative tests need: the upstream contract's claim is about which
+    /// headers arrive, never about what they contain.
+    /// </summary>
+    private static readonly HashSet<string> Redacted = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization",
+        "Cookie",
+        "X-CSRF-TOKEN",
+    };
+
     internal static void Map(WebApplication app)
     {
         // Who the caller is, as this API sees them. F-08 reads the client, the scopes and the bound
         // audience from here, which is the only way to tell app 1's token from app 2's at a listener.
-        app.MapGet("/whoami", (HttpContext context, ApiListenerOptions api) =>
-            Guard(context, api, api.ReadScope) ?? Results.Json(new
+        app.MapGet("/whoami", (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
+            Guard(context, api, admission, api.ReadScope) ?? Results.Json(new
             {
                 api = api.Name,
                 clientId = ClientOf(context),
@@ -29,9 +45,9 @@ internal static class Routes
 
         // What arrived. The upstream contract says what may and may not reach here, and the deployed
         // negative tests read this to check the gateway stripped what it was supposed to.
-        app.Map("/echo", async (HttpContext context, ApiListenerOptions api) =>
+        app.Map("/echo", async (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
         {
-            if (Guard(context, api, api.ReadScope) is { } refusal)
+            if (Guard(context, api, admission, api.ReadScope) is { } refusal)
             {
                 return refusal;
             }
@@ -46,7 +62,7 @@ internal static class Routes
                 query = context.Request.QueryString.Value,
                 headers = context.Request.Headers.ToDictionary(
                     header => header.Key,
-                    header => header.Value.ToArray(),
+                    header => Redacted.Contains(header.Key) ? ["(redacted)"] : header.Value.ToArray()!,
                     StringComparer.OrdinalIgnoreCase),
                 body = await reader.ReadToEndAsync(context.RequestAborted),
             });
@@ -54,15 +70,15 @@ internal static class Routes
 
         // The route no test app may reach. Its scope exists on the resource server and no app asks
         // for it, so F-08's 403 is a scope decision rather than a missing route.
-        app.MapGet("/admin", (HttpContext context, ApiListenerOptions api) =>
-            Guard(context, api, api.AdminScope) ?? Results.Json(new { api = api.Name, admin = true }));
+        app.MapGet("/admin", (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
+            Guard(context, api, admission, api.AdminScope) ?? Results.Json(new { api = api.Name, admin = true }));
     }
 
     /// <summary>
     /// The two checks that are this API's own, in the order their answers differ: an unauthenticated
     /// or unadmitted caller learns nothing about scopes.
     /// </summary>
-    private static IResult? Guard(HttpContext context, ApiListenerOptions api, string scope)
+    private static IResult? Guard(HttpContext context, ApiListenerOptions api, ClientAdmission admission, string scope)
     {
         if (context.User.Identity?.IsAuthenticated != true)
         {
@@ -71,7 +87,6 @@ internal static class Routes
 
         // Admission is the API owner's decision, not the gateway's. The gateway will have issued a
         // perfectly good token for a client this API has never agreed to serve (F-07, N-17).
-        ClientAdmission admission = context.RequestServices.GetRequiredService<ClientAdmission>();
         if (!admission.IsAdmitted(ClientOf(context)))
         {
             return Refused(StatusCodes.Status403Forbidden, "client_not_admitted", api);

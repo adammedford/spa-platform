@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using MockApi;
 
 // The mock API's entry point. Two listeners in one process, configured from the task environment,
@@ -24,9 +23,10 @@ string metadata = configuration["MockApi:MetadataAddress"] is { Length: > 0 } ad
     ? address
     : issuer.TrimEnd('/') + "/.well-known/openid-configuration";
 
-MockApiOptions options = configuration.GetSection("MockApi:Listeners").GetChildren().Any()
-    ? Read(configuration)
-    : MockApiOptions.Default(issuer, metadata, Required("MockApi:App1Client"), Required("MockApi:App2Client"));
+// The two listeners the plan fixes, and only those. A task environment that named its own would be
+// a second configuration path with nothing reading it, and the row fixes the pair.
+MockApiOptions options = MockApiOptions.Default(
+    issuer, metadata, Required("MockApi:App1Client"), Required("MockApi:App2Client"));
 
 await using MockApiHost host = await MockApiHost.StartAsync(options, CancellationToken.None);
 
@@ -38,16 +38,3 @@ foreach (ApiListenerOptions listener in options.Listeners)
 }
 
 await host.WaitForShutdownAsync();
-
-// The long form, for a task environment that names the listeners itself rather than taking the two
-// the plan fixes.
-static MockApiOptions Read(IConfiguration configuration) =>
-    new(
-        configuration["MockApi:Issuer"]!,
-        configuration["MockApi:MetadataAddress"]!,
-        [.. configuration.GetSection("MockApi:Listeners").GetChildren().Select(section => new ApiListenerOptions(
-            Name: section["Name"]!,
-            Port: int.Parse(section["Port"]!),
-            ScopeIdentifier: section["ScopeIdentifier"]!,
-            Audience: section["Audience"],
-            AdmittedClients: [.. section.GetSection("AdmittedClients").GetChildren().Select(client => client.Value!)]))]);

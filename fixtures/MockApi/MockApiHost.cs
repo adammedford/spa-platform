@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace MockApi;
@@ -86,8 +87,24 @@ public sealed class MockApiHost : IAsyncDisposable
         {
             ClientAdmission admission = new(listener.AdmittedClients);
 
-            WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
+            WebApplicationBuilder builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Production,
+            });
+
             builder.WebHost.UseUrls($"http://127.0.0.1:{listener.Port}");
+
+            // The framework's request log writes the full URL, and a query string is on the "never
+            // logged" list in contracts/telemetry.md: the callback carries the authorization code and
+            // state there. Test N-16 greps every log line for canary values, and task 6.1 runs this
+            // host in the composed suite, so a line written here is a line N-16 reads. The gateway's
+            // appsettings.json holds Microsoft.AspNetCore at Warning for the same reason.
+            builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
+            // Never read a forwarding header. /echo is what the deployed negative tests read to show
+            // the gateway stripped the browser's X-Forwarded-*, and a listener that honoured
+            // ASPNETCORE_FORWARDEDHEADERS_ENABLED would rewrite the evidence it is there to give.
+            builder.Configuration["ForwardedHeaders_Enabled"] = "false";
             builder.Services.AddSingleton(listener);
             builder.Services.AddSingleton(admission);
 
@@ -97,6 +114,11 @@ public sealed class MockApiHost : IAsyncDisposable
             {
                 bearer.MetadataAddress = options.MetadataAddress;
                 bearer.RequireHttpsMetadata = false;
+
+                // Claims keep the names the token gave them. With the default mapping on, sub
+                // arrives as ClaimTypes.NameIdentifier and a lookup for "sub" finds nothing, which
+                // is a silent null rather than an error.
+                bearer.MapInboundClaims = false;
                 bearer.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,

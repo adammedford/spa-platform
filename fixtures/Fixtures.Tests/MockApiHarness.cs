@@ -15,7 +15,9 @@ namespace Fixtures.Tests;
 /// </summary>
 internal sealed class MockApiHarness : IAsyncDisposable
 {
-    public const string Orders = "https://orders.spa-poc.test";
+    /// <summary>The orders resource server, which <see cref="IdpHarness"/> already names.</summary>
+    public const string Orders = IdpHarness.Orders;
+
     public const string Reports = "https://reports.spa-poc.test";
     public const string OrdersRead = Orders + "/read";
     public const string ReportsRead = Reports + "/read";
@@ -63,6 +65,16 @@ internal sealed class MockApiHarness : IAsyncDisposable
 
         return await Http.SendAsync(request, TestContext.Current.CancellationToken);
     }
+
+    /// <summary>
+    /// A call to one listener by the app that listener admits, which is what every check of a wrong
+    /// token needs: the token is wrong in exactly one way, and not also from the wrong client.
+    /// </summary>
+    public async Task<HttpResponseMessage> CallOwnAppAsync(string listener, string path) =>
+        await CallAsync(
+            listener,
+            path,
+            listener == "orders" ? await App1TokenAsync() : await App2TokenAsync());
 
     /// <summary>App 1's access token, bound to the orders API as the fixture's definition binds it.</summary>
     public async Task<string> App1TokenAsync(string scope = "openid profile " + OrdersRead)
