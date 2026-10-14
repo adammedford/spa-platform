@@ -17,19 +17,46 @@ internal static class RegistrySchemas
 {
     public const string Registry = "registry.schema.json";
     public const string AppDefinition = "app-definition.schema.json";
+    public const string PlatformConfiguration = "platform-config.schema.json";
+    public const string InfraOutputs = "infra-outputs.schema.json";
+
+    /// <summary>Where every contract schema's <c>$id</c> lives (contracts/README.md, "Using the schemas").</summary>
+    private const string IdBase = "https://spa-platform.internal/contracts/";
 
     /// <summary>The registry document first: the other three <c>$ref</c> its <c>$defs</c>.</summary>
     private static readonly string[] Files =
-        [Registry, AppDefinition, "platform-config.schema.json", "infra-outputs.schema.json"];
+        [Registry, AppDefinition, PlatformConfiguration, InfraOutputs];
+
+    /// <summary>
+    /// The one schema registry. Declared before <see cref="Loaded"/>, because static initializers run in
+    /// textual order and <see cref="Load"/> registers into it.
+    /// </summary>
+    private static readonly BuildOptions Build = new();
 
     private static readonly Dictionary<string, JsonSchema> Loaded = Load();
+
+    /// <summary>The <c>$defs</c> evaluated on their own, built on first use and kept.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonSchema> Definitions = new(StringComparer.Ordinal);
 
     private static readonly EvaluationOptions Options = new() { OutputFormat = OutputFormat.Hierarchical };
 
     /// <summary>Every schema violation, as a JSON pointer into the instance and the engine's message.</summary>
-    public static ImmutableArray<RegistryIssue> Evaluate(string schemaFile, JsonElement instance)
+    public static ImmutableArray<RegistryIssue> Evaluate(string schemaFile, JsonElement instance) =>
+        Issues(Loaded[schemaFile].Evaluate(instance, Options));
+
+    /// <summary>
+    /// Whether a value satisfies one of <c>registry.schema.json</c>'s <c>$defs</c>, such as <c>appId</c>.
+    /// The definition is reached by <c>$ref</c> through the same registry, so the rule exists once.
+    /// </summary>
+    public static bool SatisfiesRegistryDefinition(string definition, JsonElement instance)
     {
-        EvaluationResults results = Loaded[schemaFile].Evaluate(instance, Options);
+        JsonSchema schema = Definitions.GetOrAdd(definition, name =>
+            JsonSchema.FromText($"{{\"$ref\":\"{IdBase}{Registry}#/$defs/{name}\"}}", Build));
+        return schema.Evaluate(instance, Options).IsValid;
+    }
+
+    private static ImmutableArray<RegistryIssue> Issues(EvaluationResults results)
+    {
         if (results.IsValid)
         {
             return [];
@@ -77,7 +104,6 @@ internal static class RegistrySchemas
 
     private static Dictionary<string, JsonSchema> Load()
     {
-        BuildOptions build = new();
         Dictionary<string, JsonSchema> schemas = [];
         Assembly assembly = typeof(RegistrySchemas).Assembly;
         foreach (string file in Files)
@@ -86,8 +112,8 @@ internal static class RegistrySchemas
             using Stream stream = assembly.GetManifestResourceStream("contracts/" + file)
                 ?? throw new InvalidOperationException($"contracts/{file} is not embedded in {assembly.GetName().Name}.");
             using StreamReader reader = new(stream);
-            JsonSchema schema = JsonSchema.FromText(reader.ReadToEnd(), build);
-            build.SchemaRegistry.Register(schema);
+            JsonSchema schema = JsonSchema.FromText(reader.ReadToEnd(), Build);
+            Build.SchemaRegistry.Register(schema);
             schemas.Add(file, schema);
         }
 
