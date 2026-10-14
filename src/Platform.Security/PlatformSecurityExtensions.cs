@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -61,7 +62,14 @@ public static class PlatformSecurityExtensions
     /// The app's content security policy and the fixed header set, on every response, overwriting any
     /// copy an upstream sent. Task 4.5.
     /// </summary>
-    public static IApplicationBuilder UsePlatformSecurityHeaders(this IApplicationBuilder app) => app;
+    public static IApplicationBuilder UsePlatformSecurityHeaders(this IApplicationBuilder app)
+    {
+        SecurityHeaders headers = new(
+            app.ApplicationServices.GetRequiredService<IConfiguration>(),
+            app.ApplicationServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SecurityHeaders).FullName!));
+        app.Use((context, next) => headers.InvokeAsync(context, next));
+        return app;
+    }
 
     /// <summary>
     /// The rules in <c>contracts/request-gate.md</c>, one rule id per rejection. It runs before
