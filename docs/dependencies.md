@@ -58,7 +58,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | xunit.v3.extensibility.core | 4.0.2 | Apache-2.0 | `Platform.Testing` | The attributes without the runner. xUnit refuses `xunit.v3` on a library that is not an executable and names this instead. Already a transitive dependency of `xunit.v3`. |
 | xunit.v3.assert | 4.0.2 | Apache-2.0 | `Platform.Testing` | `Assert`, for the store contract suites that each implementation subclasses (task 3.4). Same 4.0.2 set. |
 | Microsoft.AspNetCore.Mvc.Testing | 10.0.12 | MIT | `Gateway.TestHarness` |  |
-| Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing` | The fake clock |
+| Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing`, `Fixtures.Tests` | The fake clock |
 | Microsoft.Playwright | 1.63.0 | MIT | `tests/e2e`, `Fixtures.Tests` |  |
 | JsonSchema.Net | 8.0.5 | MIT | Schema tests, `Fixtures.Tests`, `Platform.Registry` (the gateway and `spactl`) | Decision D-1, decided |
 
