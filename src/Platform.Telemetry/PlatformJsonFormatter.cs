@@ -88,7 +88,10 @@ internal sealed class PlatformJsonFormatter : ConsoleFormatter
 
             if (logEntry.Exception is not null)
             {
-                json.WriteString("exception", Redaction.WithoutQueryStrings(logEntry.Exception.ToString()));
+                // N-16 / contracts/telemetry.md: arbitrary exception messages, inner exceptions and
+                // stack text may contain credentials. Keep only metadata whose value is not supplied
+                // by the exception's caller; redacting structured properties cannot protect this text.
+                json.WriteString("exception", logEntry.Exception.GetType().FullName);
             }
 
             json.WriteEndObject();

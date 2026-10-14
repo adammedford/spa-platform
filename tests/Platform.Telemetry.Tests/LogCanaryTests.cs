@@ -59,6 +59,9 @@ public sealed class LogCanaryTests
         ILogger application = loggers.CreateLogger("Platform.Identity.Example");
         application.LogInformation("Refreshed {AccessToken} with {ClientSecret} for {SessionKey}", Token, Secret, Cookie);
         application.LogInformation("Callback {Url}", $"/signin-oidc?code={Code}&state={State}");
+        // N-16 also covers exception/inner-exception text, not just named template properties.
+        application.LogError(new InvalidOperationException("access_token=" + Token,
+            new ArgumentException("client_secret=" + Secret)), "Refresh failed for {AccessToken}", Token);
     }
 
     [Fact]
