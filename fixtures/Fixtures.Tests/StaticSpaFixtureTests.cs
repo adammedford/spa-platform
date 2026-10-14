@@ -129,11 +129,14 @@ public sealed partial class StaticSpaFixtureTests
     [MemberData(nameof(EveryApp))]
     public void Each_script_reads_the_session_and_signs_in_by_navigation(string appId)
     {
+        // The paths and how each is made come from the contract's endpoint table, not from here.
         string scripts = SpaRelease.Of(appId).Scripts;
+        (_, string session) = ContractEndpoint("Fetch");
+        (_, string login) = ContractEndpoint("Navigation");
 
-        Assert.Contains("fetch(\"/bff/session\"", scripts, StringComparison.Ordinal);
-        Assert.Contains("window.location.assign(\"/bff/login?returnUrl=\"", scripts, StringComparison.Ordinal);
-        Assert.DoesNotContain("fetch(\"/bff/login", scripts, StringComparison.Ordinal);
+        Assert.Contains($"fetch(\"{session}\"", scripts, StringComparison.Ordinal);
+        Assert.Contains($"window.location.assign(\"{login}?returnUrl=\"", scripts, StringComparison.Ordinal);
+        Assert.DoesNotContain($"fetch(\"{login}", scripts, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -165,9 +168,10 @@ public sealed partial class StaticSpaFixtureTests
     {
         // "POST /bff/logout | Form navigation": a fetch would not follow the provider's logout redirect.
         SpaRelease release = SpaRelease.Of(appId);
+        (string method, string logout) = ContractEndpoint("Form navigation");
 
-        Assert.Matches("<form method=\"post\" action=\"/bff/logout\">", release.IndexHtml);
-        Assert.DoesNotContain(FetchCalls(release.Scripts), call => call.Contains("/bff/logout", StringComparison.Ordinal));
+        Assert.Contains($"<form method=\"{method.ToLowerInvariant()}\" action=\"{logout}\">", release.IndexHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain(FetchCalls(release.Scripts), call => call.Contains(logout, StringComparison.Ordinal));
     }
 
     [Theory]
@@ -184,6 +188,17 @@ public sealed partial class StaticSpaFixtureTests
         }
 
         Assert.DoesNotMatch("show\\([^)]*csrfToken", scripts);
+    }
+
+    [Theory]
+    [InlineData("bff/session")]
+    [InlineData("api/orders/x.json")]
+    [InlineData("healthz")]
+    public void The_reserved_path_check_refuses_a_file_under_a_reserved_path(string file)
+    {
+        // The release check above runs only against releases that already pass it, so this feeds the
+        // same comparison a file it must refuse (CODING_STANDARDS.md, "An assertion must be able to fail").
+        Assert.Contains("/" + file.Split('/')[0], ReservedPrefixes());
     }
 
     // The checker has to be able to refuse, or every "fits" above is a label (CODING_STANDARDS.md,
@@ -263,7 +278,22 @@ public sealed partial class StaticSpaFixtureTests
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
         Match sentence = Regex.Match(contract, "An SPA cannot serve content under (.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline);
         Assert.True(sentence.Success, "contracts/http-contract.md lists no reserved paths.");
-        return [.. Regex.Matches(sentence.Groups[1].Value, "`(/[^`]+?)/?`").Select(m => m.Groups[1].Value)];
+        List<string> prefixes = [.. Regex.Matches(sentence.Groups[1].Value, "`(/[^`]+?)/?`").Select(m => m.Groups[1].Value)];
+        Assert.NotEmpty(prefixes);
+        return prefixes;
+    }
+
+    /// <summary>
+    /// The method and path of the one <c>/bff</c> row in the contract's endpoint table made the given
+    /// way ("Fetch", "Navigation" or "Form navigation"), with any query string dropped.
+    /// </summary>
+    private static (string Method, string Path) ContractEndpoint(string madeAs)
+    {
+        string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
+        Match row = Assert.Single(
+            Regex.Matches(contract, "^\\| `(?<method>[A-Z]+) (?<path>/bff/[^`?]*)[^`]*` \\| (?<as>[^|]+?) \\|", RegexOptions.Multiline),
+            match => match.Groups["as"].Value == madeAs);
+        return (row.Groups["method"].Value, row.Groups["path"].Value);
     }
 
     private static string AppIdOf(string appId) =>
