@@ -302,6 +302,17 @@ Item 3 passes when C-3.1 to C-3.5 hold for both apps (Q18). If it fails, its way
 For the port it opens a ticket for workstream 1 and for workstream 5 and adds a change request for the host
 examples in `contracts/`; for the branding style it opens a ticket for workstream 1. The verdict line names which.
 
+**Decided after review.** Four calls the grilling (Q1 to Q23) left open, settled by Adam on the review of task 3.0a:
+
+- A precondition that fails makes C-2.17, C-2.18 and C-2.19 `BAD`, not skipped. A run that measured nothing must
+  be run again, never read as an answer for ADR-0005 or task 3.9. It exits 1 and leaves item 2's verdict alone.
+- `--skip-natural-expiry` leaves item 2 not decided. It is for iterating on the harness; Q20 asks for one natural
+  expiry, so a G0 verdict comes only from a full run.
+- C-2.15 is inside item 2's gate. app2's refresh failing after app1's logout is a refresh that does not complete
+  for a client, which is what fails item 2 (Q21, read with Q19).
+- Q11's two replays run in two token families, one per outcome, not in one. A replay that revokes the family at
+  2 s would otherwise leave nothing for the 12 s replay to measure.
+
 ### The dry run (not evidence)
 
 ```bash
