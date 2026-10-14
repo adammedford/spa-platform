@@ -17,6 +17,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Task 5.2: bff-client.js is unit-tested in headless Chromium (docs/dependencies.md lists this
+         package for Fixtures.Tests, and the browser it installs). -->
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../MockApi/MockApi.csproj" />
     <ProjectReference Include="../TestIdp/TestIdp.csproj" />
   </ItemGroup>
