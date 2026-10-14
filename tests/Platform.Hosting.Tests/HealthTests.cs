@@ -26,6 +26,24 @@ public sealed class HealthTests
         Assert.Equal(0, gateway.Reached);
     }
 
+    /// <summary>
+    /// The health paths match ordinally (src/Platform.Hosting/Health.cs): a path differing only in case
+    /// is an app path, so it falls through to host resolution, which refuses an unknown host. This fails
+    /// if the stage goes back to <c>PathString</c>'s own equality, which ignores case.
+    /// </summary>
+    [Theory]
+    [InlineData("/HEALTHZ")]
+    [InlineData("/Readyz")]
+    public async Task A_health_path_in_another_case_is_not_a_health_path(string path)
+    {
+        await using HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, TestApps.Entry("app1")), Ct);
+
+        RawResponse response = await gateway.GetAsync("nope.example", path, Ct);
+
+        Assert.Equal(404, response.Status);
+        Assert.Equal(0, gateway.Reached);
+    }
+
     [Fact]
     public async Task Readyz_is_503_before_a_snapshot_and_reports_the_live_revision_after()
     {
