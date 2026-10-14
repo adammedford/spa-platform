@@ -51,6 +51,22 @@ internal sealed class Arguments
     public string Required(string name) =>
         Option(name) ?? throw new UsageException($"{name} is required.");
 
+    /// <summary>
+    /// Refuses any option outside <paramref name="accepted"/>. Without this a misspelt option is stored
+    /// and never read, so <c>registry rollback --to-revison 1</c> would roll back to the previous version
+    /// instead: a different write, not a usage error.
+    /// </summary>
+    public void AcceptOnly(IReadOnlySet<string> accepted)
+    {
+        foreach (string name in options.Keys)
+        {
+            if (!accepted.Contains(name))
+            {
+                throw new UsageException($"{name} is not an option of this command.");
+            }
+        }
+    }
+
     /// <summary>The positional words after the two-word command, exactly <paramref name="count"/> of them.</summary>
     public IReadOnlyList<string> Operands(int skip, int count, string shape)
     {

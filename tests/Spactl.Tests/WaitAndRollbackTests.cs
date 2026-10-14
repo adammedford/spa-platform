@@ -131,6 +131,30 @@ public sealed class WaitAndRollbackTests : IDisposable
     }
 
     [Fact]
+    public async Task Rollback_with_a_misspelt_option_is_a_usage_error_and_writes_nothing()
+    {
+        // A typo in --to-revision must not fall back to the previous version: that is a different write.
+        await Release("r1");
+        await Release("r2");
+        await Release("r3");
+        await spactl.Run("app", "add", Harness.Example("apps", "app1.json"), "--release", "r1");
+        await spactl.Run("release", "activate", "app1", "r2");
+        await spactl.Run("release", "activate", "app1", "r3");
+
+        Assert.Equal(2, await spactl.Run("registry", "rollback", "--to-revison", "1"));
+
+        Assert.Contains("--to-revison", spactl.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(3, spactl.Store.VersionCount(Harness.RegistryKey));
+    }
+
+    [Fact]
+    public async Task An_option_another_command_takes_is_a_usage_error()
+    {
+        Assert.Equal(2, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "1", "--offline"));
+        Assert.Empty(spactl.Readyz.Requests);
+    }
+
+    [Fact]
     public async Task Rollback_to_a_revision_no_version_carries_is_refused()
     {
         await Release("r1");

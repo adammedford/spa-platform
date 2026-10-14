@@ -49,9 +49,14 @@ internal sealed class Harness : IDisposable
     public static JsonObject ExampleJson(params string[] parts) =>
         JsonNode.Parse(File.ReadAllText(Example(parts)))!.AsObject();
 
-    /// <summary>Runs spactl with fresh output streams, passing the config and outputs paths.</summary>
+    /// <summary>
+    /// Runs spactl with fresh output streams, passing the outputs path and, to every command that reads
+    /// one, the config path (spactl refuses an option its command does not read).
+    /// </summary>
     public Task<int> Run(params string[] args) =>
-        RunRaw([.. args, "--config", ConfigPath, "--outputs", OutputsPath]);
+        args is ["release", "publish", ..]
+            ? RunRaw([.. args, "--outputs", OutputsPath])
+            : RunRaw([.. args, "--config", ConfigPath, "--outputs", OutputsPath]);
 
     public Task<int> RunRaw(params string[] args)
     {

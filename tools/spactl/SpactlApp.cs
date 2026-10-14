@@ -28,6 +28,22 @@ public static class SpactlApp
         contracts/platform-config.schema.json; its Policy and Issuers sections bound the registry.
         """;
 
+    /// <summary>The bucket options every command that reaches the store accepts.</summary>
+    private static readonly string[] Bucket = ["--outputs", "--bucket", "--region"];
+
+    /// <summary>The options each command reads, as <see cref="Usage"/> lists them; any other is refused.</summary>
+    private static readonly Dictionary<string, HashSet<string>> Options = new(StringComparer.Ordinal)
+    {
+        ["registry validate"] = [.. Bucket, "--config", "--offline"],
+        ["registry apply"] = [.. Bucket, "--config"],
+        ["registry rollback"] = [.. Bucket, "--config", "--to-revision"],
+        ["release publish"] = [.. Bucket],
+        ["release activate"] = [.. Bucket, "--config"],
+        ["app add"] = [.. Bucket, "--config", "--release"],
+        ["app remove"] = [.. Bucket, "--config"],
+        ["wait"] = ["--url", "--revision", "--timeout"],
+    };
+
     public static async Task<int> RunAsync(IReadOnlyList<string> args, SpactlEnvironment environment, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -38,6 +54,7 @@ public static class SpactlApp
             Arguments arguments = Arguments.Parse(args);
             Commands commands = new(arguments, environment);
             string command = string.Join(' ', arguments.Positional.Take(arguments.Positional.FirstOrDefault() == "wait" ? 1 : 2));
+            arguments.AcceptOnly(Options.TryGetValue(command, out HashSet<string>? accepted) ? accepted : throw new UsageException(Usage));
             return command switch
             {
                 "registry validate" => await commands.RegistryValidateAsync(ct),
