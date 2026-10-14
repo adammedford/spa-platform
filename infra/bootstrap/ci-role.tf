@@ -233,6 +233,11 @@ data "aws_iam_policy_document" "ci_plan" {
       "cognito-idp:ListUserPoolClients",
       "cognito-idp:ListResourceServers",
       "cognito-idp:ListUsers",
+      # The identity root's test users (task 1.1): aws_cognito_user's read is one AdminGetUser
+      # call, so without it a plan of that root fails refreshing each user. Read-only: it returns
+      # attributes, never a password.
+      # https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/cognitoidp/user.go
+      "cognito-idp:AdminGetUser",
       "cognito-idp:ListTagsForResource",
     ]
 

@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and edit. Only teardown_principal_arns has no default.
+
+region   = "us-east-1"
+cell     = "poc"
+vpc_cidr = "10.20.0.0/16"
+
+# Whoever runs tools/scripts/teardown.sh. Everyone else is denied deletes under
+# apps/, which is what makes a release prefix write-once.
+teardown_principal_arns = ["arn:aws:iam::111122223333:role/Admin"]

@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- Fixture SPA app3 (task 5.1). No build step, no inline script or style: the baseline policy in
+     contracts/http-contract.md allows neither. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fixture SPA app3</title>
+  <script src="/assets/app.43eda712.js" defer></script>
+</head>
+<body>
+  <main id="app" data-app="app3" data-api="reports">
+    <h1 id="marker">Fixture SPA app3</h1>
+
+    <h2>Session</h2>
+    <p id="session-state">loading</p>
+    <dl>
+      <dt>sub</dt><dd id="session-sub"></dd>
+      <dt>name</dt><dd id="session-name"></dd>
+      <dt>email</dt><dd id="session-email"></dd>
+      <dt>expiresAt</dt><dd id="session-expires"></dd>
+    </dl>
+
+    <h2>API</h2>
+    <p>
+      <button id="call-api" type="button" disabled>GET /api/reports/whoami</button>
+      <button id="post-api" type="button" disabled>POST /api/reports/echo</button>
+    </p>
+    <pre id="api-result"></pre>
+    <pre id="post-result"></pre>
+
+    <form method="post" action="/bff/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </main>
+</body>
+</html>
