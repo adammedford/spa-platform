@@ -1,4 +1,6 @@
+using Amazon.S3;
 using Amazon.SimpleSystemsManagement;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Platform.Abstractions;
@@ -45,5 +47,73 @@ public sealed class RegistrationTests
             d => d.ServiceType == typeof(IAmazonSimpleSystemsManagement));
         Assert.Equal(ServiceLifetime.Singleton, client.Lifetime);
         Assert.NotNull(client.ImplementationFactory);
+    }
+
+    [Fact]
+    public void The_registry_is_one_live_registry_and_starts_with_nothing_live()
+    {
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Services.AddLogging();
+
+        builder.AddPlatformRegistry();
+        using IHost host = builder.Build();
+
+        IRegistry registry = host.Services.GetRequiredService<IRegistry>();
+        Assert.IsType<LiveRegistry>(registry);
+        Assert.Same(registry, host.Services.GetRequiredService<IRegistry>());
+        Assert.Same(LiveRegistry.NoSnapshot, registry.Current);
+    }
+
+    [Fact]
+    public void The_object_store_is_s3_over_the_registry_bucket()
+    {
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "examples", "platform-config.example.json"));
+        builder.Services.AddSingleton<IAmazonS3>(new AmazonS3Client(
+            new Amazon.Runtime.AnonymousAWSCredentials(), Amazon.RegionEndpoint.USEast1));
+
+        builder.AddPlatformRegistry();
+        using IHost host = builder.Build();
+
+        Assert.IsType<S3ObjectStore>(host.Services.GetRequiredService<IObjectStore>());
+        ServiceDescriptor client = Assert.Single(builder.Services, d => d.ServiceType == typeof(IAmazonS3));
+        Assert.Null(client.ImplementationFactory);
+    }
+
+    [Fact]
+    public void Platform_policy_is_read_from_configuration()
+    {
+        // Read against the contract's own example, so a change to it reaches this test.
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "examples", "platform-config.example.json"));
+
+        builder.AddPlatformRegistry();
+        using IHost host = builder.Build();
+        PlatformPolicy policy = host.Services.GetRequiredService<PlatformPolicy>();
+        PlatformPolicy expected = Examples.Policy();
+
+        Assert.Equal(expected.AllowedHostSuffixes, policy.AllowedHostSuffixes);
+        Assert.Equal(expected.AllowedUpstreams, policy.AllowedUpstreams);
+        Assert.Equal(expected.Issuers.Keys.Order(), policy.Issuers.Keys.Order());
+        foreach ((string name, IssuerDefinition issuer) in expected.Issuers)
+        {
+            Assert.Equal(issuer, policy.Issuers[name]);
+        }
+    }
+
+    [Fact]
+    public void With_no_configuration_the_policy_allows_nothing()
+    {
+        // Fail closed: with no Policy:* every host suffix, upstream and issuer is refused, so no entry
+        // can validate.
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+
+        builder.AddPlatformRegistry();
+        using IHost host = builder.Build();
+        PlatformPolicy policy = host.Services.GetRequiredService<PlatformPolicy>();
+
+        Assert.Empty(policy.AllowedHostSuffixes);
+        Assert.Empty(policy.AllowedUpstreams);
+        Assert.Empty(policy.Issuers);
     }
 }

@@ -19,6 +19,12 @@
     <PackageReference Include="AWSSDK.SimpleSystemsManagement" />
   </ItemGroup>
 
+  <!-- Plan row 2.2: the S3 object store under the registry source. docs/dependencies.md assigns this
+       package to this project and to spactl. -->
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+  </ItemGroup>
+
   <!-- The contract schemas, embedded so the gateway image needs no contracts/ directory at run time.
        They are byte-for-byte copies of contracts/*.schema.json, kept here because the gateway image
        (src/Gateway/Dockerfile, the integrator's) copies only src/ into its build stage, so an Include of
