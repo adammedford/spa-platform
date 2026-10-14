@@ -31,11 +31,13 @@ public sealed class HostingHost : IAsyncDisposable
     public const string Passed = "passed";
 
     private readonly WebApplication web;
+    private readonly TelemetryStand? telemetry;
     private int reached;
 
-    private HostingHost(WebApplication web, Uri baseAddress, InMemoryRegistry registry)
+    private HostingHost(WebApplication web, Uri baseAddress, InMemoryRegistry registry, TelemetryStand? telemetry)
     {
         this.web = web;
+        this.telemetry = telemetry;
         BaseAddress = baseAddress;
         Registry = registry;
     }
@@ -53,8 +55,28 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>Runs in the terminal before it reads the feature: a swap mid-request goes here.</summary>
     public Action? DuringRequest { get; set; }
 
+    /// <summary>
+    /// The <see cref="IRequestTelemetryFeature"/> the last request carried, for a host started with
+    /// <c>telemetry: true</c>, and null for one started without. Reading it after the response is
+    /// what stage 2 does with the real feature: it sets one on the request, calls the rest of the
+    /// pipeline, then reads back the rule id whichever stage rejected left on it
+    /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
+    /// </summary>
+    public SettableRequestTelemetryFeature? LastTelemetry => telemetry?.Last;
+
+    /// <param name="telemetry">
+    /// <c>true</c> installs a fresh <see cref="SettableRequestTelemetryFeature"/> on every request,
+    /// before stages 3 and 4, standing in for stage 2, which this project's pipeline does not have.
+    /// Left <c>false</c> by default so that every other test here runs with no feature installed,
+    /// which is what the gateway is until the rest of task 6.4 lands: a stage's null-conditional
+    /// write must cost nothing.
+    /// </param>
     public static async Task<HostingHost> StartAsync(
-        RegistrySnapshot initial, CancellationToken ct, IObjectStore? store = null, ILoggerProvider? logs = null)
+        RegistrySnapshot initial,
+        CancellationToken ct,
+        IObjectStore? store = null,
+        ILoggerProvider? logs = null,
+        bool telemetry = false)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -75,6 +97,18 @@ public sealed class HostingHost : IAsyncDisposable
 
         WebApplication web = builder.Build();
         HostingHost? self = null;
+        TelemetryStand? stand = telemetry ? new TelemetryStand() : null;
+
+        if (stand is not null)
+        {
+            web.Use(async (context, next) =>
+            {
+                SettableRequestTelemetryFeature feature = new();
+                context.Features.Set<IRequestTelemetryFeature>(feature);
+                stand.Last = feature;
+                await next(context);
+            });
+        }
 
         web.UsePlatformHealth();
         web.UsePlatformHostResolution();
@@ -85,7 +119,7 @@ public sealed class HostingHost : IAsyncDisposable
             // and no UseRouting call puts routing at the front of the pipeline, before stages 3 and 4.
             web.UseRouting();
             web.MapPlatformAssets();
-            return await StartedAsync(web, registry, ct);
+            return await StartedAsync(web, registry, stand, ct);
         }
 
         web.Run(context =>
@@ -97,11 +131,12 @@ public sealed class HostingHost : IAsyncDisposable
             return context.Response.WriteAsync(Passed, ct);
         });
 
-        self = await StartedAsync(web, registry, ct);
+        self = await StartedAsync(web, registry, stand, ct);
         return self;
     }
 
-    private static async Task<HostingHost> StartedAsync(WebApplication web, InMemoryRegistry registry, CancellationToken ct)
+    private static async Task<HostingHost> StartedAsync(
+        WebApplication web, InMemoryRegistry registry, TelemetryStand? stand, CancellationToken ct)
     {
         await web.StartAsync(ct);
 
@@ -109,7 +144,7 @@ public sealed class HostingHost : IAsyncDisposable
             .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
             ?? throw new InvalidOperationException("the host started without an address."));
 
-        return new HostingHost(web, address, registry);
+        return new HostingHost(web, address, registry, stand);
     }
 
     /// <summary>
@@ -149,6 +184,12 @@ public sealed class HostingHost : IAsyncDisposable
     {
         await web.StopAsync();
         await web.DisposeAsync();
+    }
+
+    /// <summary>Where the stand-in for stage 2 leaves the feature it put on the last request.</summary>
+    private sealed class TelemetryStand
+    {
+        public SettableRequestTelemetryFeature? Last { get; set; }
     }
 }
 

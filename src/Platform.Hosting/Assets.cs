@@ -70,7 +70,7 @@ internal sealed partial class Assets(ILogger logger)
 
         if (IsReserved(request.Path))
         {
-            LogRefused(logger, "path.reserved");
+            Refuse(context, RuleIds.PathReserved);
             await Problems.WriteAsync(context, StatusCodes.Status404NotFound, Problems.NotFound);
             return;
         }
@@ -83,7 +83,7 @@ internal sealed partial class Assets(ILogger logger)
             : null;
         if (relative is null)
         {
-            LogRefused(logger, "path.invalid");
+            Refuse(context, RuleIds.PathInvalid);
             await Problems.WriteAsync(context, StatusCodes.Status400BadRequest, Problems.InvalidRequest);
             return;
         }
@@ -202,6 +202,28 @@ internal sealed partial class Assets(ILogger logger)
         }
 
         return quality > 0;
+    }
+
+    /// <summary>
+    /// Records one rejection under its rule id, in the two places the contracts put it.
+    ///
+    /// <para>On <see cref="IRequestTelemetryFeature"/> for the one request line stage 2 writes once
+    /// the pipeline has returned, and for <c>security.rejections</c> counted from the same field
+    /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
+    /// Null-conditionally: this project's own test project has no stage 2 to install the feature, and
+    /// until the rest of task 6.4 lands the gateway has none either, so a missing feature costs
+    /// nothing.</para>
+    ///
+    /// <para>And on this endpoint's own Warning line, which it keeps. The line says which of this
+    /// endpoint's checks refused the request, at the moment it did, which the request line cannot:
+    /// that line carries one rule id for the whole request and is written by another project.
+    /// Keeping it is this owner's choice, not a contract matter
+    /// (contracts/changes/6.4-request-telemetry-feature.md), and <c>AssetTests</c> asserts on it.</para>
+    /// </summary>
+    private void Refuse(HttpContext context, string rule)
+    {
+        context.Features.Get<IRequestTelemetryFeature>()?.Rule = rule;
+        LogRefused(logger, rule);
     }
 
     // The rule id only (contracts/request-gate.md, Rule ids). The path is not logged: it is the

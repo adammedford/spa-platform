@@ -23,7 +23,8 @@ public sealed class AssetTests
 
     private static string Prefix(AppDefinition app) => $"apps/{app.AppId}/releases/{app.Release}/";
 
-    private static async Task<(HostingHost Gateway, RecordingObjectStore Store)> StartAsync(RecordingLoggerProvider? logs = null)
+    private static async Task<(HostingHost Gateway, RecordingObjectStore Store)> StartAsync(
+        RecordingLoggerProvider? logs = null, bool telemetry = false)
     {
         RecordingObjectStore store = new();
         await store.SeedAsync(Prefix(App1) + "index.html", "<p>shell one</p>");
@@ -41,7 +42,7 @@ public sealed class AssetTests
         await store.SeedAsync("apps/app1/secret.txt", Leak + "app1 root");
         await store.SeedAsync(Prefix(App2) + "assets/app-3f2a.js", Leak + "app2 asset");
 
-        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store, logs);
+        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store, logs, telemetry);
         return (gateway, store);
     }
 
@@ -321,6 +322,59 @@ public sealed class AssetTests
         Assert.DoesNotContain(logs.Lines, line =>
             line.Category.StartsWith("Platform.", StringComparison.Ordinal)
             && line.Message.Contains("canary-7f3e", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The same two refusals also leave their rule id on <see cref="IRequestTelemetryFeature"/>, for
+    /// the one request line stage 2 writes and for <c>security.rejections</c> counted from the same
+    /// field (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
+    /// line"). Stage 2 is workstream 6's and is not in this pipeline, so the feature is
+    /// <c>Platform.Testing</c>'s settable one, installed by the test host in stage 2's place.
+    ///
+    /// The endpoint's own Warning line stays: it names which check refused the request, which the
+    /// request line cannot, and the test above asserts on it. The row for each id is the same path
+    /// that test refuses under, so a stage that set one id for both, or none, fails here.
+    /// </summary>
+    [Theory]
+    [InlineData("/canary-7f3e%2Fsecret.js", 400, "path.invalid")]
+    [InlineData("/bff/canary-7f3e.js", 404, "path.reserved")]
+    public async Task A_refusal_sets_its_rule_id_on_the_telemetry_feature(string path, int status, string rule)
+    {
+        (HostingHost gateway, RecordingObjectStore store) = await StartAsync(telemetry: true);
+        await using HostingHost _ = gateway;
+
+        RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
+
+        Assert.Equal(status, response.Status);
+        Assert.Equal(rule, gateway.LastTelemetry?.Rule);
+        Assert.Empty(store.KeysRead);
+
+        // The control: a path this endpoint serves is not a rejection and leaves the field null, so a
+        // stage that wrote a rule id on every request would not pass.
+        Assert.Equal(200, (await gateway.GetAsync(App1.Host, "/index.html", Ct)).Status);
+        Assert.NotNull(gateway.LastTelemetry);
+        Assert.Null(gateway.LastTelemetry.Rule);
+    }
+
+    /// <summary>
+    /// Both writes are null-conditional, so the endpoint refuses the same way with no feature
+    /// installed: that is every other test in this file, and the gateway itself until the rest of
+    /// task 6.4 lands. Stated once on its own, because "a missing feature costs nothing" is a claim.
+    /// </summary>
+    [Theory]
+    [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request")]
+    [InlineData("/bff/canary-7f3e.js", 404, "not_found")]
+    public async Task A_refusal_is_unchanged_with_no_telemetry_feature_installed(string path, int status, string code)
+    {
+        (HostingHost gateway, RecordingObjectStore store) = await StartAsync();
+        await using HostingHost _ = gateway;
+
+        RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
+
+        Assert.Equal(status, response.Status);
+        AssertProblem(response, code);
+        Assert.Null(gateway.LastTelemetry);
+        Assert.Empty(store.KeysRead);
     }
 
     /// <summary>

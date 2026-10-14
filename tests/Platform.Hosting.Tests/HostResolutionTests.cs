@@ -165,6 +165,67 @@ public sealed class HostResolutionTests
         Assert.Equal(1, gateway.Reached);
     }
 
+    /// <summary>
+    /// The rejection carries its rule id, <c>host.unknown</c> (contracts/request-gate.md, Rule ids),
+    /// to the one request line stage 2 writes and to <c>security.rejections</c> counted from the same
+    /// field (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
+    /// line"). Stage 2 is workstream 6's and is not in this pipeline, so the feature here is
+    /// <c>Platform.Testing</c>'s settable one, installed by the test host in stage 2's place.
+    ///
+    /// The control is the second half: a host the registry does name is not a rejection and leaves
+    /// the field null. Without it, a stage that set the id on every request would pass.
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_host_sets_rule_host_unknown_on_the_telemetry_feature()
+    {
+        await using HostingHost gateway = await HostingHost.StartAsync(
+            Snapshots.With(3, App1, App2), Ct, telemetry: true);
+
+        AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
+        Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
+
+        Assert.Equal(200, (await gateway.GetAsync("app1.spa-poc.test", "/", Ct)).Status);
+        Assert.NotNull(gateway.LastTelemetry);
+        Assert.Null(gateway.LastTelemetry.Rule);
+    }
+
+    /// <summary>
+    /// The write is null-conditional, so stage 4 refuses an unknown host the same way with no feature
+    /// installed: that is every other test in this file, and the gateway itself until the rest of
+    /// task 6.4 lands. Stated once on its own, because "a missing feature costs nothing" is a claim.
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_host_is_refused_the_same_way_with_no_feature_installed()
+    {
+        await using HostingHost gateway = await StartAsync();
+
+        AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
+
+        Assert.Null(gateway.LastTelemetry);
+        Assert.Equal(0, gateway.Reached);
+    }
+
+    /// <summary>
+    /// Stage 4 writes no log line of its own for an unknown host: those requests are the cheapest
+    /// traffic anyone can send, so a line each would let a stranger flood the log, and the request
+    /// line plus <c>security.rejections</c> record the rejection once
+    /// (contracts/changes/6.4-request-telemetry-feature.md, decided 14 October 2026). Only this
+    /// platform's own categories are held to that; which framework lines the gateway keeps is
+    /// workstream 6's to configure.
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_host_is_not_logged_by_this_project()
+    {
+        RecordingLoggerProvider logs = new();
+        await using HostingHost gateway = await HostingHost.StartAsync(
+            Snapshots.With(3, App1, App2), Ct, logs: logs, telemetry: true);
+
+        AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
+
+        Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
+        Assert.DoesNotContain(logs.Lines, line => line.Category.StartsWith("Platform.", StringComparison.Ordinal));
+    }
+
     /// <summary>The 404 for an unknown host is the contract's error body, code <c>not_found</c>.</summary>
     private static void AssertNotFound(RawResponse response)
     {
