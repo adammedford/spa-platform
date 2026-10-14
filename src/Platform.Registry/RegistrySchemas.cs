@@ -10,8 +10,9 @@ namespace Platform.Registry;
 /// <c>$id</c> (<c>app-definition</c> reaches into <c>registry.schema.json#/$defs</c>), so every one
 /// must be registered before any is evaluated: contracts/README.md, "Using the schemas".
 ///
-/// The only file that touches the schema engine, so open decision D-1 in docs/dependencies.md (which
-/// engine, and whether it stays in the gateway process) is a change here and nowhere else.
+/// The only file that touches the schema engine, so swapping the engine is a change here and nowhere
+/// else. Which engine is decided: JsonSchema.Net 8.0.5, running in the gateway process through this
+/// project (docs/dependencies.md -> "Decided", D-1, which records what would reopen it).
 /// </summary>
 internal static class RegistrySchemas
 {
@@ -108,7 +109,8 @@ internal static class RegistrySchemas
         Assembly assembly = typeof(RegistrySchemas).Assembly;
         foreach (string file in Files)
         {
-            // LogicalName in Platform.Registry.csproj; the copies under Schemas/ are the contract's bytes.
+            // LogicalName in Platform.Registry.csproj, where contracts/*.schema.json is linked: the
+            // resource is the contract's own bytes, not a copy of them.
             using Stream stream = assembly.GetManifestResourceStream("contracts/" + file)
                 ?? throw new InvalidOperationException($"contracts/{file} is not embedded in {assembly.GetName().Name}.");
             using StreamReader reader = new(stream);

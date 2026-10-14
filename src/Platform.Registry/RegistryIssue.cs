@@ -14,8 +14,8 @@ public sealed record RegistryIssue(string Rule, string Path, string Message)
 }
 
 /// <summary>
-/// The rule each <see cref="RegistryIssue"/> reports. Apart from <see cref="Schema"/>,
-/// <see cref="NotJson"/> and <see cref="IntegerOutOfRange"/>, each is one row of contracts/README.md, "Rules that JSON Schema cannot express".
+/// The rule each <see cref="RegistryIssue"/> reports. Apart from <see cref="Schema"/> and
+/// <see cref="NotJson"/>, each is one row of contracts/README.md, "Rules that JSON Schema cannot express".
 /// </summary>
 public static class RegistryRules
 {
@@ -36,8 +36,8 @@ public static class RegistryRules
     public const string PortOutOfRange = "port-out-of-range";
 
     /// <summary>
-    /// Not a README row, like <see cref="Schema"/> and <see cref="NotJson"/>: a schema-valid integer the
-    /// model cannot hold, a <c>revision</c> beyond Int64 or a <c>timeoutSeconds</c> beyond a TimeSpan.
+    /// The README row "A schema-valid integer the platform cannot hold or apply": a <c>revision</c>
+    /// beyond Int64, or a <c>timeoutSeconds</c> beyond a TimeSpan.
     /// Reported rather than thrown, so a caller always gets a <see cref="RegistryValidation"/>.
     /// </summary>
     public const string IntegerOutOfRange = "integer-out-of-range";
