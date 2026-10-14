@@ -130,6 +130,12 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
         if (!await tokens.IsValidAsync(context))
         {
             Refused(logger, Rule);
+
+            // Task 4.3a: the same constant on stage 2's request line, null-conditionally because this
+            // project's own tests run without stage 2 (contracts/telemetry.md -> "How `rule` and
+            // `session_ref` reach the request line").
+            context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
+
             await Problems.WriteAsync(context, StatusCodes.Status403Forbidden, "csrf_failed");
             return;
         }

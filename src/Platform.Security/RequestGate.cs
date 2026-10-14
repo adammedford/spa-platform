@@ -325,6 +325,13 @@ internal sealed partial class RequestGate(ILogger logger)
         // The rule id only. Nothing the client sent goes in the line: the path can carry a code, and
         // a cookie name is the client's to choose (contracts/telemetry.md -> Never logged).
         Refused(logger, rule);
+
+        // Task 4.3a: the same id on the one request line stage 2 writes, and the field it counts
+        // security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach the
+        // request line"). The same `rule` the line above logged, so the two cannot drift. Null
+        // conditional because this project's own tests run with no stage 2 to create the feature.
+        context.Features.Get<IRequestTelemetryFeature>()?.Rule = rule;
+
         return Problems.WriteAsync(context, status, code);
     }
 
