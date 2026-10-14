@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Gate G0, items 2 and 3: the hardened mechanism and the token library against Cognito (task 3.0).
+       Built from the sources that passed items 1, 4 and 5, unchanged: Registry.cs, Auth.cs and Browser.cs from
+       ../real-handler/RealOidcHardened, and Gateway.cs from ../token-and-proxy for TokenFlow and TokenSwitches.
+       token-and-proxy's Idp.cs is not compiled. The dry run uses the test identity provider in fixtures/TestIdp.
+       Versions match Directory.Packages.props at the repository root where it pins one. AWSSDK.CognitoIdentityProvider
+       is not pinned there; this spike pins its own version below, as spikes/Directory.Packages.props lets every spike do,
+       and uses it only to describe the OAuth clients (read only: Q23).
+       This folder has no nuget.config of its own: it restores from the one at the repository root. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseAppHost>false</UseAppHost>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <RootNamespace>Spike</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../real-handler/RealOidcHardened/Registry.cs" Link="Shared/Registry.cs" />
+    <Compile Include="../real-handler/RealOidcHardened/Auth.cs" Link="Shared/Auth.cs" />
+    <Compile Include="../real-handler/RealOidcHardened/Browser.cs" Link="Shared/Browser.cs" />
+    <Compile Include="../token-and-proxy/Gateway.cs" Link="Shared/Gateway.cs" />
+    <ProjectReference Include="../../../fixtures/TestIdp/TestIdp.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
+    <PackageReference Include="Duende.AccessTokenManagement.OpenIdConnect" Version="4.2.0" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.63.0" />
+    <PackageReference Include="AWSSDK.SimpleSystemsManagement" Version="4.0.104.2" />
+    <PackageReference Include="AWSSDK.CognitoIdentityProvider" Version="4.0.105.4" />
+  </ItemGroup>
+</Project>

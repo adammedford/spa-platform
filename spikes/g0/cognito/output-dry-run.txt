@@ -1,0 +1,100 @@
+MODE    DRY RUN against fixtures/TestIdp. This proves the harness, not Cognito. It is never G0 evidence.
+run     2026-10-14 14:57Z, .NET 10.0.12, macOS 27.0.0
+        Microsoft.AspNetCore.Authentication.OpenIdConnect 10.0.12
+        Duende.AccessTokenManagement.OpenIdConnect 4.2.0
+        Duende.IdentityModel 8.1.0
+        Microsoft.Playwright 1.63.0
+        Chromium for Playwright, revision 1243 (153.0.8010.12)
+driver  playwright
+
+setup   the test identity provider on http://127.0.0.1:60352, Cognito-style logout, no revocation_endpoint in discovery, 65 s access tokens
+setup   OAuth clients for app1 and app2 from fixtures/apps, hosts moved to port 5300; outputs document synthesised, not read (its issuer is http, so it would not be contract-valid)
+setup   gateway on https://127.0.0.1:5300 for the browser; the harness's own calls reach it on loopback as the load balancer would
+
+The harness: redaction self-check (Q4)
+OK      H-1     a line holding app1's client secret, which the harness was given, is withheld
+OK      H-2     a line holding a JWT the harness was never told about is withheld
+OK      H-3     a line holding a callback URL's code or state is withheld
+OK      H-4     a line holding only lengths, hashes and URLs without a query is printed
+OK      H-5     a line holding a token in a JSON member, or a code parameter at the start of a line, is withheld
+
+Item 2: discovery
+OK      C-2.1   the issuer's discovery document loads, names the issuer the outputs give, and puts authorization at the managed-login origin
+               [issuer http://127.0.0.1:60352; authorize at http://127.0.0.1:60352; token endpoint http://127.0.0.1:60352/token; client authentication client_secret_basic, client_secret_post]
+FINDING C-2.2   discovery lists no end_session_endpoint (item 2: what discovery advertises for logout)
+               [no end_session_endpoint]
+               -> the cognito profile's logout, as ADR-0011 has it: {BrowserOrigin}/logout with client_id and logout_uri, landing on / (R-C7). This harness logs out that way
+FINDING C-2.3   discovery lists no revocation_endpoint (Q16, T-B14)
+               [no revocation_endpoint]
+               -> Q16: I-6 adds an IIdpProfile member, and the cognito profile supplies {BrowserOrigin}/oauth2/revoke; task 3.9 deletes the session whether or not revocation worked
+
+Item 2: login, callback, refresh and logout, as tasks 3.8 and 3.9 configure them (browser A)
+OK      C-2.4   app1: login and callback complete through managed login, and the gateway holds app1's session
+               [asked for a password: no; managed login seen: no; https://app1.spa-poc.test:5300/ > http://127.0.0.1:60352/authorize > https://app1.spa-poc.test:5300/signin-oidc > https://app1.spa-poc.test:5300/]
+OK      C-2.5   app2: login and callback complete in the same browser, as a second OAuth client with its own session
+               [asked for a password: no; managed login seen: no; https://app2.spa-poc.test:5300/ > http://127.0.0.1:60352/authorize > https://app2.spa-poc.test:5300/signin-oidc > https://app2.spa-poc.test:5300/]
+FINDING C-2.6   app2's login asked for no password: the provider's session from app1's login made it silent (Q19)
+               [asked for a password: no]
+               -> none for the gateway: still two OAuth clients, two scheme pairs and two session records. C-2.12 and C-2.15 check that logout stays per app
+not-rep C-2.7   resource binding does not put app1's resource into the access token's aud (Q15)
+               [app1 sent resource at authorize: yes; app1 aud=https://orders.spa-poc.test, client_id=present, scope=openid profile https://orders.spa-poc.test/read, token_use=access, client_id is app1's client; app2 aud=(none), client_id=present, scope=openid profile https://reports.spa-poc.test/read, token_use=access, client_id is app2's client]
+               -> the plan's assumption holds: aud carries the resource
+OK      C-2.8   app1: a refresh through the token library (sentinel scheme, both scheme names, PostBody) is granted, rotates the refresh token, and the session keeps the new one
+               [200 ok; access token h:2b5bc839 -> h:3a2adc71; refresh token h:ec625c82 (37 chars) -> h:62102612 (37 chars)]
+not-rep C-2.9   aud does not survive a refresh that sends no resource (Q14)
+               [aud at login: https://orders.spa-poc.test; after the library's refresh, which sends no resource: https://orders.spa-poc.test]
+               -> task 3.8 leaves resource off the refresh (T-B12)
+OK      C-2.10  app2: a refresh through the token library (sentinel scheme, both scheme names, PostBody) is granted, rotates the refresh token, and the session keeps the new one
+               [200 ok; access token h:23b2c28a -> h:b3cec8d6; refresh token h:669e7f55 (37 chars) -> h:23b7f0b0 (37 chars)]
+        waiting 8 s for app1's access token to come within a minute of expiry (Q20)
+OK      C-2.11  app1: a call with a token due for refresh refreshes without being forced, on the provider's own token lifetime (Q20)
+               [200 ok; the token expired at 14:58:30Z; access token h:3a2adc71 -> h:e6f2425a]
+OK      C-2.12  app1: logout revokes, removes app1's session record, and sends the browser to the provider's logout with app1's client, landing on / (R-C7)
+               [302; revocation through the profile route: form body 200; session removed: yes; provider logout http://127.0.0.1:60352/logout with app1's client: yes; then https://app1.spa-poc.test:5300/bff/logout > http://127.0.0.1:60352/logout > https://app1.spa-poc.test:5300/ > http://127.0.0.1:60352/authorize > https://app1.spa-poc.test:5300/signin-oidc > https://app1.spa-poc.test:5300/]
+not-rep C-2.13  the refresh token logout revoked still refreshes
+               [a refresh with it afterwards: refused 400 invalid_grant]
+               -> logout's revocation took effect at the provider
+not-rep C-2.14  after app1's logout the next login to app1 asks for a password: the provider's logout ended its session for every client in that browser (Q19)
+               [the logout landed on /, which challenged at once; asked for a password: no]
+               -> the provider's session survived app1's logout
+OK      C-2.15  app2's session still answers /bff/session after app1's logout, and app2's refresh still works (Q19)
+               [/bff/session 200; refresh 200 ok, access token h:b3cec8d6 -> h:9d7dbea6]
+OK      C-2.16  app2: logout revokes, removes app2's session record, and sends the browser to the provider's logout with app2's client, landing on /
+               [302; revocation through the profile route: form body 200; session removed: yes; then https://app2.spa-poc.test:5300/bff/logout > http://127.0.0.1:60352/logout > https://app2.spa-poc.test:5300/ > http://127.0.0.1:60352/authorize > https://app2.spa-poc.test:5300/signin-oidc > https://app2.spa-poc.test:5300/]
+
+Item 2 questions: raw calls through Duende.IdentityModel (browser R)
+not-rep C-2.17  Cognito's grace window is insufficient, outcome (i): a replay inside the window is refused, or it leaves the successor unusable (Q11)
+               [rotation granted, a new refresh token: yes; the replay at 2.0 s: granted, returning new tokens and a different refresh token; the successor afterwards: granted]
+               -> the window covers a replay: task 3.8 stays on the library's token manager
+not-rep C-2.18  Cognito's grace window is insufficient, outcome (ii): a replay after the window makes the successor unusable, which is token-family revocation (Q11)
+               [rotation granted; the replay at 12.0 s: refused 400 invalid_grant; the successor afterwards: granted]
+               -> a late replay is refused and the successor keeps working: the expected behaviour, not a finding
+FINDING C-2.19  revoking a rotated-out refresh token leaves its successor alive (Q12, T-B18)
+               [rotation granted; revoking the rotated-out token at http://127.0.0.1:60352/revoke: accepted (form body 200); the successor afterwards: granted]
+               -> Q12: task 3.9 revokes the refresh token it reads from the session record at logout time, not the one held at the start of the request. The T-B18 race stays a documented residual: the successor lives until it expires, held only by the server, whose session record is deleted
+not-rep C-2.20  a refresh token is longer than the token library's 4,096-character limit (Q13, T-B11)
+               [app1 refresh token 38 chars at login, 38 after 1 refresh, 38 after 5; access token 765 chars; ID token 922 chars; app2 refresh token 38 chars at login, 38 after 1 refresh, 38 after 5; access token 718 chars; ID token 922 chars]
+               -> every refresh token fits the library's limit
+not-rep C-2.21  only one client credential style works at the token or revocation endpoint (Q17, T-B4, T-B5)
+               [code exchange in the form body (the handler, every login): yes; in a Basic header: yes (ok); refresh in the form body (the library and raw): yes; in a Basic header: yes (granted); revocations through the profile route and Q12 accepted with: form body, form body, form body]
+               -> both styles work: task 3.8 keeps ClientCredentialStyle.PostBody, so the code exchange and the refresh agree
+
+Item 3: the callback URL with a port, and managed login for clients Terraform made
+OK      C-3.1   each OAuth client, as created, lists https://{host}/signin-oidc as a callback and https://{host}/ as a sign-out URL, with the port
+               [app1: callbacks https://app1.spa-poc.test:5300/signin-oidc, sign-out https://app1.spa-poc.test:5300/, rotation rotating (TestIdp), grace 10 s; app2: callbacks https://app2.spa-poc.test:5300/signin-oidc, sign-out https://app2.spa-poc.test:5300/, rotation rotating (TestIdp), grace 10 s (from the test identity provider's registration, dry run)]
+OK      C-3.2   every authorize call carried the callback with its port, and the provider sent the browser back to it, for both apps
+               [app1: redirect_uri https://app1.spa-poc.test:5300/signin-oidc; the last login in each of 2 browser(s) came back to it; app2: redirect_uri https://app2.spa-poc.test:5300/signin-oidc; the last login in each of 4 browser(s) came back to it]
+OK      C-3.3   the provider accepted each app's sign-out URL: both logouts landed on https://{host}/
+               [app1: yes; app2: yes (C-2.12, C-2.16)]
+skip    C-3.4   each OAuth client has a managed-login branding style
+               [dry run: the test identity provider has no branding styles]
+skip    C-3.5   managed login renders and a login completes, for both apps
+               [dry run: the test identity provider has no login page. The logins completed: app1 yes, app2 in a new browser yes]
+
+cleanup revoked 28 of 28 refresh tokens the run obtained; the harness created nothing in AWS (Q23)
+
+17 expectations held, 0 did not, 4 findings confirmed, 8 probes not reproduced, 2 skipped
+DRY RUN: the verdicts below describe the harness against the test identity provider, not Cognito.
+G0 item 2 (DRY RUN, not evidence): passed: both OAuth clients completed login, callback, refresh and logout
+G0 item 3 (DRY RUN, not evidence): not decided: C-3.4, C-3.5 skipped in this mode
+redaction: 149 credential values held as canaries; 0 line(s) withheld
