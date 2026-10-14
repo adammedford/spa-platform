@@ -8,4 +8,16 @@
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 
+  <!-- The passing baseline is the contract's own examples, so a failing case is that example with one
+       rule broken, and a change to the examples reaches these tests (CODING_STANDARDS.md, "A guard reads
+       the thing it guards"). Read from contracts/ and fixtures/, never edited. -->
+  <ItemGroup>
+    <None Include="../../contracts/registry.example.json" Link="examples/registry.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/app-definition.example.json" Link="examples/app-definition.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/platform-config.example.json" Link="examples/platform-config.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../fixtures/apps/*.json" Link="examples/apps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/*.schema.json" Link="contracts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/Platform.Registry/Schemas/*.schema.json" Link="embedded/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
