@@ -19,12 +19,17 @@ keep twice, because the next reader is deciding whether to change that line. Cit
 ADR, the evidence id or the test id. The surrounding code is the standard for how much: match the
 density of the file you are in, which in `src/Platform.Abstractions` and `fixtures/TestIdp` is high.
 
+A comment cites a row for why the code is this way, never for what a row has still to do. "Stage 2
+does not install this yet; that is the remainder of task 6.4" was true for one afternoon, then sat
+in an integrator file that the task which made it false was not allowed to edit. What a row still
+owes goes in its merge body's `Outstanding:` line, where `docs/agents/landing-work.md` puts it.
+
 ## An assertion must be able to fail
 
 A test that cannot fail and a system that is correct look identical from the outside, and the test
 costs more than nothing: it reports confidence it has not earned.
 
-Two shapes recur here, and both passed review once before anyone noticed.
+Three shapes recur here, and each passed review once before anyone noticed.
 
 - **A rule asserted only against a tree that already satisfies it.** `tests/Gateway.ArchitectureTests`
   answers this by making each rule a function over a graph and feeding it a graph that breaks it. A
@@ -34,6 +39,10 @@ Two shapes recur here, and both passed review once before anyone noticed.
   reference, so the rule passes whether or not the code that reads project files works at all. The
   answer is a second assertion that the mechanism works, against something that does exercise it.
   The hazard is the same whenever a rule's subject has not been written yet.
+- **A test that skips on the machine it runs on.** A file flag, an operating system or a missing tool
+  turns the test into a pass that checked nothing, on exactly the machine where someone is reading
+  the result. Make the test independent of the condition; if a tool is genuinely required, fail and
+  name it.
 
 ## A guard reads the thing it guards
 

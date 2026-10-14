@@ -121,6 +121,19 @@ jobs:
             terraform -chdir="$root" validate
           done
 
+      - name: Test every root and module that has tests
+        # Each tests/*.tftest.hcl runs against a mock provider, so it needs no credentials. Without
+        # this step those runs are evidence from whichever machine wrote them.
+        run: |
+          set -euo pipefail
+          dirs=$(find infra -name '*.tftest.hcl' -not -path '*/.terraform/*' -exec dirname {} \; \
+            | xargs -n1 dirname | sort -u)
+          for dir in $dirs; do
+            echo "--- $dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" test
+          done
+
       - name: Plan policy (P-01 to P-03)
         # The allowlist of resource types and counts, plus the assertions on the two security groups
         # and the task role. Task 1.9 writes it at tools/scripts/plan-policy.sh, taking a root as its
