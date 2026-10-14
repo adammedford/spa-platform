@@ -107,12 +107,14 @@ internal static partial class Redaction
         return new string(buffer[..length]);
     }
 
-    // A '?' directly after a non-space character, followed by at least one character that could be
-    // part of a URL. "/signin-oidc?code=x" and "https://h/p?a=b" match; "is it? yes" does not.
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.
     [GeneratedRegex(@"\{\{|\}\}|\{[@$]?(?<name>[^{}:,]+)(?:[,:][^{}]*)?\}", RegexOptions.CultureInvariant)]
     private static partial Regex Hole();
 
-    [GeneratedRegex(@"(?<=\S)\?[^\s""'<>]+", RegexOptions.CultureInvariant)]
+    // A '?' followed by at least one character that could be part of a URL. "/signin-oidc?code=x",
+    // "https://h/p?a=b" and a bare "?code=x" (HttpRequest.QueryString renders with its leading '?')
+    // match; "is it? yes" does not. Nothing is asked of the character before the '?', so a query
+    // string logged on its own, or after a space, is cut too (review of task 6.4).
+    [GeneratedRegex(@"\?[^\s""'<>]+", RegexOptions.CultureInvariant)]
     private static partial Regex QueryString();
 }

@@ -97,7 +97,16 @@ public sealed class LogCanaryTests
     [Fact]
     public async Task N16_no_canary_appears_in_any_span()
     {
-        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct, configuration: EverythingAtTrace());
+        // The instrumentation already redacts query values by default, so with the defaults this test
+        // passes whether or not AddPlatformTelemetry drops url.query. Switching the instrumentation's
+        // redaction off is what makes it test the gateway's own enrichment: without that enrichment,
+        // the server spans carry "url.query=?access_token=CANARY-TOKEN-27c4" (checked in review of
+        // task 6.4; switch names from
+        // https://github.com/open-telemetry/opentelemetry-dotnet-contrib/blob/main/src/OpenTelemetry.Instrumentation.AspNetCore/README.md).
+        Dictionary<string, string?> configuration = EverythingAtTrace();
+        configuration["OTEL_DOTNET_EXPERIMENTAL_ASPNETCORE_DISABLE_URL_QUERY_REDACTION"] = "true";
+        configuration["OTEL_DOTNET_EXPERIMENTAL_HTTPCLIENT_DISABLE_URL_QUERY_REDACTION"] = "true";
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct, configuration: configuration);
 
         await SendCanaries(host);
         host.Flush();

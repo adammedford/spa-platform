@@ -36,6 +36,19 @@ public sealed class FormatterTests
     }
 
     [Fact]
+    public void A_query_string_logged_on_its_own_is_cut()
+    {
+        // HttpRequest.QueryString renders with its leading '?', so a query logged as a value of its
+        // own, or after a space in the template, has no URL in front of it.
+        string line = Write("Any", LogLevel.Information, "Query: ?code=abc and {Q}", "?code=ghi&state=jkl");
+
+        Assert.DoesNotContain("abc", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghi", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("jkl", line, StringComparison.Ordinal);
+        Assert.Equal("?[redacted]", Parse(line).GetProperty("q").GetString());
+    }
+
+    [Fact]
     public void A_question_mark_in_prose_is_left_alone()
     {
         string line = Write("Any", LogLevel.Information, "Is the snapshot live? {Answer}", "yes");
