@@ -77,10 +77,49 @@ else
   echo "pre-push: steering not checked: python3 is not on PATH." >&2
 fi
 
+# --- duplicated build artifacts ---------------------------------------------------------------
+#
+# A worktree copied rather than cloned leaves files like "Platform.Abstractions 2.dll" and
+# "project.assets 2.json" in bin/ and obj/. They do not fail the build. They make it lie: a project
+# compiles clean while its consumer reports CS0103 on a type that is plainly there, and MSBuild
+# reports an import "cannot be imported again" from a path with a space and a digit in it. That cost
+# two debugging sessions and produced a confident wrong diagnosis in between, which is worse than a
+# failure.
+#
+# Checked before the build, because the build is what the artifacts corrupt.
+duplicates="$(find src tests fixtures \( -path "*/bin/*" -o -path "*/obj/*" \) -name "* [0-9].*" 2> /dev/null || true)"
+
+if [ -n "$duplicates" ]; then
+  echo "pre-push: duplicated build artifacts:" >&2
+  echo "$duplicates" | head -5 >&2
+  echo "pre-push: delete every bin/ and obj/ and build again:" >&2
+  echo "  find src tests fixtures -type d \\( -name bin -o -name obj \\) -prune -exec rm -rf {} +" >&2
+  fail "duplicated build artifacts make the build report errors that are not in the source."
+fi
+
 # --- the build --------------------------------------------------------------------------------
 #
 # Warnings are errors, so this catches what a reviewer should never have to.
 command -v dotnet > /dev/null || fail "dotnet is not on PATH."
 dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does not build."
 
-echo "pre-push: A-05, the steering files and the build pass."
+# --- Terraform ---------------------------------------------------------------------------------
+#
+# The same argument as the build, for the other half of the repository. CI checks both; finding a
+# misformatted root here costs an amended commit instead of a red pull request.
+#
+# -backend=false: validation needs no state and no credentials, which is also why it can run on a
+# workstation that has never signed in to AWS.
+if command -v terraform > /dev/null; then
+  terraform fmt -check -recursive infra > /dev/null || fail "terraform fmt -check -recursive infra failed."
+
+  for root in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
+    terraform -chdir="$root" init -backend=false -input=false > /dev/null 2>&1 \
+      || fail "terraform init failed in $root."
+    terraform -chdir="$root" validate > /dev/null || fail "terraform validate failed in $root."
+  done
+else
+  echo "pre-push: Terraform not checked: terraform is not on PATH." >&2
+fi
+
+echo "pre-push: A-05, the steering files, the artifacts, the build and Terraform pass."
