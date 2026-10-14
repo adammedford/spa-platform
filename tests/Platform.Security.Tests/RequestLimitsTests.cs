@@ -126,9 +126,9 @@ public sealed class RequestLimitsTests
         var limits = services
             .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>>()
             .Value.Limits;
-        Assert.Equal(32 * 1024, limits.MaxRequestHeadersTotalSize);
-        Assert.Equal(100, limits.MaxRequestHeaderCount);
-        Assert.Equal(8 * 1024, limits.MaxRequestLineSize);
-        Assert.Equal(30_000_000, limits.MaxRequestBodySize);
+        Assert.Equal(PlatformSecurityLimits.MaxRequestHeadersTotalSize, limits.MaxRequestHeadersTotalSize);
+        Assert.Equal(PlatformSecurityLimits.MaxRequestHeaderCount, limits.MaxRequestHeaderCount);
+        Assert.Equal(PlatformSecurityLimits.MaxRequestLineSize, limits.MaxRequestLineSize);
+        Assert.Equal(PlatformSecurityLimits.MaxRequestBodySize, limits.MaxRequestBodySize);
     }
 }

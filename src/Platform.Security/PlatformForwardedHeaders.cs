@@ -40,7 +40,9 @@ internal static class PlatformForwardedHeaders
                 }
 
                 // With both lists empty the middleware trusts every sender, not none: an empty list
-                // is "no restriction". The test that sends from loopback with no setting found it.
+                // is "no restriction". The test that sends from loopback with no setting found it, and
+                // the middleware's source says so: it checks the sender only when either list is non-empty.
+                // https://github.com/dotnet/aspnetcore/blob/main/src/Middleware/HttpOverrides/src/ForwardedHeadersMiddleware.cs
                 // So no trusted network means no forwarded header is processed at all.
                 if (trusted.Length == 0)
                 {
