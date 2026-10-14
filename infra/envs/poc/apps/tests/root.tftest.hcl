@@ -28,15 +28,17 @@ mock_provider "aws" {
 }
 
 # The identity root's outputs, in the shape infra/envs/poc/idp/outputs.tf gives them. The
-# resource servers are the fixture's, so a scope added to pool.json is grantable here too.
+# resource servers are fixtures/cognito/pool.json's, written out because Terraform 1.11 (CI's floor)
+# allows no function calls in override_data. The first run asserts they still match the fixture, so
+# a scope added to pool.json fails here until it is added here too.
 override_data {
   target = data.terraform_remote_state.idp
   values = {
     outputs = {
       user_pool_id = "us-east-1_EXAMPLE"
       resource_servers = {
-        for rs in jsondecode(file("../../../../fixtures/cognito/pool.json")).resourceServers :
-        rs.identifier => [for s in rs.scopes : "${rs.identifier}/${s.name}"]
+        "https://orders.spa-poc.test"  = ["https://orders.spa-poc.test/read", "https://orders.spa-poc.test/admin"]
+        "https://reports.spa-poc.test" = ["https://reports.spa-poc.test/read", "https://reports.spa-poc.test/admin"]
       }
     }
   }
@@ -52,6 +54,14 @@ variables {
 
 run "one_client_branding_style_and_parameter_per_definition" {
   command = plan
+
+  assert {
+    condition = data.terraform_remote_state.idp.outputs.resource_servers == {
+      for rs in jsondecode(file("../../../../fixtures/cognito/pool.json")).resourceServers :
+      rs.identifier => [for s in rs.scopes : "${rs.identifier}/${s.name}"]
+    }
+    error_message = "The overridden resource servers no longer match fixtures/cognito/pool.json; copy the change into this file's override_data."
+  }
 
   assert {
     condition     = toset(keys(aws_cognito_user_pool_client.app)) == toset(keys(var.fixture_apps))
