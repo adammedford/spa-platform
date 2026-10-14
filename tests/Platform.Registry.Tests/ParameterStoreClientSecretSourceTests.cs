@@ -116,6 +116,33 @@ public sealed class ParameterStoreClientSecretSourceTests
         Assert.Throws<InvalidOperationException>(() => source.Get(App1Ref));
     }
 
+    /// <summary>
+    /// The SDK does not wrap every transport failure: a refused connection reaches the caller as a bare
+    /// <see cref="HttpRequestException"/> (seen by calling a real client at a closed port during the
+    /// task 2.5 review), and an HTTP timeout as a <see cref="TaskCanceledException"/> nobody asked for.
+    /// Either one, on one reference, must still cost only that reference.
+    /// </summary>
+    [Theory]
+    [InlineData("network")]
+    [InlineData("timeout")]
+    public async Task A_transport_failure_on_one_reference_is_a_failure_of_that_reference(string kind)
+    {
+        StubParameterStore ssm = new();
+        ssm.Put(App1Name, 1, Secret);
+        ssm.FailWith(App2Name + ":1", () => kind == "network"
+            ? new HttpRequestException("Connection refused (parameter store)")
+            : new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"));
+        ParameterStoreClientSecretSource source = Source(ssm);
+
+        await source.PreloadAsync([App1Ref, App2Ref], Ct);
+
+        Assert.Equal(Secret, source.Get(App1Ref));
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(() => source.Get(App2Ref));
+        Assert.Contains("could not be read", ex.Message);
+        Assert.DoesNotContain("Connection refused", ex.Message);
+        Assert.DoesNotContain("HttpClient.Timeout", ex.Message);
+    }
+
     [Fact]
     public async Task A_held_reference_is_served_from_memory_and_never_read_again()
     {

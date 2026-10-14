@@ -128,9 +128,13 @@ public sealed class ParameterStoreClientSecretSource : IClientSecretSource
             Fail(secretRef, ex.ErrorCode ?? ex.GetType().Name);
             return;
         }
-        catch (AmazonClientException ex)
+        catch (Exception ex)
         {
-            // Raised before or instead of a service answer: no credentials, no region, no network.
+            // Anything else that stops one read: AmazonClientException (no credentials, no region), and
+            // transport failures the SDK does not wrap. A refused connection reaches here as a bare
+            // HttpRequestException and an HTTP timeout as a TaskCanceledException the caller's token did
+            // not raise (both seen in the task 2.5 review). The interface promises one unreadable
+            // reference never fails the batch, and none of these messages may leave this method.
             Fail(secretRef, ex.GetType().Name);
             return;
         }
