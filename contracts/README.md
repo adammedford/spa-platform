@@ -80,7 +80,8 @@ Three readings are the integrator's, because the plan states a shape and not a r
 
 Each of these is in the one validation library of task 2.1, which the gateway and `spactl` share so
 they cannot disagree. The schema files repeat each note in the `description` of the property it
-belongs to.
+belongs to, with one exception: the last row below was added after G1a froze the schemas, so it is
+recorded here only.
 
 | Rule | Why not expressible | Checked by |
 | --- | --- | --- |
@@ -96,6 +97,7 @@ belongs to.
 | More than one upstream origin on an entry | A warning, and a schema has no notion of one. Task 2.1 keeps errors and warnings apart. | Task 2.1 |
 | The `release` prefix exists in S3 | Needs I/O, and only `spactl` does it; the gateway does not | Task 2.6 |
 | A port above 65535 | The pattern bounds the port's shape, not its value | Task 2.1 |
+| A schema-valid integer the platform cannot hold or apply | Draft 2020-12 reads `30`, `30.0` and `3e1` all as integers, and bounds neither `revision` nor `apis[].timeoutSeconds` above. The limits are the runtime's, not the document format's: a `revision` beyond Int64, and a `timeoutSeconds` the proxy cannot apply exactly. Reported as `integer-out-of-range`. | Task 2.1 |
 | The per-entry fingerprint, and eviction when it changes | Not validation at all: a hash of the entry's canonical JSON | Task 2.1 |
 | A content security policy source that embeds a wildcard, such as `https://*.example` | The plan rejects the source `*`, which the schema rejects, and says nothing about wildcards inside a host | Task 2.1, if the platform wants it. A change request would be the way to add it. |
 
@@ -103,5 +105,14 @@ Two more things the schemas deliberately do not decide:
 
 - **An empty `apps` array is a valid document.** Deployment refuses to start a gateway against an
   empty registry (task 1.7); that is a deployment rule, not a document rule.
-- **`timeoutSeconds` has no upper bound**, because the plan states none. It must be a positive
-  integer.
+- **`timeoutSeconds` has no upper bound in the schema**, because the plan states none. It must be a
+  positive integer. What bounds it is the proxy, not the document format, so the rule is this: the
+  validator **must** refuse a value the proxy cannot apply, under `integer-out-of-range` above. The
+  rule belongs here; the number does not, and a proxy or runtime upgrade must move it in the
+  validator and in the test that pins it rather than in this file.
+
+  **That rule is not implemented yet.** The validator's present bound is the `TimeSpan` limit, which
+  is far above anything the proxy applies, so a value in between validates and is then silently not
+  applied. Change request `changes/2.1-registry-schemas-and-jsonschema-net.md` records the
+  measurement, dated and attributed to the versions it was taken on, and the follow-up that tightens
+  the bound and proves it by test.

@@ -26,6 +26,13 @@ COPY src/Platform.Telemetry/Platform.Telemetry.csproj src/Platform.Telemetry/
 # Platform.Testing is not copied and not referenced: the gateway never ships a test double.
 RUN dotnet restore src/Gateway/Gateway.csproj -a "$TARGETARCH"
 
+# The contract schemas, for Platform.Registry to link and embed. It embeds its own copies under
+# Schemas/ today, so nothing reads these yet: the line lands first so that the workstream 2 follow-up
+# which replaces the copies with a link to ../../contracts can be one owner's push (change request
+# 2.1, decided 14 October 2026, a prerequisite of task I-6). After the restore, so a schema change
+# does not re-resolve every package.
+COPY contracts/*.schema.json contracts/
+
 COPY src/ src/
 RUN dotnet publish src/Gateway/Gateway.csproj -a "$TARGETARCH" --no-restore -c Release -o /app
 
