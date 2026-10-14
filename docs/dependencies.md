@@ -58,9 +58,9 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | xunit.v3.extensibility.core | 4.0.2 | Apache-2.0 | `Platform.Testing` | The attributes without the runner. xUnit refuses `xunit.v3` on a library that is not an executable and names this instead. Already a transitive dependency of `xunit.v3`. |
 | xunit.v3.assert | 4.0.2 | Apache-2.0 | `Platform.Testing` | `Assert`, for the store contract suites that each implementation subclasses (task 3.4). Same 4.0.2 set. |
 | Microsoft.AspNetCore.Mvc.Testing | 10.0.12 | MIT | `Gateway.TestHarness` |  |
-| Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing` | The fake clock |
+| Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing`, `Fixtures.Tests` | The fake clock |
 | Microsoft.Playwright | 1.63.0 | MIT | `tests/e2e`, `Fixtures.Tests` |  |
-| JsonSchema.Net | 8.0.5 | MIT | Schema tests, `spactl` | Decision D-1 |
+| JsonSchema.Net | 8.0.5 | MIT | Schema tests, `Fixtures.Tests`, `spactl` | Decision D-1 |
 
 The skeleton adds only `xunit.v3` to projects. Each owner adds the other references to their own project files as the work needs them.
 
@@ -69,9 +69,10 @@ The skeleton adds only `xunit.v3` to projects. Each owner adds the other referen
 | Item | Version | Note |
 | --- | --- | --- |
 | Terraform CLI | 1.15.8 | The plan needs 1.11 or later |
-| Provider `hashicorp/aws` | 6.68.0, published 7 October 2026 | Constrain to `~> 6.0` |
+| Provider `hashicorp/aws` | 6.68.0, published 7 October 2026 | Constrain to `~> 6.0`. MPL-2.0 |
+| Provider `hashicorp/random` | 3.9.1 | Constrain to `~> 3.7`. MPL-2.0. Task 1.1's test-user passwords, in `infra/modules/idp-cognito` and `infra/envs/poc/idp` only. Checked 13 October 2026 by `terraform init`, which resolved `~> 3.7` to 3.9.1 |
 
-The provider documents both Cognito features task 1.8 relies on: the `refresh_token_rotation` block on `aws_cognito_user_pool_client`, and the `aws_cognito_managed_login_branding` resource.
+The AWS provider documents both Cognito features task 1.8 relies on: the `refresh_token_rotation` block on `aws_cognito_user_pool_client`, and the `aws_cognito_managed_login_branding` resource.
 
 ## Open decisions
 
@@ -113,6 +114,7 @@ Read on 11 October 2026.
 - Homebrew catalogue: [dotnet-sdk](https://formulae.brew.sh/api/cask/dotnet-sdk.json), [awscli](https://formulae.brew.sh/api/formula/awscli.json), [session-manager-plugin](https://formulae.brew.sh/api/cask/session-manager-plugin.json), [docker-desktop](https://formulae.brew.sh/api/cask/docker-desktop.json), [colima](https://formulae.brew.sh/api/formula/colima.json)
 - [HashiCorp tap formula for Terraform](https://raw.githubusercontent.com/hashicorp/homebrew-tap/master/Formula/terraform.rb)
 - [Terraform registry: hashicorp/aws](https://registry.terraform.io/v1/providers/hashicorp/aws), and the provider's pages for [aws_cognito_user_pool_client](https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/cognito_user_pool_client.html.markdown) and [aws_cognito_managed_login_branding](https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/cognito_managed_login_branding.html.markdown)
+- [Terraform registry: hashicorp/random](https://registry.terraform.io/v1/providers/hashicorp/random), read on 13 October 2026 for the row above. The licence is the `LICENSE.txt` in the provider each lock file pins.
 - Package files on nuget.org, at `https://api.nuget.org/v3-flatcontainer/<id>/<version>/<id>.nuspec`
 - [xUnit.net v3: getting started](https://xunit.net/docs/getting-started/v3/getting-started) and [the 4.0.0 release notes](https://xunit.net/releases/v3/4.0.0)
 - Microsoft Learn: [testing with dotnet test](https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-with-dotnet-test), [dotnet test on Microsoft Testing Platform](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-mtp), [exit codes](https://learn.microsoft.com/en-us/dotnet/core/testing/microsoft-testing-platform-exit-codes), [containerize an app with dotnet publish](https://learn.microsoft.com/en-us/dotnet/core/containers/sdk-publish)

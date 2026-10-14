@@ -47,6 +47,7 @@ internal sealed partial class Assets(ILogger logger)
     // The framework's own extension table, so the type an object was stored with is never read
     // (s3-layout.md: content type comes from the file extension).
     private static readonly FileExtensionContentTypeProvider ContentTypes = new();
+    private static readonly MediaTypeHeaderValue HtmlType = new("text/html");
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -175,22 +176,32 @@ internal sealed partial class Assets(ILogger logger)
             return false;
         }
 
+        // RFC 9110 section 12.5.1: the most specific matching range supplies the quality. A
+        // text/html;q=0 exclusion therefore beats a positive text/* or */* (F-06).
+        // IsSubsetOf matches type and parameters, ignoring the quality parameter:
+        // https://learn.microsoft.com/dotnet/api/microsoft.net.http.headers.mediatypeheadervalue.issubsetof
+        int specificity = -1;
+        double quality = 0;
         foreach (MediaTypeHeaderValue range in ranges)
         {
-            if (range.Quality is 0)
+            if (!HtmlType.IsSubsetOf(range))
             {
                 continue;
             }
 
-            if (range.MatchesAllTypes
-                || (range.Type.Equals("text", StringComparison.OrdinalIgnoreCase)
-                    && (range.MatchesAllSubTypes || range.SubType.Equals("html", StringComparison.OrdinalIgnoreCase))))
+            int candidate = range.MatchesAllTypes ? 0 : range.MatchesAllSubTypes ? 1 : 2;
+            if (candidate > specificity)
             {
-                return true;
+                specificity = candidate;
+                quality = range.Quality ?? 1;
+            }
+            else if (candidate == specificity)
+            {
+                quality = Math.Max(quality, range.Quality ?? 1);
             }
         }
 
-        return false;
+        return quality > 0;
     }
 
     // The rule id only (contracts/request-gate.md, Rule ids). The path is not logged: it is the

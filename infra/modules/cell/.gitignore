@@ -1,0 +1,5 @@
+# A lock file belongs to a root, not to a module: Terraform honours the calling
+# root's and never consults one here. CI discovers a root as any directory holding
+# .tf files, so it inits this directory too and leaves one behind. Ignore it rather
+# than commit a file nothing reads.
+.terraform.lock.hcl
