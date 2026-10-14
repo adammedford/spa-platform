@@ -1,2 +1,2 @@
-// Placeholder so the skeleton builds. Task 2.6 replaces this file.
-throw new NotImplementedException("Task 2.6 writes spactl.");
+// spactl: the registry and release command line (plan row 2.6). SpactlApp holds every command.
+return await Spactl.SpactlApp.RunAsync(args, Spactl.SpactlEnvironment.Live(), CancellationToken.None);

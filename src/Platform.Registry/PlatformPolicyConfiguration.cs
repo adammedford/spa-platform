@@ -13,8 +13,11 @@ namespace Platform.Registry;
 /// <c>BrowserOrigin</c> that is not an absolute URI, is not an issuer, so an entry naming it is rejected
 /// with <see cref="RegistryRules.UnknownIssuer"/>. The task environment is checked against the schema
 /// before it reaches a gateway (task 1.4); this is the gateway's own floor.
+///
+/// Public because <c>spactl</c> (task 2.6) reads the policy from the same keys, so the gateway and the
+/// tool cannot read one configuration two ways (ADR-0002, "they cannot disagree").
 /// </summary>
-internal static class PlatformPolicyConfiguration
+public static class PlatformPolicyConfiguration
 {
     public static PlatformPolicy Read(IConfiguration configuration)
     {

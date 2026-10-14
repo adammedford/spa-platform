@@ -4,11 +4,18 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <RootNamespace>Spactl</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
     <ProjectReference Include="../../src/Platform.Registry/Platform.Registry.csproj" />
+  </ItemGroup>
+
+  <!-- docs/dependencies.md assigns AWSSDK.S3 to Platform.Registry and to spactl: the registry history
+       (ListObjectVersions) is spactl's alone. -->
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
   </ItemGroup>
 
 </Project>
