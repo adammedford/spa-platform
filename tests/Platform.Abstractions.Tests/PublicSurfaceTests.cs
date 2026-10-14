@@ -34,6 +34,7 @@ public sealed class PublicSurfaceTests
         "IIdpProfile",
         "IObjectStore",
         "IRegistry",
+        "IRequestTelemetryFeature",
         "ISessionStore",
         "IssuerDefinition",
         "OAuthDefinition",
@@ -41,6 +42,7 @@ public sealed class PublicSurfaceTests
         "RegistrySnapshot",
         "SchemeNames",
         "SessionRecord",
+        "SessionRef",
         "StoredObject",
     ];
 

@@ -16,7 +16,7 @@ release an enterprise could adopt.
 | `docs/plan/` | The plan: architecture, contracts, tasks, tests, infrastructure, evidence |
 | `AGENTS.md` | The rules every coding agent works under, and who owns which path |
 | `docs/agents/landing-work.md` | How a task gets from the dispatch table into `main` |
-| `docs/dependencies.md` | Tools, package versions, licences and the open decisions |
+| `docs/dependencies.md` | Tools, package versions, licences, and the decisions behind them, open and closed |
 | `spikes/g0/README.md` | The feasibility harness, and the runs of Gate G0 so far |
 
 ## Where the gateway stands
