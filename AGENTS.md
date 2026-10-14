@@ -49,8 +49,9 @@ A component test project is `tests/<Project>.Tests` and belongs to the owner of 
 ```bash
 tools/preflight.sh                              # what this machine is missing
 dotnet build                                    # the whole solution
-dotnet test --solution SpaPlatform.slnx         # every test project
+dotnet test --solution SpaPlatform.slnx --ignore-exit-code 8   # every test project; 8 = a project with no tests
 dotnet test --project tests/Platform.Registry.Tests
+tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
 ```
 
 - **Tests run on Microsoft Testing Platform**, set in `global.json`. Name what to run with `--solution` or `--project`: both forms work on every .NET 10 SDK.

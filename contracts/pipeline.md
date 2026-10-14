@@ -46,6 +46,18 @@ Three orderings carry a reason, and none of them is a preference.
 - **The request gate runs before authentication**, and the antiforgery check after it, because the
   token check needs the user and the gate does not.
 
+## What the composed gateway can show before task 2.3
+
+Stage 4's stub answers 404 to every host and calls nothing after itself, which is correct with no
+registry: every host is then an unknown host. The consequence is worth stating here, because it is
+invisible from the stage that pays it. **No stage after 4 runs in the composed gateway until task
+2.3 resolves a host.** A stage-10 endpoint that is filled in, registered and correct answers nothing
+there, and the gateway returns an empty 404 from routing.
+
+So an entry point is proven in its owner's own test project, against the doubles, and workstream 6
+proves it again in the composed suites once host resolution is real. A session reading that empty 404
+as a fault in its own stage has found this stub instead.
+
 ## Health endpoints
 
 | Path | Answer |
