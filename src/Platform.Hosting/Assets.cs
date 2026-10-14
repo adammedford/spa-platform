@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Net.Http.Headers;
@@ -18,7 +19,7 @@ namespace Platform.Hosting;
 /// paths first in the composed gateway; this endpoint does not rely on it, because the key is its own
 /// and N-13 is about what it reads, whichever stage refused.
 /// </summary>
-internal sealed partial class Assets(IObjectStore store, ILogger logger)
+internal sealed partial class Assets(ILogger logger)
 {
     private const string IndexHtml = "index.html";
 
@@ -100,6 +101,7 @@ internal sealed partial class Assets(IObjectStore store, ILogger logger)
             ? null
             : request.Headers.IfNoneMatch.ToString();
 
+        IObjectStore store = context.RequestServices.GetRequiredService<IObjectStore>();
         StoredObject? stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
         if (stored is null)
         {

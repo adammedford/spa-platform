@@ -56,12 +56,11 @@ public static class PlatformHostingExtensions
     /// </summary>
     public static IEndpointRouteBuilder MapPlatformAssets(this IEndpointRouteBuilder endpoints)
     {
-        // Resolved once, when the endpoint is mapped, as UsePlatformHealth resolves the registry: a
-        // composition without an object store fails at start-up, not on the first asset. In the gateway
-        // AddPlatformRegistry registers it, one store for the registry and every release (task 2.2).
-        Assets assets = new(
-            endpoints.ServiceProvider.GetRequiredService<IObjectStore>(),
-            endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Platform.Hosting.Assets"));
+        // The object store is resolved per request, not here: in the gateway it is AddPlatformRegistry's
+        // S3 store (task 2.2), whose client throws on construction with no region or bucket configured,
+        // and RegistryPoller defers it for that reason so the gateway starts with no Registry:* at all
+        // (CI's G1a smoke test). Resolving it at map time would undo that.
+        Assets assets = new(endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Platform.Hosting.Assets"));
 
         // A catch-all with every method, ordered last. Not the parameterless MapFallback: its pattern is
         // {*path:nonfile}, which never matches a path with an extension, so /app.js would miss
