@@ -36,6 +36,11 @@ ASP.NET Core matches request cookie names without regard to case.
 The `code` in a response says little on purpose. The rule id in the log line and in
 `security.rejections` says which rule fired.
 
+This table is the normative list, and `Platform.Abstractions.RuleIds` holds the same strings as
+constants so that no owner keeps a copy of its own: A-03 stops one workstream reading another's,
+and four workstreams raise these ids. A test in `tests/Platform.Abstractions.Tests` reads the
+table below and fails if the two drift. ADR-0015 decided it.
+
 | Rule id | Fires when |
 | --- | --- |
 | `host.unknown` | The request authority matches no registry `host` |

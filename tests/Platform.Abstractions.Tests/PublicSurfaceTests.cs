@@ -40,6 +40,7 @@ public sealed class PublicSurfaceTests
         "OAuthDefinition",
         "PlatformPolicy",
         "RegistrySnapshot",
+        "RuleIds",
         "SchemeNames",
         "SessionRecord",
         "SessionRef",
