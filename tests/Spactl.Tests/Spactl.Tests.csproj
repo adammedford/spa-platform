@@ -8,4 +8,15 @@
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 
+  <!-- The round trip runs on the repository's own documents: the contract examples, the app
+       definitions and the fixture SPAs, read from contracts/ and fixtures/ and never edited
+       (CODING_STANDARDS.md, "A guard reads the thing it guards"). -->
+  <ItemGroup>
+    <None Include="../../contracts/registry.example.json" Link="examples/registry.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/platform-config.example.json" Link="examples/platform-config.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/infra-outputs.example.json" Link="examples/infra-outputs.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../fixtures/apps/*.json" Link="examples/apps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../fixtures/spa/**/*" Link="examples/spa/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
