@@ -62,6 +62,69 @@ public sealed class TraceTests
         Assert.Equal(traceId, traceparent.Split('-')[1]);
     }
 
+    private static List<(long Count, Dictionary<string, object?> Tags)> PointsOf(TelemetryHost host, string name)
+    {
+        host.Flush();
+        List<(long Count, Dictionary<string, object?> Tags)> points = [];
+        foreach (Metric metric in host.Metrics.Where(m => m.Name == name && m.MeterName == "Platform.Telemetry"))
+        foreach (ref readonly MetricPoint point in metric.GetMetricPoints())
+        {
+            Dictionary<string, object?> tags = [];
+            foreach (KeyValuePair<string, object?> tag in point.Tags)
+            {
+                tags[tag.Key] = tag.Value;
+            }
+
+            points.Add((point.GetSumLong(), tags));
+        }
+
+        return points;
+    }
+
+    [Fact]
+    public async Task Rejections_are_counted_by_rule_and_app_once_per_request_line_with_a_rule()
+    {
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        using HttpClient client = new();
+
+        // Rule ids no other test rejects under: the meter listener is process-wide, so points from
+        // other hosts running in parallel can share this exporter. The ids are not real ones, which
+        // is fine here: stage 2 counts whatever id the rejecting stage wrote.
+        for (int i = 0; i < 2; i++)
+        {
+            using HttpRequestMessage rejected = new(HttpMethod.Get, new Uri(host.BaseAddress, "/bff/session"));
+            rejected.Headers.Add(TelemetryHost.RejectHeader, "test.counted");
+            await client.SendAsync(rejected, Ct);
+        }
+
+        await client.GetAsync(new Uri(host.BaseAddress, "/index.html"), Ct);
+
+        List<(long Count, Dictionary<string, object?> Tags)> points = PointsOf(host, "security.rejections");
+        (long count, Dictionary<string, object?> found) = Assert.Single(points, p => Equals(p.Tags["rule"], "test.counted"));
+        Assert.Equal(2, count);
+        Assert.Equal("app1", found["app_id"]);
+        Assert.Equal(2, found.Count);
+        Assert.Equal(2, host.Log.Json.Count(l =>
+            l.GetProperty("msg").GetString() == "request"
+            && l.GetProperty("rule").ValueKind == JsonValueKind.String));
+    }
+
+    [Fact]
+    public async Task A_rejection_before_the_app_is_resolved_is_counted_with_no_app()
+    {
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        using HttpClient client = new();
+        using HttpRequestMessage request = new(HttpMethod.Get, new Uri(host.BaseAddress, "/"));
+        request.Headers.Add("X-Test-Unknown-Host", "1");
+
+        await client.SendAsync(request, Ct);
+
+        // Other hosts in the process may count host.unknown too, so this asserts the tag shape only.
+        (_, Dictionary<string, object?> found) = Assert.Single(PointsOf(host, "security.rejections"),
+            p => Equals(p.Tags["rule"], "host.unknown"));
+        Assert.True(!found.TryGetValue("app_id", out object? app) || app is null);
+    }
+
     [Fact]
     public async Task Gateway_requests_are_counted_by_app_route_and_status()
     {

@@ -9,35 +9,51 @@ namespace Platform.Telemetry;
 
 /// <summary>
 /// Stage 2 (contracts/pipeline.md): the request log line, the app on the request's span, and the
-/// <c>gateway.requests</c> count, all written once the rest of the pipeline has returned.
+/// <c>gateway.requests</c> and <c>security.rejections</c> counts, all written once the rest of the
+/// pipeline has returned.
 ///
 /// The app is read after the pipeline because stage 4 pins it later than this stage runs. A request
-/// stage 4 refused has no <see cref="IAppFeature"/>, and its line says so with a null <c>app_id</c>.
+/// stage 4 rejected has no <see cref="IAppFeature"/>, and its line says so with a null <c>app_id</c>.
 ///
-/// <c>rule</c> and <c>session_ref</c> are not on this line yet: stages 6 to 9 have no way to hand
-/// them here. Change request <c>contracts/changes/6.4-request-telemetry-feature.md</c> asks for one.
-/// Until then each refusal's own line carries its rule id and the trace id that joins it to this one.
+/// <c>rule</c> and <c>session_ref</c> are not this stage's to compute (contracts/telemetry.md -> How
+/// <c>rule</c> and <c>session_ref</c> reach the request line). This stage sets a fresh
+/// <see cref="IRequestTelemetryFeature"/> on the request before calling the rest of the pipeline, a
+/// later stage writes it, and this stage reads it back afterwards. A request with a <c>rule</c> is a
+/// rejection, and is counted under <c>security.rejections</c> here and nowhere else, so the count
+/// equals the request lines that carry a rule.
 /// </summary>
 internal sealed class RequestTelemetry
 {
-    /// <summary>The meter and the activity source every platform instrument lives under.</summary>
+    /// <summary>
+    /// This project's meter, named <c>Platform.&lt;Project&gt;</c> as contracts/telemetry.md -> The
+    /// instruments requires. Other projects' instruments live under their own names.
+    /// </summary>
     public const string MeterName = "Platform.Telemetry";
 
     public const string Category = "Platform.Telemetry.Request";
 
     private readonly ILogger logger;
     private readonly Counter<long> requests;
+    private readonly Counter<long> rejections;
 
     public RequestTelemetry(ILoggerFactory loggers, IMeterFactory meters)
     {
         logger = loggers.CreateLogger(Category);
-        requests = meters.Create(MeterName).CreateCounter<long>(
+        Meter meter = meters.Create(MeterName);
+        requests = meter.CreateCounter<long>(
             "gateway.requests", unit: "{request}", description: "Requests the gateway answered, by app, route and status.");
+        rejections = meter.CreateCounter<long>(
+            "security.rejections", unit: "{request}", description: "Requests the gateway rejected, by rule id and app.");
     }
 
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         long started = Stopwatch.GetTimestamp();
+
+        // A fresh feature per request: whatever a later stage leaves here is this request's alone.
+        RequestTelemetryFeature fields = new();
+        context.Features.Set<IRequestTelemetryFeature>(fields);
+
         bool failed = false;
         try
         {
@@ -50,12 +66,14 @@ internal sealed class RequestTelemetry
         }
         finally
         {
-            Complete(context, Stopwatch.GetElapsedTime(started), failed);
+            Complete(context, fields, Stopwatch.GetElapsedTime(started), failed);
         }
     }
 
-    private void Complete(HttpContext context, TimeSpan elapsed, bool failed)
+    private void Complete(HttpContext context, RequestTelemetryFeature fields, TimeSpan elapsed, bool failed)
     {
+        string? rule = fields.Rule;
+        string? sessionRef = fields.SessionRef;
         IAppFeature? resolved = context.Features.Get<IAppFeature>();
         string? appId = resolved?.App.AppId;
         long? revision = resolved?.Snapshot.Revision;
@@ -77,10 +95,18 @@ internal sealed class RequestTelemetry
             new KeyValuePair<string, object?>("route", route),
             new KeyValuePair<string, object?>("status", status));
 
+        // contracts/telemetry.md -> The instruments: stage 2 is the one owner of this count.
+        if (rule is not null)
+        {
+            rejections.Add(1,
+                new KeyValuePair<string, object?>("rule", rule),
+                new KeyValuePair<string, object?>("app_id", appId));
+        }
+
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.Log(LogLevel.Information, new EventId(1, "Request"),
-                new RequestLine(appId, revision, route, status, Math.Round(elapsed.TotalMilliseconds, 2)),
+                new RequestLine(appId, revision, route, rule, sessionRef, status, Math.Round(elapsed.TotalMilliseconds, 2)),
                 exception: null, static (_, _) => "request");
         }
     }
@@ -113,7 +139,8 @@ internal sealed class RequestTelemetry
     }
 
     /// <summary>The line's fields, as structured state the formatter writes field by field.</summary>
-    private sealed class RequestLine(string? appId, long? revision, string route, int status, double durationMs)
+    private sealed class RequestLine(
+        string? appId, long? revision, string route, string? rule, string? sessionRef, int status, double durationMs)
         : IReadOnlyList<KeyValuePair<string, object?>>
     {
         private readonly KeyValuePair<string, object?>[] fields =
@@ -121,6 +148,8 @@ internal sealed class RequestTelemetry
             new("app_id", appId),
             new("registry_rev", revision),
             new("route", route),
+            new("rule", rule),
+            new("session_ref", sessionRef),
             new("status", status),
             new("duration_ms", durationMs),
         ];
@@ -134,5 +163,16 @@ internal sealed class RequestTelemetry
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => fields.GetEnumerator();
 
         public override string ToString() => "request";
+    }
+
+    /// <summary>
+    /// The feature this stage hands the rest of the pipeline. Both fields start null, which is what a
+    /// request that no stage rejected and that carried no session keeps.
+    /// </summary>
+    private sealed class RequestTelemetryFeature : IRequestTelemetryFeature
+    {
+        public string? Rule { get; set; }
+
+        public string? SessionRef { get; set; }
     }
 }

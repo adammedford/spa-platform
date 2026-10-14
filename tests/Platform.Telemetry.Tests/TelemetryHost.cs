@@ -24,9 +24,10 @@ namespace Platform.Telemetry.Tests;
 /// <summary>
 /// Workstream 6's own gateway, cut down to stage 2 and what stands either side of it: the
 /// telemetry entry points, a stand-in for stage 4 that pins <c>app1</c> as <see cref="IAppFeature"/>
-/// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), the
-/// framework's authentication with one real OpenID Connect scheme, and a terminal that calls an
-/// upstream over a real socket with the request's own query string.
+/// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), a
+/// stand-in for the later stages that write <see cref="IRequestTelemetryFeature"/>, the framework's
+/// authentication with one real OpenID Connect scheme, and a terminal that calls an upstream over a
+/// real socket with the request's own query string.
 ///
 /// Every log line the host writes is captured as the gateway's own JSON formatter renders it, so a
 /// test reads the same bytes stdout would carry. The console logger is still registered, so the
@@ -39,6 +40,12 @@ namespace Platform.Telemetry.Tests;
 public sealed class TelemetryHost : IAsyncDisposable
 {
     public const string AppId = "app1";
+
+    /// <summary>The session cookie the later-stage stand-in reads its session key from.</summary>
+    public const string SessionCookie = "__Host-spa-session";
+
+    /// <summary>A header naming the rule id the later-stage stand-in rejects the request under.</summary>
+    public const string RejectHeader = "X-Test-Reject";
 
     private readonly WebApplication app;
     private readonly EchoUpstreamListener upstream;
@@ -134,18 +141,41 @@ public sealed class TelemetryHost : IAsyncDisposable
             web.UsePlatformTelemetry();
         }
 
-        // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404
-        // the real stage gives an unknown host.
+        // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404 and
+        // the host.unknown rule id the real stage gives an unknown host (change request 6.4 ->
+        // Decision). Written null-conditionally, as every real stage writes it.
         AppDefinition entry = TestApps.Entry(AppId);
         web.Use(async (context, next) =>
         {
             if (context.Request.Headers["X-Test-Unknown-Host"].Count > 0)
             {
+                context.Features.Get<IRequestTelemetryFeature>()?.Rule = "host.unknown";
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
 
             context.Features.Set<IAppFeature>(SettableAppFeature.For(entry));
+            await next(context);
+        });
+
+        // Stand-in for the later stages. Workstream 3 turns the session cookie's key into its
+        // reference, and the key goes no further; a request gate rejects under the rule id the test
+        // names, with the 403 the gate answers.
+        web.Use(async (context, next) =>
+        {
+            IRequestTelemetryFeature? fields = context.Features.Get<IRequestTelemetryFeature>();
+            if (context.Request.Cookies.TryGetValue(SessionCookie, out string? key) && !string.IsNullOrEmpty(key))
+            {
+                fields?.SessionRef = SessionRef.Of(key);
+            }
+
+            if (context.Request.Headers[RejectHeader] is [{ } rule, ..])
+            {
+                fields?.Rule = rule;
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
             await next(context);
         });
 

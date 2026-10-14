@@ -73,6 +73,11 @@ public sealed class LogCanaryTests
 
         Assert.NotEmpty(host.Log.Lines);
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request");
+
+        // The cookie canary is the session key: the API call's line carries its reference instead.
+        Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request"
+            && line.GetProperty("route").GetString() == "api"
+            && line.GetProperty("session_ref").GetString() == Platform.Abstractions.SessionRef.Of(Cookie));
         foreach (string line in host.Log.Lines)
         {
             foreach (string canary in Canaries)

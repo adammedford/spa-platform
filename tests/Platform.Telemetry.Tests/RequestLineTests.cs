@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Platform.Abstractions;
 
 namespace Platform.Telemetry.Tests;
 
@@ -32,6 +33,62 @@ public sealed class RequestLineTests
         Assert.True(DateTimeOffset.TryParse(line.GetProperty("ts").GetString(), out _));
         Assert.Matches("^[0-9a-f]{32}$", line.GetProperty("trace_id").GetString());
         Assert.Matches("^[0-9a-f]{16}$", line.GetProperty("span_id").GetString());
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("rule").ValueKind);
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("session_ref").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_rejection_puts_the_rule_id_a_later_stage_wrote_on_the_line()
+    {
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        using HttpClient client = new();
+        using HttpRequestMessage request = new(HttpMethod.Get, new Uri(host.BaseAddress, "/bff/session"));
+        request.Headers.Add(TelemetryHost.RejectHeader, "gate.origin");
+
+        await client.SendAsync(request, Ct);
+
+        JsonElement line = RequestLine(host);
+        Assert.Equal("gate.origin", line.GetProperty("rule").GetString());
+        Assert.Equal(403, line.GetProperty("status").GetInt32());
+        Assert.Equal("app1", line.GetProperty("app_id").GetString());
+    }
+
+    [Fact]
+    public async Task A_session_puts_its_reference_on_the_line_and_never_its_key()
+    {
+        const string key = "session-key-4b1e9c";
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpRequestMessage request = new(HttpMethod.Get, new Uri(host.BaseAddress, "/index.html"));
+        request.Headers.Add("Cookie", TelemetryHost.SessionCookie + "=" + key);
+
+        await client.SendAsync(request, Ct);
+
+        JsonElement line = RequestLine(host);
+        Assert.Equal(SessionRef.Of(key), line.GetProperty("session_ref").GetString());
+        Assert.Matches("^[0-9a-f]{12}$", line.GetProperty("session_ref").GetString());
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("rule").ValueKind);
+        Assert.DoesNotContain(host.Log.Lines, l => l.Contains(key, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Each_request_starts_with_no_rule_and_no_session()
+    {
+        // The feature is per request: a rejection or a session on one request is not carried into
+        // the next on the same connection.
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpRequestMessage first = new(HttpMethod.Get, new Uri(host.BaseAddress, "/status/298"));
+        first.Headers.Add(TelemetryHost.RejectHeader, "csrf.token");
+        first.Headers.Add("Cookie", TelemetryHost.SessionCookie + "=first-key");
+        await client.SendAsync(first, Ct);
+
+        await client.GetAsync(new Uri(host.BaseAddress, "/status/204"), Ct);
+
+        JsonElement second = Assert.Single(host.Log.Json, l =>
+            l.GetProperty("msg").GetString() == "request" && l.GetProperty("status").GetInt32() == 204);
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("rule").ValueKind);
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("session_ref").ValueKind);
     }
 
     [Theory]
@@ -66,6 +123,7 @@ public sealed class RequestLineTests
         Assert.Equal(404, line.GetProperty("status").GetInt32());
         Assert.Equal(JsonValueKind.Null, line.GetProperty("app_id").ValueKind);
         Assert.Equal(JsonValueKind.Null, line.GetProperty("registry_rev").ValueKind);
+        Assert.Equal("host.unknown", line.GetProperty("rule").GetString());
     }
 
     [Fact]
