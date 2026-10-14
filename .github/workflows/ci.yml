@@ -61,49 +61,17 @@ jobs:
         #
         # A test project with no tests exits 8 on Microsoft Testing Platform. On the skeleton most of
         # them have none, so 8 is suppressed. It stops being suppressed when it stops being normal.
-        run: dotnet test --solution SpaPlatform.slnx --configuration Release --ignore-exit-code 8
+        #
+        # --no-build: the Build step above already built Release, and a second evaluation buys nothing.
+        run: dotnet test --solution SpaPlatform.slnx --configuration Release --no-build --ignore-exit-code 8
 
       - name: The gateway starts and answers 404 to an unknown host
         # G1a's exit test, and nothing else here proves it: the suite never starts the gateway, so a
         # composition root that throws, or a settings file the configuration binder rejects, builds
         # and tests clean. Both have happened.
         #
-        # Host-based, because host resolution is what answers 404. curl is fine on a runner: no
-        # proxy sits in front of it, unlike an agent sandbox (see AGENTS.md).
-        run: |
-          set -euo pipefail
-          dotnet publish src/Gateway/Gateway.csproj --configuration Release --no-build -o /tmp/gw
-
-          ASPNETCORE_HTTP_PORTS=5080 dotnet /tmp/gw/Gateway.dll &
-          gateway=$!
-          trap 'kill $gateway 2> /dev/null || true' EXIT
-
-          for _ in $(seq 1 30); do
-            if curl -fsS -o /dev/null http://127.0.0.1:5080/healthz 2> /dev/null; then break; fi
-            sleep 1
-          done
-
-          probe() {
-            curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" "http://127.0.0.1:5080$2"
-          }
-
-          expect() {
-            got="$(probe "$1" "$2")"
-            if [ "$got" != "$3" ]; then
-              echo "::error::Host $1 $2 answered $got, expected $3"
-              exit 1
-            fi
-            echo "  $1 $2 -> $got"
-          }
-
-          # /healthz answers on any host, because it runs before host resolution. /readyz is 503
-          # until a snapshot is live, which cannot happen on stubs. Every app path is 404 while the
-          # registry is empty: with no registry, every host is an unknown host.
-          expect nope.example      /healthz       200
-          expect nope.example      /readyz        503
-          expect nope.example      /              404
-          expect app1.spa-poc.test /              404
-          expect app1.spa-poc.test /assets/app.js 404
+        # The script holds the probes, so a local run and this one are the same test.
+        run: tools/smoke.sh Release 5080
 
   terraform:
     name: Terraform

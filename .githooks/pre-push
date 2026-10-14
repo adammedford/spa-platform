@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Runs before every push. Owner: integrator.
 #
-# It catches, locally and in about a second, the three things that are expensive to find later:
-# a change that touches a path outside its owner's set, a steering file that misleads every
-# session that loads it, and a build that does not compile.
+# It catches, locally, the things that are expensive to find later: a change that touches a path
+# outside its owner's set, a steering file that misleads every session that loads it, a build that
+# does not compile and a Terraform root that does not validate. The first three cost about a second.
+# The build and Terraform run only when the push changes their half of the repository, so a docs
+# push or a branch delete does not pay for either.
 # The tests stay in CI, where they cost nothing to wait for.
 #
 # Enable it once per clone (not per worktree: the setting lives in the shared .git/config):
@@ -51,17 +53,30 @@ esac
 # push would cost a red pull request and buy nothing, since the same person reviews it either way.
 # There is no override but --no-verify, which is the point: an override nobody can verify is a
 # permissions model for a team of one.
-if command -v python3 > /dev/null; then
-  # The default branch, not this branch's upstream. The question is what this branch adds to main;
-  # against its own upstream it would compare a branch to itself after the first push and pass on
-  # an empty diff every time.
-  base="origin/main"
-  git rev-parse --verify --quiet "$base^{commit}" > /dev/null || base="main"
+#
+# The default branch, not this branch's upstream. The question is what this branch adds to main;
+# against its own upstream it would compare a branch to itself after the first push and pass on an
+# empty diff every time.
+base="origin/main"
+git rev-parse --verify --quiet "$base^{commit}" > /dev/null || base="main"
 
-  if git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+if git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+  changed="$(git diff --name-only "$base"...HEAD)"
+else
+  base=""
+fi
+
+# Whether this push touches a half. With no base to diff against, assume it does: a skipped check
+# has to be earned by a diff that proves it unnecessary.
+touches() {
+  [ -z "$base" ] || printf '%s\n' "$changed" | grep -Eq "$1"
+}
+
+if command -v python3 > /dev/null; then
+  if [ -n "$base" ]; then
     python3 -I .github/path-ownership.py "$base" HEAD || fail "check A-05 failed."
   else
-    echo "pre-push: A-05 not checked: no '$base' to diff against." >&2
+    echo "pre-push: A-05 not checked: no main to diff against." >&2
   fi
 else
   echo "pre-push: A-05 not checked: python3 is not on PATH." >&2
@@ -79,29 +94,42 @@ fi
 
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
-# A worktree copied rather than cloned leaves files like "Platform.Abstractions 2.dll" and
-# "project.assets 2.json" in bin/ and obj/. They do not fail the build. They make it lie: a project
-# compiles clean while its consumer reports CS0103 on a type that is plainly there, and MSBuild
-# reports an import "cannot be imported again" from a path with a space and a digit in it. That cost
-# two debugging sessions and produced a confident wrong diagnosis in between, which is worse than a
-# failure.
+# iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
+# and obj/. A clone under ~/Documents or ~/Desktop is synced when "Desktop & Documents Folders" is
+# on, and the file provider keeps a numbered copy when a build replaces a file it has not finished
+# syncing. A clean checkout there held nearly two thousand of them. Keep clones and worktrees
+# outside iCloud; this check is for the clone that is not.
+#
+# They do not fail the build. They make it lie: a project compiles clean while its consumer reports
+# CS0103 on a type that is plainly there, and MSBuild reports an import "cannot be imported again"
+# from a path with a space and a digit in it. That cost two debugging sessions and produced a
+# confident wrong diagnosis in between, which is worse than a failure.
 #
 # Checked before the build, because the build is what the artifacts corrupt.
-duplicates="$(find src tests fixtures \( -path "*/bin/*" -o -path "*/obj/*" \) -name "* [0-9].*" 2> /dev/null || true)"
+duplicates="$(find src tests fixtures tools \( -path "*/bin/*" -o -path "*/obj/*" \) -name "* [0-9].*" 2> /dev/null || true)"
 
 if [ -n "$duplicates" ]; then
   echo "pre-push: duplicated build artifacts:" >&2
   echo "$duplicates" | head -5 >&2
-  echo "pre-push: delete every bin/ and obj/ and build again:" >&2
-  echo "  find src tests fixtures -type d \\( -name bin -o -name obj \\) -prune -exec rm -rf {} +" >&2
+  echo "pre-push: delete every bin/ and obj/ and build again, and move the clone out of iCloud Drive:" >&2
+  echo "  find src tests fixtures tools -type d \\( -name bin -o -name obj \\) -prune -exec rm -rf {} +" >&2
   fail "duplicated build artifacts make the build report errors that are not in the source."
 fi
 
 # --- the build --------------------------------------------------------------------------------
 #
-# Warnings are errors, so this catches what a reviewer should never have to.
-command -v dotnet > /dev/null || fail "dotnet is not on PATH."
-dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does not build."
+# Warnings are errors, so this catches what a reviewer should never have to. Skipped when nothing
+# that compiles changed: the solution's projects live under src, tests, fixtures and tools/spactl,
+# and the build settings in the root files.
+ran="A-05, the steering files, the artifacts"
+
+if touches '^(src|tests|fixtures|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^global\.json$'; then
+  command -v dotnet > /dev/null || fail "dotnet is not on PATH."
+  dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does not build."
+  ran="$ran, the build"
+else
+  echo "pre-push: build skipped: no .NET source changed."
+fi
 
 # --- Terraform ---------------------------------------------------------------------------------
 #
@@ -110,7 +138,9 @@ dotnet build --nologo --verbosity quiet > /dev/null || fail "the solution does n
 #
 # -backend=false: validation needs no state and no credentials, which is also why it can run on a
 # workstation that has never signed in to AWS.
-if command -v terraform > /dev/null; then
+if ! touches '^infra/'; then
+  echo "pre-push: Terraform skipped: nothing under infra/ changed."
+elif command -v terraform > /dev/null; then
   terraform fmt -check -recursive infra > /dev/null || fail "terraform fmt -check -recursive infra failed."
 
   for root in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
@@ -118,8 +148,9 @@ if command -v terraform > /dev/null; then
       || fail "terraform init failed in $root."
     terraform -chdir="$root" validate > /dev/null || fail "terraform validate failed in $root."
   done
+  ran="$ran, Terraform"
 else
   echo "pre-push: Terraform not checked: terraform is not on PATH." >&2
 fi
 
-echo "pre-push: A-05, the steering files, the artifacts, the build and Terraform pass."
+echo "pre-push: $ran pass."
