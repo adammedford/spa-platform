@@ -106,6 +106,22 @@ public sealed class FormatterTests
         Assert.Equal("kept", Parse(Write(category, level, "kept")).GetProperty("msg").GetString());
     }
 
+    [Fact]
+    public void N16_exception_and_inner_exception_text_never_reaches_the_log()
+    {
+        const string token = "CANARY-EXCEPTION-TOKEN";
+        const string secret = "CANARY-INNER-SECRET";
+        CaptureLogger logger = new("Platform.Identity.Example", LogLevel.Error);
+        logger.LogError(new InvalidOperationException("access_token=" + token,
+            new ArgumentException("client_secret=" + secret)), "Refresh failed for {AccessToken}", token);
+
+        string line = logger.Line;
+        Assert.DoesNotContain(token, line, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, line, StringComparison.Ordinal);
+        Assert.Equal(typeof(InvalidOperationException).FullName, Parse(line).GetProperty("exception").GetString());
+        Assert.Equal("Refresh failed for [redacted]", Parse(line).GetProperty("msg").GetString());
+    }
+
     private sealed class CaptureLogger(string category, LogLevel enabled) : ILogger
     {
         public string Line { get; private set; } = string.Empty;

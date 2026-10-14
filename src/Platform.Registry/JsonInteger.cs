@@ -12,7 +12,7 @@ namespace Platform.Registry;
 /// (https://learn.microsoft.com/dotnet/api/system.text.json.jsonelement.trygetint64), so a reader that
 /// trusted the schema threw on a schema-valid document instead of reporting it.
 /// </summary>
-internal static class JsonInteger
+public static class JsonInteger
 {
     /// <summary>The value, when <paramref name="node"/> is an integral number that fits a <see cref="long"/>.</summary>
     public static bool TryRead(JsonNode node, out long value)

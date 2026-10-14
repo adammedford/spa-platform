@@ -569,7 +569,8 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         apps.OfType<JsonObject>().FirstOrDefault(entry => entry["appId"] is JsonValue id && id.TryGetValue(out string? value) && value == appId);
 
     private static long? RevisionOf(JsonObject document) =>
-        document["revision"] is JsonValue value && value.TryGetValue(out long revision) ? revision : null;
+        // Task 2.6: live and history documents use the same integer spellings as the shared validator.
+        document["revision"] is { } value && JsonInteger.TryRead(value, out long revision) ? revision : null;
 
     private static long? ReadyRevision(string body)
     {
