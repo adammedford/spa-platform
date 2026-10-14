@@ -178,7 +178,9 @@ run "issuer_and_domain_feed_the_outputs_contract" {
     }
   }
 
-  # Literals from contracts/infra-outputs.example.json's issuer and the documented domain form.
+  # Proves how the module builds the two values from the pool and the domain, not agreement with
+  # a contract file: the expected strings follow from the overrides above. The forms are
+  # contracts/infra-outputs.example.json's issuer and the documented <prefix>.auth.<region> host.
   assert {
     condition     = output.issuer == "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE"
     error_message = "The issuer is https:// plus the pool's endpoint, the value behind Issuers:{name}:Authority."

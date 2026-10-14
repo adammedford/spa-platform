@@ -16,6 +16,10 @@ variable "domain_prefix" {
   EOT
   type        = string
 
+  # The pattern is CreateUserPoolDomain's for Domain, and the reserved words are the developer
+  # guide's "Reserved terms":
+  # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolDomain.html
+  # https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html
   validation {
     condition = (
       can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.domain_prefix))
