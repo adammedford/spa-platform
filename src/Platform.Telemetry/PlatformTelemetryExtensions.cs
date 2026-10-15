@@ -66,9 +66,8 @@ public static class PlatformTelemetryExtensions
                                 activity.SetTag("url.full", uri.GetLeftPart(UriPartial.Path));
                             }
                         })
-                    // Decided by implementer: platform instruments live under "Platform.*"; YARP's
-                    // own source names the forwarding span. Change request 6.4 asks the integrator
-                    // to write the convention down.
+                    // contracts/telemetry.md -> The instruments: platform sources are named
+                    // "Platform.<Project>"; YARP's own source names the forwarding span.
                     .AddSource("Platform.*")
                     .AddSource("Yarp.ReverseProxy");
                 if (!string.IsNullOrWhiteSpace(otlp))
@@ -81,6 +80,7 @@ public static class PlatformTelemetryExtensions
                 metrics
                     .AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
+                    // contracts/telemetry.md -> The instruments: "Platform.<Project>" and nothing else.
                     .AddMeter("Platform.*");
                 if (!string.IsNullOrWhiteSpace(otlp))
                 {
