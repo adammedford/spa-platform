@@ -20,8 +20,10 @@ It also checks what no reader can check by eye: that the ladder covers every pla
 and names none that does not exist. A roadmap that quietly drops a row is worse than no roadmap,
 because it reads as coverage.
 
-    tools/roadmap.py            rewrite the generated blocks
+    tools/roadmap.py            rewrite the generated blocks (also --write)
     tools/roadmap.py --check    fail if they are not what the repository says they should be
+
+An unrecognised argument exits 2 and writes nothing, because the default action writes.
 
 The generated text holds no date and no commit id on purpose. It is a function of the tags, the
 merge subjects and the plan, so --check stays quiet until one of those changes, and the push that
@@ -30,6 +32,7 @@ lands a task is the push that updates the roadmap.
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import re
 import subprocess
@@ -405,7 +408,29 @@ def replace(text: str, name: str, body: str) -> tuple[str, bool]:
 
 
 def main(argv: list[str]) -> int:
-    check = "--check" in argv
+    # Parsed rather than scanned for "--check", because the default action rewrites two tracked
+    # files and a scan reads every typo as that default: `tools/roadmap.py --help` rewrote the
+    # blocks and exited 0, which no session exploring the script expects. An unknown flag now
+    # exits 2 and writes nothing.
+    parser = argparse.ArgumentParser(
+        prog="tools/roadmap.py",
+        description=(
+            "Rewrite the generated blocks in docs/roadmap.md and README.md from the tags, the "
+            "merge subjects and the plan."
+        ),
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if the blocks are not what the repository says, and write nothing",
+    )
+    mode.add_argument(
+        "--write",
+        action="store_true",
+        help="rewrite the blocks: the default, named so a caller can say which it meant",
+    )
+    check = parser.parse_args(argv).check
     root = pathlib.Path(__file__).resolve().parent.parent
 
     rows = plan_rows(root)
@@ -454,6 +479,7 @@ def main(argv: list[str]) -> int:
         print()
         print("ROADMAP FAILED: the generated blocks are not what the tags, the merge subjects and")
         print("the plan say they should be. Run tools/roadmap.py and commit what it writes.")
+        print("If this is main just after a merge, the merge did not go through tools/land.sh.")
         return 1
 
     print(f"roadmap: {len(rows)} plan rows, each in one stage; the generated blocks are current.")

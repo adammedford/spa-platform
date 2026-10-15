@@ -2,6 +2,10 @@
 
 Issues and specs for this repo live as markdown files in `.scratch/`.
 
+The tracker is **tracked**, not scratch. A merge body, an ADR or a contract that cites a ticket by
+path is citing a file every other session and CI can open, which is the whole point of citing it.
+Session logs under `.scratch/<feature-slug>/log/` stay ignored: they are a transcript, not a spec.
+
 ## Conventions
 
 - One feature per directory: `.scratch/<feature-slug>/`
