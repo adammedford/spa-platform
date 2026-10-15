@@ -17,8 +17,6 @@
     <None Include="../../contracts/infra-outputs.example.json" Link="examples/infra-outputs.example.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/platform-config.example.json" Link="examples/platform-config.example.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../fixtures/apps/*.json" Link="examples/apps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../contracts/*.schema.json" Link="contracts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../src/Platform.Registry/Schemas/*.schema.json" Link="embedded/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
