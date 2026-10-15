@@ -61,8 +61,8 @@ public sealed class CapturedTelemetry
             {
                 theirs?.Invoke(services);
 
-                // Simple, not batching: a span is exported as it stops, so a test that has seen the
-                // response has seen the spans without waiting for a batch timer.
+                // Simple processing exports each span as it stops, without a batch timer. Tests
+                // await their specific trace: the server span can stop after the response arrives.
                 services.ConfigureOpenTelemetryTracerProvider(tracing =>
                     tracing.AddProcessor(new SimpleActivityExportProcessor(new SpanExporter(captured.spans))));
                 services.ConfigureOpenTelemetryMeterProvider(meters =>
