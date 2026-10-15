@@ -18,6 +18,10 @@ change requests supersede these review errors in Q49, Q56, Q63, Q69 and their ti
   between teardown credentials and writer credentials. No AWS apply or live role is claimed.
 - The plan-ignore patterns land here; the apply-recipe and CI artifact follow-ups remain open.
 
+The negative carve's implemented list contains twelve distinct rows (nine whole, three partial),
+not thirteen or fourteen. N-11 and N-12's response-cookie clause remain with row 4.2. The live carve
+spec now records this delivery boundary; the original run's counts below are historical.
+
 Primary sources checked on 2026-10-15:
 [IAM MFA semantics](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-multifactorauthpresent),
 [S3 Object Lock configuration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-configure.html),

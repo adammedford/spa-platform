@@ -5,6 +5,14 @@ Owner: workstream 6 (Verification and operations)
 Parent row: 6.3 (Negative suite, hermetic: N-01 to N-25 and N-27 — green at G4)
 Base: trunk, after tasks 2.3b and 4.3b
 
+## Review amendment — 2026-10-15
+
+The original carve included stripping owned by unlanded plan row 4.2. The deliverable is twelve
+distinct rows: nine whole (N-08, N-09, N-13, N-14, N-16, N-20, N-24, N-25, N-27) and three partial
+(N-07, N-10, N-12). N-11 is absent until 4.2; N-12 proves CORS/CSP treatment on 200/500, with
+`Set-Cookie` stripping deferred to 4.2. Session-dependent clauses still wait for G4. The user
+stories below preserve the original target; this amendment and the scope list govern delivery.
+
 ## Problem Statement
 
 The platform's refusals are implemented but unproven in the composed gateway.
@@ -126,12 +134,14 @@ line, or what an upstream received — never by reaching into the stage that pro
   reach the process, and an HTTP client that answers on the `Host` header would never deliver it.
 - **Rule ids come from the shared constants** in `Platform.Abstractions` (ADR-0015), never as string
   literals. A renamed id must break the build, not pass silently.
-- **Rows in scope, whole:** N-08, N-09, N-12, N-13, N-14, N-16, N-20, N-24, N-25, N-27.
+- **Rows in scope, whole:** N-08, N-09, N-13, N-14, N-16, N-20, N-24, N-25, N-27.
 - **Rows in scope, partially, with the proven clause named in the test:** N-07 (the pre-authentication
   refusal on the API path and the absence of CORS headers; the authenticated variants wait for G4),
   N-10 (the unlisted API name and the escape paths; "no upstream logs the request" is proven against
-  the echo upstream and the mock API as they stand), N-11 (that the caller's cookies, bearer token,
-  CSRF header and forwarding headers are stripped; "it sees the session's token" waits for G4).
+  the echo upstream and the mock API as they stand), N-12 (CORS and upstream CSP treatment on
+  success and error responses; `Set-Cookie` stripping waits for row 4.2).
+- **Deferred to row 4.2:** N-11 request stripping and N-12 response-cookie stripping. N-11
+  token injection also needs the identity work; no passing assertion claims these clauses today.
 - **Rows deferred to row 6.3 at G4, and absent from this suite rather than skipped:** N-01 to N-06,
   N-15, N-17, N-18, N-19, N-21, N-22, N-23. N-26 belongs to the deployed browser suite.
 - **A temporal caveat recorded in the suite itself.** The shell gate is stage 8 and belongs to
