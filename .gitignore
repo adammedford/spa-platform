@@ -21,6 +21,13 @@ crash.*.log
 *.tfvars.json
 backend.hcl
 
+# Terraform plan files. A plan's `after` holds the values the apply will write, so the
+# identity root's carries the generated test-user passwords and the apps root's carries
+# the OAuth client secrets. Belt and braces: the documented recipe writes plans outside
+# the tree, and this catches the one that is not (change request 1.1).
+*.tfplan
+*.tfplan.json
+
 # Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
 *.pem
 *.key
