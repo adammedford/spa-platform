@@ -59,6 +59,10 @@ resource "aws_cloudwatch_log_group" "gateway" {
 # are this module's variables, and the rest are inputs the root supplies.
 
 locals {
+  # The subnets the internal load balancer sits in (alb.tf), in the order the subnet map's keys sort
+  # in, so the indexed keys below are stable between plans.
+  alb_subnet_cidrs = [for subnet in aws_subnet.public : subnet.cidr_block]
+
   # One entry per issuer, flattened rather than merged so an empty map stays an empty map. Each
   # issuer's three settings are the ones the contract requires of an issuer.
   issuer_environment = {
@@ -84,12 +88,6 @@ locals {
       "Registry__PollSeconds" = tostring(var.registry_poll_seconds)
       "Assets__Bucket"        = aws_s3_bucket.platform.bucket
 
-      # Stage 1 trusts X-Forwarded-Proto and X-Forwarded-For from this range and from nowhere else
-      # (contracts/pipeline.md, N-09). It is this cell's own VPC range, which is where the internal
-      # load balancer's addresses come from: anything wider would let a forwarded header through
-      # from somewhere that is not the load balancer.
-      "ForwardedHeaders__TrustedNetworks__0" = var.vpc_cidr
-
       "Session__Store"       = var.session_store
       "Session__MaxSessions" = tostring(var.session_max_sessions)
     },
@@ -97,6 +95,13 @@ locals {
     # upstreams it may name.
     { for index, suffix in var.allowed_host_suffixes : "Policy__AllowedHostSuffixes__${index}" => suffix },
     { for index, upstream in var.allowed_upstreams : "Policy__AllowedUpstreams__${index}" => upstream },
+    # Stage 1 trusts X-Forwarded-Proto and X-Forwarded-For from these addresses and from nowhere
+    # else (contracts/pipeline.md stage 1, N-09). The contract names the value itself -- "The ALB
+    # subnets, in CIDR form" (contracts/platform-config.schema.json ->
+    # ForwardedHeaders.TrustedNetworks) -- so it is the subnets the load balancer sits in, which is
+    # where its addresses come from (alb.tf). The cell's whole VPC range would also trust every
+    # unallocated address in it, and only two subnets out of the range are allocated.
+    { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
   )
 
@@ -110,6 +115,22 @@ locals {
     "MockApi__App1Client" = var.mock_api_app1_client_id
     "MockApi__App2Client" = var.mock_api_app2_client_id
   }
+
+  # Not a platform setting, and deliberately not merged into platform_configuration: the
+  # configuration contract's own $comment says the task environment "also carries settings that are
+  # not the platform's (Logging, ASPNETCORE_*, OTEL_*)", so this belongs in the environment but not
+  # in what the contract describes.
+  #
+  # It is here because var.gateway_port is one value in three places -- the target group sends to it
+  # (task 1.3), the container publishes it, and the process has to listen on it -- and the third did
+  # not follow the variable. src/Gateway/Dockerfile sets ASPNETCORE_HTTP_PORTS=8080, so at any other
+  # value of the variable the load balancer would send to a port nothing answered on and the target
+  # could never turn healthy. Setting it here makes the variable's own description true.
+  gateway_runtime_environment = {
+    "ASPNETCORE_HTTP_PORTS" = tostring(var.gateway_port)
+  }
+
+  gateway_environment = merge(local.platform_configuration, local.gateway_runtime_environment)
 
   gateway_container = {
     name      = local.gateway_container_name
@@ -128,9 +149,9 @@ locals {
     }]
 
     environment = [
-      for key in sort(keys(local.platform_configuration)) : {
+      for key in sort(keys(local.gateway_environment)) : {
         name  = key
-        value = local.platform_configuration[key]
+        value = local.gateway_environment[key]
       }
     ]
 

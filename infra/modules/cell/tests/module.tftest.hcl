@@ -250,6 +250,44 @@ run "the_service_registers_with_the_load_balancer_s_existing_target_group" {
   }
 }
 
+# var.gateway_port is one value in three places: the target group sends to it (task 1.3), the
+# container publishes it, and the process has to listen on it. The third did not follow the
+# variable -- the image's own ASPNETCORE_HTTP_PORTS=8080 decided it (src/Gateway/Dockerfile) -- so
+# at any other value the load balancer sent to a port nothing answered on and the target could
+# never turn healthy, which is row 1.4's own done-when.
+#
+# Run with the variable changed, because at its default the three agree by coincidence and the
+# assertion could not fail. The root's own test already exercises gateway_port = 9090.
+run "the_gateway_process_listens_on_the_port_the_load_balancer_sends_to" {
+  command = plan
+
+  variables {
+    gateway_port = 9090
+  }
+
+  assert {
+    condition = (
+      one([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e if e.name == "ASPNETCORE_HTTP_PORTS"
+      ]).value == tostring(var.gateway_port)
+    )
+    error_message = "The gateway container must be told to listen on var.gateway_port: its image listens on 8080 unless told otherwise (src/Gateway/Dockerfile), so at any other value the load balancer sends to a port nothing answers on."
+  }
+
+  assert {
+    condition = (
+      one(one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).portMappings).containerPort == var.gateway_port
+      && one(aws_ecs_service.gateway.load_balancer).container_port == var.gateway_port
+      && aws_lb_target_group.gateway.port == var.gateway_port
+    )
+    error_message = "The published container port, the registered target port and the target group's port are all var.gateway_port: one value in three places, so none of them can drift from the others."
+  }
+}
+
 run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
   command = plan
 
@@ -477,22 +515,53 @@ run "the_registry_and_cell_settings_come_from_the_module_s_own_bucket_and_variab
   }
 }
 
-run "the_trusted_network_is_this_cell_s_own_range_and_nothing_wider" {
+run "the_trusted_networks_are_the_load_balancer_s_own_subnets_and_nothing_wider" {
   command = plan
 
   variables {
     vpc_cidr = "10.31.0.0/20"
   }
 
+  # Read off the load balancer rather than restated: the contract's own words for this field are
+  # "The ALB subnets, in CIDR form" (contracts/platform-config.schema.json), so the expected value
+  # is the CIDR of each subnet aws_lb.cell actually sits in. Moving the load balancer moves this.
   assert {
     condition = (
+      toset([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
+      ])
+      == toset([for s in aws_subnet.public : s.cidr_block if contains(aws_lb.cell.subnets, s.id)])
+    )
+    error_message = "ForwardedHeaders:TrustedNetworks is the CIDR of each subnet the load balancer sits in: stage 1 trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md stage 1, N-09)."
+  }
+
+  # The anti-widening half. The cell's whole VPC range passes the first assertion's shape only by
+  # accident and admits every unallocated address in the cell, which is not the load balancer.
+  assert {
+    condition = !contains(
       [
         for e in one([
           for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
         ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
-      ] == [var.vpc_cidr]
+      ],
+      var.vpc_cidr
     )
-    error_message = "ForwardedHeaders:TrustedNetworks names this cell's own range and nothing else: stage 1 trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md, N-09)."
+    error_message = "The cell's whole VPC range is not a trusted network: only two subnets of it are allocated, so the range would trust addresses no load balancer holds."
+  }
+
+  # One entry per subnet, indexed from zero, which is the array form the contract's own example
+  # gives for a list setting.
+  assert {
+    condition = (
+      length([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
+      ]) == length(aws_lb.cell.subnets)
+    )
+    error_message = "Every subnet the load balancer sits in contributes one TrustedNetworks entry; a dropped one would stop stage 1 trusting that availability zone's node."
   }
 }
 
@@ -647,6 +716,47 @@ run "the_task_role_holds_no_unrecognised_statement" {
       length(coalesce(s.not_actions, toset([]))) == 0 && length(coalesce(s.not_resources, toset([]))) == 0
     ])
     error_message = "No statement is written as NotAction or NotResource: both grant everything except what they name, which is the opposite of a reviewable role."
+  }
+
+  # Everything above reads data.aws_iam_policy_document.task, so it is a closed account of the
+  # role's grants only while that document is the whole of what the role holds. Three declarations
+  # add a grant without passing through it, and each was watched leaving all 25 runs green before
+  # these assertions existed (see the ticket's Review section): a second aws_iam_role_policy on the
+  # same role, aws_iam_role's own inline_policy block, and managed_policy_arns -- which is one line
+  # and arn:aws:iam::aws:policy/AdministratorAccess.
+  #
+  # Read from the module's source rather than from a value, because the two role attributes are
+  # Optional+Computed in provider v6: correctly unset, they read as unknown at plan time, so an
+  # assertion on their value could not pass cleanly. This is the technique the resource-type
+  # allowlist and the no-default check already use for the same reason. A separate
+  # aws_iam_role_policy_attachment needs nothing here: the resource-type allowlist does not name
+  # that type.
+  assert {
+    condition = toset([
+      for m in regexall(
+        "(?m)^resource \"aws_iam_role_policy\" \"([a-z0-9_]+)\"",
+        join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
+      ) : m[0]
+    ]) == toset(["task", "task_execution"])
+    error_message = "Each role carries exactly one inline policy, and they are the two documents this file reads. A third aws_iam_role_policy widens a role without changing either document, so every assertion above would still pass."
+  }
+
+  assert {
+    condition = length(regexall(
+      "(?m)^\\s*(managed_policy_arns\\s*=|inline_policy\\s*\\{)",
+      join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
+    )) == 0
+    error_message = "No role here attaches a managed policy or declares an inline_policy block: either adds a grant that data.aws_iam_policy_document.task never sees, and AdministratorAccess is one line of managed_policy_arns."
+  }
+
+  # And each of the two policies is on its own role, so the agent's grants cannot also land on the
+  # workload's role under a name this file already recognises.
+  assert {
+    condition = (
+      aws_iam_role_policy.task.role == aws_iam_role.task.id
+      && aws_iam_role_policy.task_execution.role == aws_iam_role.task_execution.id
+    )
+    error_message = "The task policy is on the task role and the execution policy on the execution role: attaching either to the other role would make the two-role split cosmetic."
   }
 }
 
