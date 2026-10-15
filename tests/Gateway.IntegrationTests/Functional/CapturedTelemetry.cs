@@ -32,8 +32,11 @@ namespace Gateway.IntegrationTests.Functional;
 /// no synchronisation
 /// (https://github.com/open-telemetry/opentelemetry-dotnet/blob/core-1.19.1/src/OpenTelemetry.Exporter.InMemory/InMemoryExporter.cs),
 /// and a reader here enumerates while concurrent requests are still exporting. Task 6.4's own
-/// <c>TelemetryHost</c> took the same way out for the same reason. It also keeps this suite to the
-/// packages its project already has.</para>
+/// <c>TelemetryHost</c> took the same way out for the same reason, in a project that does reference
+/// that package. The reason is the synchronisation and nothing else: the package is pinned in
+/// <c>Directory.Packages.props</c> already, and AGENTS.md -> Build and test lets a workstream add
+/// <c>&lt;PackageReference Include="Name" /&gt;</c> with no version to its own project file, so
+/// taking it would have needed no integrator edit either.</para>
 /// </summary>
 public sealed class CapturedTelemetry
 {

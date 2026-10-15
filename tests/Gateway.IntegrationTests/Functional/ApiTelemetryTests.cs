@@ -30,7 +30,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>The API this row follows: the echo upstream, which records what reached it.</summary>
-    public const string Path = "/api/echo/items";
+    public const string ApiPath = "/api/echo/items";
 
     /// <summary>One harness, one API call, and everything the call produced.</summary>
     public sealed class Call : IAsyncLifetime
@@ -62,7 +62,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
 
             using TestBrowser browser = Harness.CreateBrowser();
             await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: ct);
-            BrowserResponse response = await browser.GetAsync(Harness.App("app1").Url(Path).ToString(), ct: ct);
+            BrowserResponse response = await browser.GetAsync(Harness.App("app1").Url(ApiPath).ToString(), ct: ct);
             Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
 
             // Stage 2 writes the line after the pipeline has returned, and the server span stops after
@@ -179,6 +179,14 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
 
         Assert.All(platformSpans, name => Assert.Contains(name, ContractText.PlatformInstrumentNames));
         Assert.All(platformMeters, name => Assert.Contains(name, ContractText.PlatformInstrumentNames));
+
+        // CODING_STANDARDS.md -> "An assertion must be able to fail", second shape: the span line
+        // above is vacuous today. Nothing in the tree creates an ActivitySource, so every span here
+        // comes from the framework's instrumentation or from the proxy and none carries the
+        // platform's prefix; the line starts biting when a workstream adds one. The meter line is
+        // the half with data, and the mechanism both rest on is checked against an input that breaks
+        // it: a name under the platform's prefix that is no project under src/ is not accepted.
+        Assert.DoesNotContain("Platform.NotAProject", ContractText.PlatformInstrumentNames);
 
         // And the subscription is not vacuous: the platform's own counter did arrive, under a name the
         // contract's metric list holds, and the proxy's span came from the source named beside them.

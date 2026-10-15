@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Gateway.TestHarness;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Platform.Registry;
 
 namespace Gateway.IntegrationTests.Functional;
 
@@ -34,7 +35,8 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     {
         public GatewayHarness Harness { get; private set; } = null!;
 
-        public async ValueTask InitializeAsync() => Harness = await GatewayHarness.StartAsync();
+        public async ValueTask InitializeAsync() =>
+            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -85,7 +87,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     }
 
     [Fact]
-    public async Task One_apps_entry_cannot_name_a_directive_outside_the_baselines_ten()
+    public async Task The_served_policy_names_exactly_the_baselines_ten_directives()
     {
         using TestBrowser browser = Harness.CreateBrowser();
 
@@ -119,6 +121,32 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
             Assert.DoesNotContain(response.Headers.Keys, name =>
                 name.StartsWith(ContractText.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    [Fact]
+    public async Task An_entry_naming_a_directive_outside_the_sanctioned_set_is_refused_whole()
+    {
+        // Its own harness, because this test publishes a registry document and the class fixture's
+        // does not. The input the clause above cannot supply: no app fixture names an out-of-set
+        // directive, and fixtures/ is workstream 5's, so the entry arrives the way an operator's
+        // would -- by publishing one (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
+        using TestBrowser browser = harness.CreateBrowser();
+
+        BrowserResponse before = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
+        RefreshOutcome outcome = await harness.UpdateRegistryAsync(
+            document => document["apps"]!.AsArray().Single(app => app!["appId"]!.GetValue<string>() == "app1")!
+                .AsObject()["csp"] = new JsonObject { ["worker-src"] = new JsonArray("'self'") },
+            Ct);
+        BrowserResponse after = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
+
+        // contracts/registry.schema.json -> csp.propertyNames names exactly the baseline's ten, so a
+        // document naming an eleventh fails validation and the live snapshot stays. Refused rather
+        // than partially honoured: the policy the browser gets is the one it got before the publish,
+        // and the baseline was not widened by it.
+        Assert.Equal(RefreshOutcome.Rejected, outcome);
+        Assert.Equal(before.Header("Content-Security-Policy"), after.Header("Content-Security-Policy"));
+        Assert.DoesNotContain("worker-src", after.Header("Content-Security-Policy")!, StringComparison.Ordinal);
     }
 
     /// <summary>

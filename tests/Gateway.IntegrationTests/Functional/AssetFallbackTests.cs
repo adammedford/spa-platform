@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using Gateway.TestHarness;
@@ -28,7 +29,8 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     {
         public GatewayHarness Harness { get; private set; } = null!;
 
-        public async ValueTask InitializeAsync() => Harness = await GatewayHarness.StartAsync();
+        public async ValueTask InitializeAsync() =>
+            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -37,6 +39,15 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
 
     /// <summary>One file of a fixture SPA, as the release in the harness's bucket holds it.</summary>
     private static byte[] Released(string appId, string path) => FixtureFiles.Spa(appId)[path];
+
+    /// <summary>
+    /// The script the fixture shell loads, by the path the shell names. Read out of the shell rather
+    /// than written down here: the name carries a content hash and <c>fixtures/</c> is workstream 5's,
+    /// so a rebuilt fixture renames it and a test holding the old name would fail for the wrong reason
+    /// (CODING_STANDARDS.md -> "A guard reads the thing it guards").
+    /// </summary>
+    private static string ScriptPath(string appId) =>
+        Encoding.UTF8.GetString(Released(appId, "index.html")).Split("src=\"")[1].Split('"')[0];
 
     [Fact]
     public async Task An_extensionless_path_that_accepts_html_returns_the_apps_own_shell()
@@ -98,11 +109,12 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
 
         // The script the fixture shell loads, by the path the shell names, with the type taken from
         // its extension (contracts/s3-layout.md) and not from what it was stored as.
-        string script = Encoding.UTF8.GetString(Released("app1", "index.html"))
-            .Split("src=\"")[1].Split('"')[0];
+        string script = ScriptPath("app1");
         BrowserResponse asset = await browser.NavigateAsync(Harness.App("app1").Url(script), ct: Ct);
 
-        Assert.Equal("/assets/app.43eda712.js", script);
+        // The shell named an asset path, so the parse above found one rather than returning garbage.
+        Assert.StartsWith("/assets/", script, StringComparison.Ordinal);
+        Assert.EndsWith(".js", script, StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
         Assert.Equal("text/javascript", asset.Header("Content-Type"));
         Assert.Equal(Released("app1", script.TrimStart('/')), asset.Bytes);
@@ -114,8 +126,9 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
         // A raw socket, because this is a request no browser API sends and the Host header is what
         // routes it (AGENTS.md -> "Reach the gateway over a raw socket when the Host header matters").
         string host = Harness.App("app1").Host;
-        RawResponse head = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", "/assets/app.43eda712.js", host, ct: Ct);
-        RawResponse get = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", "/assets/app.43eda712.js", host, ct: Ct);
+        string script = ScriptPath("app1");
+        RawResponse head = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", script, host, ct: Ct);
+        RawResponse get = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", script, host, ct: Ct);
         RawResponse headMissing = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", "/assets/gone.js", host, ct: Ct);
 
         // RFC 9110 section 9.3.2: the headers GET would send, Content-Length included, and no body. A
@@ -124,7 +137,9 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
         Assert.Equal(get.Header("Content-Length"), head.Header("Content-Length"));
         Assert.Equal(get.Header("Content-Type"), head.Header("Content-Type"));
         Assert.Equal(get.Header("ETag"), head.Header("ETag"));
-        Assert.Equal(Released("app1", "assets/app.43eda712.js").Length.ToString(System.Globalization.CultureInfo.InvariantCulture), head.Header("Content-Length"));
+        Assert.Equal(
+            Released("app1", script.TrimStart('/')).Length.ToString(CultureInfo.InvariantCulture),
+            head.Header("Content-Length"));
         Assert.Empty(head.Body);
         Assert.Equal(404, headMissing.StatusCode);
     }
