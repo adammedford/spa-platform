@@ -17,16 +17,17 @@ locals {
 # The certificate tools/scripts/certs.sh imported. Terraform does not create it, it
 # finds it, the way docs/plan/05-infrastructure-and-cost.md says: by domain name.
 #
-# The Cell tag is the same filter certs.sh's own lookup applies, so a certificate
-# imported for another cell under the same domain is never picked up here. The leaf
-# certs.sh issues is RSA 2048, which is this data source's default key type, so no
-# key_types argument is needed. A lookup that finds nothing fails the plan, which is
-# the right failure: the listener cannot exist without the certificate.
+# The Cell tag prevents a lookup from selecting another cell's certificate. Tags
+# are exact-match filters, not merely returned metadata:
+# https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/acm_certificate
+# Key types mirror tools/scripts/certs.sh's lookup, including a future non-RSA leaf.
+# A lookup that finds nothing fails the plan: the listener needs the certificate.
 data "aws_acm_certificate" "wildcard" {
   domain      = "*.${var.certificate_domain}"
   types       = ["IMPORTED"]
   statuses    = ["ISSUED"]
   most_recent = true
+  key_types   = ["RSA_2048", "RSA_3072", "RSA_4096", "EC_prime256v1", "EC_secp384r1"]
 
   tags = {
     Cell = var.cell
@@ -49,13 +50,15 @@ resource "aws_lb" "cell" {
   # the registry's host carries (app1.spa-poc.test:8443 through the tunnel).
   preserve_host_header = true
 
-  # A header whose name is not a valid HTTP field name is removed before it reaches
-  # the gateway, rather than left for the gateway to interpret.
+  # Task 1.3 requires invalid header names to be dropped before the gateway.
+  # AWS documents routing.http.drop_invalid_header_fields.enabled here:
+  # https://docs.aws.amazon.com/cli/latest/reference/elbv2/modify-load-balancer-attributes.html
   drop_invalid_header_fields = true
 
   # The load balancer appends the client address to X-Forwarded-For, which is what
   # the gateway's forward limit of one reads (T6, N-09). This is the provider's
   # default, written down because the gateway depends on it.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/x-forwarded-headers.html
   xff_header_processing_mode = "append"
 
   # Teardown destroys this root and then proves the account is empty by tag query
@@ -97,7 +100,8 @@ resource "aws_lb_listener" "https" {
   protocol          = "HTTPS"
   certificate_arn   = data.aws_acm_certificate.wildcard.arn
 
-  # TLS 1.3 and 1.2 only.
+  # Implementation choice: pin TLS 1.3 and 1.2 rather than the older API default.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html
   ssl_policy = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
   # No listener rules, ever (ADR-0010): every host goes to the one target group, and

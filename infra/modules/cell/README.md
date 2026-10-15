@@ -44,12 +44,12 @@ One listener, one target group, no listener rules (ADR-0010). Every host reaches
 gateway, which resolves the app by exact authority match.
 
 - **Internal, HTTPS on 443 only.** No port 80 listener and no redirect: only the
-  tunnel reaches it. The policy allows TLS 1.2 and 1.3.
+  tunnel reaches it. This module pins a TLS 1.2/1.3 policy as an implementation choice.
 - **Host header preserved, invalid header fields dropped.** The gateway reads the
   `Host` the browser sent, port included.
 - **The certificate is found, not created.** `tools/scripts/certs.sh import` puts
   `*.{certificate_domain}` into ACM tagged with this cell, and `alb.tf` looks it up by
-  that domain and the `Cell` tag, the same filter `certs.sh` uses. Run it before the
+  that domain, the `Cell` tag and the key types `certs.sh` searches. Run it before the
   first apply, or the plan fails on the lookup.
 - **The health-check path follows the image.** `health_check_path` is `/` for the
   sample image and `/readyz` for the gateway.

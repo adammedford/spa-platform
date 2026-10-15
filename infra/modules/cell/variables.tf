@@ -87,7 +87,9 @@ variable "certificate_domain" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.certificate_domain))
+    # The base certificate domain uses the same DNS grammar as albDnsName. Read
+    # the repository contract rather than maintaining a second copy of its pattern.
+    condition     = can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json"))["$defs"].dnsName.pattern, var.certificate_domain))
     error_message = "certificate_domain is a dotted lowercase name with no wildcard and no trailing dot, such as spa-poc.test."
   }
 }

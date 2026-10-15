@@ -49,11 +49,6 @@ output "alb_dns_name" {
   value       = aws_lb.cell.dns_name
 }
 
-output "alb_arn" {
-  description = "The internal load balancer."
-  value       = aws_lb.cell.arn
-}
-
 output "target_group_arn" {
   description = "The one target group, which task 1.4's service registers its task in."
   value       = aws_lb_target_group.gateway.arn

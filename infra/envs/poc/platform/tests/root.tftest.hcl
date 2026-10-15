@@ -27,8 +27,9 @@ mock_provider "aws" {
 
   mock_resource "aws_lb" {
     defaults = {
-      arn      = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/spa-poc/0123456789abcdef"
-      dns_name = "internal-spa-poc-123456789.us-east-1.elb.amazonaws.com"
+      arn = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/spa-poc/0123456789abcdef"
+      # A deliberate sentinel: this test proves output wiring, not AWS DNS generation.
+      dns_name = "mock-alb-dns-sentinel"
     }
   }
 
@@ -40,6 +41,9 @@ mock_provider "aws" {
 }
 
 variables {
+  cell                    = "poc"
+  vpc_cidr                = "10.20.0.0/16"
+  certificate_domain      = "spa-poc.test"
   teardown_principal_arns = ["arn:aws:iam::111122223333:role/Admin"]
 }
 
@@ -47,13 +51,8 @@ run "the_root_publishes_the_load_balancer_dns_name" {
   command = apply
 
   assert {
-    condition     = module.cell.alb_dns_name == output.alb_dns_name
-    error_message = "The root must publish the module's load balancer DNS name as alb_dns_name, the contract's albDnsName."
-  }
-
-  assert {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", output.alb_dns_name))
-    error_message = "alb_dns_name must have the shape of contracts/infra-outputs.schema.json's dnsName."
+    condition     = output.alb_dns_name == "mock-alb-dns-sentinel"
+    error_message = "The root must publish the ALB resource DNS name as alb_dns_name, the contract's albDnsName."
   }
 }
 
@@ -66,12 +65,6 @@ run "the_module_builds_one_listener_and_one_target_group" {
     source = "../../../modules/cell"
   }
 
-  variables {
-    cell               = "poc"
-    vpc_cidr           = "10.20.0.0/16"
-    certificate_domain = "spa-poc.test"
-  }
-
   assert {
     condition     = aws_lb.cell.internal && aws_lb.cell.load_balancer_type == "application"
     error_message = "The load balancer must be an internal application load balancer."
@@ -80,6 +73,16 @@ run "the_module_builds_one_listener_and_one_target_group" {
   assert {
     condition     = aws_lb.cell.preserve_host_header
     error_message = "The Host header must be preserved: the gateway resolves the app from it (ADR-0010)."
+  }
+
+  assert {
+    condition     = aws_lb.cell.xff_header_processing_mode == "append"
+    error_message = "The ALB must append the client address for the gateway's forward limit of one (ADR-0010, N-09)."
+  }
+
+  assert {
+    condition     = aws_lb_listener.https.ssl_policy == "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    error_message = "The listener must pin the selected TLS 1.2/1.3 policy instead of the older provider default."
   }
 
   assert {
@@ -98,7 +101,7 @@ run "the_module_builds_one_listener_and_one_target_group" {
   }
 
   assert {
-    condition     = length(aws_lb.cell.name) <= 32 && aws_lb.cell.name == "spa-poc"
+    condition     = aws_lb.cell.name == "spa-${var.cell}"
     error_message = "The load balancer is named spa-{cell}, which fits the 32-character limit."
   }
 
@@ -113,13 +116,18 @@ run "the_module_builds_one_listener_and_one_target_group" {
   }
 
   assert {
-    condition     = data.aws_acm_certificate.wildcard.domain == "*.spa-poc.test" && data.aws_acm_certificate.wildcard.tags["Cell"] == "poc"
+    condition     = data.aws_acm_certificate.wildcard.domain == "*.${var.certificate_domain}" && data.aws_acm_certificate.wildcard.tags["Cell"] == var.cell
     error_message = "The certificate is found by its wildcard domain and this cell's Cell tag, the filter certs.sh uses."
   }
 
   assert {
     condition     = data.aws_acm_certificate.wildcard.types == tolist(["IMPORTED"])
     error_message = "Only an imported certificate is looked up: certs.sh imports it."
+  }
+
+  assert {
+    condition     = toset(data.aws_acm_certificate.wildcard.key_types) == toset(split(",", regex("keyTypes=([A-Za-z0-9_,]+)", file("../../../../tools/scripts/certs.sh"))[0]))
+    error_message = "The certificate lookup must accept exactly the key types certs.sh searches."
   }
 
   assert {
@@ -135,7 +143,7 @@ run "the_module_builds_one_listener_and_one_target_group" {
     condition = (
       aws_lb_target_group.gateway.target_type == "ip"
       && aws_lb_target_group.gateway.protocol == "HTTP"
-      && aws_lb_target_group.gateway.port == 8080
+      && aws_lb_target_group.gateway.port == var.gateway_port
     )
     error_message = "The target group sends HTTP to the gateway's port on a Fargate task's address."
   }
@@ -143,6 +151,31 @@ run "the_module_builds_one_listener_and_one_target_group" {
   assert {
     condition     = aws_lb_target_group.gateway.health_check[0].path == "/"
     error_message = "The health-check path defaults to /, for the sample image."
+  }
+}
+
+# Exercise both the naming boundary and port wiring with non-default inputs. The
+# ordinary poc/default-port run cannot detect a long-name or hardcoded-port regression.
+run "the_longest_cell_and_a_different_gateway_port" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    cell         = "abcdefghijklmnopqrstuv"
+    gateway_port = 9090
+  }
+
+  assert {
+    condition     = aws_lb.cell.name == "spa-${var.cell}" && length(aws_lb.cell.name) <= 32 && aws_lb_target_group.gateway.name == aws_lb.cell.name
+    error_message = "Both ALB and target-group names must fit AWS's limit at the cell's maximum length."
+  }
+
+  assert {
+    condition     = aws_lb_target_group.gateway.port == var.gateway_port
+    error_message = "The target group must follow a non-default gateway port."
   }
 }
 
@@ -154,14 +187,11 @@ run "the_health_check_path_follows_the_variable" {
   }
 
   variables {
-    cell               = "poc"
-    vpc_cidr           = "10.20.0.0/16"
-    certificate_domain = "spa-poc.test"
-    health_check_path  = "/readyz"
+    health_check_path = "/readyz"
   }
 
   assert {
-    condition     = aws_lb_target_group.gateway.health_check[0].path == "/readyz"
+    condition     = aws_lb_target_group.gateway.health_check[0].path == var.health_check_path
     error_message = "The health-check path is the variable: /readyz for the gateway."
   }
 }
@@ -174,10 +204,7 @@ run "a_health_check_path_must_be_absolute" {
   }
 
   variables {
-    cell               = "poc"
-    vpc_cidr           = "10.20.0.0/16"
-    certificate_domain = "spa-poc.test"
-    health_check_path  = "readyz"
+    health_check_path = "readyz"
   }
 
   expect_failures = [var.health_check_path]
@@ -191,8 +218,6 @@ run "a_certificate_domain_carries_no_wildcard" {
   }
 
   variables {
-    cell               = "poc"
-    vpc_cidr           = "10.20.0.0/16"
     certificate_domain = "*.spa-poc.test"
   }
 
