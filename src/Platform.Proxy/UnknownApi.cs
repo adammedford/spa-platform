@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Platform.Abstractions;
 
 namespace Platform.Proxy;
 
@@ -21,6 +22,11 @@ internal static class UnknownApi
         context.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(UnknownApi).FullName!)
             .LogWarning("The app lists no upstream under that name. rule={Rule}", Rule);
+
+        // Task 4.3a: the same constant on stage 2's request line, null-conditionally because this
+        // project's own tests run without stage 2 (contracts/telemetry.md -> "How `rule` and
+        // `session_ref` reach the request line").
+        context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
 
         return Problems.WriteAsync(context, StatusCodes.Status404NotFound, "unknown_api");
     }

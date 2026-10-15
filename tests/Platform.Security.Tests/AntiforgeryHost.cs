@@ -50,14 +50,17 @@ public sealed class AntiforgeryHost : IAsyncDisposable
 
     private readonly WebApplication app;
     private readonly HttpClient client;
+    private readonly List<SettableRequestTelemetryFeature> telemetryFeatures;
     private int reached;
     private long lastBodyBytesRead = -1;
 
-    private AntiforgeryHost(WebApplication app, Uri baseAddress, List<string> log)
+    private AntiforgeryHost(
+        WebApplication app, Uri baseAddress, List<string> log, List<SettableRequestTelemetryFeature> telemetryFeatures)
     {
         this.app = app;
         BaseAddress = baseAddress;
         Log = log;
+        this.telemetryFeatures = telemetryFeatures;
 
         // No cookie container: each test plays a browser, or an attacker, and writes Cookie itself.
         client = new HttpClient(new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = false });
@@ -67,6 +70,23 @@ public sealed class AntiforgeryHost : IAsyncDisposable
 
     /// <summary>Every log line the host wrote, formatted.</summary>
     public List<string> Log { get; }
+
+    /// <summary>
+    /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
+    /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
+    /// the host was started with <c>telemetry: true</c>, because stage 2 is the only thing that creates
+    /// that feature and this host is cut down to one stage.
+    /// </summary>
+    public IReadOnlyList<string?> TelemetryRules
+    {
+        get
+        {
+            lock (telemetryFeatures)
+            {
+                return [.. telemetryFeatures.Select(feature => feature.Rule)];
+            }
+        }
+    }
 
     /// <summary>How many requests reached the terminal, which stands for everything after stage 9.</summary>
     public int Reached => Volatile.Read(ref reached);
@@ -79,7 +99,12 @@ public sealed class AntiforgeryHost : IAsyncDisposable
     /// Runs after <c>AddPlatformSecurity</c>, for a test that puts back a framework default to show what
     /// the platform's setting prevents.
     /// </param>
-    public static async Task<AntiforgeryHost> StartAsync(CancellationToken ct, Action<IServiceCollection>? configure = null)
+    /// <param name="telemetry">
+    /// true installs stage 2's stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
+    /// and records what each request left on it in <see cref="TelemetryRules"/>.
+    /// </param>
+    public static async Task<AntiforgeryHost> StartAsync(
+        CancellationToken ct, Action<IServiceCollection>? configure = null, bool telemetry = false)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -99,8 +124,33 @@ public sealed class AntiforgeryHost : IAsyncDisposable
 
         WebApplication web = builder.Build();
         AntiforgeryHost? self = null;
+        List<SettableRequestTelemetryFeature> telemetryFeatures = [];
 
         web.UsePlatformForwardedHeaders();
+
+        // Stage 2's stand-in, when a test asks for it: the feature stage 2 sets on the request before
+        // calling the rest of the pipeline and reads back once it returns
+        // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
+        // by default, so every other test here runs the stage with no feature installed, which is what
+        // holds the stage's write to being null-conditional.
+        //
+        // The feature is recorded before the request runs rather than after: each stage sets the rule
+        // id before it writes the response, so a test reading the recorded feature cannot race the
+        // response body back to the client.
+        if (telemetry)
+        {
+            web.Use((context, next) =>
+            {
+                SettableRequestTelemetryFeature feature = new();
+                lock (telemetryFeatures)
+                {
+                    telemetryFeatures.Add(feature);
+                }
+
+                context.Features.Set<IRequestTelemetryFeature>(feature);
+                return next(context);
+            });
+        }
 
         // Stage 4's stand-in: the app whose host the request names. Any other host is a test error.
         web.Use((context, next) =>
@@ -176,7 +226,7 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
             ?? throw new InvalidOperationException("the host started without an address."));
 
-        self = new AntiforgeryHost(web, address, log);
+        self = new AntiforgeryHost(web, address, log, telemetryFeatures);
         return self;
     }
 
