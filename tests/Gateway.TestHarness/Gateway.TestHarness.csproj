@@ -3,11 +3,16 @@
   <!-- Shared harness for the composed suites: gateway factory, test browser. Owner: workstream 6. Not a test project itself. -->
 
   <ItemGroup>
-    <ProjectReference Include="../../src/Gateway/Gateway.csproj" />
+    <!-- Aliased because the mock API's top-level Program is public too: GatewayFactory names this one. -->
+    <ProjectReference Include="../../src/Gateway/Gateway.csproj" Aliases="GatewayApp" />
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
     <ProjectReference Include="../../fixtures/TestIdp/TestIdp.csproj" />
     <ProjectReference Include="../../fixtures/MockApi/MockApi.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
 
 </Project>
