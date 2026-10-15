@@ -11,9 +11,11 @@ name carries `var.cell`.
 | `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, and the two security groups |
 | `storage.tf` | 1.5 | The platform bucket and its policy, and the two image repositories |
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
+| `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
+| `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
 
-Task 1.4 adds the ECS cluster, task definition, service and log group to this same
-module.
+`tests/module.tftest.hcl` plans all of it against a mock provider, with no credentials
+and no network beyond `terraform init`. The Terraform test step in CI discovers it.
 
 ## Names and tags
 
@@ -53,6 +55,48 @@ gateway, which resolves the app by exact authority match.
   first apply, or the plan fails on the lookup.
 - **The health-check path follows the image.** `health_check_path` is `/` for the
   sample image and `/readyz` for the gateway.
+
+## The compute, and what a green plan does not say
+
+Task 1.4a wrote the ECS half and proved everything about it a plan can prove. It did
+not prove row 1.4's own done-when — a steady service, a healthy target, a successful
+image pull or a working tunnel — because each of those needs the apply, and the apply
+needs credentials, a state bucket and the first-deployment order in
+`docs/plan/05-infrastructure-and-cost.md`. **A green plan here is not a running cell.**
+
+- **The task.** ARM64, 0.25 vCPU, 1 GB, Fargate only, in this cell's two public
+  subnets with a public address, because the no-NAT design leaves that as the task's
+  only route out. ECS Exec is on and the root filesystem stays writable: those are two
+  of the three conditions the Session Manager tunnel comes with, and the third is the
+  four `ssmmessages` permissions below.
+- **The deployment.** One service, desired count 1, circuit breaker on with rollback.
+  Both images are variables with no default that names a tag: `deploy.sh` passes a
+  digest and every other apply passes the digest already in state, which is what keeps
+  a routine apply from moving a running image. `mock_api_image` defaults to absent, so
+  the service applies before task 5.3's image exists.
+- **The task environment** is generated from `contracts/platform-config.schema.json`
+  in the form that contract names: a colon becomes a double underscore and every value
+  is a string. The bucket, the registry key, the poll interval and the cell name come
+  from this module's own bucket and variables, and `TrustedNetworks` is this cell's own
+  range, so stage 1 trusts the load balancer and nothing wider.
+
+### The task role is the security object of record
+
+It is the one object in the cell where a careless grant is easy to write and hard to
+notice, which is why it was written and reviewed before the AWS sitting rather than
+during it. It holds exactly three grants, each asserted on its own:
+
+| Grant | Scope |
+| --- | --- |
+| `ReadRegistryAndReleases` | `s3:GetObject` on this bucket's `registry/*` and `apps/*`, the two prefixes `contracts/s3-layout.md` lays out. No write, no delete, no listing, and not the bucket's own ARN |
+| `ReadClientSecrets` | `ssm:GetParameter` and `ssm:GetParameters` on `/spa-platform/{cell}/apps/*`. Another cell's secret is outside it |
+| `SessionManagerMessages` | The four `ssmmessages` actions the tunnel needs. They take no resource-level condition, so this is the one grant on `*` — and the test asserts it is the only one |
+
+A fourth statement fails a test. So does a wildcard in an action, a `Deny`, a
+`NotAction` or `NotResource`, and a second grant on `*`: the suite names the statements
+it recognises and fails on one it does not, so a widened grant cannot pass by being
+unmentioned. The execution role is separate and holds image pull and log writes only;
+neither role can do the other's job.
 
 ## The two things the bucket enforces that no code does
 

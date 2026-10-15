@@ -32,6 +32,28 @@ output "ecr_mock_api" {
   value       = module.cell.ecr_mock_api
 }
 
+# Task 1.4a's four.
+
+output "ecs_cluster" {
+  description = "The contract's `ecsCluster`. tunnel.sh builds the Session Manager target from it."
+  value       = module.cell.ecs_cluster
+}
+
+output "ecs_service" {
+  description = "The contract's `ecsService`. deploy.sh waits on it for steady state."
+  value       = module.cell.ecs_service
+}
+
+output "log_group" {
+  description = "The contract's `logGroup`. The deployed tests read a run's gateway log from it."
+  value       = module.cell.log_group
+}
+
+output "gateway_image" {
+  description = "The contract's `gatewayImage`: the image this apply placed, which deploy.sh asserts against the running one."
+  value       = module.cell.gateway_image
+}
+
 # Nothing else. contracts/infra-outputs.schema.json is additionalProperties: false,
 # so an output this root publishes that the contract has no field for is a trap for
 # whatever assembles outputs.json in task 1.7. The network and the security groups
