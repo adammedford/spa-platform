@@ -156,6 +156,11 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
             Contract.Directives(Contract.BaselineCspTemplate).Where(directive => directive.Key == "frame-ancestors"));
         Assert.Equal(expected.Value, framing.Value);
 
+        // The row names the value and not just the directive (docs/plan/04-tests.md -> N-24), so the
+        // baseline is held to it as well. Comparing the response against the contract alone would
+        // admit a weakened baseline: both sides would move together and this row would still pass.
+        Assert.Equal("'none'", expected.Value);
+
         foreach ((string name, string value) in Contract.FixedResponseHeaders)
         {
             Assert.Equal(value, header(name));

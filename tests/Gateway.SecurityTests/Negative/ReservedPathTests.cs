@@ -67,9 +67,10 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
 
     private async Task AssertReservedAsync(BrowserResponse response, int before)
     {
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Contract.ErrorRow expected = Contract.Error("a reserved path that is switched off");
+        Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
-        Assert.Contains("\"code\":\"not_found\"", response.Body, StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);
 
         // Nothing about the request in the body: the path is the caller's text.
         Assert.DoesNotContain("signout-oidc", response.Body, StringComparison.Ordinal);

@@ -35,10 +35,11 @@ public sealed class AssetPathTests : IAsyncLifetime
     private GatewayHarness harness = null!;
 
     /// <summary>
-    /// One harness per test class, started with the recorder in place. Not a class fixture, because
-    /// the recorder and the harness have to be built together and the fixture would have to hand
-    /// both back; <see cref="IAsyncLifetime"/> on the class gives each test a fresh pair, which also
-    /// keeps the recorded keys of one row out of another's.
+    /// One harness per <b>test</b> here, not per class, which is the one place in this suite that
+    /// differs. Not a class fixture, because the recorder and the harness have to be built together
+    /// and a fixture would have to hand both back; <see cref="IAsyncLifetime"/> on the class is
+    /// re-run for every test, so each gets a fresh pair — which also keeps the keys recorded for one
+    /// row out of another's, and is why "this request read nothing" can be read off a count.
     /// </summary>
     public async ValueTask InitializeAsync() =>
         harness = await Suite.StartAsync(recorder.Options(), TestContext.Current.CancellationToken);

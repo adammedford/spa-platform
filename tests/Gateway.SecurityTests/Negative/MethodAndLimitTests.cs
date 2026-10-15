@@ -47,9 +47,17 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
     private GatewayHarness Harness => cell.Harness;
 
-    /// <summary>The methods no path of the gateway accepts, which the row names.</summary>
+    /// <summary>
+    /// The methods no path of the gateway accepts, which the row names. <c>CONNECT</c> carries the
+    /// authority form RFC 9110 section 9.3.6 gives it, read from <c>fixtures/apps/app1.json</c>
+    /// rather than copied here, so a renamed fixture host cannot leave this sending a stale one.
+    /// </summary>
     public static TheoryData<string, string> MethodsNoPathAccepts =>
-        new() { { "TRACE", "/" }, { "CONNECT", "app1.spa-poc.test:8443" } };
+        new()
+        {
+            { "TRACE", "/" },
+            { "CONNECT", FixtureFiles.AppDefinition("app1")["host"]!.GetValue<string>() },
+        };
 
     [Theory]
     [MemberData(nameof(MethodsNoPathAccepts))]
@@ -146,8 +154,12 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         Assert.Equal(431, response.StatusCode);
         Assert.Empty(response.Body);
 
-        // Nothing of the header comes back, and no stage ran to log anything of it.
-        Assert.DoesNotContain("xxxx", response.StatusLine, StringComparison.Ordinal);
+        // And no stage logged any of it, because Kestrel answered before stage 2 ran. Swept over
+        // the log rather than over the status line, which could not have carried a request header's
+        // value in the first place (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        Assert.NotEmpty(Harness.Log.Lines);
+        Assert.DoesNotContain(
+            Harness.Log.Lines, line => line.Contains(oversized, StringComparison.Ordinal));
     }
 
     [Fact]

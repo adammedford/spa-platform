@@ -134,9 +134,10 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
 
     private async Task AssertHostRefusedAsync(RawResponse response, int before)
     {
-        Assert.Equal(404, response.StatusCode);
+        Contract.ErrorRow expected = Contract.Error("Unknown host");
+        Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
-        Assert.Contains("\"code\":\"not_found\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
 
         Assert.Equal(RuleIds.HostUnknown, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }

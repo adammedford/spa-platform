@@ -54,7 +54,12 @@ public sealed class RegistryRejectionTests
         await AssertRejectedWholeAsync((document, _) =>
             // contracts/http-contract.md: "`*` and `'unsafe-eval'` are rejected in every directive".
             // A policy source is the one registry value that reaches the browser verbatim.
-            Entry(document, "app1")["csp"] = new JsonObject { ["img-src"] = new JsonArray("*") });
+            //
+            // Added beside the benign source rather than replacing the directive. Assigning `csp`
+            // here would overwrite what Benign just wrote, leaving this the one row in the class
+            // that published a single change — and its "the benign change is absent too"
+            // assertion vacuous, because the value would never have been in the document.
+            Entry(document, "app1")["csp"]!["img-src"]!.AsArray().Add("*"));
     }
 
     [Fact]
