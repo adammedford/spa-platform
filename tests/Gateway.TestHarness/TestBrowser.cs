@@ -51,11 +51,10 @@ public sealed class TestBrowser : IDisposable
     /// Where requests go. The harness passes one that sends a gateway host to the gateway through a
     /// stand-in for the load balancer and a loopback address straight to its listener.
     /// </param>
-    /// <param name="disposeTransport">Whether disposing the browser disposes <paramref name="transport"/>.</param>
-    public TestBrowser(HttpMessageHandler transport, bool disposeTransport = true)
+    public TestBrowser(HttpMessageHandler transport)
     {
         ArgumentNullException.ThrowIfNull(transport);
-        this.transport = new HttpMessageInvoker(transport, disposeTransport);
+        this.transport = new HttpMessageInvoker(transport, disposeHandler: true);
     }
 
     /// <summary>The cookie jar. Host-only cookies stay with their host; a <c>Domain</c> cookie reaches its subdomains.</summary>
@@ -75,9 +74,6 @@ public sealed class TestBrowser : IDisposable
             }
         }
     }
-
-    /// <summary>The cookies the browser would send to <paramref name="url"/>.</summary>
-    public IReadOnlyList<Cookie> CookiesFor(Uri url) => [.. Cookies.GetCookies(url).Cast<Cookie>()];
 
     /// <summary>Every cookie in the jar, for a test that dumps them (F-05).</summary>
     public IReadOnlyList<Cookie> AllCookies => [.. Cookies.GetAllCookies().Cast<Cookie>()];
@@ -135,41 +131,7 @@ public sealed class TestBrowser : IDisposable
             ? null
             : new Body(await content.ReadAsByteArrayAsync(ct), content.Headers.ContentType?.ToString());
 
-        List<Uri> chain = [];
-        Uri current = target;
-        for (int hop = 0; ; hop++)
-        {
-            chain.Add(current);
-            Dictionary<string, string?> headers = new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Accept"] = "*/*",
-                ["Sec-Fetch-Site"] = FetchMetadata.Site(page, chain),
-                ["Sec-Fetch-Mode"] = "cors",
-                ["Sec-Fetch-Dest"] = "empty",
-            };
-
-            // A fetch carries Origin unless it is a same-origin GET or HEAD
-            // (https://fetch.spec.whatwg.org/#origin-header).
-            bool crossOrigin = chain.Any(hopUrl => !FetchMetadata.IsSameOrigin(page, hopUrl));
-            if (crossOrigin || (method != HttpMethod.Get && method != HttpMethod.Head))
-            {
-                headers["Origin"] = FetchMetadata.Origin(page);
-            }
-
-            BrowserResponse response = await SendOnceAsync(method, current, headers, body, options, chain, ct);
-            if (!IsRedirect(response, out Uri? next) || options?.Redirect == RedirectMode.Manual)
-            {
-                return response;
-            }
-
-            if (!FetchMetadata.IsSameOrigin(page, next) || hop + 1 >= MaxRedirects)
-            {
-                return response;
-            }
-
-            (method, body) = AfterRedirect(response.StatusCode, method, body);
-            current = next;
-        }
+        return await SendAsync(method, target, page, body, options, navigation: false, ct);
     }
 
     /// <summary>A fetch with no body, for the common case.</summary>
@@ -178,41 +140,54 @@ public sealed class TestBrowser : IDisposable
 
     public void Dispose() => transport.Dispose();
 
-    private async Task<BrowserResponse> SendNavigationAsync(
-        HttpMethod method, Uri url, Uri? initiator, Body? body, RequestOptions? options, CancellationToken ct)
+    private Task<BrowserResponse> SendNavigationAsync(
+        HttpMethod method, Uri url, Uri? initiator, Body? body, RequestOptions? options, CancellationToken ct) =>
+        SendAsync(method, url, initiator, body, options, navigation: true, ct);
+
+    private async Task<BrowserResponse> SendAsync(
+        HttpMethod method, Uri url, Uri? initiator, Body? body, RequestOptions? options, bool navigation, CancellationToken ct)
     {
         List<Uri> chain = [];
         Uri current = url;
-        bool crossedOrigin = false;
+        bool taintedOrigin = false;
         for (int hop = 0; ; hop++)
         {
-            chain.Add(current);
-            if (initiator is not null && !FetchMetadata.IsSameOrigin(initiator, current))
+            // Fetch redirect-taint compares consecutive URLs, and only taints when the previous
+            // URL also differs from the initiator. A first cross-origin form POST retains its origin.
+            // https://fetch.spec.whatwg.org/#concept-request-redirect-taint
+            if (initiator is not null && chain.Count > 0
+                && !FetchMetadata.IsSameOrigin(chain[^1], current)
+                && !FetchMetadata.IsSameOrigin(initiator, chain[^1]))
             {
-                crossedOrigin = true;
+                taintedOrigin = true;
             }
 
+            chain.Add(current);
             Dictionary<string, string?> headers = new(StringComparer.OrdinalIgnoreCase)
             {
-                ["Accept"] = NavigationAccept,
+                ["Accept"] = navigation ? NavigationAccept : "*/*",
                 ["Sec-Fetch-Site"] = FetchMetadata.Site(initiator, chain),
-                ["Sec-Fetch-Mode"] = "navigate",
-                ["Sec-Fetch-Dest"] = "document",
-                ["Sec-Fetch-User"] = "?1",
-                ["Upgrade-Insecure-Requests"] = "1",
+                ["Sec-Fetch-Mode"] = navigation ? "navigate" : "cors",
+                ["Sec-Fetch-Dest"] = navigation ? "document" : "empty",
             };
-
-            // A navigation carries Origin only when its method is not GET or HEAD, and the origin is
-            // opaque once a redirect has crossed origins (https://fetch.spec.whatwg.org/#origin-header).
-            if (initiator is not null && method != HttpMethod.Get && method != HttpMethod.Head)
+            if (navigation)
             {
-                headers["Origin"] = crossedOrigin ? "null" : FetchMetadata.Origin(initiator);
+                headers["Sec-Fetch-User"] = "?1";
+                headers["Upgrade-Insecure-Requests"] = "1";
+            }
+
+            // https://fetch.spec.whatwg.org/#origin-header
+            if (initiator is not null && ((method != HttpMethod.Get && method != HttpMethod.Head)
+                || (!navigation && chain.Any(hopUrl => !FetchMetadata.IsSameOrigin(initiator, hopUrl)))))
+            {
+                headers["Origin"] = taintedOrigin ? "null" : FetchMetadata.Origin(initiator);
             }
 
             BrowserResponse response = await SendOnceAsync(method, current, headers, body, options, chain, ct);
-            if (!IsRedirect(response, out Uri? next) || options?.Redirect == RedirectMode.Manual || hop + 1 >= MaxRedirects)
+            if (!IsRedirect(response, out Uri? next) || options?.Redirect == RedirectMode.Manual
+                || hop + 1 >= MaxRedirects || (!navigation && !FetchMetadata.IsSameOrigin(initiator!, next)))
             {
-                if (current.Scheme is "http" or "https")
+                if (navigation)
                 {
                     Page = current;
                 }
@@ -266,14 +241,14 @@ public sealed class TestBrowser : IDisposable
 
             if (!request.Headers.TryAddWithoutValidation(name, value))
             {
-                request.Content ??= new ByteArrayContent([]);
-                request.Content.Headers.TryAddWithoutValidation(name, value);
+                request.Content?.Headers.TryAddWithoutValidation(name, value);
             }
         }
 
-        ImmutableDictionary<string, string> sent = headers
-            .Where(header => header.Value is not null)
-            .ToImmutableDictionary(header => header.Key, header => header.Value!, StringComparer.OrdinalIgnoreCase);
+        // Record accepted request headers before the ALB transport adds its forwarding headers.
+        ImmutableDictionary<string, string> sent = request.Headers
+            .Concat(request.Content?.Headers.AsEnumerable() ?? [])
+            .ToImmutableDictionary(header => header.Key, header => string.Join(", ", header.Value), StringComparer.OrdinalIgnoreCase);
 
         using HttpResponseMessage message = await transport.SendAsync(request, ct);
         byte[] bytes = await message.Content.ReadAsByteArrayAsync(ct);

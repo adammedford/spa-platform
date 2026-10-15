@@ -142,12 +142,12 @@ public sealed class GatewayHarness : IAsyncDisposable
 
         Dictionary<string, string> upstreams = new(StringComparer.Ordinal)
         {
-            ["orders"] = Origin(mockApi.BaseAddressOf("orders")),
-            ["reports"] = Origin(mockApi.BaseAddressOf("reports")),
+            ["orders"] = FetchMetadata.Origin(mockApi.BaseAddressOf("orders")),
+            ["reports"] = FetchMetadata.Origin(mockApi.BaseAddressOf("reports")),
         };
         if (options.EchoApi is { } echoApi)
         {
-            upstreams[echoApi] = Origin(echoListener.BaseAddress);
+            upstreams[echoApi] = FetchMetadata.Origin(echoListener.BaseAddress);
         }
 
         Dictionary<string, string?> settings = new(StringComparer.OrdinalIgnoreCase)
@@ -400,8 +400,6 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>
     public static string ClientIdFor(string appId) => "client-" + appId;
-
-    private static string Origin(Uri address) => address.GetLeftPart(UriPartial.Authority);
 
     private static MemoryStream Utf8(string text) => new(Encoding.UTF8.GetBytes(text));
 }

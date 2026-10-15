@@ -143,6 +143,45 @@ public sealed class TestBrowserTests
     }
 
     [Theory]
+    [InlineData("https://evil.test/", "https://evil.test/next", "https://app1.spa-poc.test:8443")]
+    [InlineData("https://evil.test/", "https://other.test/next", "null")]
+    [InlineData("https://app1.spa-poc.test:8443/", "https://evil.test/next", "https://app1.spa-poc.test:8443")]
+    public async Task A_form_origin_is_tainted_only_by_a_redirect_between_origins_away_from_its_initiator(
+        string first, string second, string redirectedOrigin)
+    {
+        Network network = new();
+        network.On(new Uri(first), "/submit", _ => Respond(HttpStatusCode.TemporaryRedirect, ("Location", second)));
+        using TestBrowser browser = new(network);
+        await browser.NavigateAsync(App1, ct: Ct);
+
+        BrowserResponse landed = await browser.SubmitFormAsync(new Uri(new Uri(first), "/submit").ToString(), ct: Ct);
+
+        Assert.Equal("https://app1.spa-poc.test:8443", browser.Exchanges[^2].Sent("Origin"));
+        Assert.Equal(redirectedOrigin, landed.Sent("Origin"));
+        Assert.Equal(redirectedOrigin, network.Received[^1].Headers["Origin"]);
+        Assert.Equal("POST", landed.Method);
+    }
+
+    [Fact]
+    public async Task Rejected_headers_do_not_appear_in_the_request_record_or_create_a_get_body()
+    {
+        Network network = new();
+        network.On(App1, "/", request =>
+        {
+            Assert.Null(request.Content);
+            return Respond(HttpStatusCode.OK);
+        });
+        using TestBrowser browser = new(network);
+
+        BrowserResponse response = await browser.NavigateAsync(App1,
+            RequestOptions.With(("Content-Type", "text/plain"), ("Set-Cookie", "refused=1")), Ct);
+
+        Assert.Null(response.Sent("Content-Type"));
+        Assert.Equal(network.Received[0].Headers["Set-Cookie"], response.Sent("Set-Cookie"));
+        Assert.Equal("SpaPlatformTestBrowser/1.0", response.Sent("User-Agent"));
+    }
+
+    [Theory]
     [InlineData("https://app1.spa-poc.test:8443/", "https://app1.spa-poc.test:8443/x", FetchMetadata.SameOrigin)]
     [InlineData("https://app1.spa-poc.test:8443/", "https://app2.spa-poc.test:8443/x", FetchMetadata.SameSite)]
     [InlineData("https://app1.spa-poc.test:8443/", "https://app1.spa-poc.test:9443/x", FetchMetadata.SameSite)]

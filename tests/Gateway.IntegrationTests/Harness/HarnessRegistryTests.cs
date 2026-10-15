@@ -49,7 +49,7 @@ public sealed class HarnessRegistryTests
 
         Assert.Equal(RefreshOutcome.Swapped, outcome);
         Assert.Same(before, harness.Services);
-        Assert.Equal("app3.spa-poc.test:8443", app3.Host);
+        Assert.Equal(FixtureFiles.AppDefinition("app3")["host"]!.GetValue<string>(), app3.Host);
         Assert.Contains(app3.ClientId, harness.Idp.Clients.Keys);
         Assert.Equal(app3.ClientId, harness.Registry.Current.ByAppId["app3"].OAuth.ClientId);
         Assert.NotNull(served.Header("Content-Security-Policy"));

@@ -54,15 +54,6 @@ public sealed class CapturedLog
         }
     }
 
-    /// <summary>Forgets every line so far, so a test can read only what its own requests wrote.</summary>
-    public void Clear()
-    {
-        lock (lines)
-        {
-            lines.Clear();
-        }
-    }
-
     internal void Add(string line)
     {
         lock (lines)

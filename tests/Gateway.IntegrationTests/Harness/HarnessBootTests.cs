@@ -51,17 +51,11 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
     {
         IConfiguration configuration = Harness.Services.GetRequiredService<IConfiguration>();
 
-        // The host reads settings through a file provider that excludes hidden files, and macOS marks
-        // every file in some checkouts hidden (a worktree under .claude, for one). The gateway cannot
-        // read its settings there at all, which is the checkout's fault and not the harness's.
         string settings = Path.Combine(FixtureFiles.RepositoryRoot, "src", "Gateway", "appsettings.json");
-        if (File.GetAttributes(settings).HasFlag(FileAttributes.Hidden))
-        {
-            Assert.Skip($"{settings} carries the hidden flag, so no host can read it from this checkout.");
-        }
-
-        // From src/Gateway/appsettings.json, which holds the framework's request log at Warning (N-16).
-        Assert.Equal("Warning", configuration["Logging:LogLevel:Microsoft.AspNetCore"]);
+        using JsonDocument source = JsonDocument.Parse(File.ReadAllText(settings));
+        string expected = source.RootElement.GetProperty("Logging").GetProperty("LogLevel")
+            .GetProperty("Microsoft.AspNetCore").GetString()!;
+        Assert.Equal(expected, configuration["Logging:LogLevel:Microsoft.AspNetCore"]);
         Assert.Equal(Harness.Idp.BaseUrl, configuration[$"Issuers:{Harness.Options.IssuerName}:Authority"]);
     }
 
@@ -71,13 +65,24 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         RegistrySnapshot snapshot = Harness.Registry.Current;
 
         Assert.Equal(["app1", "app2"], snapshot.ByAppId.Keys.Order());
-        Assert.Equal("app1.spa-poc.test:8443", snapshot.ByAppId["app1"].Host);
+        Assert.Equal(FixtureFiles.AppDefinition("app1")["host"]!.GetValue<string>(), snapshot.ByAppId["app1"].Host);
         Assert.Equal(GatewayHarness.ClientIdFor("app1"), snapshot.ByAppId["app1"].OAuth.ClientId);
 
         Dictionary<string, Uri> apis = snapshot.ByAppId["app1"].Apis.ToDictionary(api => api.Name, api => api.Upstream);
         Assert.Equal(Harness.MockApi.BaseAddressOf("orders").GetLeftPart(UriPartial.Authority), apis["orders"].GetLeftPart(UriPartial.Authority));
         Assert.Equal(Harness.MockApi.BaseAddressOf("reports").GetLeftPart(UriPartial.Authority), apis["reports"].GetLeftPart(UriPartial.Authority));
         Assert.Equal(Harness.EchoAddress.GetLeftPart(UriPartial.Authority), apis["echo"].GetLeftPart(UriPartial.Authority));
+    }
+
+    [Fact]
+    public async Task The_harness_registry_echo_address_reaches_its_echo_listener()
+    {
+        Uri upstream = Harness.Registry.Current.ByAppId["app1"].Apis.Single(api => api.Name == "echo").Upstream;
+        using TestBrowser browser = Harness.CreateBrowser();
+        BrowserResponse response = await browser.NavigateAsync(new Uri(upstream, "/harness-echo?probe=6.1"), ct: Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(Harness.Echo.Requests, request => request.Path == "/harness-echo" && request.Query == "?probe=6.1");
     }
 
     [Fact]
