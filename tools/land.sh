@@ -3,8 +3,10 @@
 #
 #     tools/land.sh <pr-number> [--subject "<merge subject>"]
 #
-# Run it from a clean checkout of the pull request's base branch, because the roadmap is derived
-# from the tree the merge commit makes. `git worktree add ../spa-land origin/main` gives one.
+# Run it from a worktree sitting at the pull request's base with nothing uncommitted, because the
+# roadmap is derived from the tree the merge commit makes:
+#
+#     git worktree add --detach ../spa-land origin/main
 #
 # Why this exists rather than `gh pr merge`. tools/roadmap.py derives how far the work has got from
 # the merge subjects, so the merge commit is the input to the derivation and docs/roadmap.md is its
@@ -49,13 +51,15 @@ state="$(gh pr view "$pr" --json state --jq .state)"
 [ "$state" = "OPEN" ] || die "pull request #$pr is $state."
 
 # The merge commit lands on the pull request's base, and the roadmap is derived from the tree that
-# commit makes, so this has to run on a clean checkout of that base. Checked before the merge: a
-# wrong branch found afterwards leaves the merge done and the roadmap stale, which is the state this
-# script exists to prevent. `git worktree add ../spa-land origin/main` gives a clean one.
+# commit makes, so this has to run somewhere sitting at that base with nothing uncommitted. The test
+# is the commit rather than the branch name, because a repository that keeps the base checked out in
+# its primary worktree can only offer a detached one: `git worktree add --detach ../spa-land
+# origin/main`. Checked before the merge -- a wrong tree found afterwards leaves the merge done and
+# the roadmap stale, which is the state this script exists to prevent.
 base="$(gh pr view "$pr" --json baseRefName --jq .baseRefName)"
-branch="$(git rev-parse --abbrev-ref HEAD)"
-[ "$branch" = "$base" ] \
-  || die "#$pr merges into $base and this worktree is on $branch. Run it from a checkout of $base."
+git fetch -q origin "$base" || die "could not fetch origin/$base."
+[ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$base")" ] \
+  || die "HEAD is not at origin/$base. Run this from a worktree sitting there, then try again."
 git diff --quiet && git diff --cached --quiet \
   || die "this worktree has uncommitted changes; the roadmap refresh would carry them."
 
@@ -74,10 +78,10 @@ else
   gh pr merge "$pr" --merge
 fi
 
-echo "--- fetching the merge commit onto $branch"
+echo "--- fetching the merge commit for $base"
 git fetch origin
-git merge --ff-only "origin/$branch" \
-  || die "could not fast-forward $branch onto origin/$branch. Reconcile, then run tools/roadmap.py."
+git merge --ff-only "origin/$base" \
+  || die "could not fast-forward onto origin/$base. Reconcile, then run tools/roadmap.py."
 
 echo "--- deriving the roadmap"
 python3 -I tools/roadmap.py
@@ -97,5 +101,5 @@ never reached .githooks/pre-push.
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 echo "--- pushing the refresh"
-git push origin "$branch"
+git push origin "HEAD:$base"
 echo "land: #$pr is in and the roadmap says so."
