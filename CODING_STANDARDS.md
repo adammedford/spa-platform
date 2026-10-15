@@ -3,6 +3,10 @@
 Read during review, not during implementation. `/code-review`'s Standards axis loads this file and
 holds the diff to it.
 
+`docs/agents/review.md` holds the rest of what a review needs here: how to read a branch without
+touching the shared tree, which files each axis is held to, and what makes a finding worth
+reporting.
+
 Everything here is a **judgement call**: something no check could decide. A mechanical rule belongs
 in a check instead, where it runs on every push rather than when a reviewer remembers it. The repo's
 checks are `.githooks/pre-push`, `.github/workflows/ci.yml` and `tests/Gateway.ArchitectureTests`;
@@ -43,6 +47,15 @@ Three shapes recur here.
   turns the test into a pass that checked nothing, on exactly the machine where someone is reading
   the result. Make the test independent of the condition; if a tool is genuinely required, fail and
   name it.
+
+**A new invariant test names the mutation that made it fail.** Break the thing it guards on purpose,
+watch it go red, revert, and put the mutation and its count in the merge body: "swapping the two ids
+failed 4 of 153". It costs one run and it is the only evidence that separates a guard from a
+decoration — a reviewer can then check the mutation instead of re-deriving the hazard. The nine
+pull requests reviewed on 15 October 2026 split cleanly on this: the three that stated a mutation
+reproduced exactly when the reviewer re-ran it, and each of the five that stated none carried an
+assertion that could not fail, including a Terraform suite that stayed green with the attribute
+N-09 depends on deleted.
 
 ## A guard reads the thing it guards
 

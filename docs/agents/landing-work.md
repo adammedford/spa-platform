@@ -48,6 +48,12 @@ The subject is read by a check: `tools/roadmap.py` derives the roadmap's state f
 subjects, so "Merge task 2.4: ..." lands the row and "Merge part of task 2.4: ..." does not. Run the
 script before the push and commit what it writes, or `.githooks/pre-push` will say so.
 
+**Merge with `tools/land.sh <pr> --subject "..."`.** The merge subject is the input to that
+derivation and `docs/roadmap.md` is its output, so the merge commit is the one commit that moves the
+roadmap — and a merge made through the GitHub API or the web UI is created on the server, where the
+hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
+commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
+
 The body says what was verified and how. If the row landed without being finished, add an
 `Outstanding:` line saying what it still owes, and an `Outstanding test ids:` line for any test id
 the row names that is not yet proven. The claim branch is deleted when the **task** is done, not
@@ -60,7 +66,9 @@ request open. Merged is not done.
 
 A pull request is reviewed by a session other than the one that wrote the code, with `/code-review`,
 and its findings answered before merge. The spec axis is the plan row plus the contracts rows naming
-it, cited by path; there is no per-task spec file.
+it, cited by path; there is no per-task spec file. `docs/agents/review.md` has the rest: how to read
+a branch without touching the shared tree, every source each axis is held to, and when a finding
+holds a merge rather than becoming an `Outstanding:` line.
 
 The integrator's own skeleton work has no second workstream to review it, so it merges on CI plus
 the human. That is the weakest link here, and it is known.
