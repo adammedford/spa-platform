@@ -47,9 +47,7 @@ override_data {
   target          = data.aws_iam_policy_document.task
   override_during = plan
   values = {
-    json = jsonencode({ Version = "2012-10-17", Statement = [{
-      Sid = "task", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
-    }] })
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"task\",\"Effect\":\"Deny\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"*\"}]}"
   }
 }
 
@@ -57,9 +55,7 @@ override_data {
   target          = data.aws_iam_policy_document.task_execution
   override_during = plan
   values = {
-    json = jsonencode({ Version = "2012-10-17", Statement = [{
-      Sid = "taskexecution", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
-    }] })
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"taskexecution\",\"Effect\":\"Deny\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"*\"}]}"
   }
 }
 
@@ -67,15 +63,13 @@ override_data {
   target          = data.aws_iam_policy_document.ecs_tasks_trust
   override_during = plan
   values = {
-    json = jsonencode({ Version = "2012-10-17", Statement = [{
-      Sid = "ecstaskstrust", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
-    }] })
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"ecstaskstrust\",\"Effect\":\"Deny\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"*\"}]}"
   }
 }
 
 # The three account facts the task role's ARNs are built from. `override_during = plan` is what
-# makes them known during a plan rather than only after an apply, which is what keeps every run in
-# this file a plan and still lets it assert a whole ARN.
+# makes them known during a plan rather than only after an apply, so the permission runs can
+# assert the complete account-scoped ARN at plan time.
 override_data {
   target          = data.aws_partition.current
   override_during = plan
