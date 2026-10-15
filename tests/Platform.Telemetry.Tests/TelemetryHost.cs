@@ -78,7 +78,8 @@ public sealed class TelemetryHost : IAsyncDisposable
     public static async Task<TelemetryHost> StartAsync(
         CancellationToken ct,
         bool telemetry = true,
-        IDictionary<string, string?>? configuration = null)
+        IDictionary<string, string?>? configuration = null,
+        string unknownHostRule = "host.unknown")
     {
         EchoUpstream echo = new();
         EchoUpstreamListener listener = await echo.ListenAsync(ct);
@@ -142,14 +143,15 @@ public sealed class TelemetryHost : IAsyncDisposable
         }
 
         // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404 and
-        // the host.unknown rule id the real stage gives an unknown host (change request 6.4 ->
+        // the host.unknown rule id (overridable to isolate metric tests) the real stage gives an
+        // unknown host (change request 6.4 ->
         // Decision). Written null-conditionally, as every real stage writes it.
         AppDefinition entry = TestApps.Entry(AppId);
         web.Use(async (context, next) =>
         {
             if (context.Request.Headers["X-Test-Unknown-Host"].Count > 0)
             {
-                context.Features.Get<IRequestTelemetryFeature>()?.Rule = "host.unknown";
+                context.Features.Get<IRequestTelemetryFeature>()?.Rule = unknownHostRule;
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }

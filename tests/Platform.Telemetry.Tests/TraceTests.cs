@@ -112,17 +112,21 @@ public sealed class TraceTests
     [Fact]
     public async Task A_rejection_before_the_app_is_resolved_is_counted_with_no_app()
     {
-        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct, unknownHostRule: "test.unresolved");
         using HttpClient client = new();
         using HttpRequestMessage request = new(HttpMethod.Get, new Uri(host.BaseAddress, "/"));
         request.Headers.Add("X-Test-Unknown-Host", "1");
 
         await client.SendAsync(request, Ct);
 
-        // Other hosts in the process may count host.unknown too, so this asserts the tag shape only.
-        (_, Dictionary<string, object?> found) = Assert.Single(PointsOf(host, "security.rejections"),
-            p => Equals(p.Tags["rule"], "host.unknown"));
-        Assert.True(!found.TryGetValue("app_id", out object? app) || app is null);
+        // A private stand-in rule isolates this point from other hosts' process-wide meters.
+        (long count, Dictionary<string, object?> found) = Assert.Single(PointsOf(host, "security.rejections"),
+            p => Equals(p.Tags["rule"], "test.unresolved"));
+        Assert.Equal(1, count);
+        Assert.Equal(2, found.Count);
+        // OpenTelemetry retains nullable tag values in its in-memory metric points:
+        // https://github.com/open-telemetry/opentelemetry-dotnet/blob/core-1.19.1/src/OpenTelemetry/Metrics/Tags.cs
+        Assert.Null(found["app_id"]);
     }
 
     [Fact]
@@ -135,20 +139,7 @@ public sealed class TraceTests
         // other hosts running in parallel can share this exporter.
         await client.GetAsync(new Uri(host.BaseAddress, "/status/299"), Ct);
         await client.GetAsync(new Uri(host.BaseAddress, "/status/299"), Ct);
-        host.Flush();
-
-        List<(long Count, Dictionary<string, object?> Tags)> points = [];
-        foreach (Metric requests in host.Metrics.Where(m => m.Name == "gateway.requests" && m.MeterName == "Platform.Telemetry"))
-        foreach (ref readonly MetricPoint point in requests.GetMetricPoints())
-        {
-            Dictionary<string, object?> tags = [];
-            foreach (KeyValuePair<string, object?> tag in point.Tags)
-            {
-                tags[tag.Key] = tag.Value;
-            }
-
-            points.Add((point.GetSumLong(), tags));
-        }
+        List<(long Count, Dictionary<string, object?> Tags)> points = PointsOf(host, "gateway.requests");
 
         (long count, Dictionary<string, object?> found) = Assert.Single(points, p => Equals(p.Tags["status"], 299));
         Assert.Equal(2, count);

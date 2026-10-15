@@ -20,7 +20,8 @@ namespace Platform.Telemetry;
 /// <see cref="IRequestTelemetryFeature"/> on the request before calling the rest of the pipeline, a
 /// later stage writes it, and this stage reads it back afterwards. A request with a <c>rule</c> is a
 /// rejection, and is counted under <c>security.rejections</c> here and nowhere else, so the count
-/// equals the request lines that carry a rule.
+/// equals the request lines that carry a rule. The stage-1 method allowlist answers before this
+/// stage runs; its 405 is outside both, as contracts/telemetry.md records.
 /// </summary>
 internal sealed class RequestTelemetry
 {
@@ -73,7 +74,6 @@ internal sealed class RequestTelemetry
     private void Complete(HttpContext context, RequestTelemetryFeature fields, TimeSpan elapsed, bool failed)
     {
         string? rule = fields.Rule;
-        string? sessionRef = fields.SessionRef;
         IAppFeature? resolved = context.Features.Get<IAppFeature>();
         string? appId = resolved?.App.AppId;
         long? revision = resolved?.Snapshot.Revision;
@@ -106,7 +106,7 @@ internal sealed class RequestTelemetry
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.Log(LogLevel.Information, new EventId(1, "Request"),
-                new RequestLine(appId, revision, route, rule, sessionRef, status, Math.Round(elapsed.TotalMilliseconds, 2)),
+                new RequestLine(appId, revision, route, fields, status, Math.Round(elapsed.TotalMilliseconds, 2)),
                 exception: null, static (_, _) => "request");
         }
     }
@@ -140,7 +140,7 @@ internal sealed class RequestTelemetry
 
     /// <summary>The line's fields, as structured state the formatter writes field by field.</summary>
     private sealed class RequestLine(
-        string? appId, long? revision, string route, string? rule, string? sessionRef, int status, double durationMs)
+        string? appId, long? revision, string route, IRequestTelemetryFeature telemetry, int status, double durationMs)
         : IReadOnlyList<KeyValuePair<string, object?>>
     {
         private readonly KeyValuePair<string, object?>[] fields =
@@ -148,8 +148,8 @@ internal sealed class RequestTelemetry
             new("app_id", appId),
             new("registry_rev", revision),
             new("route", route),
-            new("rule", rule),
-            new("session_ref", sessionRef),
+            new("rule", telemetry.Rule),
+            new("session_ref", telemetry.SessionRef),
             new("status", status),
             new("duration_ms", durationMs),
         ];
