@@ -109,3 +109,229 @@ variable "health_check_path" {
     error_message = "health_check_path is an absolute path with no query string, such as / or /readyz."
   }
 }
+
+# --- Task 1.4a: the images -------------------------------------------------------------------
+
+variable "gateway_image" {
+  description = <<-EOT
+    The gateway container's image. No default, and in particular no default that names a tag:
+    deploy.sh builds and pushes by digest and then asserts the running digest, and every other
+    apply passes the digest already in state, which is what keeps a routine apply from moving a
+    running image (docs/plan/05-infrastructure-and-cost.md -> What stays out of Terraform).
+
+    The first apply of this root passes the public sample image, because the service is applied
+    before the gateway image exists; the health check follows the image (health_check_path).
+  EOT
+  type        = string
+
+  validation {
+    condition     = length(var.gateway_image) > 0
+    error_message = "gateway_image is the image the task runs. Pass the sample image on the first apply, and a digest afterwards."
+  }
+}
+
+variable "mock_api_image" {
+  description = <<-EOT
+    The mock API container's image, or empty for a task with the gateway alone. Empty is the
+    default so the service applies cleanly before that image is built: the mock API is task 5.3's
+    and the first deployment reaches it after this root (docs/plan/05-infrastructure-and-cost.md ->
+    First deployment).
+
+    Like gateway_image, no default that names a tag.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "mock_api_app1_client_id" {
+  description = <<-EOT
+    The client the mock API's orders listener admits, which is app 1's
+    (fixtures/MockApi/MockApiOptions.cs -> Default, port 5080). An input, because the apps root
+    decides client ids and nothing about one is written into this module; that is also what keeps
+    onboarding a third app out of the platform root's plan (F-07).
+
+    Admission is the API owner's decision and not the gateway's (contracts/upstream-contract.md).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    # fixtures/MockApi/Program.cs throws on a missing client id, so the alternative to failing the
+    # plan here is a container that crash-loops after the apply reported success.
+    condition     = var.mock_api_image == "" || length(var.mock_api_app1_client_id) > 0
+    error_message = "A mock API image needs mock_api_app1_client_id: fixtures/MockApi/Program.cs refuses to start without it."
+  }
+}
+
+variable "mock_api_app2_client_id" {
+  description = <<-EOT
+    The client the mock API's reports listener admits, which is app 2's
+    (fixtures/MockApi/MockApiOptions.cs -> Default, port 5081). An input, for the same reason as
+    mock_api_app1_client_id.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.mock_api_image == "" || length(var.mock_api_app2_client_id) > 0
+    error_message = "A mock API image needs mock_api_app2_client_id: fixtures/MockApi/Program.cs refuses to start without it."
+  }
+}
+
+# --- Task 1.4a: platform configuration the task environment carries ---------------------------
+#
+# contracts/platform-config.schema.json is the shape. Everything here is a bound a registry entry
+# cannot widen, which is why these are the root's inputs and not an entry's fields.
+
+variable "issuers" {
+  description = <<-EOT
+    The issuers a registry entry may name, keyed by the name an entry uses in oauth.issuer. The
+    values come from the identity root's `issuer` and `cognito_domain` outputs, which is why this is
+    an input rather than a lookup: the platform root and the identity root are separate states
+    (docs/plan/05-infrastructure-and-cost.md -> Terraform boundaries).
+
+    Assumption A4 is one issuer per environment. A task carrying the mock API requires exactly one,
+    because that process validates against one issuer (fixtures/MockApi/Program.cs).
+  EOT
+  type = map(object({
+    authority      = string
+    profile        = string
+    browser_origin = string
+  }))
+
+  validation {
+    # contracts/platform-config.schema.json gives Issuers minProperties 1: a gateway with no issuer
+    # can authenticate nobody, and the binder would see the section missing altogether.
+    condition     = length(var.issuers) > 0
+    error_message = "Name at least one issuer: contracts/platform-config.schema.json requires the Issuers section to hold one."
+  }
+
+  validation {
+    # The permitted values are IIdpProfile.Name, read from the contract rather than copied, so a
+    # profile added or removed at G1b does not leave a stale list here.
+    condition = alltrue([
+      for issuer in values(var.issuers) : contains(
+        jsondecode(file("${path.module}/../../../contracts/platform-config.schema.json")).properties.Issuers.additionalProperties.properties.Profile.enum,
+        issuer.profile,
+      )
+    ])
+    error_message = "Each issuer's profile must be one of the values contracts/platform-config.schema.json lists for Issuers:{name}:Profile."
+  }
+
+  validation {
+    condition = alltrue([
+      for issuer in values(var.issuers) :
+      can(regex("^https://[^\\s]+$", issuer.authority)) && can(regex("^https://[^\\s/?#]+$", issuer.browser_origin))
+    ])
+    error_message = "An issuer's authority is an https URL, and its browser origin is https plus an authority only: it goes into form-action (contracts/platform-config.schema.json)."
+  }
+}
+
+variable "allowed_host_suffixes" {
+  description = <<-EOT
+    The suffixes a registry host may end with, lowercase and including the port when hosts carry
+    one. In the proof of concept a host is reached through the tunnel, so it carries the local
+    port: app1.spa-poc.test:8443 (docs/plan/05-infrastructure-and-cost.md -> Workstation access).
+  EOT
+  type        = list(string)
+
+  validation {
+    condition     = length(var.allowed_host_suffixes) > 0 && length(var.allowed_host_suffixes) == length(distinct(var.allowed_host_suffixes))
+    error_message = "Name at least one host suffix, with no duplicates (contracts/platform-config.schema.json -> Policy.AllowedHostSuffixes)."
+  }
+}
+
+variable "allowed_upstreams" {
+  description = <<-EOT
+    The upstream origins a registry entry may name. The two the mock API listens on in the proof of
+    concept are loopback ports inside the task (fixtures/apps/*.json -> apis[].upstream).
+  EOT
+  type        = list(string)
+
+  validation {
+    condition     = length(var.allowed_upstreams) > 0 && length(var.allowed_upstreams) == length(distinct(var.allowed_upstreams))
+    error_message = "Name at least one upstream origin, with no duplicates (contracts/platform-config.schema.json -> Policy.AllowedUpstreams)."
+  }
+}
+
+variable "registry_key" {
+  description = <<-EOT
+    The registry object's key in the cell's bucket. registry/registry.json in every environment so
+    far, which is the one object contracts/s3-layout.md puts outside apps/.
+  EOT
+  type        = string
+  default     = "registry/registry.json"
+
+  validation {
+    # The contract's own pattern: a key, so no leading slash and no whitespace.
+    condition = can(regex(
+      jsondecode(file("${path.module}/../../../contracts/platform-config.schema.json")).properties.Registry.properties.Key.pattern,
+      var.registry_key,
+    ))
+    error_message = "registry_key is an S3 key with no leading slash, such as registry/registry.json (contracts/platform-config.schema.json -> Registry.Key)."
+  }
+}
+
+variable "registry_poll_seconds" {
+  description = <<-EOT
+    The registry's conditional-GET interval, jittered by up to 20% in the gateway. It is also how
+    long an activation or a rollback takes to go live (docs/plan/05-infrastructure-and-cost.md ->
+    Deployment and rollback).
+  EOT
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.registry_poll_seconds >= 1 && floor(var.registry_poll_seconds) == var.registry_poll_seconds
+    error_message = "registry_poll_seconds is a whole number of seconds, at least 1 (contracts/platform-config.schema.json -> Registry.PollSeconds)."
+  }
+}
+
+variable "session_store" {
+  description = <<-EOT
+    Where sessions live: memory in Phase 1, dynamodb in Phase 2 (ADR-0004, ADR-0012). In Phase 1 a
+    gateway deployment therefore signs every user out.
+  EOT
+  type        = string
+  default     = "memory"
+
+  validation {
+    condition = contains(
+      jsondecode(file("${path.module}/../../../contracts/platform-config.schema.json")).properties.Session.properties.Store.enum,
+      var.session_store,
+    )
+    error_message = "session_store must be one of the values contracts/platform-config.schema.json lists for Session:Store."
+  }
+}
+
+variable "session_max_sessions" {
+  description = "The bound on the in-memory session store (contracts/platform-config.schema.json -> Session.MaxSessions)."
+  type        = number
+  default     = 10000
+
+  validation {
+    condition     = var.session_max_sessions >= 1 && floor(var.session_max_sessions) == var.session_max_sessions
+    error_message = "session_max_sessions is a whole number of sessions, at least 1."
+  }
+}
+
+variable "log_retention_days" {
+  description = <<-EOT
+    How long the task's log group keeps a log. Explicit, because the alternative is not a default
+    but "never expires", and plan row 1.4 asks for a decision either way. The deployed tests read a
+    run's gateway log from this group, so it has to outlive a gate run comfortably.
+  EOT
+  type        = number
+  default     = 14
+
+  validation {
+    # The values CloudWatch Logs accepts; 0 would mean never expire, which is the decision this
+    # variable exists to avoid taking by accident.
+    # https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutRetentionPolicy.html
+    condition = contains(
+      [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653],
+      var.log_retention_days,
+    )
+    error_message = "log_retention_days must be one of the retention periods CloudWatch Logs accepts, and not 0, which means never expire."
+  }
+}
