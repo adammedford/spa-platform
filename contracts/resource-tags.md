@@ -35,11 +35,12 @@ wildcard, no `contains`.
 This matters because the bootstrap value below begins with the same eleven characters. The tagging
 API's `--tag-filters Key=Platform,Values=spa-platform` is already an exact match and is the
 supported form; a hand-rolled `Values=spa-platform*` or a client-side `contains(...)` would sweep up
-the two resources that are meant to survive, and teardown would then report a failure forever.
+the three resources that are meant to survive, and teardown would then report a failure forever.
 
 ## The bootstrap exemption
 
-Resources in `infra/bootstrap` — the Terraform state bucket and the read-only CI plan role — carry a
+Resources in `infra/bootstrap` — the Terraform state bucket, the read-only CI plan role and the
+teardown role (ADR-0014) — carry a
 different `Platform` value and so do not answer the platform query:
 
 | Tag | Value |
@@ -49,7 +50,7 @@ different `Platform` value and so do not answer the platform query:
 | `Component` | `bootstrap` |
 | `Root` | the root the state belongs to |
 
-Those two resources outlive every teardown by design: the plan destroys the three roots in reverse
+Those three resources outlive every teardown by design: the plan destroys the three roots in reverse
 order and then leaves the state bucket "last, by hand". If they answered the platform query, P-05
 could never pass, and a `teardown.sh` that deleted them would destroy the state of the roots it was
 in the middle of destroying.

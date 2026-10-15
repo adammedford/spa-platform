@@ -14,6 +14,13 @@ TestResults/
 crash.log
 crash.*.log
 
+# Variable and backend files are local: they carry role ARNs and the state bucket
+# name, both of which carry the account id. Every root ships a .example of each,
+# which these patterns do not match (change request 1.5).
+*.tfvars
+*.tfvars.json
+backend.hcl
+
 # Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
 *.pem
 *.key
