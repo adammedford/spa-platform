@@ -1,5 +1,6 @@
-# Task 1.4a. Plans the cell module against a mock AWS provider: no credentials, no apply and no
-# network beyond `terraform init`.
+# Task 1.4a. Checks the cell module against a mock AWS provider: no credentials, no AWS apply
+# and no network beyond `terraform init`. Permission assertions use plan; the final attachment
+# assertion uses only the mock provider's in-memory apply.
 #   terraform -chdir=infra/modules/cell init -backend=false
 #   terraform -chdir=infra/modules/cell test
 #
@@ -30,12 +31,45 @@ mock_provider "aws" {
   }
 
   # A mock provider returns a generated value for `json`, not the rendered policy, so no assertion
-  # below reads it. Every permission claim reads the `statement` blocks instead, which are
-  # configuration and so are known at plan time.
+  # below treats it as rendered permissions. Permission claims read the configured statement
+  # blocks; the final wiring run uses distinct JSON sentinels to identify attached documents.
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
+  }
+}
+
+# Distinct JSON values make attachment wiring observable despite the mock provider. Only json
+# is overridden: the statement blocks remain the actual configuration checked by the grant tests.
+# Sid distinguishes valid policy documents without duplicating the permissions they test.
+override_data {
+  target          = data.aws_iam_policy_document.task
+  override_during = plan
+  values = {
+    json = jsonencode({ Version = "2012-10-17", Statement = [{
+      Sid = "task", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
+    }] })
+  }
+}
+
+override_data {
+  target          = data.aws_iam_policy_document.task_execution
+  override_during = plan
+  values = {
+    json = jsonencode({ Version = "2012-10-17", Statement = [{
+      Sid = "taskexecution", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
+    }] })
+  }
+}
+
+override_data {
+  target          = data.aws_iam_policy_document.ecs_tasks_trust
+  override_during = plan
+  values = {
+    json = jsonencode({ Version = "2012-10-17", Statement = [{
+      Sid = "ecstaskstrust", Effect = "Deny", Action = "sts:AssumeRole", Resource = "*"
+    }] })
   }
 }
 
@@ -758,6 +792,8 @@ run "the_task_role_holds_no_unrecognised_statement" {
     )
     error_message = "The task policy is on the task role and the execution policy on the execution role: attaching either to the other role would make the two-role split cosmetic."
   }
+
+
 }
 
 run "the_execution_role_is_separate_and_holds_only_image_pull_and_log_writes" {
@@ -859,6 +895,30 @@ run "both_roles_are_assumable_only_by_ecs_tasks_in_this_account" {
       )
     ])
     error_message = "Only the ECS tasks service may assume these roles."
+  }
+
+  # CODING_STANDARDS.md: names alone do not hold a trust boundary. A mutation replacing the
+  # SourceAccount value with "*" passed all 26 runs before this assertion; now it fails this run.
+  # AWS specifies both the operator and the account/region-scoped values:
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
+  assert {
+    condition = length(data.aws_iam_policy_document.ecs_tasks_trust.statement) == 1 && alltrue([
+      for s in data.aws_iam_policy_document.ecs_tasks_trust.statement : (
+        s.effect == "Allow"
+        && length(s.principals) == 1
+        && length(s.condition) == 2
+        && alltrue([
+          for c in s.condition : (
+            c.variable == "aws:SourceAccount"
+            ? c.test == "StringEquals" && toset(c.values) == toset([data.aws_caller_identity.current.account_id])
+            : c.variable == "aws:SourceArn" && c.test == "ArnLike" && toset(c.values) == toset([
+              "arn:${data.aws_partition.current.partition}:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*",
+            ])
+          )
+        ])
+      )
+    ])
+    error_message = "ECS trust must use the documented operators and this account's exact account/region bounds, with no additional statement or principal."
   }
 
   # The confused-deputy conditions AWS documents for a service role: without them, ECS in any
@@ -1121,4 +1181,79 @@ run "an_empty_issuer_map_is_refused" {
   # contracts/platform-config.schema.json gives Issuers minProperties 1: a gateway with no issuer
   # can authenticate nobody, and the configuration binder would see the section missing entirely.
   expect_failures = [var.issuers]
+}
+
+# A mock-only apply resolves document values deferred by the resource dependencies. Terraform's
+# mock provider stores fake resources only in its in-memory test state; no AWS API is called.
+# https://developer.hashicorp.com/terraform/language/tests/mocking
+run "the_attached_grants_and_trust_are_the_checked_documents" {
+  command = apply
+
+  override_resource {
+    target = aws_lb.cell
+    values = { arn = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/spa-poc/0123456789abcdef" }
+  }
+
+  override_resource {
+    target          = aws_s3_bucket.platform
+    override_during = apply
+    values          = { arn = "arn:aws:s3:::spa-platform-poc" }
+  }
+  override_resource {
+    target          = aws_lb_target_group.gateway
+    override_during = apply
+    values          = { arn = "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/spa-poc/0123456789abcdef" }
+  }
+  override_resource {
+    target          = aws_subnet.public["us-east-1a"]
+    override_during = apply
+    values          = { id = "subnet-0a" }
+  }
+  override_resource {
+    target          = aws_subnet.public["us-east-1b"]
+    override_during = apply
+    values          = { id = "subnet-0b" }
+  }
+  override_resource {
+    target          = aws_security_group.task
+    override_during = apply
+    values          = { id = "sg-task" }
+  }
+  override_resource {
+    target          = aws_cloudwatch_log_group.gateway
+    override_during = apply
+    values          = { arn = "arn:aws:logs:us-east-1:111122223333:log-group:/spa-platform/poc/gateway" }
+  }
+  override_resource {
+    target          = aws_ecr_repository.repository["gateway"]
+    override_during = apply
+    values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/gateway" }
+  }
+  override_resource {
+    target          = aws_ecr_repository.repository["mock-api"]
+    override_during = apply
+    values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/mock-api" }
+  }
+  override_resource {
+    target          = aws_iam_role.task
+    override_during = apply
+    values          = { arn = "arn:aws:iam::111122223333:role/spa-platform-poc-task" }
+  }
+  override_resource {
+    target          = aws_iam_role.task_execution
+    override_during = apply
+    values          = { arn = "arn:aws:iam::111122223333:role/spa-platform-poc-task-execution" }
+  }
+
+  # Distinct provider sentinels above make the document selected by each attachment observable.
+  assert {
+    condition = (
+      aws_iam_role_policy.task.policy == data.aws_iam_policy_document.task.json
+      && aws_iam_role_policy.task_execution.policy == data.aws_iam_policy_document.task_execution.json
+      && aws_iam_role.task.assume_role_policy == data.aws_iam_policy_document.ecs_tasks_trust.json
+      && aws_iam_role.task_execution.assume_role_policy == data.aws_iam_policy_document.ecs_tasks_trust.json
+    )
+    error_message = "Both grants and both trust attachments must select their checked policy document."
+  }
+
 }

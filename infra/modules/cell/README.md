@@ -14,7 +14,7 @@ name carries `var.cell`.
 | `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
 | `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
 
-`tests/module.tftest.hcl` plans all of it against a mock provider, with no credentials
+`tests/module.tftest.hcl` checks it against a mock provider, with no credentials
 and no network beyond `terraform init`. The Terraform test step in CI discovers it.
 
 ## Names and tags
@@ -77,8 +77,8 @@ needs credentials, a state bucket and the first-deployment order in
 - **The task environment** is generated from `contracts/platform-config.schema.json`
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come
-  from this module's own bucket and variables, and `TrustedNetworks` is this cell's own
-  range, so stage 1 trusts the load balancer and nothing wider.
+  from this module's own bucket and variables, and `TrustedNetworks` names only the ALB
+  subnet ranges, so stage 1 trusts the load balancer and nothing wider.
 
 ### The task role is the security object of record
 
@@ -112,3 +112,7 @@ bucket.
 empty cannot be destroyed, and P-05 would then fail for ever. Change request 1.5 asks
 the integrator where that ARN should come from, because no root creates a teardown
 role today.
+
+The permission and resource assertions run at plan time. One additional mock-only apply run checks
+that each grant and trust document is attached to its intended role. Mock resources exist only in
+Terraform's in-memory test state; this does not apply the infrastructure to AWS.
