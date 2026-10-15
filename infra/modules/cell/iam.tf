@@ -155,9 +155,10 @@ data "aws_iam_policy_document" "task" {
   #
   # The parameters are SecureString under the AWS-managed key the apps root chose
   # (infra/envs/poc/apps/main.tf). No kms:Decrypt is granted here, because the AWS-managed key's own
-  # policy admits this account's principals when the call arrives through Systems Manager. If the
-  # first apply shows AccessDenied on a secret, that is one statement and a change request, not a
-  # reason to widen this one now.
+  # policy admits this account's principals when the call arrives through Systems Manager:
+  # https://docs.aws.amazon.com/systems-manager/latest/userguide/ps-restrict-decryption.html
+  # A customer-managed replacement key requires a reviewed, explicit kms:Decrypt grant for that
+  # key; the AWS-managed-key assumption does not extend to customer-managed keys.
   statement {
     sid    = "ReadClientSecrets"
     effect = "Allow"
