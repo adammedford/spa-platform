@@ -15,8 +15,8 @@ namespace Platform.Hosting.Tests;
 /// <summary>
 /// Workstream 2's gateway cut down to stages 3 and 4, <c>UsePlatformHealth</c> then
 /// <c>UsePlatformHostResolution</c>, over an <see cref="InMemoryRegistry"/> the test swaps by hand.
-/// The composed gateway cannot run either against a registry until task 2.2's source has a bucket,
-/// so the stages are proven here and again by workstream 6.
+/// The in-memory registry isolates these stages from object-store configuration; workstream 6
+/// proves them again in the composed gateway.
 ///
 /// The terminal stands for stages 5 to 10. It records the <see cref="IAppFeature"/> it was handed and
 /// answers 200 with <see cref="Passed"/>, so a test that asserts a refusal can fail if stage 4 let the
@@ -67,9 +67,8 @@ public sealed class HostingHost : IAsyncDisposable
     /// <param name="telemetry">
     /// <c>true</c> installs a fresh <see cref="SettableRequestTelemetryFeature"/> on every request,
     /// before stages 3 and 4, standing in for stage 2, which this project's pipeline does not have.
-    /// Left <c>false</c> by default so that every other test here runs with no feature installed,
-    /// which is what the gateway is until the rest of task 6.4 lands: a stage's null-conditional
-    /// write must cost nothing.
+    /// Left <c>false</c> by default to exercise component pipelines without the feature, as required
+    /// by contracts/changes/6.4-request-telemetry-feature.md.
     /// </param>
     public static async Task<HostingHost> StartAsync(
         RegistrySnapshot initial,

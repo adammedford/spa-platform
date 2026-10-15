@@ -191,8 +191,8 @@ public sealed class HostResolutionTests
 
     /// <summary>
     /// The write is null-conditional, so stage 4 refuses an unknown host the same way with no feature
-    /// installed: that is every other test in this file, and the gateway itself until the rest of
-    /// task 6.4 lands. Stated once on its own, because "a missing feature costs nothing" is a claim.
+    /// installed, as required by contracts/changes/6.4-request-telemetry-feature.md. This case
+    /// explicitly protects component pipelines that omit stage 2.
     /// </summary>
     [Fact]
     public async Task An_unknown_host_is_refused_the_same_way_with_no_feature_installed()
@@ -209,9 +209,8 @@ public sealed class HostResolutionTests
     /// Stage 4 writes no log line of its own for an unknown host: those requests are the cheapest
     /// traffic anyone can send, so a line each would let a stranger flood the log, and the request
     /// line plus <c>security.rejections</c> record the rejection once
-    /// (contracts/changes/6.4-request-telemetry-feature.md, decided 14 October 2026). Only this
-    /// platform's own categories are held to that; which framework lines the gateway keeps is
-    /// workstream 6's to configure.
+    /// (contracts/changes/6.4-request-telemetry-feature.md, decided 14 October 2026). Only hosting
+    /// categories are held to that; other stages own their own log lines.
     /// </summary>
     [Fact]
     public async Task An_unknown_host_is_not_logged_by_this_project()
@@ -223,7 +222,8 @@ public sealed class HostResolutionTests
         AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
 
         Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
-        Assert.DoesNotContain(logs.Lines, line => line.Category.StartsWith("Platform.", StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Lines, line => line.Category == "Platform.Hosting"
+            || line.Category.StartsWith("Platform.Hosting.", StringComparison.Ordinal));
     }
 
     /// <summary>The 404 for an unknown host is the contract's error body, code <c>not_found</c>.</summary>
