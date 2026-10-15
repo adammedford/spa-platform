@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Platform.Abstractions;
 
 namespace Platform.Abstractions.Tests;
@@ -44,16 +45,65 @@ public sealed class RuleIdsTests
         Assert.Equal(RuleIds.All.Length, RuleIds.All.Distinct().Count());
     }
 
+    [Fact]
+    public void Callers_cannot_change_the_shared_catalogue()
+    {
+        // All is shared across owners (ADR-0015), so one consumer must not rewrite another's ids.
+        IList<string> ids = RuleIds.All;
+        Assert.Throws<NotSupportedException>(() => ids[0] = "host.changed");
+        Assert.Equal(RuleIds.HostUnknown, RuleIds.All[0]);
+    }
+
     [Theory]
     [MemberData(nameof(EveryRuleId))]
     public void Every_id_is_lower_case_dotted_with_one_dot(string id)
     {
         // The shape telemetry.md assumes when it tags security.rejections by rule: a prefix naming
         // the stage that refused, then the rule. A stray capital would split one counter in two.
-        Assert.Equal(id.ToLowerInvariant(), id);
-        Assert.Equal(1, id.Count(character => character == '.'));
-        Assert.DoesNotContain(' ', id);
+        Assert.True(IsRuleId(id));
     }
+
+    [Theory]
+    [InlineData("Host.unknown")]
+    [InlineData("host.unknown.extra")]
+    [InlineData("host.unknown\t")]
+    [InlineData("host.unknown\n")]
+    [InlineData("host.")]
+    [InlineData(".unknown")]
+    [InlineData("host.unknown!")]
+    [InlineData("host.unknown--rule")]
+    public void The_shape_check_rejects_malformed_ids(string id)
+    {
+        Assert.False(IsRuleId(id));
+    }
+
+    [Fact]
+    public void The_table_reader_ignores_other_sections_and_table_headings()
+    {
+        // Prove the drift guard reads only the normative section, including its final row.
+        string[] lines =
+        [
+            "## Other section",
+            "| `wrong.before` | ignored |",
+            "## Rule ids",
+            "| Rule id | Fires when |",
+            "| --- | --- |",
+            "| `host.unknown` | First |",
+            "| `api.unknown` | Last |",
+            "## Following section",
+            "| `wrong.after` | ignored |",
+        ];
+        Assert.Equal(["host.unknown", "api.unknown"], ParseRuleIds(lines));
+    }
+
+    [Fact]
+    public void A_missing_rule_section_cannot_pass_as_an_empty_contract()
+    {
+        Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ParseRuleIds(["## Other section"]));
+    }
+
+    private static bool IsRuleId(string id) =>
+        Regex.IsMatch(id, @"\A[a-z]+\.[a-z]+(?:-[a-z]+)*\z", RegexOptions.CultureInvariant);
 
     public static TheoryData<string> EveryRuleId() => new(RuleIds.All);
 
@@ -63,7 +113,11 @@ public sealed class RuleIdsTests
     /// </summary>
     private static string[] ContractRuleIds()
     {
-        string[] lines = File.ReadAllLines(Path.Combine(ContractsDirectory(), "request-gate.md"));
+        return ParseRuleIds(File.ReadAllLines(Path.Combine(ContractsDirectory(), "request-gate.md")));
+    }
+
+    private static string[] ParseRuleIds(IEnumerable<string> lines)
+    {
         List<string> ids = [];
         bool inSection = false;
 

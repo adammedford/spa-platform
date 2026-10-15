@@ -64,8 +64,9 @@ someone can act on it.
 schema and raises the `schemaVersion` question that gap MR-1 in `docs/roadmap.md` says nothing yet
 answers: no rule states which registry documents a given gateway build accepts. The bound lands
 with that rule, not before it. Until then ticket 49 stays open and the validator keeps its present
-model-level bound, which is wrong by a factor of about 430,000 but wrong in the safe direction —
-it refuses nothing the proxy would have applied correctly.
+model-level bound (922,337,203,685 seconds), about 430,000 times the proxy ceiling. This is a
+known validation gap: the registry accepts timeouts the proxy cannot honour. This ADR records the
+gap; it does not change registry validation or claim that those accepted values are safe.
 
 ## Alternatives rejected
 
@@ -79,7 +80,7 @@ it refuses nothing the proxy would have applied correctly.
 
 ## Consequences
 
-- Three adoption tickets follow, one per owner, each deleting a copy and depending on nothing else:
+- Adoption changes belong to future owner work outside this PR. Three adoption tickets follow, one per owner, each deleting a copy and depending on nothing else:
   workstream 2 (`src/Platform.Hosting/RuleIds.cs`), workstream 4 (`Platform.Security`'s constants and
   `Platform.Proxy`'s private `Rule`), and workstream 3 at G1b (write `auth.callback` and
   `auth.session` from `RuleIds` rather than from new literals).
