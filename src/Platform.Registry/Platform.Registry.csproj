@@ -7,8 +7,8 @@
   </ItemGroup>
 
   <!-- Plan row 2.1: "schema check" in the one library the gateway and spactl share. The 8.0.5 pin is
-       the MIT release line (docs/dependencies.md, open decision D-1). Only RegistrySchemas touches it,
-       so a different engine is a change to one file. -->
+       the MIT release line (docs/dependencies.md -> "Decided", D-1, which records the revisit trigger).
+       Only RegistrySchemas touches it, so a different engine is a change to one file. -->
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
   </ItemGroup>
@@ -26,13 +26,12 @@
   </ItemGroup>
 
   <!-- The contract schemas, embedded so the gateway image needs no contracts/ directory at run time.
-       They are byte-for-byte copies of contracts/*.schema.json, kept here because the gateway image
-       (src/Gateway/Dockerfile, the integrator's) copies only src/ into its build stage, so an Include of
-       ../../contracts would break the image build. tests/Platform.Registry.Tests (SchemaCopyTests) fails
-       when a copy differs from its contract, so the copies cannot drift. Change request
-       contracts/changes/2.1-registry-schemas-and-jsonschema-net.md proposes linking contracts/ instead. -->
+       Linked from contracts/, which is the only copy: the gateway image (src/Gateway/Dockerfile, the
+       integrator's) copies contracts/*.schema.json next to src/ in its build stage, so this Include
+       resolves there as it does here (change request 2.1, decided 14 October 2026). LogicalName is what
+       RegistrySchemas asks the assembly for, so it does not depend on where the file sits. -->
   <ItemGroup>
-    <EmbeddedResource Include="Schemas/*.schema.json" LogicalName="contracts/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../contracts/*.schema.json" LogicalName="contracts/%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>
