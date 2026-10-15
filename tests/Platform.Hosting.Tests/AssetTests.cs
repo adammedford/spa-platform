@@ -358,8 +358,8 @@ public sealed class AssetTests
 
     /// <summary>
     /// Both writes are null-conditional, so the endpoint refuses the same way with no feature
-    /// installed: that is every other test in this file, and the gateway itself until the rest of
-    /// task 6.4 lands. Stated once on its own, because "a missing feature costs nothing" is a claim.
+    /// installed, as required by contracts/changes/6.4-request-telemetry-feature.md. This case
+    /// explicitly protects component pipelines that omit stage 2.
     /// </summary>
     [Theory]
     [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request")]

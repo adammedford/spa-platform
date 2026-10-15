@@ -210,9 +210,8 @@ internal sealed partial class Assets(ILogger logger)
     /// <para>On <see cref="IRequestTelemetryFeature"/> for the one request line stage 2 writes once
     /// the pipeline has returned, and for <c>security.rejections</c> counted from the same field
     /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
-    /// Null-conditionally: this project's own test project has no stage 2 to install the feature, and
-    /// until the rest of task 6.4 lands the gateway has none either, so a missing feature costs
-    /// nothing.</para>
+    /// Null-conditionally because component pipelines can omit stage 2; a missing feature must not
+    /// change the rejection (contracts/changes/6.4-request-telemetry-feature.md).</para>
     ///
     /// <para>And on this endpoint's own Warning line, which it keeps. The line says which of this
     /// endpoint's checks refused the request, at the moment it did, which the request line cannot:

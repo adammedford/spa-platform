@@ -18,6 +18,6 @@ internal static class RuleIds
     /// <summary>Stage 10's asset endpoint: the path failed normalisation.</summary>
     public const string PathInvalid = "path.invalid";
 
-    /// <summary>Stage 10's asset endpoint: a reserved path an SPA may not serve.</summary>
+    /// <summary>Stage 10's asset endpoint: a reserved path that is switched off.</summary>
     public const string PathReserved = "path.reserved";
 }
