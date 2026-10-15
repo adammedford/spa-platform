@@ -19,10 +19,25 @@ from an unchecked path segment.
 
 ## Rules
 
+ADR-0014 specifies the teardown-role implementation workstream 1 must add. At base `070e3fae`,
+bootstrap has no such role; these requirements do not attest to an applied or implemented role.
+
 - **A release prefix is written once.** `spactl` sends `If-None-Match: *` on every object, in
   single-part uploads. The bucket policy requires that header under `apps/` and denies deletes there
   to everyone but the teardown role. Without the delete rule, a delete followed by a write would
   replace a release. The bucket enforces this, not gateway code; P-04 checks it.
+- **The teardown role is `spa-platform-<cell>-teardown`**, created by `infra/bootstrap` and so
+  outliving what it tears down (ADR-0014). Its **name** is derived from the cell, never configured;
+  its ARN comes from AWS, because the platform root looks the role up rather than assembling the
+  string. The value the policy names is the **role** ARN, never the
+  `arn:aws:sts::<account>:assumed-role/<role>/<session>` form that `aws sts get-caller-identity`
+  prints: `aws:PrincipalArn` carries the role ARN for a role session, so the session form would
+  match nothing and the deny would apply to teardown as well. The role may delete under `apps/` and
+  holds **no write permission at all**, which is what stops it replacing a release: a conditional
+  write succeeds when the current version is a delete marker, so the `If-None-Match` rule alone would
+  not stop a principal that could both delete and write. P-04 runs as its own principal and not as
+  this role. A trusted human who can delete with this role and then write with another principal
+  can republish; this exception is break-glass access, not tamper-proof retention.
 - **Activation is a registry change.** Setting `release` on an entry makes it live within one poll
   interval. Rolling back is the same change in reverse.
 - **Content type comes from the file extension.** The gateway ignores the type stored in S3 and

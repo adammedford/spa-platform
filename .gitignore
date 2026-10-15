@@ -14,6 +14,20 @@ TestResults/
 crash.log
 crash.*.log
 
+# Variable and backend files are local: they carry role ARNs and the state bucket
+# name, both of which carry the account id. Committed .example templates remain
+# available: these patterns do not match them (change request 1.5).
+*.tfvars
+*.tfvars.json
+backend.hcl
+
+# Terraform plan files. A plan's `after` holds the values the apply will write, so the
+# identity root's carries the generated test-user passwords and the apps root's carries
+# the OAuth client secrets. Change request 1.1 also requires the documented recipe to
+# write plans outside the tree; that recipe and the CI rule remain outstanding.
+*.tfplan
+*.tfplan.json
+
 # Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
 *.pem
 *.key

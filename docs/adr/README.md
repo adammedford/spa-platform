@@ -26,6 +26,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0011](0011-idp-differences-behind-iidpprofile.md) | Put identity-provider differences behind `IIdpProfile`, chosen per issuer | D11 |
 | [0012](0012-cell-as-deployment-unit.md) | Make the cell the deployment unit | D12 |
 | [0013](0013-platform-tag-and-bootstrap-exemption.md) | Name the platform tag `Platform = spa-platform`, and exempt the bootstrap root | — |
+| [0014](0014-teardown-role-in-bootstrap.md) | Create the teardown role in `infra/bootstrap`, and derive its name from the cell | — |
 | [0015](0015-shared-constants-across-a-workstream-boundary.md) | Keep a contract-fixed shared constant in `Platform.Abstractions`, and a dependency-measured one where it is measured | — |
 
 Three decisions carry open gate work: ADR-0001 (G0 items 2 and 3, Cognito), ADR-0005 (the reserve
