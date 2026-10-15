@@ -158,10 +158,18 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         await browser.NavigateAsync(Harness.App("app2").Url("/healthz"), ct: Ct);
         await browser.NavigateAsync(Harness.App("app2").Url("/"), new RequestOptions { Redirect = RedirectMode.Manual }, Ct);
 
-        // Task 6.4's request line, which names the app and the revision once stage 4 has resolved it.
-        Assert.Contains(Harness.Log.Json, line =>
+        // Stage 2 logs after the downstream response returns (contracts/telemetry.md), so the
+        // client receiving the body does not prove the request line has been captured yet.
+        static bool IsAppRequest(JsonElement line) =>
             line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == "app2"
-            && line.TryGetProperty("registry_rev", out JsonElement revision) && revision.GetInt64() == 1);
+            && line.TryGetProperty("registry_rev", out JsonElement revision) && revision.GetInt64() == 1;
+
+        for (int attempt = 0; attempt < 100 && !Harness.Log.Json.Any(IsAppRequest); attempt++)
+        {
+            await Task.Delay(20, Ct);
+        }
+
+        Assert.Contains(Harness.Log.Json, IsAppRequest);
     }
 
     /// <summary>
