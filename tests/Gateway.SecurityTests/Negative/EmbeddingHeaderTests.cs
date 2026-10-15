@@ -5,16 +5,13 @@ using Platform.Testing;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// N-24, whole for the response shapes that exist today: "Read framing and embedding headers on a
+/// N-24, partial: "Read framing and embedding headers on a
 /// shell, an asset, a <c>/bff</c> response and an API error -> <c>frame-ancestors 'none'</c>,
 /// <c>nosniff</c> and <c>Cross-Origin-Resource-Policy</c> on all four." (docs/plan/04-tests.md.)
 ///
-/// <para><b>Three of the four shapes, and more besides.</b> A <c>/bff</c> response needs stage 10's
-/// <c>MapPlatformBff</c>, which is workstream 3's and waits for <c>contracts-v1</c>; it joins this
-/// class at G4. The other three are read here, and so are four shapes the row does not name but the
-/// claim covers — the gateway's own 404, its 403 refusal, its 400 refusal and an upstream's 500 —
-/// because the row behind this one is "there is no response shape that silently omits them", and a
-/// refusal written by an early stage is exactly the shape most likely to.</para>
+/// <para>This class covers shells, assets and API errors, plus gateway refusals and an upstream
+/// 500. It does not exercise a successful BFF response, so its evidence covers three of N-24
+///'s four required response shapes.</para>
 ///
 /// <para><b>Why that holds by construction, and why it is still worth asserting.</b> Stage 5 applies
 /// the headers from <c>Response.OnStarting</c> rather than writing them as it runs, so they are
@@ -22,10 +19,9 @@ namespace Gateway.SecurityTests.Negative;
 /// copied an upstream's. The composed pipeline is the only place that claim can be read, because in
 /// workstream 4's own project there is no stage 10 and no upstream to be overwritten.</para>
 ///
-/// <para><b>Temporal caveat.</b> The shell and the asset are 200s only because the shell gate
-/// (stage 8, workstream 3) is not in the pipeline yet. When it lands they become a challenge and a
-/// 401 (ADR-0008). Stage 5 runs before stage 8, so the header assertions survive unchanged; it is
-/// the 200s that are to be re-read.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClassFixture<EmbeddingHeaderTests.Cell>
 {

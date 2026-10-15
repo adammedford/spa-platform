@@ -11,29 +11,19 @@ namespace Gateway.SecurityTests.Negative;
 /// times." (docs/plan/04-tests.md.)
 ///
 /// <para><b>What is proven: the CORS header and the policy, on both statuses.</b> Both are stage 5's
-/// (task 4.5, landed): <c>contracts/http-contract.md</c> -> Response headers says the header set is
+/// (task 4.5): <c>contracts/http-contract.md</c> -> Response headers says the header set is
 /// "Set on every response, including proxied ones, where they overwrite what the upstream sent", and
 /// "No <c>Access-Control-*</c> header, ever. One sent by an upstream is stripped." Stage 5 applies
 /// them from <c>Response.OnStarting</c>, so they land after YARP has copied the upstream's — and the
 /// composed gateway is the only place that can be read, because workstream 4's own project has no
 /// stage 10 and no upstream to be overwritten.</para>
 ///
-/// <para><b>What is NOT proven, and why it is absent rather than failing: the <c>Set-Cookie</c>
-/// clause.</b> Stripping it belongs to plan row <b>4.2</b> ("Strip <c>Set-Cookie</c> and
-/// <c>Access-Control-*</c> from responses on every status, which in YARP needs
-/// <c>ResponseCondition.Always</c>"), whose own needs are "4.1, G1b" — it has not landed, and
-/// workstream 6 owns the proof and not the stage. Measured on this branch, an upstream's
-/// <c>Set-Cookie</c> does reach the browser today. A test asserting the contract here would be red
-/// on arrival for a row nobody has written yet, and a test asserting what happens today would have
-/// to be deleted when 4.2 lands rather than kept. So the clause waits for 4.2, in this class,
-/// against this upstream. The same applies to N-11 in full, which is why this suite has no N-11:
-/// the caller's <c>Cookie</c>, bearer token and <c>X-CSRF-TOKEN</c> all reach an upstream on this
-/// branch, and stripping them is the same row 4.2.</para>
+/// <para>This class proves only the CORS and CSP clauses. The Set-Cookie clause and N-11
+/// require separate proxy-pipeline evidence under plan row 4.2 and are not asserted here.</para>
 ///
-/// <para><b>Temporal caveat.</b> The calls below reach an upstream with no session because the shell
-/// gate (stage 8, workstream 3) is not in the pipeline yet; when it lands they become 401s
-/// (ADR-0008) and this class needs a session to reach an upstream at all. The header claims are
-/// stage 5's and survive that; the 200 and the 500 are what is to be re-read.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class UpstreamResponseTests
 {

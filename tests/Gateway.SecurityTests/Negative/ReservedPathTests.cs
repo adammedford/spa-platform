@@ -8,14 +8,9 @@ namespace Gateway.SecurityTests.Negative;
 /// N-27: "<c>GET</c> and <c>POST</c> to <c>/signout-oidc</c> with a live session -> 404. The session
 /// survives." (docs/plan/04-tests.md.)
 ///
-/// <para><b>What is proven here, and what is not.</b> The 404 on both methods is proven. "With a
-/// live session" and "the session survives" are not: a session needs
-/// <c>src/Platform.Identity</c>, which starts at <c>contracts-v1</c>, so the whole row joins this
-/// class at G4 with one more test and no change to these two. That is not a weakening of the row as
-/// it stands today — the path is refused at stage 6, before authentication runs at all
-/// (<c>contracts/pipeline.md</c>), so no session state is reachable from this request whether one
-/// exists or not. The reason the path is switched off is threat T18: the framework's remote sign-out
-/// would let a provider-shaped request end a session from outside the browser.</para>
+/// <para>These requests prove the 404 for both methods. They establish no session and therefore
+/// do not prove session survival. Threat T18 motivates both clauses: provider-shaped remote-signout
+/// requests must not end a browser's session (docs/plan/04-tests.md, N-27).</para>
 ///
 /// <para>The refusal is the request gate's reserved row, so it carries
 /// <see cref="RuleIds.PathReserved"/> and the body's <c>code</c> is <c>not_found</c>

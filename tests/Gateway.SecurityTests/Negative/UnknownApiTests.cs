@@ -11,12 +11,9 @@ namespace Gateway.SecurityTests.Negative;
 /// prefix -> 404 <c>unknown_api</c> for the unlisted name, 400 or 404 for the escape paths. No
 /// upstream logs the request." (docs/plan/04-tests.md.)
 ///
-/// <para><b>What is proven, and what waits.</b> All three clauses are proven as they stand: the
-/// unlisted name, the escape paths, and that no upstream saw either. <b>What waits for G4</b> is
-/// the same rows made by a caller who holds a session. Today no caller can hold one, so "no upstream
-/// logs the request" is proven against the two upstreams as they are — the echo upstream's recorder,
-/// and the mock API, which cannot have answered because the body that came back is the gateway's
-/// own problem document and not the API's JSON.</para>
+/// <para>The requests establish no session. They prove unknown-name and escape-path refusals,
+/// plus the absence of upstream requests, against that explicit caller state. They do not prove
+/// the same refusals for an authenticated caller.</para>
 ///
 /// <para><b>Why the unlisted name cannot reach an upstream.</b> ADR-0006: YARP's routes are
 /// generated from the registry snapshot, one per app and API, and nothing reads the request to

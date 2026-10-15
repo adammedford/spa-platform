@@ -21,12 +21,9 @@ namespace Gateway.SecurityTests.Negative;
 /// <c>Authorization</c>, <c>Cookie</c>, <c>Set-Cookie</c>, query strings, tokens, codes, state,
 /// client secrets and session keys off every line. This row is the check on all of it at once.</para>
 ///
-/// <para><b>What is proven today, and what the same row will cover later.</b> Every line this suite
-/// can produce is swept, which is the row whole as it is written. What no suite can produce yet is a
-/// line about a <i>session</i> — a login, a refresh, a logout — because those are
-/// <c>src/Platform.Identity</c>'s and start at <c>contracts-v1</c>. The mechanism does not change
-/// when they arrive: a new test class starts its harness the same way and its lines join the same
-/// sweep.</para>
+/// <para>The sweep covers every enrolled harness in this test assembly, including lines produced
+/// outside this class. It does not establish that unexercised login, refresh or logout paths
+/// redact credentials: those operations need their own acceptance requests.</para>
 /// </summary>
 public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTests.Cell>
 {

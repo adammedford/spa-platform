@@ -17,13 +17,9 @@ namespace Gateway.IntegrationTests.Functional;
 /// about it. That is the row's own wording — "follow <b>one</b> API call" — and it keeps the request
 /// log line unambiguous, because the line carries no path to tell two calls apart by.</para>
 ///
-/// <para><b>Temporal caveat.</b> The call is unauthenticated, and the upstream is the echo upstream
-/// rather than the mock API, because the token step is task 4.2 and the session is workstream 3's:
-/// stage 8 is still a pass-through, so <c>/api</c> is reachable without a session today. When those
-/// land, this becomes an authenticated call carrying a bearer token, and the hop grows a token
-/// acquisition. The claim this row makes — one trace id across the log line, the spans and the
-/// upstream's <c>traceparent</c> — is about the hop and not about who made it, so the assertions
-/// below hold; the upstream and the absent session are what is to be re-read.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : IClassFixture<ApiTelemetryTests.Call>
 {
@@ -153,8 +149,8 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         Assert.Equal("information", TheCall.Line.GetProperty("level").GetString());
         Assert.Equal(200, TheCall.Line.GetProperty("status").GetInt32());
 
-        // There is no session: stage 8 is a pass-through and workstream 3 has not landed. The null is
-        // asserted rather than left unread, so a session_ref appearing from somewhere is a failure.
+        // This call establishes no session. Assert the telemetry contract's null session_ref
+        // explicitly, so attributing this request to a session is a failure.
         Assert.Equal(JsonValueKind.Null, TheCall.Line.GetProperty("session_ref").ValueKind);
 
         // Not a rejection either, so no rule id: an upstream's own 4xx and this 200 both leave it null.

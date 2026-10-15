@@ -14,11 +14,9 @@ namespace Gateway.IntegrationTests.Functional;
 /// <c>fixtures/spa/</c> through <see cref="FixtureFiles.Spa"/>, so a release served from another app's
 /// prefix or a shell served in place of an asset is a failure rather than a coincidence.</para>
 ///
-/// <para><b>Temporal caveat.</b> As in <see cref="PerAppHeadersTests"/>: stage 8, the shell gate, is
-/// workstream 3's and is still a pass-through, so these are unauthenticated requests that reach the
-/// asset endpoint. ADR-0008 requires a session before any asset, so when task 3.9 lands these become
-/// authenticated navigations and the 200s below change <b>legitimately</b>. What the row is about —
-/// which key the endpoint reads for which path — is the same either way.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFixture<AssetFallbackTests.Cell>
 {

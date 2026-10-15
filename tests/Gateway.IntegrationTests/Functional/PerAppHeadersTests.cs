@@ -18,13 +18,9 @@ namespace Gateway.IntegrationTests.Functional;
 /// additions in <c>fixtures/apps/app2.json</c>, both read from those files
 /// (<see cref="ContractText"/>).</para>
 ///
-/// <para><b>Temporal caveat.</b> The shell gate is stage 8 of contracts/pipeline.md and belongs to
-/// workstream 3, which has not landed it: <c>UsePlatformShellGate</c> is a pass-through today, so an
-/// unauthenticated navigation reaches the asset endpoint and the response these tests read is a 200.
-/// When task 3.9 lands, ADR-0008 makes the same navigation a challenge, and the status codes below
-/// change <b>legitimately</b>. Stage 5 runs before stage 8 and writes the policy on every response
-/// either way, so the header assertions survive; the 200s are what is to be re-read, not treated as
-/// a regression.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFixture<PerAppHeadersTests.Cell>
 {

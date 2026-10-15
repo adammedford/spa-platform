@@ -24,11 +24,9 @@ namespace Gateway.SecurityTests.Negative;
 /// <para><b>Why the raw socket.</b> The <c>Cookie</c> header's bytes are the input: two names equal
 /// but for case, and one name twice. A client with a cookie jar normalises both away.</para>
 ///
-/// <para><b>Temporal caveat.</b> The control below — the exact name, sent once, is not refused —
-/// reaches the asset endpoint and gets a 200 only because the shell gate (stage 8, workstream 3) is
-/// not in the pipeline yet. When it lands, ADR-0008 makes that same request a challenge or a 401.
-/// The claim the control carries is "stage 6 did not refuse it", which is what the status being
-/// neither 400 nor the gate's rule shows; re-read the 200, not the row.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<CookieNameTests.Cell>
 {

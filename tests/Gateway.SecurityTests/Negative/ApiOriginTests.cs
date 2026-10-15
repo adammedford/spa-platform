@@ -10,15 +10,9 @@ namespace Gateway.SecurityTests.Negative;
 /// <c>origin_rejected</c>. No <c>Access-Control-Allow-*</c> header on any response, including
 /// preflight." (docs/plan/04-tests.md.)
 ///
-/// <para><b>What is proven, and what waits.</b> Every refusal in the row is the request gate's, and
-/// the gate is stage 6, which runs <i>before</i> authentication (<c>contracts/pipeline.md</c>,
-/// <c>contracts/request-gate.md</c>: "The gate runs before authentication"). So the refusals and the
-/// absence of CORS headers are provable in full today and are proven here, on <c>/api</c> and on
-/// <c>/bff/session</c> alike. <b>What waits for G4</b> is the authenticated variants: that a caller
-/// who <i>does</i> hold a session is refused the same way, and that the <c>/bff</c> endpoints
-/// themselves (stage 10, workstream 3, task 3.9) behave this way once they exist. Those need
-/// <c>src/Platform.Identity</c>, which starts at <c>contracts-v1</c>, and they join this class at G4
-/// without changing a line below — the gate answers before either, which is why.</para>
+/// <para>These requests prove the stage-6 gate refusals on API and BFF paths, before
+/// authentication (contracts/pipeline.md). They do not establish an authenticated session or
+/// exercise a successful BFF endpoint; those require separate N-07 acceptance evidence.</para>
 ///
 /// <para><b>The two refusals are told apart.</b> Both answer 403 <c>origin_rejected</c>, because the
 /// <c>code</c> "says little on purpose"; the rule id is what distinguishes them
@@ -26,10 +20,9 @@ namespace Gateway.SecurityTests.Negative;
 /// says tests assert on both. A test that read only the status could not tell a gate that lost its
 /// <c>Origin</c> check from one that kept it.</para>
 ///
-/// <para><b>Temporal caveat.</b> The controls here — a same-origin fetch that is <i>not</i> refused —
-/// reach an upstream and get its answer only because the shell gate (stage 8, workstream 3) is not
-/// in the pipeline yet. When it lands those become a 401 (ADR-0008), legitimately. The claim the
-/// controls carry is "the gate did not refuse this", which the absent rule id shows either way.</para>
+/// <para>These requests isolate the HTTP contract named above. Session establishment and
+/// preservation require separate acceptance evidence; a successful response here proves only the
+/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<ApiOriginTests.Cell>
 {
