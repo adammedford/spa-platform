@@ -53,6 +53,14 @@ is therefore either looked up from AWS or asserted at plan time.
 
 **The teardown role is `spa-platform-<cell>-teardown`, created by `infra/bootstrap`.**
 
+This is an accepted implementation decision, not evidence that the Terraform below has landed.
+At this PR's base `070e3fae`, bootstrap has no teardown role and the cell module defaults its bucket
+name to `spa-platform-<cell>` (with a `bucket_name` override). Workstream 1 must implement the
+follow-ups in change request 1.5 before an apply relies on this convention. The account-qualified
+bucket name below is the intended default; permissions must use the actual bucket ARN, including
+any supported override. In particular, `spa-platform-<cell>-*` does match the intended
+account-qualified name; it misses the current unsuffixed default and is broader than one bucket.
+
 1. **It lives in `infra/bootstrap`** beside the CI plan role. A teardown role cannot live in a root
    that teardown destroys, and bootstrap's resources already outlive every teardown. It carries
    bootstrap's tags — `Platform = spa-platform-bootstrap`, `Cell`, `Component = bootstrap`, `Root` —
@@ -81,13 +89,20 @@ is therefore either looked up from AWS or asserted at plan time.
    the apply when nobody is named, the way `trust_is_configured` already guards the CI role. The
    humans cannot be derived and `*.tfvars` is now ignored, so a loud failure is the only safe shape.
    The role is not assumable by the CI plan role and not through the GitHub Actions OIDC provider:
-   CI plans; it never deletes. Trust carries an MFA condition with `BoolIfExists`, which denies
-   long-term credentials without MFA without locking out a federated session that never sets the
-   key. A pasted session ARN fails loudly here, unlike in the `Deny` condition.
+   CI plans; it never deletes. Validate the input as explicit IAM user or role ARNs, rejecting
+   account-root and STS session ARNs. IAM-user trust requires `Allow` with
+   `Bool: {"aws:MultiFactorAuthPresent": "true"}`, so long-term keys alone cannot assume it.
+   Federated human roles need a separate, explicitly allowlisted trust statement and MFA enforced
+   by their identity provider: the MFA context key can be absent for those sessions and cannot
+   attest to their MFA. `Allow` with `BoolIfExists: true` would also admit long-term keys;
+   `Deny` with `BoolIfExists: false` would block both those keys and missing-key federation.
+   Neither combination alone provides both guarantees. AWS need not reject a session ARN in a
+   trust policy, so the Terraform input validation must reject it before apply.
 6. **Its permissions are the delete and nothing else**, scoped to real ARNs rather than a glob:
    `s3:DeleteObject` and `s3:DeleteObjectVersion` on `<bucket ARN>/apps/*`, and `s3:ListBucket` and
    `s3:ListBucketVersions` on the bucket ARN, where the bucket is
-   `spa-platform-<cell>-<account id>`. Destroying the three roots runs as the operator's own
+   intended to default to `spa-platform-<cell>-<account id>`; use the actual bucket ARN rather than
+   reconstructing that string. Destroying the three roots runs as the operator's own
    principal, not as this role.
 7. **The cell name is validated identically in both roots:** 3 to 22 characters,
    `^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$`, no leading or trailing hyphen, with a comment naming where
@@ -124,6 +139,9 @@ second half and needs no architecture.
   version is a delete marker, so a principal holding both would replace a release in two steps. This
   is the sentence a future reader would otherwise cite when asked to give the teardown role a write
   "to repair a prefix".
+  This is separation between credentials, not tamper-proof retention: a human who can assume the
+  teardown role and then write with another principal can still delete and republish. Teardown
+  access therefore remains trusted break-glass access; P-04 proves the ordinary writer's denial.
 - **P-04 must not run under the teardown role**, or it would observe the exception rather than the
   rule. It runs as the test's own principal, which is denied, which is what it asserts. P-04 stays
   negative-only; the positive half is proved by task 6.9's tear-down-and-deploy-again.
@@ -153,6 +171,9 @@ second half and needs no architecture.
   not be used in that condition key: [IAM User Guide, AWS global condition context
   keys](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html),
   read 14 October 2026.
+- MFA operator semantics and missing-key federation: the same IAM reference's
+  [`aws:MultiFactorAuthPresent` section](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-multifactorauthpresent),
+  checked 15 October 2026. User and federated-role trust must be evaluated separately.
 - A conditional write succeeds when the current object version is a delete marker:
   [Amazon S3 User Guide, conditional
   requests](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html), read

@@ -19,6 +19,9 @@ from an unchecked path segment.
 
 ## Rules
 
+ADR-0014 specifies the teardown-role implementation workstream 1 must add. At base `070e3fae`,
+bootstrap has no such role; these requirements do not attest to an applied or implemented role.
+
 - **A release prefix is written once.** `spactl` sends `If-None-Match: *` on every object, in
   single-part uploads. The bucket policy requires that header under `apps/` and denies deletes there
   to everyone but the teardown role. Without the delete rule, a delete followed by a write would
@@ -33,7 +36,8 @@ from an unchecked path segment.
   holds **no write permission at all**, which is what stops it replacing a release: a conditional
   write succeeds when the current version is a delete marker, so the `If-None-Match` rule alone would
   not stop a principal that could both delete and write. P-04 runs as its own principal and not as
-  this role.
+  this role. A trusted human who can delete with this role and then write with another principal
+  can republish; this exception is break-glass access, not tamper-proof retention.
 - **Activation is a registry change.** Setting `release` on an entry makes it live within one poll
   interval. Rolling back is the same change in reverse.
 - **Content type comes from the file extension.** The gateway ignores the type stored in S3 and

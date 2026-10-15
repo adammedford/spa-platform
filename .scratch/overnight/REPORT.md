@@ -1,5 +1,29 @@
 # Overnight report — 2026-10-15
 
+## PR review amendment — 2026-10-15
+
+This file preserves the overnight snapshot and its original questions. The final ADR-0014 and
+change requests supersede these review errors in Q49, Q56, Q63, Q69 and their ticket-57 sources:
+
+- Current Terraform at `070e3fae` defaults to `spa-platform-<cell>`, with a bucket-name override.
+  The account-qualified name is proposed, not implemented; `spa-platform-<cell>-*` misses the former
+  but matches the latter. Teardown grants must use the actual bucket ARN, including overrides.
+- `Allow` plus `BoolIfExists: true` accepts long-term keys when the MFA key is absent. `Deny` plus
+  `BoolIfExists: false` also denies federation when the key is absent. ADR-0014 now separates
+  IAM-user trust (`Bool: true`) from explicitly allowlisted federated human roles whose MFA is
+  enforced upstream; input validation rejects root and STS-session ARNs.
+- Object Lock can be enabled on existing versioned buckets; its irreversible enablement and
+  retention/bypass trade-offs, not mandatory bucket replacement, are the relevant constraints.
+- Role separation protects against the ordinary writer, not a trusted human who can switch
+  between teardown credentials and writer credentials. No AWS apply or live role is claimed.
+- The plan-ignore patterns land here; the apply-recipe and CI artifact follow-ups remain open.
+
+Primary sources checked on 2026-10-15:
+[IAM MFA semantics](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-multifactorauthpresent),
+[S3 Object Lock configuration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-configure.html),
+[S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+
+
 **2 integrated, 1 partial, 0 failed, 8 need you, 21 blocked.** 143 questions, 0 claimed branches to
 merge.
 
