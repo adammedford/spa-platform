@@ -121,18 +121,30 @@ jobs:
             terraform -chdir="$root" validate
           done
 
-      - name: Test every root and module that has tests
-        # Each tests/*.tftest.hcl runs against a mock provider, so it needs no credentials. Without
-        # this step those runs are evidence from whichever machine wrote them.
+      - name: Test every root and module with tests under infra/
+        # Terraform loads *.tftest.hcl beside the configuration or in its tests/ directory:
+        # https://developer.hashicorp.com/terraform/language/tests#test-directory
+        # These tests use mock providers, so they need no credentials. Without this step those
+        # runs are evidence from whichever machine wrote them.
         run: |
           set -euo pipefail
-          dirs=$(find infra -name '*.tftest.hcl' -not -path '*/.terraform/*' -exec dirname {} \; \
-            | xargs -n1 dirname | sort -u)
-          for dir in $dirs; do
+          dirs=$(find infra -type f -name '*.tftest.hcl' -not -path '*/.terraform/*' -exec dirname {} \; \
+            | while IFS= read -r parent; do
+                if [ "$(basename "$parent")" = tests ]; then
+                  dirname "$parent"
+                else
+                  printf '%s\n' "$parent"
+                fi
+              done | sort -u)
+          if [ -z "$dirs" ]; then
+            echo "::error::no Terraform test roots found under infra/"
+            exit 1
+          fi
+          while IFS= read -r dir; do
             echo "--- $dir"
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" test
-          done
+          done <<< "$dirs"
 
       - name: Plan policy (P-01 to P-03)
         # The allowlist of resource types and counts, plus the assertions on the two security groups

@@ -6,13 +6,6 @@ namespace Platform.Abstractions;
 /// and any stage after stage 2 writes it. contracts/telemetry.md -> "How `rule` and `session_ref`
 /// reach the request line" is the contract; contracts/pipeline.md has the stage order.
 ///
-/// <para><b>Stage 2 does not install this yet.</b> That is the remainder of task 6.4, in
-/// src/Platform.Telemetry. Until it lands, every <c>Features.Get&lt;IRequestTelemetryFeature&gt;()</c>
-/// returns null and a null-conditional write records nothing, so a stage owner adding one should not
-/// expect to see it on a line. A stage's own test installs Platform.Testing's
-/// <c>SettableRequestTelemetryFeature</c> and asserts against that instead, which is the behaviour
-/// the test id names either way.</para>
-///
 /// <para>One stage cannot use this at all: the method allowlist answers 405 in stage 1, before this
 /// feature exists. contracts/telemetry.md records that as a known gap.</para>
 ///

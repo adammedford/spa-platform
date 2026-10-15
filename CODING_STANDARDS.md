@@ -29,7 +29,7 @@ owes goes in its merge body's `Outstanding:` line, where `docs/agents/landing-wo
 A test that cannot fail and a system that is correct look identical from the outside, and the test
 costs more than nothing: it reports confidence it has not earned.
 
-Three shapes recur here, and each passed review once before anyone noticed.
+Three shapes recur here.
 
 - **A rule asserted only against a tree that already satisfies it.** `tests/Gateway.ArchitectureTests`
   answers this by making each rule a function over a graph and feeding it a graph that breaks it. A
