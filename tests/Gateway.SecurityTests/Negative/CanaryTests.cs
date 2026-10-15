@@ -1,0 +1,170 @@
+using Gateway.TestHarness;
+
+namespace Gateway.SecurityTests.Negative;
+
+/// <summary>
+/// N-16, whole: "Run the full suite with canary values for tokens, secrets, cookies, codes and
+/// state, then search every log line -> No canary appears." (docs/plan/04-tests.md.)
+///
+/// <para><b>Why this row is a suite property and not a test.</b> Its subject is "every log line", so
+/// the only honest reading covers lines this class never produced. Two things carry it:
+/// <see cref="Suite.StartAsync"/> enrols every harness in the project with
+/// <see cref="CanarySweep"/>, and <see cref="SuiteSweep"/> — an assembly fixture, disposed after the
+/// last test class — sweeps the whole run's log. The tests below are the part that can be named:
+/// they send the five kinds of credential the row lists, and sweep what has been collected by the
+/// time they run.</para>
+///
+/// <para><b>Why the request line is the hazard.</b> <c>contracts/telemetry.md</c> -> Why query
+/// strings are dropped: the callback carries the authorization code and state in the query string,
+/// ADR-0007 accepts that for Phase 1, and the framework's own request log would include it — so the
+/// platform replaces that log, holds the authentication loggers at Information, and keeps
+/// <c>Authorization</c>, <c>Cookie</c>, <c>Set-Cookie</c>, query strings, tokens, codes, state,
+/// client secrets and session keys off every line. This row is the check on all of it at once.</para>
+///
+/// <para><b>What is proven today, and what the same row will cover later.</b> Every line this suite
+/// can produce is swept, which is the row whole as it is written. What no suite can produce yet is a
+/// line about a <i>session</i> — a login, a refresh, a logout — because those are
+/// <c>src/Platform.Identity</c>'s and start at <c>contracts-v1</c>. The mechanism does not change
+/// when they arrive: a new test class starts its harness the same way and its lines join the same
+/// sweep.</para>
+/// </summary>
+public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTests.Cell>
+{
+    /// <summary>One harness for this class. Its client secrets are canaries by the harness's own design.</summary>
+    public sealed class Cell : IAsyncLifetime
+    {
+        public GatewayHarness Harness { get; private set; } = null!;
+
+        public async ValueTask InitializeAsync() =>
+            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+
+        public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
+    }
+
+    private GatewayHarness Harness => cell.Harness;
+
+    [Fact]
+    public async Task No_canary_this_suite_has_sent_appears_in_any_line_it_has_produced()
+    {
+        // Every kind the row names, each on the request shape where it would do real damage.
+        await SendCredentialsAsync();
+
+        // Lines are written after the pipeline returns, so wait for the last of them before
+        // sweeping: a sweep that ran first would report an absence it was too early to see.
+        await Observed.SettledCountAsync(Harness, Suite.Ct);
+
+        CanarySweep.Assert("after this class sent every kind of credential");
+    }
+
+    [Fact]
+    public async Task The_request_lines_of_those_requests_exist_and_carry_none_of_it()
+    {
+        int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
+
+        await SendCredentialsAsync();
+        await Observed.UntilAsync(
+            () => Observed.RequestLines(Harness).Count > before, "the request lines of this class", Suite.Ct);
+        await Observed.SettledCountAsync(Harness, Suite.Ct);
+
+        // The sweep above would also pass if the gateway logged nothing at all, so this names what
+        // the lines must contain as well as what they must not: the requests were logged, with a
+        // status and a route, and the credentials are not in them
+        // (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        IReadOnlyList<System.Text.Json.JsonElement> produced = [.. Observed.RequestLines(Harness).Skip(before)];
+        Assert.NotEmpty(produced);
+        foreach (System.Text.Json.JsonElement line in produced)
+        {
+            Assert.NotNull(Observed.Field(line, "route"));
+            Assert.NotNull(Observed.Number(line, "status"));
+        }
+
+        Assert.Empty(CanarySweep.Leaks(
+            produced.Select(line => line.GetRawText()), CanarySweep.Values));
+    }
+
+    [Fact]
+    public void A_canary_in_a_line_is_found_by_the_sweep()
+    {
+        // The guard on the guard. Every other assertion in this class is an absence, so the search
+        // itself has to be shown to find something — otherwise a sweep that silently matched nothing
+        // would report the same clean result forever
+        // (CODING_STANDARDS.md -> "A check that is vacuous today").
+        string planted = $"{{\"msg\":\"request\",\"authorization\":\"Bearer {Canaries.Token}\"}}";
+
+        IReadOnlyList<string> leaks = CanarySweep.Leaks([planted, "{\"msg\":\"request\"}"], CanarySweep.Values);
+
+        string leak = Assert.Single(leaks);
+        Assert.Contains("a bearer token", leak, StringComparison.Ordinal);
+
+        // And the description does not repeat the credential, because this message is itself logged
+        // by whatever is running the suite.
+        Assert.DoesNotContain(Canaries.Token, leak, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_apps_client_secret_is_among_the_values_swept()
+    {
+        // The secrets are the one canary kind this suite does not type: the harness mints one per app
+        // per run, "so a secret seen in a log line is this run's and no other's (N-16)", and the
+        // gateway reads them when it exchanges a code. Collected from the harness rather than
+        // restated, so an app added later is swept for without this file changing.
+        foreach (HarnessApp app in Harness.Apps.Values)
+        {
+            Assert.Contains(app.ClientSecret, CanarySweep.Values);
+        }
+
+        Assert.NotEmpty(Harness.Apps);
+    }
+
+    /// <summary>
+    /// One request per kind of credential the row names, each sent where it would matter: the
+    /// session cookie's value, a bearer token, the antiforgery header, and a code and state in a
+    /// query string on the callback path and on an asset path. Two of them are refused and two are
+    /// not, so both the refusal lines and the ordinary request lines are swept.
+    /// </summary>
+    private async Task SendCredentialsAsync()
+    {
+        string host = Harness.App("app1").Host;
+        (string Target, (string, string)[] Headers)[] requests =
+        [
+            // The session cookie, under the platform's own name, on an asset request.
+            ("/index.html", [("Cookie", $"__Host-spa-session={Canaries.Cookie}")]),
+
+            // A bearer token and the antiforgery header on an API call that is refused, so the
+            // refusal's own Warning line is swept as well as the request line.
+            ("/api/echo/thing",
+            [
+                ("Sec-Fetch-Site", FetchMetadata.CrossSite),
+                ("Authorization", $"Bearer {Canaries.Token}"),
+                ("X-CSRF-TOKEN", Canaries.Csrf),
+            ]),
+
+            // The same two on an API call that is not refused, which reaches an upstream.
+            ("/api/echo/thing",
+            [
+                ("Sec-Fetch-Site", FetchMetadata.SameOrigin),
+                ("Authorization", $"Bearer {Canaries.Token}"),
+                ("X-CSRF-TOKEN", Canaries.Csrf),
+            ]),
+
+            // A code and a state in a query string, on the callback path the contract names.
+            ($"/signin-oidc?code={Canaries.Code}&state={Canaries.State}", []),
+
+            // And on an asset path, where the framework's own request log would have carried them.
+            ($"/index.html?code={Canaries.Code}&state={Canaries.State}", []),
+
+            // On a host the registry does not name, which is refused before an app is resolved.
+            ($"/?code={Canaries.Code}&state={Canaries.State}", []),
+        ];
+
+        foreach ((string target, (string, string)[] headers) in requests)
+        {
+            await RawHttp.SendAsync(Harness.GatewayAddress, "GET", target, host, headers, Suite.Ct);
+        }
+
+        // The last one again on an unknown host, so a line with no app_id is swept too.
+        await RawHttp.SendAsync(
+            Harness.GatewayAddress, "GET", $"/?code={Canaries.Code}&state={Canaries.State}",
+            "nobody.spa-poc.test:8443", ct: Suite.Ct);
+    }
+}
