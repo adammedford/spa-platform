@@ -73,3 +73,39 @@ variable "teardown_principal_arns" {
     error_message = "Name at least one principal that may delete under apps/, or nothing can ever empty the bucket and teardown cannot destroy it."
   }
 }
+
+variable "certificate_domain" {
+  description = <<-EOT
+    The domain the cell's wildcard certificate covers, without the wildcard: the
+    load balancer's listener presents *.{certificate_domain}. tools/scripts/certs.sh
+    imports that certificate into ACM, tagged with this cell, and the module finds it
+    there; Terraform never creates it.
+
+    No default: the domain belongs to the cell, so the root decides it. The poc
+    root's default is spa-poc.test, which is certs.sh's default too.
+  EOT
+  type        = string
+
+  validation {
+    # The base certificate domain uses the same DNS grammar as albDnsName. Read
+    # the repository contract rather than maintaining a second copy of its pattern.
+    condition     = can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json"))["$defs"].dnsName.pattern, var.certificate_domain))
+    error_message = "certificate_domain is a dotted lowercase name with no wildcard and no trailing dot, such as spa-poc.test."
+  }
+}
+
+variable "health_check_path" {
+  description = <<-EOT
+    The path the load balancer's health check requests. It follows the image the
+    service runs: / for the public sample image the service starts on, and /readyz
+    for the gateway, which answers 200 only once a registry snapshot is live
+    (contracts/pipeline.md).
+  EOT
+  type        = string
+  default     = "/"
+
+  validation {
+    condition     = can(regex("^/[A-Za-z0-9._~/-]*$", var.health_check_path))
+    error_message = "health_check_path is an absolute path with no query string, such as / or /readyz."
+  }
+}
