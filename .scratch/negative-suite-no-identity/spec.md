@@ -8,10 +8,12 @@ Base: trunk, after tasks 2.3b and 4.3b
 ## Review amendment — 2026-10-15
 
 The original carve included stripping owned by unlanded plan row 4.2. The deliverable is twelve
-distinct rows: nine whole (N-08, N-09, N-13, N-14, N-16, N-20, N-24, N-25, N-27) and three partial
-(N-07, N-10, N-12). N-11 is absent until 4.2; N-12 proves CORS/CSP treatment on 200/500, with
+distinct rows: six whole (N-08, N-09, N-13, N-14, N-16, N-20) and six partial
+(N-07, N-10, N-12, N-24, N-25, N-27). N-11 is absent until 4.2; N-12 proves CORS/CSP treatment on 200/500, with
 `Set-Cookie` stripping deferred to 4.2. Session-dependent clauses still wait for G4. The user
 stories below preserve the original target; this amendment and the scope list govern delivery.
+N-24 lacks the successful BFF-response clause, N-25 lacks real-browser `__Host-` enforcement, and
+N-27 lacks the proof that a live session survives `/signout-oidc`; those clauses remain outstanding.
 
 ## Problem Statement
 
@@ -134,12 +136,15 @@ line, or what an upstream received — never by reaching into the stage that pro
   reach the process, and an HTTP client that answers on the `Host` header would never deliver it.
 - **Rule ids come from the shared constants** in `Platform.Abstractions` (ADR-0015), never as string
   literals. A renamed id must break the build, not pass silently.
-- **Rows in scope, whole:** N-08, N-09, N-13, N-14, N-16, N-20, N-24, N-25, N-27.
+- **Rows in scope, whole:** N-08, N-09, N-13, N-14, N-16, N-20.
 - **Rows in scope, partially, with the proven clause named in the test:** N-07 (the pre-authentication
   refusal on the API path and the absence of CORS headers; the authenticated variants wait for G4),
   N-10 (the unlisted API name and the escape paths; "no upstream logs the request" is proven against
   the echo upstream and the mock API as they stand), N-12 (CORS and upstream CSP treatment on
-  success and error responses; `Set-Cookie` stripping waits for row 4.2).
+  success and error responses; `Set-Cookie` stripping waits for row 4.2), N-24 (security headers
+  on shell, asset and errors; successful BFF response pending), N-25 (case-sensitive server
+  validation; real-browser `__Host-` enforcement pending), N-27 (404 on GET/POST; live-session
+  survival pending).
 - **Deferred to row 4.2:** N-11 request stripping and N-12 response-cookie stripping. N-11
   token injection also needs the identity work; no passing assertion claims these clauses today.
 - **Rows deferred to row 6.3 at G4, and absent from this suite rather than skipped:** N-01 to N-06,
