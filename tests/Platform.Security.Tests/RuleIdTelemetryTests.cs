@@ -9,7 +9,7 @@ namespace Platform.Security.Tests;
 /// <c>session_ref</c> reach the request line"). The ids are <c>contracts/request-gate.md</c> -> Rule
 /// ids.
 ///
-/// Stage 2 itself is workstream 6's (task 6.4a) and is not here: these hosts install
+/// Stage 2 belongs to workstream 6; these component hosts install
 /// <c>Platform.Testing</c>'s <see cref="Platform.Testing.SettableRequestTelemetryFeature"/> in its
 /// place, which is what a stage's own test project can do. Every other test in this project starts
 /// its host with no feature at all, so the stages' null-conditional writes are exercised both ways.
@@ -144,9 +144,8 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_refuses_with_no_telemetry_feature_installed()
     {
-        // The write is null-conditional: with no stage 2 the refusal is unchanged, which is the state
-        // every other test in this project runs in and the state the composed gateway is in until task
-        // 6.4a lands.
+        // The write is null-conditional: these component hosts omit stage 2, so the refusal must
+        // remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
         await using GateHost host = await GateHost.StartAsync(Ct);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/api/orders/items", Ct, FetchSite("cross-site"));

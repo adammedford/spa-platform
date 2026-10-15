@@ -59,9 +59,9 @@ public sealed class GateHost : IAsyncDisposable
 
     /// <summary>
     /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
-    /// requests returned, with null for a request that left none. Empty unless the host was started
-    /// with <c>telemetry: true</c>, because stage 2 is the only thing that creates that feature and
-    /// this host is cut down to one stage.
+    /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
+    /// the host was started with <c>telemetry: true</c>, because stage 2 is the only thing that creates
+    /// that feature and this host is cut down to one stage.
     /// </summary>
     public IReadOnlyList<string?> TelemetryRules
     {

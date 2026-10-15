@@ -10,7 +10,7 @@ namespace Platform.Proxy.Tests;
 /// <c>session_ref</c> reach the request line"). The id is <c>api.unknown</c>
 /// (<c>contracts/request-gate.md</c> -> Rule ids).
 ///
-/// Stage 2 is workstream 6's (task 6.4a), so these tests install <c>Platform.Testing</c>'s
+/// Stage 2 belongs to workstream 6, so these component tests install <c>Platform.Testing</c>'s
 /// <see cref="SettableRequestTelemetryFeature"/> in its place. Every other test in this project
 /// starts its host without one, which is what exercises the null-conditional write.
 /// </summary>
@@ -52,8 +52,8 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task An_unlisted_api_name_is_still_refused_with_no_telemetry_feature_installed()
     {
-        // The write is null-conditional: with no stage 2 the refusal is unchanged, which is the state
-        // the composed gateway is in until task 6.4a lands.
+        // The write is null-conditional: this component host omits stage 2, so the refusal must
+        // remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
         await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, TestApps.Entry("app1"));
         using HttpClient client = new();
 
