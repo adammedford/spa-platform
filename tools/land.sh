@@ -3,6 +3,9 @@
 #
 #     tools/land.sh <pr-number> [--subject "<merge subject>"]
 #
+# Run it from a clean checkout of the pull request's base branch, because the roadmap is derived
+# from the tree the merge commit makes. `git worktree add ../spa-land origin/main` gives one.
+#
 # Why this exists rather than `gh pr merge`. tools/roadmap.py derives how far the work has got from
 # the merge subjects, so the merge commit is the input to the derivation and docs/roadmap.md is its
 # output. .githooks/pre-push holds the two together, and a merge made through the GitHub API never
@@ -45,6 +48,17 @@ cd "$root"
 state="$(gh pr view "$pr" --json state --jq .state)"
 [ "$state" = "OPEN" ] || die "pull request #$pr is $state."
 
+# The merge commit lands on the pull request's base, and the roadmap is derived from the tree that
+# commit makes, so this has to run on a clean checkout of that base. Checked before the merge: a
+# wrong branch found afterwards leaves the merge done and the roadmap stale, which is the state this
+# script exists to prevent. `git worktree add ../spa-land origin/main` gives a clean one.
+base="$(gh pr view "$pr" --json baseRefName --jq .baseRefName)"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+[ "$branch" = "$base" ] \
+  || die "#$pr merges into $base and this worktree is on $branch. Run it from a checkout of $base."
+git diff --quiet && git diff --cached --quiet \
+  || die "this worktree has uncommitted changes; the roadmap refresh would carry them."
+
 # The subject is read by a check, so it is worth saying out loud which one is being used.
 if [ -z "$subject" ]; then
   printf 'land: no --subject given, so GitHub will use its own. docs/agents/landing-work.md fixes\n'
@@ -60,7 +74,6 @@ else
   gh pr merge "$pr" --merge
 fi
 
-branch="$(git rev-parse --abbrev-ref HEAD)"
 echo "--- fetching the merge commit onto $branch"
 git fetch origin
 git merge --ff-only "origin/$branch" \
