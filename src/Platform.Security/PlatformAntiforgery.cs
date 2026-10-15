@@ -112,8 +112,8 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
     // reach the proxy route without a token.
     private static readonly PathString Api = "/api";
 
-    /// <summary><c>contracts/request-gate.md</c> -> Rule ids.</summary>
-    private const string Rule = "csrf.token";
+    /// <summary><c>contracts/request-gate.md</c> -> Rule ids, via <see cref="RuleIds"/> (ADR-0015).</summary>
+    private const string Rule = RuleIds.CsrfToken;
 
     internal async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {

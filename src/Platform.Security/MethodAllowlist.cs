@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Platform.Abstractions;
 
 namespace Platform.Security;
 
@@ -15,7 +16,13 @@ namespace Platform.Security;
 /// </summary>
 internal static partial class MethodAllowlist
 {
-    private const string Rule = "gate.method";
+    /// <summary>
+    /// <see cref="RuleIds"/> holds <c>contracts/request-gate.md</c>'s table, so this refusal and
+    /// stage 6's share one spelling (ADR-0015). Stage 1 answers before stage 2 creates
+    /// <c>IRequestTelemetryFeature</c>, so the id reaches the Warning line and nothing else;
+    /// <c>contracts/telemetry.md</c> records that.
+    /// </summary>
+    private const string Rule = RuleIds.GateMethod;
 
     /// <summary>
     /// <c>/api/**</c> takes any method an API might use; everything else takes fewer. <c>OPTIONS</c>

@@ -12,8 +12,11 @@ namespace Platform.Proxy;
 /// </summary>
 internal static class UnknownApi
 {
-    /// <summary>The rule id for this refusal, from <c>contracts/request-gate.md</c>.</summary>
-    private const string Rule = "api.unknown";
+    /// <summary>
+    /// The rule id for this refusal, from <c>contracts/request-gate.md</c> -> Rule ids by way of
+    /// <see cref="RuleIds"/>, which holds that table so that no owner keeps a copy (ADR-0015).
+    /// </summary>
+    private const string Rule = RuleIds.ApiUnknown;
 
     internal static Task WriteAsync(HttpContext context)
     {
