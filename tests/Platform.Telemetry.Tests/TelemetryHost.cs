@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -24,9 +25,10 @@ namespace Platform.Telemetry.Tests;
 /// <summary>
 /// Workstream 6's own gateway, cut down to stage 2 and what stands either side of it: the
 /// telemetry entry points, a stand-in for stage 4 that pins <c>app1</c> as <see cref="IAppFeature"/>
-/// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), the
-/// framework's authentication with one real OpenID Connect scheme, and a terminal that calls an
-/// upstream over a real socket with the request's own query string.
+/// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), a
+/// stand-in for the later stages that write <see cref="IRequestTelemetryFeature"/>, the framework's
+/// authentication with one real OpenID Connect scheme, and a terminal that calls an upstream over a
+/// real socket with the request's own query string.
 ///
 /// Every log line the host writes is captured as the gateway's own JSON formatter renders it, so a
 /// test reads the same bytes stdout would carry. The console logger is still registered, so the
@@ -40,26 +42,51 @@ public sealed class TelemetryHost : IAsyncDisposable
 {
     public const string AppId = "app1";
 
+    /// <summary>The session cookie the later-stage stand-in reads its session key from.</summary>
+    public const string SessionCookie = "__Host-spa-session";
+
+    /// <summary>A header naming the rule id the later-stage stand-in rejects the request under.</summary>
+    public const string RejectHeader = "X-Test-Reject";
+
     private readonly WebApplication app;
     private readonly EchoUpstreamListener upstream;
 
     private TelemetryHost(WebApplication app, EchoUpstream echo, EchoUpstreamListener upstream, Uri baseAddress,
-        CapturedLog log, List<Activity> spans, List<Metric> metrics)
+        CapturedLog log, ConcurrentQueue<Activity> spans, List<Metric> metrics)
     {
         this.app = app;
         this.upstream = upstream;
         Upstream = echo;
         BaseAddress = baseAddress;
         Log = log;
-        Spans = spans;
+        this.spans = spans;
         Metrics = metrics;
+    }
+
+    // The pinned in-memory exporter calls ICollection.Add without synchronizing readers:
+    // https://github.com/open-telemetry/opentelemetry-dotnet/blob/core-1.19.1/src/OpenTelemetry.Exporter.InMemory/InMemoryExporter.cs
+    private sealed class CapturedActivityExporter(ConcurrentQueue<Activity> destination) : BaseExporter<Activity>
+    {
+        public override ExportResult Export(in Batch<Activity> batch)
+        {
+            foreach (Activity activity in batch)
+            {
+                destination.Enqueue(activity);
+            }
+
+            return ExportResult.Success;
+        }
     }
 
     public Uri BaseAddress { get; }
 
     public CapturedLog Log { get; }
 
-    public List<Activity> Spans { get; }
+    private readonly ConcurrentQueue<Activity> spans;
+
+    // Export callbacks can append after a response reaches the client; readers need a stable
+    // snapshot for N-16 and F-11 instead of enumerating a list while another host exports.
+    public IReadOnlyList<Activity> Spans => spans.ToArray();
 
     public List<Metric> Metrics { get; }
 
@@ -71,7 +98,8 @@ public sealed class TelemetryHost : IAsyncDisposable
     public static async Task<TelemetryHost> StartAsync(
         CancellationToken ct,
         bool telemetry = true,
-        IDictionary<string, string?>? configuration = null)
+        IDictionary<string, string?>? configuration = null,
+        string unknownHostRule = "host.unknown")
     {
         EchoUpstream echo = new();
         EchoUpstreamListener listener = await echo.ListenAsync(ct);
@@ -90,14 +118,14 @@ public sealed class TelemetryHost : IAsyncDisposable
             builder.Configuration.AddInMemoryCollection(configuration);
         }
 
-        List<Activity> spans = [];
+        ConcurrentQueue<Activity> spans = new();
         List<Metric> metrics = [];
         CapturedLog log = new();
 
         if (telemetry)
         {
             builder.AddPlatformTelemetry();
-            builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddInMemoryExporter(spans));
+            builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddProcessor(new SimpleActivityExportProcessor(new CapturedActivityExporter(spans))));
             builder.Services.ConfigureOpenTelemetryMeterProvider(meters => meters.AddInMemoryExporter(metrics));
             builder.Logging.Services.AddSingleton<ILoggerProvider>(services => new CapturingProvider(log,
                 services.GetServices<ConsoleFormatter>().Single(f => f.Name == PlatformJsonFormatter.FormatterName)));
@@ -134,18 +162,42 @@ public sealed class TelemetryHost : IAsyncDisposable
             web.UsePlatformTelemetry();
         }
 
-        // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404
-        // the real stage gives an unknown host.
+        // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404 and
+        // the host.unknown rule id (overridable to isolate metric tests) the real stage gives an
+        // unknown host (change request 6.4 ->
+        // Decision). Written null-conditionally, as every real stage writes it.
         AppDefinition entry = TestApps.Entry(AppId);
         web.Use(async (context, next) =>
         {
             if (context.Request.Headers["X-Test-Unknown-Host"].Count > 0)
             {
+                context.Features.Get<IRequestTelemetryFeature>()?.Rule = unknownHostRule;
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
 
             context.Features.Set<IAppFeature>(SettableAppFeature.For(entry));
+            await next(context);
+        });
+
+        // Stand-in for the later stages. Workstream 3 turns the session cookie's key into its
+        // reference, and the key goes no further; a request gate rejects under the rule id the test
+        // names, with the 403 the gate answers.
+        web.Use(async (context, next) =>
+        {
+            IRequestTelemetryFeature? fields = context.Features.Get<IRequestTelemetryFeature>();
+            if (context.Request.Cookies.TryGetValue(SessionCookie, out string? key) && !string.IsNullOrEmpty(key))
+            {
+                fields?.SessionRef = SessionRef.Of(key);
+            }
+
+            if (context.Request.Headers[RejectHeader] is [{ } rule, ..])
+            {
+                fields?.Rule = rule;
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
             await next(context);
         });
 
