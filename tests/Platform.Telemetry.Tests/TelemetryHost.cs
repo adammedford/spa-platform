@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -51,22 +52,41 @@ public sealed class TelemetryHost : IAsyncDisposable
     private readonly EchoUpstreamListener upstream;
 
     private TelemetryHost(WebApplication app, EchoUpstream echo, EchoUpstreamListener upstream, Uri baseAddress,
-        CapturedLog log, List<Activity> spans, List<Metric> metrics)
+        CapturedLog log, ConcurrentQueue<Activity> spans, List<Metric> metrics)
     {
         this.app = app;
         this.upstream = upstream;
         Upstream = echo;
         BaseAddress = baseAddress;
         Log = log;
-        Spans = spans;
+        this.spans = spans;
         Metrics = metrics;
+    }
+
+    // The pinned in-memory exporter calls ICollection.Add without synchronizing readers:
+    // https://github.com/open-telemetry/opentelemetry-dotnet/blob/core-1.19.1/src/OpenTelemetry.Exporter.InMemory/InMemoryExporter.cs
+    private sealed class CapturedActivityExporter(ConcurrentQueue<Activity> destination) : BaseExporter<Activity>
+    {
+        public override ExportResult Export(in Batch<Activity> batch)
+        {
+            foreach (Activity activity in batch)
+            {
+                destination.Enqueue(activity);
+            }
+
+            return ExportResult.Success;
+        }
     }
 
     public Uri BaseAddress { get; }
 
     public CapturedLog Log { get; }
 
-    public List<Activity> Spans { get; }
+    private readonly ConcurrentQueue<Activity> spans;
+
+    // Export callbacks can append after a response reaches the client; readers need a stable
+    // snapshot for N-16 and F-11 instead of enumerating a list while another host exports.
+    public IReadOnlyList<Activity> Spans => spans.ToArray();
 
     public List<Metric> Metrics { get; }
 
@@ -98,14 +118,14 @@ public sealed class TelemetryHost : IAsyncDisposable
             builder.Configuration.AddInMemoryCollection(configuration);
         }
 
-        List<Activity> spans = [];
+        ConcurrentQueue<Activity> spans = new();
         List<Metric> metrics = [];
         CapturedLog log = new();
 
         if (telemetry)
         {
             builder.AddPlatformTelemetry();
-            builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddInMemoryExporter(spans));
+            builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddProcessor(new SimpleActivityExportProcessor(new CapturedActivityExporter(spans))));
             builder.Services.ConfigureOpenTelemetryMeterProvider(meters => meters.AddInMemoryExporter(metrics));
             builder.Logging.Services.AddSingleton<ILoggerProvider>(services => new CapturingProvider(log,
                 services.GetServices<ConsoleFormatter>().Single(f => f.Name == PlatformJsonFormatter.FormatterName)));
