@@ -80,9 +80,14 @@ tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
 Read it, do not take it from here. This file does not track progress, because a copy of the state
 goes stale and then misleads every session that loads it.
 
-- **Which gates have closed:** `git tag`. Each annotated tag names the gate and the CI run that
-  proves its exit test.
-- **What has landed:** `git log --oneline`, where each task's merge names its id.
+**`git fetch origin` first, and read the trunk rather than this checkout.** A local main runs
+behind the remote one, and tags and merges arrive with a fetch. Skip it and every answer below
+comes from a stale clone, which reads as confident rather than stale: a session then rebuilds what
+is already upstream and forks its work from a commit the trunk has moved past.
+
+- **Which gates have closed:** `git tag`, after that fetch. Each annotated tag names the gate and
+  the CI run that proves its exit test.
+- **What has landed:** `git log --oneline origin/main`, where each task's merge names its id.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
   tags.
 - **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read against `git tag`.

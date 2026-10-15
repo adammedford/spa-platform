@@ -24,7 +24,9 @@ or a test run, make a throwaway worktree outside the repo, run the one project t
 
 **Standards** is `CODING_STANDARDS.md`, plus `AGENTS.md` and `CLAUDE.md` for the rules an
 implementation agent carries, plus `OWNERSHIP.md`: a diff that writes outside its owner's paths is a
-finding on its own, and `.github/path-ownership.py <base> <head>` decides it.
+finding on its own, and `.github/path-ownership.py <base> <head>` decides it. It reads a task
+branch by its whole diff and an integration branch per commit, so on a multi-owner branch the
+finding is a single commit that crossed owners, not the branch's breadth.
 
 **Spec** has no per-task spec file. `docs/agents/landing-work.md` fixes it: the plan row plus the
 contracts rows naming it, cited by path. In practice:

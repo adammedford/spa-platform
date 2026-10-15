@@ -53,6 +53,14 @@ jobs:
           python3 -I tools/roadmap_tests.py
           python3 -I tools/roadmap.py --check
 
+      - name: A-05's two rules hold
+        # The ownership check is the one guard with no CI job of its own: it runs in the pre-push
+        # hook, where a failure costs an amended commit instead of a red pull request. Its rules
+        # are still worth a test, because the second one -- every commit single-owner, on a branch
+        # that merged something -- is the rule that decides whether an integration branch can be
+        # pushed through the hook at all rather than around it.
+        run: python3 -I .github/path_ownership_tests.py
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
