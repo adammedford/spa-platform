@@ -66,7 +66,7 @@ assertion could fail, whether a comment is true, whether the diff matches the ro
 
 Report a sub-agent's finding only after you have taken its severity for yourself. A finding handed
 up as "looks wrong" is sometimes right, sometimes the contract's own design: on 15 October two axes
-independently called stage 2's captured feature a defect, and the contract turned out to give later
+independently called `UsePlatformTelemetry`'s captured feature a defect, and the contract turned out to give later
 stages a feature they write rather than replace.
 
 ## Landing or holding

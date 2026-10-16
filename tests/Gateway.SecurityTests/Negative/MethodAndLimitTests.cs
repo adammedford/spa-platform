@@ -12,15 +12,15 @@ namespace Gateway.SecurityTests.Negative;
 /// where it answers.</b></para>
 /// <list type="bullet">
 /// <item><c>TRACE</c> and <c>CONNECT</c> are refused by the method allowlist, which runs in
-/// <b>stage 1</b>. <c>contracts/telemetry.md</c> records the consequence as a known gap: stage 1
-/// "is answered before stage 2 creates the feature, so it reaches no request line and is not
-/// counted. It is logged with its rule id by the stage itself." So the rule id for these two is
-/// asserted on the stage's own line, and the <i>absence</i> of a request line is asserted too —
-/// that is the gap, and a test that looked for the id on a request line would be reporting a defect
-/// that is a documented decision waiting for a gate.</item>
+/// <c>UsePlatformForwardedHeaders</c>, behind <c>UsePlatformTelemetry</c> since ADR-0018 put
+/// telemetry first. The rule id is asserted on the allowlist's own line, and the request line the
+/// telemetry stage writes for the 405 is asserted to exist with its status. That line's
+/// <c>rule</c> field is not read here yet: the allowlist's write of <c>gate.method</c> to
+/// <c>IRequestTelemetryFeature</c> is workstream 4's (overnight ticket 63), and the assertion that
+/// it reaches this line and <c>security.rejections</c> is ticket 64's, which waits on 63.</item>
 /// <item>An unsafe method on an <b>asset path</b> is the request gate's per-path rule
-/// (<b>stage 6</b>), which is after stage 2, so that one does carry its rule id on the request
-/// line.</item>
+/// (<c>UsePlatformRequestGate</c>), which runs after the telemetry stage like every other, so that
+/// one does carry its rule id on the request line.</item>
 /// <item><b>Oversized headers</b> are refused by <b>Kestrel</b>, before any middleware:
 /// <c>contracts/http-contract.md</c> -> Errors says "Kestrel refuses oversized headers itself, with
 /// 431 and no body". The limit itself is <c>PlatformSecurityLimits</c>, applied by
@@ -61,7 +61,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
     [Theory]
     [MemberData(nameof(MethodsNoPathAccepts))]
-    public async Task A_method_no_path_accepts_is_405_at_stage_1_under_gate_method(string method, string target)
+    public async Task A_method_no_path_accepts_is_405_under_gate_method_and_on_the_request_line(string method, string target)
     {
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
         int warnings = MethodRefusals().Count;
@@ -79,12 +79,16 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         Assert.DoesNotContain(method, allow, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("GET", allow, StringComparison.Ordinal);
 
-        // The rule id on the stage's own line, which is the only place it reaches.
+        // The rule id on the allowlist's own line.
         await Observed.UntilAsync(() => MethodRefusals().Count > warnings, "the stage's own refusal line", Suite.Ct);
         Assert.Equal(RuleIds.GateMethod, Observed.Field(MethodRefusals()[warnings], "rule"));
 
-        // And the documented gap: no request line, because stage 2 never ran.
-        Assert.Equal(before, await Observed.SettledCountAsync(Harness, Suite.Ct));
+        // And the request line, now that the telemetry stage runs first (ADR-0018): exactly one,
+        // carrying the status. Its rule id is ticket 63's to write and ticket 64's to assert.
+        await Observed.UntilAsync(() => Observed.RequestLines(Harness).Count > before, "the request's own log line", Suite.Ct);
+        IReadOnlyList<JsonElement> lines = Observed.RequestLines(Harness);
+        Assert.Equal(before + 1, lines.Count);
+        Assert.Equal((long?)expected.Status, Observed.Number(lines[before], "status"));
     }
 
     [Theory]
@@ -107,7 +111,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         // Allow header says so rather than naming every method some other path takes.
         Assert.Equal("GET, HEAD", Assert.Single(response.Values("Allow")));
 
-        // This refusal is stage 6's, which is after stage 2, so the id does reach the request line.
+        // This refusal is the request gate's, which writes the feature, so the id reaches the request line.
         Assert.Equal(RuleIds.GateMethod, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }
 
@@ -154,7 +158,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         Assert.Equal(431, response.StatusCode);
         Assert.Empty(response.Body);
 
-        // And no stage logged any of it, because Kestrel answered before stage 2 ran. Swept over
+        // And no stage logged any of it, because Kestrel answered before any stage ran. Swept over
         // the log rather than over the status line, which could not have carried a request header's
         // value in the first place (CODING_STANDARDS.md -> "An assertion must be able to fail").
         Assert.NotEmpty(Harness.Log.Lines);

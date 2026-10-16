@@ -25,26 +25,36 @@ leaves open: the key's UTF-8 bytes, and lowercase hex. Two writers must produce 
 
 ## How `rule` and `session_ref` reach the request line
 
-Stage 2 writes the request line after the rest of the pipeline has returned, so it can read what a
-later stage left on the request, but neither of these values is its own to compute: the stage that
-rejected the request knows the rule, and only workstream 3 holds the session key.
+`UsePlatformTelemetry` is the first stage, and it writes the request line after the rest of the
+pipeline has returned, so it can read what a later stage left on the request; but neither of these
+values is its own to compute: the stage that rejected the request knows the rule, and only
+workstream 3 holds the session key.
 
-`IRequestTelemetryFeature` in `src/Platform.Abstractions` is where they are left. Stage 2 sets the
-feature on the request before calling the rest of the pipeline and reads it back afterwards; any
-later stage writes it, null-conditionally, because a stage's own test project runs without stage 2.
-The rule id is written only by the stage that ends the request with a rejection, so at most one stage
-writes it and nothing enforces write-once.
+`IRequestTelemetryFeature` in `src/Platform.Abstractions` is where they are left. The telemetry
+stage sets the feature on the request before calling the rest of the pipeline and reads it back
+afterwards; every later stage writes it, null-conditionally, because a stage's own test project
+runs without the telemetry stage. The rule id is written only by the stage that ends the request
+with a rejection, so at most one stage writes it and nothing enforces write-once.
 
 Two cases are deliberately not rejections and leave `rule` null: the 401 answered when no access
 token can be had for a live session, for which `contracts/request-gate.md` has no id, and an upstream
 API's own 4xx. Every 401 that *does* have an id in that table carries it — a cookie resolving to no
 session for this app is `auth.session`, not a null.
 
-One rejection is outside this mechanism's reach and is a known gap, not a licence: the stage-1 405
-for a method no path accepts (`gate.method` from the method allowlist) is answered before stage 2
-creates the feature, so it reaches no request line and is not counted. It is logged with its rule id
-by the stage itself. Closing the gap needs either a change to the stage order in
-`contracts/pipeline.md` or a second owner for `security.rejections`, so it waits for a gate.
+Every rejection the application answers therefore reaches the line and the count, the method
+allowlist's 405 included: it runs in `UsePlatformForwardedHeaders`, the second stage, and writes
+`gate.method` like any other. Until G1b the allowlist ran first and its 405 reached neither, which
+change request 6.4 recorded as a gap; ADR-0018 closed it by making telemetry the first stage. What
+the server refuses before any stage runs — Kestrel's 431 for oversized headers,
+`contracts/http-contract.md` → Errors — is not a rejection in this contract's sense and carries no
+rule id; `contracts/request-gate.md` says the same.
+
+The request line carries no value forwarded headers settle: no scheme, no client address, no host.
+That is what lets the telemetry stage run before `UsePlatformForwardedHeaders` without logging a
+value the trusted-network rule has not yet been applied to, and it is held by the "Log fields" row
+above: a line is those fields and nothing else. The span's own tags are the framework
+instrumentation's, set when hosting starts the activity before any stage runs, so the order of
+these two stages does not change them.
 
 ## The instruments
 
@@ -55,7 +65,7 @@ and traces to `Platform.*` plus the proxy's own `Yarp.ReverseProxy`, so an instr
 that shape is one nobody sees.
 
 `security.rejections` is the exception to "the instrument belongs to the project that raises the
-event": stage 2 counts it, from the same feature field it logs as `rule`, on its own
+event": `UsePlatformTelemetry` counts it, from the same feature field it logs as `rule`, on its own
 `Platform.Telemetry` meter. One owner then guarantees that the count equals the request lines
 carrying a rule. It is tagged `rule` and `app_id`, and `app_id` is null for a request rejected before
 the app was resolved.

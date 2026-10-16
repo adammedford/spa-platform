@@ -28,7 +28,7 @@ after landing a row; `--check` runs in `.githooks/pre-push` and in CI.
 | --- | --- | --- | --- |
 | S1 It boots, and refuses a host it does not know | G1a, tagged `skeleton-v1` | 5 of 5 | nothing |
 | S2 The mechanism holds on the shipped parts | G0, tagged `g0-mechanism` | 5 of 6 | part-landed: `1.1` |
-| S3 The identity surface is frozen | G1b, not tagged | 0 of 1 | part-landed: `I-6` |
+| S3 The identity surface is frozen | G1b, tagged `contracts-v1` | 1 of 1 | nothing |
 | S4 Feature complete, hermetically | G2, not tagged | 18 of 29 | `3.1`, `3.2`, `3.3`, `3.4`, `3.5`, `3.6`, `3.7`, `3.8`, `3.9`, `4.2`; part-landed: `6.2` |
 | S5 The same gateway on real infrastructure | G3, not tagged | 0 of 9 | `1.6b`, `1.7`, `1.9`, `6.5`, `6.9`; part-landed: `1.2`, `1.3`, `1.4`, `1.5` |
 | S6 Hardened: every attempt is refused | G4, not tagged | 0 of 1 | part-landed: `6.3` |
@@ -50,7 +50,7 @@ The brief these stages serve asks for a gateway that is feature complete, harden
 word needs a test, or it is a mood.
 
 **Feature complete** means every entry point in `contracts/pipeline.md` is filled by its owner and
-nothing is a stub: nine of the ten middleware stages, since stage 7 is the framework's own, plus
+nothing is a stub: nine of the ten middleware stages, since routing and authentication are the framework's own, plus
 six service registrations and three endpoint maps. The proof is the hermetic functional suite,
 F-01 to F-06 and F-08 to F-11, against the real composition. That is stage S4, gate G2. Feature
 complete says nothing about whether the features are right.
@@ -70,13 +70,14 @@ section below carries the rest, because the plan does not yet name it.
 ## The gateway's surface, and what fills it
 
 Feature complete is a per-stage question, so here is the ladder stage that fills each stage of the
-request path. The order is `contracts/pipeline.md`, which freezes at G1a and is security-relevant;
+request path. The order is `contracts/pipeline.md`, frozen at G1a and changed once at G1b
+(ADR-0018), and it is security-relevant;
 the owner column is that contract's, not this file's.
 
 | Request path | Entry point | Owner | Filled at |
 | --- | --- | --- | --- |
-| 1 Forwarded headers | `UsePlatformForwardedHeaders` | 4 | S4 |
-| 2 Telemetry | `UsePlatformTelemetry` | 6 | S4 |
+| 1 Telemetry | `UsePlatformTelemetry` | 6 | S4 |
+| 2 Forwarded headers and the method allowlist | `UsePlatformForwardedHeaders` | 4 | S4 |
 | 3 Health | `UsePlatformHealth` | 2 | S4 |
 | 4 Host resolution | `UsePlatformHostResolution` | 2 | S4 |
 | 5 Security headers and CSP | `UsePlatformSecurityHeaders` | 4 | S4 |
