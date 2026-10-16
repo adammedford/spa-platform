@@ -4,9 +4,11 @@
 Owner: integrator.
 
 Two of the documents are loaded into every context window -- AGENTS.md and CLAUDE.md -- one is
-read by every workstream before it builds, the contracts index, and the last rule widens the scope
-again: a ticket citation is a pointer, and any tracked file may carry one. Each rule below was a
-prose paragraph first, and each paragraph was broken by the session after the one that wrote it.
+read by every workstream before it builds, the contracts index, and the last two widen the scope
+again: a ticket citation is a pointer, and any tracked file may carry one; and a citation is only
+as good as the number it names, which every tracker directory has to keep to one file. Each rule
+below was a prose paragraph first, and each paragraph was broken by the session after the one that
+wrote it.
 
 **No progress.** AGENTS.md says of itself that it "does not track progress, because a copy of the
 state goes stale and then misleads every session that loads it". The skeleton import wrote three
@@ -41,6 +43,16 @@ by an unqualified citation. A document meaning another tracker names it -- `over
 One global number-to-file map would mis-resolve both readings. A ticket named before it is filed
 goes in UNFILED below, on PLANNED's terms, and the line this rule passes prints how many citations
 it followed, for the reason the freeze count is printed.
+
+**No number two tickets share.** The citation rule's other half: a number that resolves to two
+files resolves, and still leaves its reader to guess. `.scratch/overnight/issues/` once held two
+61s and two 66s, filed by sessions that could not see each other's unlanded work, and the fix for
+that is a failure at the second push, since neither branch was wrong until the other landed. The
+check is per tracker, read by the same trackers() the citation rule resolves in, because numbering
+restarts in each and `06` in several of them is several tickets. What a session does when its
+number is taken is in docs/agents/issue-tracker.md; the rule cannot do the part that matters,
+which is reading each citation of the old number to see which ticket it meant, because after a
+rename every one of them still resolves. The line it passes prints how many tickets it read.
 
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py
 """
@@ -161,6 +173,10 @@ CITATION = re.compile(
 # rule one level over: this check fails once the ticket appears, so landing it forces the entry out
 # rather than leaving a stale exemption behind. Empty is the expected state.
 UNFILED: dict[tuple[str, str], str] = {}
+
+# The number a ticket file answers to: the two digits a citation of it is looked up by, as
+# dangling_tickets() globs `NN-*`. A file named any other way is not a ticket a number can reach.
+NUMBERED = re.compile(r"^(\d{2})-")
 
 
 def progress_claims(root: pathlib.Path) -> list[str]:
@@ -409,6 +425,36 @@ def dangling_tickets(root: pathlib.Path) -> tuple[list[str], list[str], int]:
     return missing, filed, resolved
 
 
+def shared_numbers(root: pathlib.Path) -> tuple[list[str], int]:
+    """The numbers two or more tickets in one tracker share, and how many tickets were read.
+
+    Per tracker and never across them, because numbering restarts in each: `06` names a file in
+    several of them by design. The trackers are the ones a citation resolves in, read by trackers(),
+    so this rule and the citation rule cannot disagree about which directories hold tickets. A
+    file answers to a number when the citation rule's own lookup -- `NN-*` -- would land on it, so
+    the files reported here are exactly the ones a citation of the number cannot choose between.
+
+    The count is reported for the reason the other two are: a sentence printed whether or not any
+    ticket was read is a sentence no test can hold to anything.
+    """
+    shared, read = [], 0
+    for tracker in sorted(trackers(root)):
+        issues = root / TRACKER_ROOT / tracker / ISSUES
+        claimed: dict[str, list[str]] = {}
+        for entry in issues.iterdir():
+            found = NUMBERED.match(entry.name)
+            if found:
+                claimed.setdefault(found.group(1), []).append(entry.name)
+        for number, names in sorted(claimed.items()):
+            read += len(names)
+            if len(names) > 1:
+                shared.append(
+                    f"{TRACKER_ROOT}/{tracker}/{ISSUES}/: {number} is claimed by "
+                    + " and ".join(sorted(names))
+                )
+    return shared, read
+
+
 def report(lines: list[str], headline: str, *advice: str) -> bool:
     """Print one rule's failures under its own headline, and say whether there were any.
 
@@ -435,6 +481,7 @@ def main() -> int:
     missing, landed = dangling_pointers(root)
     disagreements, unreadable, compared = freeze_disagreements(root)
     unresolved, filed, resolved = dangling_tickets(root)
+    shared, numbered = shared_numbers(root)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -485,6 +532,15 @@ def main() -> int:
             "STEERING FAILED: a ticket on UNFILED has been filed.",
             "Remove it from UNFILED in this script, so the list never outlives its entries.",
         ),
+        report(
+            shared,
+            "STEERING FAILED: two tickets in one tracker share a number.",
+            "A citation of the number cannot say which it means. Renumber the ticket that",
+            "reached origin/main second to the next free number in its directory, and move",
+            "every citation that meant it in the same commit. Read each one: after the rename",
+            "the number still resolves, to the other file, so no check finds one left behind.",
+            "The procedure is in docs/agents/issue-tracker.md.",
+        ),
     ]
 
     if any(failures):
@@ -497,6 +553,9 @@ def main() -> int:
     if resolved:
         citations = "citation resolves" if resolved == 1 else "citations resolve"
         summary += f" {resolved} ticket {citations} to a spec."
+    if numbered:
+        tickets = "ticket holds" if numbered == 1 else "tickets each hold"
+        summary += f" {numbered} {tickets} a number no other ticket in its tracker shares."
     print(summary)
     return 0
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Regressions for the four rules .github/steering.py holds.
+"""Regressions for the rules .github/steering.py holds.
 
 Owner: integrator. Run: python3 -I .github/steering_tests.py
 
 Each case builds a throwaway tree -- a pair of steering files, a contracts index, a tracker
 directory, and whatever a pointer in them is supposed to resolve to -- rather than asserting
-against the live repository, which is green and so proves nothing about the red side. The freeze
-rule and the citation rule each get one case against the repository as well, because their green
+against the live repository, which is green and so proves nothing about the red side. The freeze,
+citation and numbering rules each get one case against the repository as well, because their green
 side is the index, the contracts and the tracker as they actually stand. The module resolves its
 root from __file__, so patching that points it at the tree; PLANNED and UNFILED are module state,
 so a case that needs an entry sets one.
@@ -645,7 +645,7 @@ class SteeringTests(unittest.TestCase):
         the rule would be switched off within a week of landing.
         """
         self.write_ticket("overnight", "46")
-        self.cite_in(f"{issues_in(TRACKER)}/46-a-spec.md",
+        self.cite_in(f"{issues_in(TRACKER)}/47-a-spec.md",
                      f"Add notes to workstream 3's {WORD}s 3.3, 3.5 and 3.9.")
         code, out = self.check()
         self.assertEqual(0, code, out)
@@ -670,17 +670,22 @@ class SteeringTests(unittest.TestCase):
         self.assertNotIn("STEERING FAILED", out)
 
     def test_a_number_resolving_to_two_files_resolves(self):
-        """The tracker holds two files numbered 61 today.
+        """The overnight tracker held two files numbered 61 when this rule landed.
 
         A citation of it lands on a spec, which is all this rule promises; that two files share a
-        number is a different defect, and the rule that catches it is its own.
+        number is a different defect, and the rule that catches it is its own -- so the push still
+        fails, on that rule's headline and not on this one's. The count is read off the rule
+        directly, because a failing run prints no summary to read it from.
         """
         self.write_ticket("overnight", "61", "one-slug")
         self.write_ticket("overnight", "61", "another-slug")
         self.cite_in(f"{issues_in(TRACKER)}/62-a-spec.md", f"Follows {cite('61')}.")
         code, out = self.check()
-        self.assertEqual(0, code, out)
-        self.assertIn("1 ticket citation resolves to a spec.", out)
+        self.assertEqual(1, code, out)
+        self.assertNotIn("STEERING FAILED: a cited ticket number resolves to no file.", out)
+        self.assertIn("STEERING FAILED: two tickets in one tracker share a number.", out)
+        missing, filed, resolved = steering.dangling_tickets(self.root)
+        self.assertEqual(([], [], 1), (missing, filed, resolved))
 
     def test_an_unfiled_ticket_is_exempt_while_absent(self):
         why = "the integrator files it with the decision it records"
@@ -725,6 +730,80 @@ class SteeringTests(unittest.TestCase):
         counted = re.search(r"(\d+) ticket citations? resolves? to a spec\.", out)
         self.assertIsNotNone(counted, out)
         self.assertGreaterEqual(int(counted.group(1)), 350, out)
+
+    # --- a ticket number is unique within its tracker -----------------------------------------
+
+    def test_two_tickets_sharing_a_number_in_one_tracker_fail(self):
+        """The overnight tracker's two 61s: one session's flake ticket, and another's task 6.1a.
+
+        Written by two sessions that could not see each other's unlanded work, and each a spec a
+        citation of the number might mean. The failure names the directory and both files, so the
+        session that has to renumber one does not have to list the directory to find them.
+        """
+        self.write_ticket(TRACKER, "60")
+        self.write_ticket(TRACKER, "61", "security-suite-refresh-outcome-flake")
+        self.write_ticket(TRACKER, "61", "6.1a-harness-update-registry-race")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: two tickets in one tracker share a number.", out)
+        self.assertIn(
+            f"{issues_in(TRACKER)}/: 61 is claimed by 61-6.1a-harness-update-registry-race.md "
+            "and 61-security-suite-refresh-outcome-flake.md",
+            out,
+        )
+        self.assertIn("docs/agents/issue-tracker.md", out)
+
+    def test_every_number_sharing_files_is_reported_in_every_tracker(self):
+        """Three files on one number are one line naming all three, and a second collision in
+        another tracker is reported beside it rather than after the first is fixed."""
+        for slug in ("a", "b", "c"):
+            self.write_ticket(TRACKER, "07", slug)
+        self.write_ticket(OTHER_TRACKER, "02", "one")
+        self.write_ticket(OTHER_TRACKER, "02", "two")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn(f"{issues_in(TRACKER)}/: 07 is claimed by 07-a.md and 07-b.md and 07-c.md",
+                      out)
+        self.assertIn(f"{issues_in(OTHER_TRACKER)}/: 02 is claimed by 02-one.md and 02-two.md",
+                      out)
+
+    def test_a_number_repeated_across_trackers_passes(self):
+        """Numbering restarts per tracker by design, so `06` in two of them is two tickets.
+
+        The count is what the assertion holds, as the citation rule's green case does: a rule
+        deleted outright also exits 0, and the sentence has to say how many tickets it read.
+        """
+        self.write_ticket(TRACKER, "06", "a-plan-ticket")
+        self.write_ticket(OTHER_TRACKER, "06", "a-feature-ticket")
+        self.write(f"{issues_in(OTHER_TRACKER)}/README.md", "Not a numbered ticket.\n")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("2 tickets each hold a number no other ticket in its tracker shares.", out)
+
+    def test_a_single_ticket_is_counted_in_the_singular(self):
+        """The plural above and the singular here, so the count is a number and not a word."""
+        self.write_ticket(TRACKER, "06")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("1 ticket holds a number no other ticket in its tracker shares.", out)
+
+    def test_every_ticket_in_the_live_tree_holds_its_own_number(self):
+        """The one uniqueness case against the real tree, where the 61s collided until this rule
+        landed and renumbered one of them.
+
+        The count is asserted as a floor for the reason the other two live counts are: a green
+        exit on its own is what a rule reading no tracker also prints. The floor is what the
+        trackers held when the rule landed: filing a ticket raises the count, and only deleting
+        one lowers it, which is a change that should lower this floor on purpose.
+        """
+        steering.__file__ = str(ROOT / ".github" / "steering.py")
+        steering.PLANNED = LIVE_PLANNED
+        steering.UNFILED = LIVE_UNFILED
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        counted = re.search(r"(\d+) tickets? (?:each )?holds? a number no other ticket", out)
+        self.assertIsNotNone(counted, out)
+        self.assertGreaterEqual(int(counted.group(1)), 86, out)
 
 
 if __name__ == "__main__":

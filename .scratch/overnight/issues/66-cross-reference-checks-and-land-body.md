@@ -14,7 +14,8 @@ trunk stops at 61, that the 405 write is unpushed, or that fifteen exception sit
 write are historical evidence. Their deletion obligation is satisfied by those landed changes.
 The proposed cross-reference checks, test companion and landing-script body option remain future
 work; this ticket does not claim them implemented. Ticket 67 is the separate G2 session-composition
-work, and the older duplicate 61 remains a numbering cleanup for this check's implementation.
+work. The duplicate 61 is resolved: task 6.1a's ticket is 68 now, renumbered by
+cross-reference-checks ticket 04, and the security suite's flake ticket kept 61.
 
 ## Problem Statement
 
