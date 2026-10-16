@@ -333,6 +333,13 @@ run "teardown_trust_refuses_the_ci_plan_role" {
 run "teardown_policy_is_the_roles_own_and_its_arn_is_an_output" {
   command = apply
 
+  # Apply only the role and its policy: the state bucket intentionally prevents destruction,
+  # including Terraform test cleanup. Earlier full plans still cover the complete root.
+  # https://developer.hashicorp.com/terraform/language/tests#run-blocks (plan_options.target)
+  plan_options {
+    target = [aws_iam_role.teardown, aws_iam_role_policy.teardown]
+  }
+
   assert {
     condition     = aws_iam_role_policy.teardown.role == aws_iam_role.teardown.id
     error_message = "The teardown policy is the teardown role's own inline policy."
