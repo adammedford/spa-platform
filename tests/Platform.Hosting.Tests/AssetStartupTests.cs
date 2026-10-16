@@ -9,7 +9,8 @@ namespace Platform.Hosting.Tests;
 /// <summary>
 /// Mapping the asset endpoint builds no object store. The gateway's is the S3 store, whose client
 /// throws with no region or bucket configured, and <c>RegistryPoller</c> defers it so the gateway
-/// starts with no <c>Registry:*</c> at all (CI's G1a smoke test); stage 10 must not undo that.
+/// starts with no <c>Registry:*</c> at all (CI's G1a smoke test); <c>MapPlatformAssets</c> must not
+/// undo that.
 /// </summary>
 public sealed class AssetStartupTests
 {

@@ -5,7 +5,7 @@ using Platform.Abstractions;
 namespace Platform.Hosting;
 
 /// <summary>
-/// Stage 3's two answers (contracts/pipeline.md, Health endpoints).
+/// <c>UsePlatformHealth</c>'s two answers (contracts/pipeline.md, Health endpoints).
 /// </summary>
 internal static class Health
 {

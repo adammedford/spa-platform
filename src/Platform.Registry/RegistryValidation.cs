@@ -33,8 +33,8 @@ public sealed record RegistryValidation(
                 $"A rejected registry document has no snapshot ({Errors.Length} error(s), the first: {Errors[0]}).");
         }
 
-        // Ordinal: the schema admits only lowercase hosts and appIds, and host resolution matches the
-        // request authority exactly (contracts/pipeline.md, stage 4).
+        // Ordinal: the schema admits only lowercase hosts and appIds, and host resolution matches
+        // the request authority exactly (contracts/pipeline.md, UsePlatformHostResolution).
         return new RegistrySnapshot(
             Revision,
             etag,

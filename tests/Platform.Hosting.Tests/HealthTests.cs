@@ -4,7 +4,7 @@ using Platform.Testing;
 namespace Platform.Hosting.Tests;
 
 /// <summary>
-/// Stage 3, <c>UsePlatformHealth</c>: contracts/pipeline.md, Health endpoints. Both paths answer on
+/// <c>UsePlatformHealth</c>: contracts/pipeline.md, Health endpoints. Both paths answer on
 /// any host, because health runs before host resolution so the ALB health check and
 /// <c>spactl wait</c> need no registry entry.
 /// </summary>

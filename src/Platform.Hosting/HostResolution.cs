@@ -4,7 +4,8 @@ using Platform.Abstractions;
 namespace Platform.Hosting;
 
 /// <summary>
-/// Stage 4 (contracts/pipeline.md; docs/plan/01-plan.md, Request path step 3 and threat T4).
+/// <c>UsePlatformHostResolution</c> (contracts/pipeline.md; docs/plan/01-plan.md, Request path step
+/// 3 and threat T4).
 /// </summary>
 internal static class HostResolution
 {
@@ -16,18 +17,20 @@ internal static class HostResolution
         RegistrySnapshot snapshot = registry.Current;
         string authority = context.Request.Host.Value ?? "";
 
-        // Exact means ordinal (GLOSSARY.md, Host), checked here rather than left to the snapshot's index
-        // comparer: the registry builds it ordinal, but stage 4 is where the rule is enforced, and a
-        // host that differs only in case is not the host the registry names. Nothing is normalised;
-        // X-Forwarded-Host is never read (N-08; docs/plan/01-plan.md, threat T4).
+        // Exact means ordinal (GLOSSARY.md, Host), checked here rather than left to the snapshot's
+        // index comparer: the registry builds it ordinal, but host resolution is where the rule is
+        // enforced, and a host that differs only in case is not the host the registry names.
+        // Nothing is normalised; X-Forwarded-Host is never read (N-08; docs/plan/01-plan.md, threat
+        // T4).
         if (!snapshot.ByHost.TryGetValue(authority, out AppDefinition? app)
             || !string.Equals(app.Host, authority, StringComparison.Ordinal))
         {
-            // The rejection says which rule fired, on the one request line stage 2 writes after the
-            // pipeline returns, and in security.rejections counted from the same field
-            // (contracts/telemetry.md -> "How rule and session_ref reach the request line").
-            // Null-conditional because this project's own test project runs without stage 2, and
-            // because stage 2 is the only installer: a missing feature must cost nothing.
+            // The rejection says which rule fired, on the one request line UsePlatformTelemetry
+            // writes after the pipeline returns, and in security.rejections counted from the same
+            // field (contracts/telemetry.md -> "How rule and session_ref reach the request line").
+            // Null-conditional because this project's own test project runs without
+            // UsePlatformTelemetry, and because UsePlatformTelemetry is the only installer: a
+            // missing feature must cost nothing.
             //
             // No Warning line of this stage's own. An unknown host is the cheapest traffic anyone can
             // send, so a line each would let a stranger flood the log; the request line and the

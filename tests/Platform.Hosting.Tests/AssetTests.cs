@@ -4,8 +4,9 @@ using Platform.Testing;
 namespace Platform.Hosting.Tests;
 
 /// <summary>
-/// Stage 10's asset endpoint, <c>MapPlatformAssets</c> (plan row 2.4; contracts/s3-layout.md;
-/// contracts/http-contract.md), behind the real stages 3 and 4 and over a recording in-memory store.
+/// The asset endpoint, <c>MapPlatformAssets</c> (plan row 2.4; contracts/s3-layout.md;
+/// contracts/http-contract.md), behind the real <c>UsePlatformHealth</c> and
+/// <c>UsePlatformHostResolution</c> and over a recording in-memory store.
 /// </summary>
 public sealed class AssetTests
 {
@@ -325,11 +326,12 @@ public sealed class AssetTests
     }
 
     /// <summary>
-    /// The same two refusals also leave their rule id on <see cref="IRequestTelemetryFeature"/>, for
-    /// the one request line stage 2 writes and for <c>security.rejections</c> counted from the same
-    /// field (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
-    /// line"). Stage 2 is workstream 6's and is not in this pipeline, so the feature is
-    /// <c>Platform.Testing</c>'s settable one, installed by the test host in stage 2's place.
+    /// The same two refusals also leave their rule id on <see cref="IRequestTelemetryFeature"/>,
+    /// for the one request line <c>UsePlatformTelemetry</c> writes and for
+    /// <c>security.rejections</c> counted from the same field (contracts/telemetry.md -> "How
+    /// <c>rule</c> and <c>session_ref</c> reach the request line"). <c>UsePlatformTelemetry</c> is
+    /// workstream 6's and is not in this pipeline, so the feature is <c>Platform.Testing</c>'s
+    /// settable one, installed by the test host in its place.
     ///
     /// The endpoint's own Warning line stays: it names which check refused the request, which the
     /// request line cannot, and the test above asserts on it. The row for each id is the same path
@@ -359,7 +361,7 @@ public sealed class AssetTests
     /// <summary>
     /// Both writes are null-conditional, so the endpoint refuses the same way with no feature
     /// installed, as required by contracts/changes/6.4-request-telemetry-feature.md. This case
-    /// explicitly protects component pipelines that omit stage 2.
+    /// explicitly protects component pipelines that omit <c>UsePlatformTelemetry</c>.
     /// </summary>
     [Theory]
     [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request")]

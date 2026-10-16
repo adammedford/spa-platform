@@ -10,14 +10,14 @@ using Platform.Abstractions;
 namespace Platform.Hosting;
 
 /// <summary>
-/// Stage 10's asset endpoint (plan row 2.4; contracts/s3-layout.md; contracts/http-contract.md): every
-/// <c>GET</c> or <c>HEAD</c> that is not <c>/bff/*</c> or <c>/api/*</c>, read from the app's live
-/// release prefix and streamed back.
+/// The asset endpoint, <c>MapPlatformAssets</c> (plan row 2.4; contracts/s3-layout.md;
+/// contracts/http-contract.md): every <c>GET</c> or <c>HEAD</c> that is not <c>/bff/*</c> or
+/// <c>/api/*</c>, read from the app's live release prefix and streamed back.
 ///
 /// The key is built from two registry values and a path this class has validated itself, never from
-/// a segment it has not checked (s3-layout.md). The request gate (stage 6, task 4.3) refuses the same
-/// paths first in the composed gateway; this endpoint does not rely on it, because the key is its own
-/// and N-13 is about what it reads, whichever stage refused.
+/// a segment it has not checked (s3-layout.md). The request gate (<c>UsePlatformRequestGate</c>,
+/// task 4.3) refuses the same paths first in the composed gateway; this endpoint does not rely on
+/// it, because the key is its own and N-13 is about what it reads, whichever stage refused.
 /// </summary>
 internal sealed partial class Assets(ILogger logger)
 {
@@ -51,11 +51,12 @@ internal sealed partial class Assets(ILogger logger)
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Stage 4 pins the app. Without it there is no release to read from, and guessing one would be
-        // serving another app's files, so a misordered pipeline throws rather than answers.
+        // UsePlatformHostResolution pins the app. Without it there is no release to read from, and
+        // guessing one would be serving another app's files, so a misordered pipeline throws rather
+        // than answers.
         AppDefinition app = (context.Features.Get<IAppFeature>()
             ?? throw new InvalidOperationException(
-                "The asset endpoint (stage 10) runs after host resolution (stage 4), which sets IAppFeature.")).App;
+                "The asset endpoint, MapPlatformAssets, runs after UsePlatformHostResolution, which sets IAppFeature.")).App;
 
         HttpRequest request = context.Request;
         bool head = HttpMethods.IsHead(request.Method);
@@ -121,8 +122,9 @@ internal sealed partial class Assets(ILogger logger)
             : RevalidateCacheControl;
         response.Headers.ETag = stored.ETag;
 
-        // Also sent by stage 5 on every response; set here too because a type chosen by extension is
-        // only safe if the browser is told not to second-guess it (s3-layout.md).
+        // Also sent by UsePlatformSecurityHeaders on every response; set here too because a type
+        // chosen by extension is only safe if the browser is told not to second-guess it
+        // (s3-layout.md).
         response.Headers.XContentTypeOptions = "nosniff";
 
         if (stored.NotModified)
@@ -207,11 +209,12 @@ internal sealed partial class Assets(ILogger logger)
     /// <summary>
     /// Records one rejection under its rule id, in the two places the contracts put it.
     ///
-    /// <para>On <see cref="IRequestTelemetryFeature"/> for the one request line stage 2 writes once
-    /// the pipeline has returned, and for <c>security.rejections</c> counted from the same field
-    /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
-    /// Null-conditionally because component pipelines can omit stage 2; a missing feature must not
-    /// change the rejection (contracts/changes/6.4-request-telemetry-feature.md).</para>
+    /// <para>On <see cref="IRequestTelemetryFeature"/> for the one request line
+    /// <c>UsePlatformTelemetry</c> writes once the pipeline has returned, and for
+    /// <c>security.rejections</c> counted from the same field (contracts/telemetry.md -> "How
+    /// <c>rule</c> and <c>session_ref</c> reach the request line"). Null-conditionally because
+    /// component pipelines can omit <c>UsePlatformTelemetry</c>; a missing feature must not change
+    /// the rejection (contracts/changes/6.4-request-telemetry-feature.md).</para>
     ///
     /// <para>And on this endpoint's own Warning line, which it keeps. The line says which of this
     /// endpoint's checks refused the request, at the moment it did, which the request line cannot:

@@ -5,9 +5,10 @@ namespace Platform.Hosting.Tests;
 
 /// <summary>
 /// Snapshots indexed the way the real registry indexes them: <c>ByHost</c> with
-/// <see cref="StringComparer.Ordinal"/>, as <c>src/Platform.Registry/RegistryValidation.cs</c> builds
-/// it. <c>InMemoryRegistry.SnapshotOf</c> indexes hosts ignoring case, so a test of exact matching
-/// built on it could pass because of the comparer rather than because of stage 4.
+/// <see cref="StringComparer.Ordinal"/>, as <c>src/Platform.Registry/RegistryValidation.cs</c>
+/// builds it. <c>InMemoryRegistry.SnapshotOf</c> indexes hosts ignoring case, so a test of exact
+/// matching built on it could pass because of the comparer rather than because of
+/// <c>UsePlatformHostResolution</c>.
 /// </summary>
 internal static class Snapshots
 {
