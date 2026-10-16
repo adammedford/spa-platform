@@ -100,6 +100,23 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
             result.GetProperty("error").GetString());
     }
 
+    /// <summary>
+    /// The URL of every navigation request the page makes from now on, oldest first, redirect hops
+    /// included: the list fills as the browser goes.
+    /// </summary>
+    public List<Uri> RecordNavigations()
+    {
+        List<Uri> navigations = [];
+        Page.Request += (_, request) =>
+        {
+            if (request.IsNavigationRequest)
+            {
+                navigations.Add(new Uri(request.Url));
+            }
+        };
+        return navigations;
+    }
+
     /// <summary>The cookies the browser holds for an app's origin.</summary>
     public async Task<IReadOnlyList<BrowserContextCookiesResult>> CookiesOfAsync(HarnessApp app) =>
         await Context.CookiesAsync([app.Origin.ToString()]);

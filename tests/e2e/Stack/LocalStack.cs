@@ -38,9 +38,10 @@ public sealed class LocalStack : IAsyncDisposable
     {
         CancellationToken ct = TestContext.Current.CancellationToken;
         GatewayHarness harness = await GatewayHarness.StartAsync((options ?? new GatewayHarnessOptions()) with { SessionRequired = true }, ct);
+        TlsLoadBalancer? balancer = null;
         try
         {
-            TlsLoadBalancer balancer = await TlsLoadBalancer.StartAsync(harness.GatewayAddress, Domain, ct);
+            balancer = await TlsLoadBalancer.StartAsync(harness.GatewayAddress, Domain, ct);
             // Every name under the app domain, whatever port its URL names, reaches the load balancer, and
             // so does the foreign site, whose pages it serves. Nothing else is mapped, so the provider on
             // loopback is reached directly, as it is on the internet in the deployed tier.
@@ -50,6 +51,11 @@ public sealed class LocalStack : IAsyncDisposable
         }
         catch
         {
+            if (balancer is not null)
+            {
+                await balancer.DisposeAsync();
+            }
+
             await harness.DisposeAsync();
             throw;
         }

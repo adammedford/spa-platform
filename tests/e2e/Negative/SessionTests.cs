@@ -36,7 +36,7 @@ public sealed class SessionTests
 
         // A navigation is challenged afresh: to the provider, for app 2's own client. The load balancer
         // holds the callback, so the browser stops after the provider.
-        List<Uri> navigations = Navigations(profile);
+        List<Uri> navigations = profile.RecordNavigations();
         stack.LoadBalancer.Hold(url => url.AbsolutePath == "/signin-oidc");
         await profile.Page.GotoAsync(app2.Url("/").ToString());
         Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.Harness.Idp.AuthorizeEndpoint);
@@ -89,18 +89,5 @@ public sealed class SessionTests
 
         await profile.Page.GotoAsync(app.Url("/").ToString());
         await profile.WaitSignedInAsync(app);
-    }
-
-    private static List<Uri> Navigations(Profile profile)
-    {
-        List<Uri> navigations = [];
-        profile.Page.Request += (_, request) =>
-        {
-            if (request.IsNavigationRequest)
-            {
-                navigations.Add(new Uri(request.Url));
-            }
-        };
-        return navigations;
     }
 }
