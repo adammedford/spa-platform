@@ -1,5 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Browser suite for the deployed stack. Owner: workstream 6. It references no project: it drives a running gateway. -->
+  <!-- Browser suite (task 6.5): every row docs/plan/04-tests.md marks D, in headless Chromium. Owner: workstream 6.
+       Locally it drives the hermetic cell from Gateway.TestHarness, reached through a stand-in for the load balancer. -->
+
+  <ItemGroup>
+    <!-- The stand-in load balancer terminates TLS on Kestrel. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Gateway.TestHarness/Gateway.TestHarness.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- docs/dependencies.md lists this package for tests/e2e, with the Chromium it installs. -->
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
 
 </Project>
