@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -44,6 +45,20 @@ public static class PlatformIdentityExtensions
         // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieExtensions.cs
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IPostConfigureOptions<CookieAuthenticationOptions>, PostConfigureCookieAuthenticationOptions>());
+
+        // The OpenID Connect options of task 3.2. The framework's post-configuration is registered as
+        // AddOpenIdConnect would register it, for the same reason as the cookie handler's above; it
+        // supplies the state and nonce protectors and keeps the shared backchannel and metadata manager
+        // this setup sets. The validation AddOpenIdConnect would add for one fixed name is registered
+        // for every OpenID Connect scheme instead (R-D9). AddOpenIdConnect's own registrations:
+        // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectExtensions.cs
+        services.TryAddSingleton<IssuerDirectory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IConfigureOptions<OpenIdConnectOptions>, OidcOptionsSetup>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IPostConfigureOptions<OpenIdConnectOptions>, OpenIdConnectPostConfigureOptions>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IValidateOptions<OpenIdConnectOptions>, OidcOptionsValidation>());
         return builder;
     }
 

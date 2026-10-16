@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -27,7 +26,7 @@ public sealed class HandlersPerRequestTests
     {
         // S-A7 (one remote handler per request) and R-A6 (one real OpenIdConnectHandler per request).
         AppDefinition[] apps = [TestApps.Entry("app1"), TestApps.Entry("app2")];
-        using Gateway gateway = new(apps);
+        await using Gateway gateway = await Gateway.StartAsync(apps);
 
         foreach (AppDefinition app in apps)
         {
@@ -46,7 +45,7 @@ public sealed class HandlersPerRequestTests
         // the host-scoped provider builds one. The timing half of S-F1 (142 to 172 microseconds) is a
         // measurement, not a component test; the count is what drives it.
         AppDefinition[] apps = [.. Enumerable.Range(1, 303).Select(i => TestApps.Entry("app" + i))];
-        using Gateway gateway = new(apps);
+        await using Gateway gateway = await Gateway.StartAsync(apps);
 
         foreach (AppDefinition app in new[] { apps[0], apps[150], apps[302] })
         {
@@ -61,10 +60,10 @@ public sealed class HandlersPerRequestTests
     [Fact]
     public async Task Any_of_303_apps_is_challenged_through_its_own_openid_connect_scheme()
     {
-        // S-F1, "any app can log in": every host's challenge goes to its own client's scheme. The
-        // login itself needs the OIDC options of task 3.2.
+        // S-F1, "any app can log in": every host's challenge goes to its own client's scheme. A whole
+        // login on those options is LoginTests.
         AppDefinition[] apps = [.. Enumerable.Range(1, 303).Select(i => TestApps.Entry("app" + i))];
-        using Gateway gateway = new(apps);
+        await using Gateway gateway = await Gateway.StartAsync(apps);
         IAuthenticationSchemeProvider schemes = gateway.Services.GetRequiredService<IAuthenticationSchemeProvider>();
 
         foreach (AppDefinition app in apps)
@@ -78,7 +77,7 @@ public sealed class HandlersPerRequestTests
     public async Task The_request_is_authenticated_through_the_hosts_own_cookie_scheme()
     {
         AppDefinition app2 = TestApps.Entry("app2");
-        using Gateway gateway = new([TestApps.Entry("app1"), app2]);
+        await using Gateway gateway = await Gateway.StartAsync([TestApps.Entry("app1"), app2]);
 
         Built built = await gateway.SendAsync(app2, "/");
 
@@ -96,7 +95,7 @@ public sealed class HandlersPerRequestTests
         // The app's own cookie scheme authenticates (with no result, no cookie being sent), so the
         // refusal is about the name, not about authentication being unavailable.
         AppDefinition app1 = TestApps.Entry("app1");
-        using Gateway gateway = new([app1, TestApps.Entry("app2")]);
+        await using Gateway gateway = await Gateway.StartAsync([app1, TestApps.Entry("app2")]);
         using IServiceScope scope = gateway.Services.CreateScope();
         HttpContext context = gateway.Pin(app1);
         context.RequestServices = scope.ServiceProvider;
@@ -130,31 +129,19 @@ public sealed class HandlersPerRequestTests
         }
     }
 
-    private sealed class Gateway : IDisposable
+    /// <summary>
+    /// <see cref="IdentityGateway"/> with the handler provider recording, and a request sent through
+    /// the authentication middleware alone.
+    /// </summary>
+    private sealed class Gateway(IdentityGateway inner) : IAsyncDisposable
     {
-        private readonly IHost host;
-        private readonly RegistrySnapshot snapshot;
+        public static async Task<Gateway> StartAsync(AppDefinition[] apps) => new(await IdentityGateway.StartAsync(
+            apps,
+            services => services.Replace(ServiceDescriptor.Scoped<IAuthenticationHandlerProvider, RecordingHandlerProvider>())));
 
-        public Gateway(AppDefinition[] apps)
-        {
-            HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-            builder.Services.AddLogging();
-            builder.AddPlatformIdentity();
-            builder.Services.Replace(ServiceDescriptor.Scoped<IAuthenticationHandlerProvider, RecordingHandlerProvider>());
-            host = builder.Build();
-            snapshot = InMemoryRegistry.SnapshotOf(1, "\"r1\"", apps);
-        }
+        public IServiceProvider Services => inner.Services;
 
-        public IServiceProvider Services => host.Services;
-
-        public HttpContext Pin(AppDefinition app)
-        {
-            DefaultHttpContext context = new();
-            context.Request.Host = new HostString(app.Host);
-            context.Features.Set<IAppFeature>(new SettableAppFeature(app, snapshot));
-            Services.GetRequiredService<IHttpContextAccessor>().HttpContext = context;
-            return context;
-        }
+        public HttpContext Pin(AppDefinition app) => inner.Pin(app);
 
         /// <summary>One request through <c>UseAuthentication</c>'s middleware, in its own scope.</summary>
         public async Task<Built> SendAsync(AppDefinition app, string path)
@@ -164,7 +151,6 @@ public sealed class HandlersPerRequestTests
             context.RequestServices = scope.ServiceProvider;
             context.Request.Method = "GET";
             context.Request.Path = path;
-            context.Request.Scheme = "https";
 
             ClaimsHolder seen = new();
             AuthenticationMiddleware middleware = new(
@@ -177,7 +163,7 @@ public sealed class HandlersPerRequestTests
             return new Built([.. handlers.Handed], context.Response.StatusCode, seen.User);
         }
 
-        public void Dispose() => host.Dispose();
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private sealed class ClaimsHolder
