@@ -28,7 +28,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
         public GatewayHarness Harness { get; private set; } = null!;
 
         public async ValueTask InitializeAsync() =>
-            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
+            Harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -50,7 +50,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     [Fact]
     public async Task An_extensionless_path_that_accepts_html_returns_the_apps_own_shell()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         // A client-side route, as a full page load reaches it: no extension, and a browser's Accept.
         BrowserResponse route = await browser.NavigateAsync(Harness.App("app1").Url("/orders/42"), ct: Ct);
@@ -70,7 +70,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     [Fact]
     public async Task An_extensionless_path_that_does_not_accept_html_is_not_rewritten()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
         await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Ct);
 
         // contracts/http-contract.md: the fallback is for "a path with no extension that accepts HTML".
@@ -85,7 +85,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     [Fact]
     public async Task A_missing_asset_returns_404_and_never_the_shell()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         // A broken asset reference, and a missing page that carries an extension. Both have an
         // extension, so neither is rewritten, and a release that does not hold them answers 404.
@@ -103,7 +103,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     [Fact]
     public async Task A_path_with_an_extension_is_served_as_that_asset()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         // The script the fixture shell loads, by the path the shell names, with the type taken from
         // its extension (contracts/s3-layout.md) and not from what it was stored as.
@@ -123,11 +123,14 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
     {
         // A raw socket, because this is a request no browser API sends and the Host header is what
         // routes it (AGENTS.md -> "Reach the gateway over a raw socket when the Host header matters").
+        // With a signed-in browser's cookies, because an asset is served only in a session (ADR-0008).
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
+        (string, string)[] session = [("Cookie", browser.Cookies.GetCookieHeader(Harness.App("app1").Origin))];
         string host = Harness.App("app1").Host;
         string script = ScriptPath("app1");
-        RawResponse head = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", script, host, ct: Ct);
-        RawResponse get = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", script, host, ct: Ct);
-        RawResponse headMissing = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", "/assets/gone.js", host, ct: Ct);
+        RawResponse head = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", script, host, session, Ct);
+        RawResponse get = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", script, host, session, Ct);
+        RawResponse headMissing = await RawHttp.SendAsync(Harness.GatewayAddress, "HEAD", "/assets/gone.js", host, session, Ct);
 
         // RFC 9110 section 9.3.2: the headers GET would send, Content-Length included, and no body. A
         // cache or a probe therefore sees the same decision the browser would.

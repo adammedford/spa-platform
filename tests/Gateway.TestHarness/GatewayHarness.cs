@@ -197,6 +197,11 @@ public sealed class GatewayHarness : IAsyncDisposable
                 provider.GetServices<ConsoleFormatter>().FirstOrDefault(formatter =>
                     formatter.Name == provider.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ConsoleLoggerOptions>>()?.CurrentValue.FormatterName)));
 
+            if (options.SessionRequired)
+            {
+                RequireSession(services);
+            }
+
             options.ConfigureServices?.Invoke(services);
         });
 
@@ -227,6 +232,11 @@ public sealed class GatewayHarness : IAsyncDisposable
 
             factory.StartServer();
 
+            if (options.SessionRequired && harness.Services.GetService<IAccessTokenSource>() is null)
+            {
+                throw new InvalidOperationException("SessionRequired is set and the gateway has no IAccessTokenSource.");
+            }
+
             // The poller's first read may still be in flight. One more poll waits for it (the source
             // runs one poll at a time) and settles the outcome either way.
             await harness.RefreshRegistryAsync(ct);
@@ -248,6 +258,46 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     /// <summary>A browser whose network reaches the gateway through the stand-in load balancer.</summary>
     public TestBrowser CreateBrowser() => new(new LoadBalancerTransport(GatewayAddress));
+
+    /// <summary>
+    /// Signs <paramref name="browser"/> in to an app the way a user does: a navigation to <c>/bff/login</c>,
+    /// through the test provider (which approves at once, as <see cref="TestIdentityProvider.DefaultSubject"/>)
+    /// and the app's callback, back to the shell. Returns the shell the browser landed on. Throws, naming
+    /// where the login ended, when it did not land on the app's own origin with a 200.
+    /// </summary>
+    public async Task<BrowserResponse> SignInAsync(TestBrowser browser, string appId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(browser);
+        HarnessApp app = App(appId);
+        BrowserResponse landed = await browser.NavigateAsync(app.Url("/bff/login"), ct: ct);
+        if (landed.StatusCode != System.Net.HttpStatusCode.OK || !FetchMetadata.IsSameOrigin(app.Origin, landed.Url)
+            || landed.RedirectedFrom.All(hop => hop.AbsolutePath != "/signin-oidc"))
+        {
+            throw new InvalidOperationException($"signing in to {app} ended at {landed}, not at the app's shell after its callback.");
+        }
+
+        return landed;
+    }
+
+    /// <summary>A browser signed in to every app of the first registry revision, in the order <see cref="GatewayHarnessOptions.Apps"/> lists them.</summary>
+    public async Task<TestBrowser> CreateSignedInBrowserAsync(CancellationToken ct = default)
+    {
+        TestBrowser browser = CreateBrowser();
+        try
+        {
+            foreach (string appId in Options.Apps)
+            {
+                await SignInAsync(browser, appId, ct);
+            }
+        }
+        catch
+        {
+            browser.Dispose();
+            throw;
+        }
+
+        return browser;
+    }
 
     /// <summary>Polls the registry object once, as the poller would on its next tick.</summary>
     public Task<RefreshOutcome> RefreshRegistryAsync(CancellationToken ct = default) =>
@@ -396,6 +446,25 @@ public sealed class GatewayHarness : IAsyncDisposable
 
         apps[appId] = app;
         return app;
+    }
+
+    /// <summary>
+    /// Switches on the shell gate and the <see cref="IAccessTokenSource"/> binding, which workstream 3
+    /// registers outside <c>AddPlatformIdentity</c> until the composed suites sign in first (tasks 3.8 and
+    /// 3.9). Each is an internal method of <c>Platform.Identity</c>, named in that project's own comments
+    /// as the line that moves into <c>AddPlatformIdentity</c>; the harness calls it by name so the gateway
+    /// runs the real gate and the real source, with nothing standing in for either. Both only add what is
+    /// missing, so once <c>AddPlatformIdentity</c> registers them this changes nothing, and a method that
+    /// is no longer there has been folded in.
+    /// </summary>
+    public static void RequireSession(IServiceCollection services)
+    {
+        foreach (string name in (string[])["AddPlatformAccessTokenSource", "AddPlatformShellGate"])
+        {
+            typeof(Platform.Identity.PlatformIdentityExtensions)
+                .GetMethod(name, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
+                ?.Invoke(null, [services]);
+        }
     }
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>
