@@ -42,7 +42,7 @@ ASP.NET Core matches request cookie names without regard to case.
 ## Rule ids
 
 The `code` in a response says little on purpose. The rule id in the log line says which rule
-fired, and so does the tag on `security.rejections` for every rule but `gate.method`.
+fired, and so does the tag on `security.rejections`, except for the method allowlist's 405.
 
 This table is the normative list, and `Platform.Abstractions.RuleIds` holds the same strings as
 constants so that no owner keeps a copy of its own: A-03 stops one workstream reading another's,
@@ -64,6 +64,5 @@ table below and fails if the two drift. ADR-0015 decided it.
 | `auth.session` | A cookie that resolves to no session for this app |
 | `api.unknown` | The app lists no upstream under that name |
 
-Tests assert on both the `code` and the rule id, for every id a stage writes today;
-`auth.callback` and `auth.session` wait on workstream 3, which nothing writes them from yet. A
-refusal by an upstream API is the API's to log.
+Nothing writes `auth.callback` or `auth.session` yet; they wait on workstream 3. A refusal by an
+upstream API is the API's to log.
