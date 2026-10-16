@@ -87,7 +87,7 @@ public sealed class SessionIsolationTests
         Assert.Null(CookieOptions(gateway, App2).TicketDataFormat.Unprotect(login.Callback.SessionCookie.Value.Value));
 
         Assert.Equal(401, (await gateway.SendAsync(App2, IdentityGateway.ApiPath, login.Jar)).Status);
-        IdentityGateway.Answer navigation = await gateway.SendAsync(App2, "/", login.Jar);
+        IdentityGateway.Answer navigation = await gateway.SendAsync(App2, "/", login.Jar, headers: IdentityGateway.Navigation);
         Assert.Equal(302, navigation.Status);
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, navigation.Location, StringComparison.Ordinal);
         Assert.Equal("client-app2", navigation.RedirectQuery["client_id"]);

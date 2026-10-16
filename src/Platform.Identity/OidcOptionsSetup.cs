@@ -96,6 +96,9 @@ public sealed class OidcOptionsSetup(
         // those settings and no provider-specific refinement.
         profiles.FirstOrDefault(p => string.Equals(p.Name, issuer.Profile, StringComparison.Ordinal))
             ?.Configure(options, app, issuer);
+
+        // The gateway's events after the profile, so they wrap what it set (plan row 3.5).
+        AuthenticationEvents.Apply(options);
     }
 
     private AppDefinition? AppFor(string? name) =>

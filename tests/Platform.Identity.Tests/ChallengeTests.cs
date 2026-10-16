@@ -22,7 +22,7 @@ public sealed class ChallengeTests
         // S-A1
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1, App2]);
 
-        IdentityGateway.Answer challenge = await gateway.SendAsync(App1, "/");
+        IdentityGateway.Answer challenge = await gateway.SendAsync(App1, "/", headers: IdentityGateway.Navigation);
 
         Assert.Equal(302, challenge.Status);
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint + "?", challenge.Location, StringComparison.Ordinal);
@@ -36,7 +36,7 @@ public sealed class ChallengeTests
         // S-A2 and R-A2
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1, App2]);
 
-        IdentityGateway.Answer challenge = await gateway.SendAsync(App2, "/");
+        IdentityGateway.Answer challenge = await gateway.SendAsync(App2, "/", headers: IdentityGateway.Navigation);
 
         Assert.Equal(302, challenge.Status);
         Assert.Equal("client-app2", challenge.RedirectQuery["client_id"]);
@@ -50,7 +50,7 @@ public sealed class ChallengeTests
         // ResponseMode = query looks like on the wire (R-D8 is the form_post default this avoids).
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1, App2]);
 
-        IReadOnlyDictionary<string, string> query = (await gateway.SendAsync(App1, "/")).RedirectQuery;
+        IReadOnlyDictionary<string, string> query = (await gateway.SendAsync(App1, "/", headers: IdentityGateway.Navigation)).RedirectQuery;
 
         Assert.Equal("code", query["response_type"]);
         Assert.Equal("S256", query["code_challenge_method"]);
@@ -67,7 +67,7 @@ public sealed class ChallengeTests
     {
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1, App2]);
 
-        IReadOnlyDictionary<string, string> query = (await gateway.SendAsync(App2, "/")).RedirectQuery;
+        IReadOnlyDictionary<string, string> query = (await gateway.SendAsync(App2, "/", headers: IdentityGateway.Navigation)).RedirectQuery;
 
         Assert.Equal("openid email", query["scope"]);
         Assert.False(query.ContainsKey("resource"));
