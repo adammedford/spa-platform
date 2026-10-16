@@ -103,7 +103,11 @@ public static class PlatformIdentityExtensions
         services.TryAddSingleton<SessionGates>();
         services.TryAddSingleton<AccessTokenSourceOptions>();
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<CredentialStyles>();
         services.TryAddSingleton<AccessTokenSource>();
+
+        // Logout's revocation and removal of task 3.9, under the same gates and in the same style.
+        services.TryAddSingleton<SessionEnd>();
         return builder;
     }
 
@@ -111,10 +115,11 @@ public static class PlatformIdentityExtensions
     /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
     ///
     /// Separate from <see cref="AddPlatformIdentity"/> because a bound source makes the proxy's token step
-    /// answer every sessionless <c>/api</c> call 401 (contracts/http-contract.md -> Errors), and a gateway
-    /// whose <see cref="UsePlatformShellGate"/> and <see cref="MapPlatformBff"/> are empty has no way to
-    /// establish a session: nothing in it challenges. Without one, the proxy forwards with no
-    /// <c>Authorization</c>, which the upstream refuses on its own (assumption A5).
+    /// answer every sessionless <c>/api</c> call 401 (contracts/http-contract.md -> Errors), and the
+    /// composed suites in <c>tests/Gateway.*</c> still call <c>/api</c> without signing in, although
+    /// <see cref="MapPlatformBff"/> can now establish a session (task 3.9). Without one, the proxy forwards
+    /// with no <c>Authorization</c>, which the upstream refuses on its own (assumption A5). It moves into
+    /// <see cref="AddPlatformIdentity"/> with <see cref="AddPlatformShellGate"/>, once those suites sign in.
     /// </summary>
     internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
     {
@@ -123,11 +128,31 @@ public static class PlatformIdentityExtensions
     }
 
     /// <summary>
-    /// A session before any asset (ADR-0008): an unauthenticated navigation is challenged, an
-    /// unauthenticated fetch gets 401. Task 3.9.
+    /// Switches <see cref="UsePlatformShellGate"/> on. Separate from <see cref="AddPlatformIdentity"/> for
+    /// the reason <see cref="AddPlatformAccessTokenSource"/> is: with the gate on, every asset request
+    /// without a session is challenged or answered 401, and the composed suites in <c>tests/Gateway.*</c>
+    /// (workstream 6) still request assets without signing in, which turned fifteen of them red. The
+    /// identity tests call it; <see cref="AddPlatformIdentity"/> calls it, with the token source's binding,
+    /// once those suites sign in first (tasks 6.2, 6.3 and 6.5 behind this one).
     /// </summary>
-    public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) => app;
+    internal static IServiceCollection AddPlatformShellGate(this IServiceCollection services)
+    {
+        services.TryAddSingleton<ShellGate.Binding>();
+        return services;
+    }
 
-    /// <summary><c>/bff/session</c>, <c>/bff/login</c> and <c>/bff/logout</c>. Task 3.9.</summary>
-    public static IEndpointRouteBuilder MapPlatformBff(this IEndpointRouteBuilder endpoints) => endpoints;
+    /// <summary>
+    /// A session before any asset (ADR-0008): an unauthenticated navigation is challenged, an
+    /// unauthenticated fetch gets 401. Task 3.9; see <see cref="ShellGate"/>. In the pipeline only when
+    /// <see cref="AddPlatformShellGate"/> has been called.
+    /// </summary>
+    public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) =>
+        app.ApplicationServices.GetService<ShellGate.Binding>() is null ? app : app.Use(ShellGate.InvokeAsync);
+
+    /// <summary><c>/bff/session</c>, <c>/bff/login</c> and <c>/bff/logout</c>. Task 3.9; see <see cref="Bff"/>.</summary>
+    public static IEndpointRouteBuilder MapPlatformBff(this IEndpointRouteBuilder endpoints)
+    {
+        Bff.Map(endpoints);
+        return endpoints;
+    }
 }

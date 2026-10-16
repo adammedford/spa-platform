@@ -39,8 +39,7 @@ internal sealed partial class AccessTokenSource(
     ISessionStore sessions,
     SessionGates gates,
     ProfileTokenEndpoints endpoints,
-    IssuerDirectory issuers,
-    IEnumerable<IIdpProfile> profiles,
+    CredentialStyles styles,
     AccessTokenSourceOptions options,
     TimeProvider clock,
     ILogger<AccessTokenSource> logger) : IAccessTokenSource
@@ -153,7 +152,7 @@ internal sealed partial class AccessTokenSource(
         using CancellationTokenSource deadline = new(options.ProviderDeadline);
         try
         {
-            TokenResult<UserToken> result = await endpoints.For(CredentialStyleOf(app)).RefreshAccessTokenAsync(
+            TokenResult<UserToken> result = await endpoints.For(styles.Of(app)).RefreshAccessTokenAsync(
                 new UserRefreshToken(RefreshToken.Parse(refreshToken), null), parameters, deadline.Token);
 
             return result.Succeeded
@@ -228,14 +227,6 @@ internal sealed partial class AccessTokenSource(
         && string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal)
             ? record
             : null;
-
-    /// <summary>The style the app's issuer's profile states; the form body when no profile is registered for it.</summary>
-    private ClientCredentialStyle CredentialStyleOf(AppDefinition app)
-    {
-        string profile = issuers.Get(app.OAuth.Issuer).Profile;
-        return profiles.FirstOrDefault(p => string.Equals(p.Name, profile, StringComparison.Ordinal))?.ClientCredentialStyle
-            ?? ClientCredentialStyle.PostBody;
-    }
 
     private static AuthenticationTicket Deserialize(SessionRecord record) =>
         TicketSerializer.Default.Deserialize(record.Ticket.ToArray())
