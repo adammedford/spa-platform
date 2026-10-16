@@ -113,6 +113,24 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
         Assert.NotEmpty(Harness.Apps);
     }
 
+    [Fact]
+    public async Task Every_token_a_signed_in_visit_was_issued_is_among_the_values_swept()
+    {
+        // The real credentials of the session rows: a login and an API call through the real token
+        // source, then the provider's own record of what it issued. Swept by value at the end of the
+        // run with every other canary, and searched for here over this visit's own lines.
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        using TestBrowser browser = harness.CreateBrowser();
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
+        Assert.Equal(System.Net.HttpStatusCode.OK, (await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct)).StatusCode);
+
+        string[] issued = [.. harness.Idp.IssuedAccessTokens, .. harness.Idp.IssuedRefreshTokens];
+        Assert.NotEmpty(harness.Idp.IssuedAccessTokens);
+        Assert.NotEmpty(harness.Idp.IssuedRefreshTokens);
+        Assert.All(issued, token => Assert.True(CanarySweep.Values.Contains(token), "an issued token is not swept for"));
+        Assert.Empty(CanarySweep.Leaks(harness.Log.Lines, issued));
+    }
+
     /// <summary>
     /// One request per kind of credential the row names, each sent where it would matter: the
     /// session cookie's value, a bearer token, the antiforgery header, and a code and state in a

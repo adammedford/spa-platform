@@ -61,6 +61,16 @@ internal static partial class Contract
     /// </summary>
     public static string BaselineCspTemplate { get; } = ReadBaselineCsp();
 
+    /// <summary>
+    /// The header an unsafe <c>/api</c> call carries its antiforgery token in, from the one row of
+    /// <c>contracts/http-contract.md</c> -> "Request headers the SPA sends" (N-06).
+    /// </summary>
+    public static string CsrfHeaderName { get; } = ReadCsrfHeaderName();
+
+    /// <summary>The platform cookie whose name ends <paramref name="suffix"/>, from <see cref="PlatformCookieNames"/>.</summary>
+    public static string PlatformCookie(string suffix) =>
+        PlatformCookieNames.Single(name => name.EndsWith(suffix, StringComparison.Ordinal));
+
     /// <summary>The status and code pairs of the Errors table, with the "When" column that names each.</summary>
     public static ImmutableArray<ErrorRow> Errors { get; } = ReadErrors();
 
@@ -130,6 +140,16 @@ internal static partial class Contract
                 "contracts/request-gate.md no longer says 'A cookie name that begins `...`'. N-25 reads the prefix from there.");
     }
 
+    private static string ReadCsrfHeaderName()
+    {
+        string section = Section(Read("http-contract.md"), "## Request headers the SPA sends", "## Response headers");
+        Match row = RequestHeaderRow().Match(section);
+        return row.Success
+            ? row.Groups["name"].Value
+            : throw new InvalidOperationException(
+                "contracts/http-contract.md -> Request headers the SPA sends has no header row. N-06 reads it from there.");
+    }
+
     private static ImmutableDictionary<string, string> ReadFixedResponseHeaders()
     {
         string headers = Section(Read("http-contract.md"), "## Response headers", "### The baseline content security policy");
@@ -192,6 +212,9 @@ internal static partial class Contract
 
     [GeneratedRegex(@"^\| (?<status>\d{3}) \| `(?<code>[a-z_]+)` \| (?<when>[^|]+)\|", RegexOptions.Multiline)]
     private static partial Regex ErrorTableRow();
+
+    [GeneratedRegex(@"^\| `(?<name>[A-Za-z][A-Za-z0-9-]*)` \|", RegexOptions.Multiline)]
+    private static partial Regex RequestHeaderRow();
 
     [GeneratedRegex(@"A cookie name that begins `(?<prefix>[^`]+)`")]
     private static partial Regex CookiePrefixRule();
