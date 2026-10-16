@@ -71,8 +71,8 @@ What G1b changed, rather than only froze: `IIdpProfile` gained `ClientCredential
 Cognito's revocation endpoint takes only a Basic header while its other endpoints take either
 (ADR-0017, evidence C-2.19 and C-2.21). **The pipeline's stage order moved**: telemetry is now the
 outermost stage, ahead of forwarded headers, so every rejection the application answers reaches a
-request line (ADR-0018, settling change request 6.4 and ticket 53). The method allowlist's 405 is
-on the line but not yet in `security.rejections`, which `contracts/telemetry.md` records. The
+request line and `security.rejections` under its rule id (ADR-0018, change request 6.4, and
+tasks 4.7a and 6.3b). The
 `oauth` section, the `Profile` enum and the session record keep their shapes. The browser
 contract clarifies nullable display claims, session expiry and unconditional local logout removal.
 

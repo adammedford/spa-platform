@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 namespace Platform.Abstractions;
 
 /// <summary>
-/// The rule ids a refusal is logged and counted under, except the method allowlist's 405.
+/// The rule ids a refusal is logged and counted under.
 /// Source: contracts/request-gate.md -> Rule
 /// ids, which is the normative list; ADR-0015 put them here. Freezes at G1a with that contract.
 ///
@@ -15,12 +15,9 @@ namespace Platform.Abstractions;
 /// in tests/Platform.Abstractions.Tests reads the contract's own table and fails if the two drift.
 ///
 /// A rule id reaches a log line and <c>security.rejections</c>, never a response body: the
-/// <c>code</c> in a problem response says less on purpose. One rejection is the exception: the
-/// method allowlist's 405, because <c>MethodAllowlist</c> logs <see cref="GateMethod"/> without
-/// writing it to <c>IRequestTelemetryFeature</c>. Two stages write that id and only this one is
-/// excepted -- the request gate's own 405 carries it to the line and the count.
-/// See contracts/telemetry.md -> "How <c>rule</c> and
-/// <c>session_ref</c> reach the request line".
+/// <c>code</c> in a problem response says less on purpose. Both method-checking stages write
+/// <see cref="GateMethod"/> to the telemetry feature, so both 405 paths reach the line and count.
+/// See contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line".
 /// </summary>
 public static class RuleIds
 {

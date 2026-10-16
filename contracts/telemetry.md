@@ -41,13 +41,10 @@ token can be had for a live session, for which `contracts/request-gate.md` has n
 API's own 4xx. Every 401 that *does* have an id in that table carries it — a cookie resolving to no
 session for this app is `auth.session`, not a null.
 
-Every rejection the application answers therefore reaches the line, the method allowlist's 405
-included: it runs in `UsePlatformForwardedHeaders`, inside the telemetry stage that ADR-0018 made
-first. **It is the one rejection not yet in the count.** `MethodAllowlist` writes its rule id to
-the log and not to `IRequestTelemetryFeature`, so its request line carries `rule: null` and
-`security.rejections` does not move. Until G1b the 405 reached neither; ADR-0018 closed half of
-that by making telemetry the first stage, and the remaining half is one write in
-`src/Platform.Security/MethodAllowlist.cs`, workstream 4's to make. What
+Every rejection the application answers reaches the line and `security.rejections` under its rule
+id, including the method allowlist's 405. `MethodAllowlist` runs in `UsePlatformForwardedHeaders`,
+inside the telemetry stage that ADR-0018 made first, and writes `gate.method` to the feature
+(tasks 4.7a and 6.3b). What
 the server refuses before any stage runs — Kestrel's 431 for oversized headers,
 `contracts/http-contract.md` → Errors — is not a rejection in this contract's sense and carries no
 rule id; `contracts/request-gate.md` says the same.

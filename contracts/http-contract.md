@@ -101,7 +101,5 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |
 
 The `code` says little on purpose. Which rule fired is in the log line and in
-`security.rejections`, under the rule ids in `contracts/request-gate.md`. The one exception is the
-method allowlist's 405: `MethodAllowlist` logs `gate.method` without writing it to
-`IRequestTelemetryFeature`, so that rejection reaches the line with no id and is not counted. The
-request gate's own 405 carries the same id and is counted.
+`security.rejections`, under the rule ids in `contracts/request-gate.md`. Both the method
+allowlist and the request gate write `gate.method` for their 405 rejections.
