@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Gateway.TestHarness;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Platform.Abstractions;
@@ -28,25 +29,33 @@ namespace Gateway.SecurityTests.Negative;
 internal sealed class ObjectStoreRecorder
 {
     private readonly ConcurrentQueue<string> reads = new();
+    private readonly ConcurrentQueue<string> requestReads = new();
     private bool installed;
 
     /// <summary>Every key the gateway has asked to read, in order.</summary>
-    public IReadOnlyList<string> Reads
-    {
-        get
-        {
-            if (!installed)
-            {
-                throw new InvalidOperationException(
-                    "no harness was started with these options, so nothing could have been recorded.");
-            }
+    public IReadOnlyList<string> Reads => Snapshot(reads);
 
-            return [.. reads];
+    /// <summary>
+    /// Reads made in an HTTP request. Registry polling uses the same bucket independently of
+    /// requests, so it cannot be evidence that an N-13 traversal reached the asset store.
+    /// The distinction is request context, not the key: an erroneous request-side registry read
+    /// remains visible here too.
+    /// </summary>
+    public IReadOnlyList<string> RequestReads => Snapshot(requestReads);
+
+    private IReadOnlyList<string> Snapshot(ConcurrentQueue<string> source)
+    {
+        if (!installed)
+        {
+            throw new InvalidOperationException(
+                "no harness was started with these options, so nothing could have been recorded.");
         }
+
+        return [.. source];
     }
 
-    /// <summary>The keys read since <paramref name="from"/>, which is a count taken earlier.</summary>
-    public IReadOnlyList<string> Since(int from) => [.. Reads.Skip(from)];
+    /// <summary>The request-associated keys since an earlier <see cref="RequestReads"/> count.</summary>
+    public IReadOnlyList<string> RequestsSince(int from) => [.. RequestReads.Skip(from)];
 
     /// <summary>Harness options that record the gateway's reads, laid over any a test already has.</summary>
     public GatewayHarnessOptions Options(GatewayHarnessOptions? options = null)
@@ -69,17 +78,24 @@ internal sealed class ObjectStoreRecorder
                         "the harness no longer registers IObjectStore as an instance, so this recorder cannot wrap it.");
 
                 services.RemoveAll<IObjectStore>();
-                services.AddSingleton<IObjectStore>(new Recording(this, store));
+                services.AddHttpContextAccessor();
+                services.AddSingleton<IObjectStore>(provider =>
+                    new Recording(this, store, provider.GetRequiredService<IHttpContextAccessor>()));
                 installed = true;
             },
         };
     }
 
-    private sealed class Recording(ObjectStoreRecorder recorder, IObjectStore inner) : IObjectStore
+    private sealed class Recording(
+        ObjectStoreRecorder recorder, IObjectStore inner, IHttpContextAccessor accessor) : IObjectStore
     {
         public Task<StoredObject?> GetAsync(string key, string? ifNoneMatch, CancellationToken ct)
         {
             recorder.reads.Enqueue(key);
+            if (accessor.HttpContext is not null)
+            {
+                recorder.requestReads.Enqueue(key);
+            }
             return inner.GetAsync(key, ifNoneMatch, ct);
         }
 
