@@ -131,7 +131,7 @@ public sealed class LogCanaryTests
     }
 
     [Fact]
-    public async Task Authentication_loggers_are_capped_at_information_whatever_configuration_says()
+    public async Task Authentication_loggers_cannot_emit_provider_fields_whatever_configuration_says()
     {
         await using TelemetryHost host = await TelemetryHost.StartAsync(Ct, configuration: EverythingAtTrace());
         ILogger handler = host.Services.GetRequiredService<ILoggerFactory>()
@@ -139,9 +139,9 @@ public sealed class LogCanaryTests
 
         handler.LogDebug("held back at debug");
         handler.LogTrace("held back at trace");
-        handler.LogInformation("written at information");
+        handler.LogInformation("held back at information");
+        handler.LogError("held back at error");
 
-        Assert.Contains(host.Log.Lines, line => line.Contains("written at information", StringComparison.Ordinal));
         Assert.DoesNotContain(host.Log.Lines, line => line.Contains("held back", StringComparison.Ordinal));
     }
 }
