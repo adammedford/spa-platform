@@ -17,10 +17,12 @@ namespace Platform.Identity.Tests;
 /// the framework's <c>UseAuthentication</c> as the only middleware. <see cref="SettableAppFeature"/>
 /// stands in for host resolution, which runs before authentication and pins the app.
 ///
-/// The terminal handler stands in for what later rows build: an anonymous request to <c>/</c> is
-/// challenged (the shell gate of task 3.9), an anonymous request to <see cref="ApiPath"/> gets 401
-/// and an authenticated one 200 (the API's answer, task 4.2), and every other path is 404, as routing
-/// answers a path nothing claims. Platform configuration carries one issuer, <see cref="IssuerName"/>,
+/// The pipeline is stages 7 to 10 of contracts/pipeline.md as workstream 3 fills them: routing, the
+/// framework's authentication, <c>UsePlatformShellGate</c> and <c>MapPlatformBff</c>. A terminal
+/// handler stands in for what other workstreams build behind them: <c>/</c> answers 200 (an asset,
+/// task 2.4), an anonymous request to <see cref="ApiPath"/> gets 401 and an authenticated one 200 (the
+/// API's answer, task 4.2), and every other path is 404, as routing answers a path nothing claims.
+/// <see cref="FakeCsrfTokens"/> stands in for the antiforgery tokens of task 4.4. Platform configuration carries one issuer, <see cref="IssuerName"/>,
 /// whose authority is the provider's loopback origin. Sessions go to <see cref="Sessions"/>, the
 /// Platform.Testing store behind a recorder, and every request carries a
 /// <see cref="SettableRequestTelemetryFeature"/> in place of <c>UsePlatformTelemetry</c>.
@@ -32,11 +34,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// <summary>A path standing in for an upstream API: 401 when anonymous, 200 when authenticated.</summary>
     public const string ApiPath = "/api/probe";
 
-    /// <summary>
-    /// A path standing in for <c>/bff/logout</c> (task 3.9): it signs out of the app's cookie scheme and
-    /// then of its OpenID Connect scheme, which hands the browser to the issuer's profile (task 3.7).
-    /// </summary>
-    public const string LogoutPath = "/logout/probe";
+    /// <summary><c>POST /bff/logout</c>, which hands the browser to the issuer's profile (task 3.7).</summary>
+    public const string LogoutPath = "/bff/logout";
 
     /// <summary>
     /// A path standing in for the proxy's token step (task 4.2): it asks <see cref="IAccessTokenSource"/>
@@ -44,7 +43,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// code. It hands the source the request's own cancellation token on purpose, so a test can prove the
     /// source never lets a disconnecting browser cancel a refresh (T-B16).
     /// </summary>
-    public const string TokenPath = "/token/probe";
+    public const string TokenPath = "/api/token-probe";
 
     /// <summary>The fetch metadata a browser sends on a top-level navigation the user typed.</summary>
     public static readonly IReadOnlyDictionary<string, string> Navigation = new Dictionary<string, string>
@@ -81,16 +80,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
         Profile = profile;
 
         ApplicationBuilder app = new(host.Services);
+        app.UseRouting();
         app.UseAuthentication();
+        app.UsePlatformShellGate();
+        app.UseEndpoints(endpoints => endpoints.MapPlatformBff());
         app.Run(async context =>
         {
-            if (context.Request.Path == LogoutPath && context.Features.Get<IAppFeature>()?.App is { } pinned)
-            {
-                await context.SignOutAsync(SchemeNames.Cookie(pinned.AppId));
-                await context.SignOutAsync(SchemeNames.Oidc(pinned.AppId), new AuthenticationProperties { RedirectUri = "/" });
-                return;
-            }
-
             if (context.Request.Path == TokenPath)
             {
                 AccessTokenResult result = await context.RequestServices.GetRequiredService<IAccessTokenSource>()
@@ -106,12 +101,6 @@ internal sealed class IdentityGateway : IAsyncDisposable
             }
 
             bool authenticated = context.User.Identity?.IsAuthenticated == true;
-            if (context.Request.Path == "/" && !authenticated)
-            {
-                await context.ChallengeAsync();
-                return;
-            }
-
             context.Response.StatusCode = context.Request.Path == "/" ? 200
                 : context.Request.Path == ApiPath ? (authenticated ? 200 : 401)
                 : 404;
@@ -200,8 +189,15 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<IIdpProfile>(profile);
         RecordingSessionStore sessions = new(new InMemorySessionStore());
         builder.Services.AddSingleton<ISessionStore>(sessions);
+        // What a web host registers and an empty host does not: routing's middleware needs both.
+        builder.Services.AddRouting();
+        builder.Services.AddSingleton(new System.Diagnostics.DiagnosticListener("Platform.Identity.Tests"));
+        builder.Services.AddSingleton<System.Diagnostics.DiagnosticSource>(sp => sp.GetRequiredService<System.Diagnostics.DiagnosticListener>());
+        builder.Services.AddSingleton<FakeCsrfTokens>();
+        builder.Services.AddSingleton<ICsrfTokens>(sp => sp.GetRequiredService<FakeCsrfTokens>());
         builder.AddPlatformIdentity();
         builder.Services.AddPlatformAccessTokenSource();
+        builder.Services.AddPlatformShellGate();
         services?.Invoke(builder.Services);
 
         return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);
@@ -305,7 +301,10 @@ internal sealed class IdentityGateway : IAsyncDisposable
             context.Features.Get<IRequestTelemetryFeature>()!.SessionRef,
             context.Features.Get<IRequestTelemetryFeature>()!.Rule,
             context.Response.ContentType,
-            body);
+            body)
+        {
+            CacheControl = context.Response.Headers.CacheControl.ToString(),
+        };
     }
 
     /// <summary>
@@ -313,9 +312,11 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// provider's authorize endpoint, then the callback carrying the cookies the challenge set, and
     /// any <paramref name="planted"/> cookies besides.
     /// </summary>
-    public async Task<Login> LoginAsync(AppDefinition app, IReadOnlyDictionary<string, string>? planted = null)
+    /// <param name="start">The navigation that starts the login: <c>/</c> through the shell gate, or a
+    /// <c>/bff/login</c> URL.</param>
+    public async Task<Login> LoginAsync(AppDefinition app, IReadOnlyDictionary<string, string>? planted = null, string start = "/")
     {
-        Authorized authorized = await AuthorizeAsync(app);
+        Authorized authorized = await AuthorizeAsync(app, start);
         Dictionary<string, string> jar = new(authorized.LoginState, StringComparer.Ordinal);
         foreach ((string name, string value) in planted ?? new Dictionary<string, string>())
         {
@@ -331,9 +332,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// authorize endpoint. What comes back is the callback the provider redirected to, unsent, and the
     /// login-state cookies the challenge set.
     /// </summary>
-    public async Task<Authorized> AuthorizeAsync(AppDefinition app)
+    public async Task<Authorized> AuthorizeAsync(AppDefinition app, string start = "/", IReadOnlyDictionary<string, string>? cookies = null)
     {
-        Answer challenge = await SendAsync(app, "/", headers: Navigation);
+        Answer challenge = await SendAsync(app, start, cookies, headers: Navigation);
         Assert.Equal(302, challenge.Status);
 
         using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false });
@@ -370,6 +371,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
         string? ContentType,
         string Body)
     {
+        /// <summary>The <c>Cache-Control</c> header, or empty.</summary>
+        public string CacheControl { get; init; } = "";
+
         /// <summary>
         /// The one cookie set that is not login state: the app's session. Found by elimination so the
         /// tests do not depend on its name, which the cookie options of task 3.3 set.

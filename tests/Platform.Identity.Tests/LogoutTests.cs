@@ -7,8 +7,8 @@ namespace Platform.Identity.Tests;
 
 /// <summary>
 /// Task 3.7's profiles at logout, through the services <c>AddPlatformIdentity</c> registers and the test
-/// identity provider. <see cref="IdentityGateway.LogoutPath"/> signs out as <c>/bff/logout</c> will
-/// (task 3.9); what is under test is where each profile then sends the browser.
+/// identity provider, through <c>POST /bff/logout</c> (task 3.9); what is under test is where each
+/// profile then sends the browser.
 /// </summary>
 public sealed class LogoutTests
 {
@@ -23,7 +23,7 @@ public sealed class LogoutTests
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
 
-        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar);
+        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar, "POST");
 
         Assert.Equal(302, logout.Status);
         Assert.Null(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
@@ -55,7 +55,7 @@ public sealed class LogoutTests
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
 
-        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar);
+        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar, "POST");
 
         Assert.Equal(302, logout.Status);
         Assert.Null(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
@@ -103,7 +103,7 @@ public sealed class LogoutTests
         };
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
 
-        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar);
+        IdentityGateway.Answer logout = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar, "POST");
 
         Assert.Equal("https://logout.example.test/bye", logout.Location);
         (AppDefinition app, IssuerDefinition issuer) = Assert.Single(gateway.Profile.SignOutRedirects);

@@ -48,6 +48,14 @@ internal sealed class ProfileTokenEndpoints
         _ => throw new ArgumentOutOfRangeException(nameof(style), style, "No such client credential style."),
     };
 
+    /// <summary>The library's name for <paramref name="style"/>: by name, never by cast (see <see cref="For"/>).</summary>
+    public static LibraryCredentialStyle LibraryStyle(ClientCredentialStyle style) => style switch
+    {
+        ClientCredentialStyle.PostBody => LibraryCredentialStyle.PostBody,
+        ClientCredentialStyle.AuthorizationHeader => LibraryCredentialStyle.AuthorizationHeader,
+        _ => throw new ArgumentOutOfRangeException(nameof(style), style, "No such client credential style."),
+    };
+
     /// <summary>
     /// The implementation type the library registered for its endpoint. Throws when the registration is
     /// not a plain type, which would mean the pinned package changed how it registers it.
