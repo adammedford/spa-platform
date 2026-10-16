@@ -10,7 +10,7 @@ namespace Gateway.SecurityTests.Negative;
 /// <c>origin_rejected</c>. No <c>Access-Control-Allow-*</c> header on any response, including
 /// preflight." (docs/plan/04-tests.md.)
 ///
-/// <para>These requests prove the stage-6 gate refusals on API and BFF paths, before
+/// <para>These requests prove the request gate's refusals on API and BFF paths, before
 /// authentication (contracts/pipeline.md). They do not establish an authenticated session or
 /// exercise a successful BFF endpoint; those require separate N-07 acceptance evidence.</para>
 ///
@@ -163,7 +163,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     public async Task A_preflight_is_refused_and_grants_nothing()
     {
         // The method allowlist admits OPTIONS "for the APIs' own use", so a preflight reaches the
-        // gate rather than stopping at stage 1; the gate then refuses it like any other cross-site
+        // gate rather than stopping at the allowlist; the gate then refuses it like any other cross-site
         // request, and nothing in the answer makes the browser's check pass.
         using TestBrowser browser = Harness.CreateBrowser();
         await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);

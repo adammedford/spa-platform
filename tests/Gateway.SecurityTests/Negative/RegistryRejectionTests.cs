@@ -33,7 +33,7 @@ public sealed class RegistryRejectionTests
     public async Task A_duplicate_host_rejects_the_document_whole()
     {
         await AssertRejectedWholeAsync((document, harness) =>
-            // Two entries claiming one authority. Stage 4 resolves an app by exact authority, so a
+            // Two entries claiming one authority. Host resolution finds an app by exact authority, so a
             // document like this has no answer to "which app is app1's host?" and the only safe
             // reading is to take none of it.
             Entry(document, "app2")["host"] = harness.App("app1").Host);

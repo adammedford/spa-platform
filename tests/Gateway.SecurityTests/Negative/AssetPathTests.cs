@@ -19,13 +19,13 @@ namespace Gateway.SecurityTests.Negative;
 ///
 /// <para><b>Why the raw socket.</b> Every shape in the row is one <see cref="Uri"/> normalises away:
 /// a client library would send <c>/secret</c> where the row says <c>/../secret</c>. Two stages judge
-/// these paths and both read the undecoded target — the request gate at stage 6 reads
+/// these paths and both read the undecoded target — the request gate reads
 /// <c>RawTarget</c> "before any decoding", and the asset endpoint judges it again itself, "because
 /// the key is its own and N-13 is about what it reads, whichever stage refused". Only a socket can
 /// put the row's bytes on the wire.</para>
 ///
 /// <para><b>Which stage answers is not asserted, and that is deliberate.</b> In the composed gateway
-/// stage 6 refuses first, so the refusals below carry <see cref="RuleIds.PathInvalid"/> from there;
+/// the request gate refuses first, so the refusals below carry <see cref="RuleIds.PathInvalid"/> from there;
 /// the endpoint's own copy of the check is what makes the claim hold if the order ever changed. Both
 /// raise the same rule id, which is exactly why <c>RuleIds</c> exists (ADR-0015).</para>
 /// </summary>

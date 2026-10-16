@@ -10,13 +10,13 @@ namespace Gateway.SecurityTests.Negative;
 /// a 200 and on a 500 -> The browser receives no cookie, no CORS header and the gateway's CSP, both
 /// times." (docs/plan/04-tests.md.)
 ///
-/// <para><b>What is proven: the CORS header and the policy, on both statuses.</b> Both are stage 5's
+/// <para><b>What is proven: the CORS header and the policy, on both statuses.</b> Both are UsePlatformSecurityHeaders'
 /// (task 4.5): <c>contracts/http-contract.md</c> -> Response headers says the header set is
 /// "Set on every response, including proxied ones, where they overwrite what the upstream sent", and
-/// "No <c>Access-Control-*</c> header, ever. One sent by an upstream is stripped." Stage 5 applies
+/// "No <c>Access-Control-*</c> header, ever. One sent by an upstream is stripped." UsePlatformSecurityHeaders applies
 /// them from <c>Response.OnStarting</c>, so they land after YARP has copied the upstream's — and the
 /// composed gateway is the only place that can be read, because workstream 4's own project has no
-/// stage 10 and no upstream to be overwritten.</para>
+/// proxy endpoint and no upstream to be overwritten.</para>
 ///
 /// <para>This class proves only the CORS and CSP clauses. The Set-Cookie clause and N-11
 /// require separate proxy-pipeline evidence under plan row 4.2 and are not asserted here.</para>

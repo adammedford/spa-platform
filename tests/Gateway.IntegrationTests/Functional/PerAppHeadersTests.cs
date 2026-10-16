@@ -39,7 +39,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
 
     private GatewayHarness Harness => cell.Harness;
 
-    /// <summary>The issuer origin stage 5 splices into <c>form-action</c>, as the gateway reads it.</summary>
+    /// <summary>The issuer origin UsePlatformSecurityHeaders splices into <c>form-action</c>, as the gateway reads it.</summary>
     private string IssuerBrowserOrigin =>
         Harness.Services.GetRequiredService<IConfiguration>()[$"Issuers:{Harness.Options.IssuerName}:BrowserOrigin"]!;
 

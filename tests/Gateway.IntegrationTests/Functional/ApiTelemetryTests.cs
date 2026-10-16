@@ -35,7 +35,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
 
         public CapturedTelemetry Telemetry { get; } = new();
 
-        /// <summary>The one request log line stage 2 wrote for the call.</summary>
+        /// <summary>The one request log line the telemetry stage wrote for the call.</summary>
         public JsonElement Line { get; private set; }
 
         /// <summary>What the upstream received.</summary>
@@ -61,7 +61,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
             BrowserResponse response = await browser.GetAsync(Harness.App("app1").Url(ApiPath).ToString(), ct: ct);
             Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
 
-            // Stage 2 writes the line after the pipeline has returned, and the server span stops after
+            // The telemetry stage writes the line after the pipeline has returned, and the server span stops after
             // that, so the response arriving does not mean either is here yet.
             await CapturedTelemetry.UntilAsync(
                 () => CapturedTelemetry.RequestLines(Harness).Any(line => line.GetProperty("route").GetString() == "api"),
@@ -126,7 +126,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
     public void The_request_line_names_the_app_and_the_span_carries_it_too()
     {
         // "and the line names the app": a trace in a multi-tenant log is attributable without a
-        // second lookup. Stage 2 puts the same app on the span (contracts/telemetry.md).
+        // second lookup. The telemetry stage puts the same app on the span (contracts/telemetry.md).
         Assert.Equal("app1", TheCall.Line.GetProperty("app_id").GetString());
         Assert.Equal("app1", TheCall.RequestSpan.GetTagItem("app_id"));
         Assert.Equal("api", TheCall.RequestSpan.GetTagItem("route"));

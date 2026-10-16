@@ -45,7 +45,7 @@ public sealed class ConcurrentApiCallsTests
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         Assert.NotEqual(first, second);
 
-        // Ordered on both sides: the two calls race, so which request line stage 2 wrote first is
+        // Ordered on both sides: the two calls race, so which request line the telemetry stage wrote first is
         // not this row's claim.
         Assert.Equal(new[] { first, second }.Order(), logged.Order());
 

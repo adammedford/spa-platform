@@ -135,7 +135,7 @@ public sealed class ReleaseSwitchTests
         Assert.Equal(restored, harness.Registry.Current.Revision);
     }
 
-    /// <summary>The revision <c>/readyz</c> reports, on any host (stage 3 runs before host resolution).</summary>
+    /// <summary>The revision <c>/readyz</c> reports, on any host (UsePlatformHealth runs before host resolution).</summary>
     private static async Task<long> RevisionAsync(TestBrowser browser, CancellationToken ct)
     {
         BrowserResponse ready = await browser.NavigateAsync("https://anything.example/readyz", ct: ct);

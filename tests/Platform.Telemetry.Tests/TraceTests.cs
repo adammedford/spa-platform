@@ -89,7 +89,7 @@ public sealed class TraceTests
 
         // Rule ids no other test rejects under: the meter listener is process-wide, so points from
         // other hosts running in parallel can share this exporter. The ids are not real ones, which
-        // is fine here: stage 2 counts whatever id the rejecting stage wrote.
+        // is fine here: the telemetry stage counts whatever id the rejecting stage wrote.
         for (int i = 0; i < 2; i++)
         {
             using HttpRequestMessage rejected = new(HttpMethod.Get, new Uri(host.BaseAddress, "/bff/session"));
