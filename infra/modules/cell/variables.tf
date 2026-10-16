@@ -6,9 +6,13 @@ variable "cell" {
   EOT
   type        = string
 
+  # The same rule as infra/bootstrap and the platform root, character for character (change
+  # request 1.5, ADR-0014 item 7). 3 is the frozen appId minimum the cell is published as
+  # (contracts/infra-outputs.schema.json -> cell); 22 keeps spa-<cell> within the load balancer's
+  # 32-character name limit. No edge hyphen, because the cell ends bucket and repository names.
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9-]{0,20}[a-z0-9]$", var.cell))
-    error_message = "The cell name is 2 to 22 lowercase letters, digits or hyphens, and does not start or end with a hyphen. It goes into bucket and repository names."
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
+    error_message = "The cell name is 3 to 22 lowercase letters, digits or hyphens, and does not start or end with a hyphen. It goes into bucket and repository names."
   }
 }
 
@@ -62,9 +66,9 @@ variable "teardown_principal_arns" {
     delete followed by a write would replace a release (contracts/s3-layout.md).
 
     It cannot be empty. A bucket nobody may empty is a bucket teardown.sh cannot
-    destroy, and P-05 would then fail forever. Name the role or user that runs
-    teardown.sh. Change request 1.5 asks the integrator where that ARN should come
-    from, because no root creates a teardown role today.
+    destroy, and P-05 would then fail forever. The platform root passes the
+    teardown role infra/bootstrap creates, looked up by its derived name, then any
+    additional principals (change request 1.5, ADR-0014).
   EOT
   type        = list(string)
 

@@ -12,6 +12,16 @@ variable "cell" {
   EOT
   type        = string
   default     = "poc"
+
+  # The same rule as infra/bootstrap and modules/cell, character for character (change request
+  # 1.5, ADR-0014 item 7), checked here so a bad name fails at this root's own input. 3 is the
+  # frozen appId minimum the cell is published as (contracts/infra-outputs.schema.json -> cell); 22
+  # keeps spa-<cell> within the load balancer's 32-character name limit (tests/root.tftest.hcl). No
+  # edge hyphen, because the cell ends bucket and role names.
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
+    error_message = "cell must be 3 to 22 lowercase letters, digits or hyphens, and must not start or end with a hyphen."
+  }
 }
 
 variable "vpc_cidr" {
@@ -24,17 +34,28 @@ variable "vpc_cidr" {
   default     = "10.20.0.0/16"
 }
 
-variable "teardown_principal_arns" {
+variable "additional_teardown_principal_arns" {
   description = <<-EOT
-    The principals allowed to delete objects under apps/, which is what lets
-    teardown.sh empty the bucket. Everyone else is denied, and that is what makes a
-    release prefix write-once (contracts/s3-layout.md, test P-04).
+    Principals allowed to delete objects under apps/ in addition to the teardown role, which this
+    root looks up by its derived name, spa-platform-<cell>-teardown (change request 1.5, ADR-0014).
+    Everyone else is denied, and that is what makes a release prefix write-once
+    (contracts/s3-layout.md, test P-04).
 
-    There is no default. No root creates a teardown role today, so this is the ARN
-    of whoever runs teardown.sh; change request 1.5 asks the integrator where it
-    should come from.
+    Additional, never instead: the list is appended to the role, so it cannot lock out the one
+    principal that can empty the bucket. Each entry is an IAM user or role ARN, never the
+    arn:aws:sts::...:assumed-role/... session ARN `aws sts get-caller-identity` prints, which
+    aws:PrincipalArn never carries and the bucket policy's condition would therefore never match.
   EOT
   type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.additional_teardown_principal_arns :
+      can(regex("^arn:aws(-[a-z]+)*:iam::[0-9]{12}:(user|role)/[A-Za-z0-9+=,.@_/-]+$", arn))
+    ])
+    error_message = "additional_teardown_principal_arns takes IAM user or role ARNs. Not the account root, and not an arn:aws:sts::...:assumed-role/... session ARN."
+  }
 }
 
 variable "certificate_domain" {

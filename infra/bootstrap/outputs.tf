@@ -55,3 +55,12 @@ output "backend_blocks" {
     EOT
   }
 }
+
+output "teardown_role_arn" {
+  description = <<-EOT
+    ARN of the teardown role, for humans. No consumer reads it: the platform root and teardown.sh
+    derive the name spa-platform-<cell>-teardown, because this root's state is local and its
+    outputs exist only on the workstation that applied it (ADR-0014 item 8).
+  EOT
+  value       = aws_iam_role.teardown.arn
+}

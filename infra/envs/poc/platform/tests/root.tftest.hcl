@@ -31,6 +31,15 @@ mock_provider "aws" {
     }
   }
 
+  # Change request 1.5: the root looks the teardown role up by its derived name. The mock satisfies
+  # the lookup, so what this file proves is the name and the wiring; that the role exists is a
+  # property of the AWS plan, not of terraform test (ADR-0014 item 2).
+  mock_data "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::111122223333:role/spa-platform-poc-teardown"
+    }
+  }
+
   mock_data "aws_region" {
     defaults = {
       region = "us-east-1"
@@ -121,9 +130,11 @@ override_data {
 }
 
 variables {
-  cell                    = "poc"
-  vpc_cidr                = "10.20.0.0/16"
-  certificate_domain      = "spa-poc.test"
+  cell               = "poc"
+  vpc_cidr           = "10.20.0.0/16"
+  certificate_domain = "spa-poc.test"
+  # Read only by the runs against modules/cell, which still takes the list as input. The root
+  # derives it (change request 1.5).
   teardown_principal_arns = ["arn:aws:iam::111122223333:role/Admin"]
 
   # Task 1.4a. The sample image the service starts on, passed by digest like every other image.
@@ -461,4 +472,86 @@ run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
     condition     = !strcontains(jsonencode(local.mock_api_clients), local.app_clients["app3"].clientId)
     error_message = "App 3's client must not reach the mock API's allowlists: admission is the API owner's decision (contracts/upstream-contract.md), and F-07 logs app 3 in and still expects a refusal."
   }
+}
+
+# --- Change request 1.5: the teardown role and the cell name ------------------------------------
+
+run "the_teardown_principal_is_the_role_bootstrap_creates_looked_up_by_its_derived_name" {
+  command = plan
+
+  assert {
+    condition     = data.aws_iam_role.teardown.name == "spa-platform-poc-teardown"
+    error_message = "The root derives spa-platform-<cell>-teardown, the role infra/bootstrap creates (ADR-0014)."
+  }
+
+  assert {
+    condition     = local.teardown_principal_arns == ["arn:aws:iam::111122223333:role/spa-platform-poc-teardown"]
+    error_message = "With no additional principals, the only teardown principal is the ARN AWS returned for the looked-up role."
+  }
+}
+
+run "an_additional_teardown_principal_is_added_and_never_replaces_the_role" {
+  command = plan
+
+  variables {
+    additional_teardown_principal_arns = ["arn:aws:iam::111122223333:role/Operator"]
+  }
+
+  assert {
+    condition = local.teardown_principal_arns == [
+      "arn:aws:iam::111122223333:role/spa-platform-poc-teardown",
+      "arn:aws:iam::111122223333:role/Operator",
+    ]
+    error_message = "additional_teardown_principal_arns is concatenated after the derived role, so it cannot lock out the one principal that can empty the bucket."
+  }
+}
+
+run "an_additional_teardown_principal_refuses_an_assumed_role_session_arn" {
+  command = plan
+
+  variables {
+    additional_teardown_principal_arns = ["arn:aws:sts::111122223333:assumed-role/Operator/someone"]
+  }
+
+  expect_failures = [var.additional_teardown_principal_arns]
+}
+
+# Bootstrap grants the teardown role spa-platform-<cell> by default; this is the bucket that name has
+# to be.
+run "the_bucket_is_the_one_bootstrap_grants_the_teardown_role" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes = [".spa-poc.test:8443"]
+    allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+  }
+
+  assert {
+    condition     = aws_s3_bucket.platform.bucket == "spa-platform-poc"
+    error_message = "The platform bucket must be spa-platform-<cell>, which infra/bootstrap's teardown policy names by default. Change both together."
+  }
+}
+
+run "cell_refuses_pc_at_this_root" {
+  command = plan
+
+  variables {
+    cell = "pc"
+  }
+
+  expect_failures = [var.cell]
+}
+
+run "cell_refuses_a_trailing_hyphen_at_this_root" {
+  command = plan
+
+  variables {
+    cell = "poc-"
+  }
+
+  expect_failures = [var.cell]
 }

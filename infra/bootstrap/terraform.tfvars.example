@@ -1,6 +1,7 @@
-# Copy to terraform.tfvars and edit. terraform.tfvars is not ignored by
-# .gitignore, so keep nothing secret in it. Nothing here is secret: the file names
-# a cell, a region and the principals allowed to run plans.
+# Copy to terraform.tfvars and edit. .gitignore ignores terraform.tfvars (change
+# request 1.5), so the copy stays on this workstation; this template stays tracked.
+# Nothing here is secret: the file names a cell, a region, the principals allowed to
+# run plans and the humans allowed to assume the teardown role.
 
 cell   = "poc"
 region = "us-east-1"
@@ -19,3 +20,15 @@ additional_trusted_principal_arns = []
 
 # Leave off unless a CI plan must block a concurrent apply. See the README.
 allow_state_lock = false
+
+# The humans who may assume the teardown role, spa-platform-<cell>-teardown, which
+# deletes published releases under apps/ (ADR-0014). Required: the apply fails on an
+# empty list. IAM user or role ARNs only. A user assumes it only with MFA; a role is
+# an allowlisted federated human role whose identity provider enforces MFA. Never
+# the account root, never the assumed-role session ARN `aws sts get-caller-identity`
+# prints, never the CI plan role.
+teardown_trusted_principal_arns = ["arn:aws:iam::111122223333:user/operator"]
+
+# The platform bucket the teardown role may empty. Empty means spa-platform-<cell>,
+# modules/cell's default; set it only together with that module's bucket_name.
+platform_bucket_name = ""
