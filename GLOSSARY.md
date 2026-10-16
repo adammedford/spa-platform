@@ -117,7 +117,8 @@ the metric say "rejection", and that is the word.
 
 **Rule id** — the identifier of the rule a rejection fired under, from the table in
 `contracts/request-gate.md` → Rule ids, held once as `Platform.Abstractions.RuleIds` (ADR-0015). It
-is the `rule` field of the request line and the tag of `security.rejections`; the `code` in a
+is the `rule` field of the request line and the tag of `security.rejections`, except on the
+method allowlist's 405, which reaches the line with no id; the `code` in a
 problem body is deliberately less specific.
 
 **Request line** — the one JSON log line `UsePlatformTelemetry` writes per request, after the rest of

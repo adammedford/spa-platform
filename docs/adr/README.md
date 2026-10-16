@@ -30,7 +30,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0015](0015-shared-constants-across-a-workstream-boundary.md) | Keep a contract-fixed shared constant in `Platform.Abstractions`, and a dependency-measured one where it is measured | — |
 | [0016](0016-plan-policy-without-aws-credentials.md) | Assert plan policy with mock providers, and keep AWS credentials out of CI | — |
 | [0017](0017-g0-findings-fold-into-the-identity-contracts.md) | Fold Gate G0's Cognito findings in: adopt the reserve refresh design, and put the client credential style on the profile | — |
-| [0018](0018-telemetry-is-the-outermost-stage.md) | Put `UsePlatformTelemetry` first, so every rejection the application answers is logged and counted; name stages, never number them, outside the pipeline table | — |
+| [0018](0018-telemetry-is-the-outermost-stage.md) | Put `UsePlatformTelemetry` first, so every rejection the application answers is logged on a request line, and all but the method allowlist's 405 are counted; name stages, never number them, outside the pipeline table | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

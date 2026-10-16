@@ -7,14 +7,15 @@
 - **Source:** `docs/plan/02-contracts.md` → Request gate; ADR-0007
 
 The gate runs before authentication (`UsePlatformRequestGate` in `contracts/pipeline.md`). The CSRF
-token check runs after it, because that one needs the user. Each rejection is logged and counted
-under a rule id. A rejection is an answer the application gives: a response some stage ends the
-request with. Every one of them reaches the request line, because `UsePlatformTelemetry` is the
-first stage (ADR-0018), and every one but the method allowlist's 405 reaches
-`security.rejections`. That 405 is on the line with `rule: null` until `MethodAllowlist` writes
-its id to `IRequestTelemetryFeature`; `contracts/telemetry.md` says the same. What Kestrel
-refuses before any stage runs, the 431 for oversized headers in `contracts/http-contract.md` →
-Errors, is the server's answer, carries no rule id, and is outside this sentence.
+token check runs after it, because that one needs the user. Each rejection is logged under a rule
+id, and counted under it too, with the one exception named below. A rejection is an answer the
+application gives: a response some stage ends the request with. Every one of them reaches the
+request line, because `UsePlatformTelemetry` is the first stage (ADR-0018), and every one but the
+method allowlist's 405 reaches `security.rejections`. That 405 is on the line with `rule: null`
+until `MethodAllowlist` writes its id to `IRequestTelemetryFeature`; `contracts/telemetry.md`
+says the same. What Kestrel refuses before any stage runs, the 431 for oversized headers in
+`contracts/http-contract.md` → Errors, is the server's answer, carries no rule id, and is outside
+this sentence.
 
 ## Rules by path
 
@@ -40,8 +41,8 @@ ASP.NET Core matches request cookie names without regard to case.
 
 ## Rule ids
 
-The `code` in a response says little on purpose. The rule id in the log line and in
-`security.rejections` says which rule fired.
+The `code` in a response says little on purpose. The rule id in the log line says which rule
+fired, and so does the tag on `security.rejections`, except for the method allowlist's 405.
 
 This table is the normative list, and `Platform.Abstractions.RuleIds` holds the same strings as
 constants so that no owner keeps a copy of its own: A-03 stops one workstream reading another's,
@@ -63,4 +64,5 @@ table below and fails if the two drift. ADR-0015 decided it.
 | `auth.session` | A cookie that resolves to no session for this app |
 | `api.unknown` | The app lists no upstream under that name |
 
-Tests assert on both the `code` and the rule id. A refusal by an upstream API is the API's to log.
+Nothing writes `auth.callback` or `auth.session` yet; they wait on workstream 3. A refusal by an
+upstream API is the API's to log.

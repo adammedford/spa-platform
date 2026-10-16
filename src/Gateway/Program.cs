@@ -29,7 +29,9 @@ WebApplication app = builder.Build();
 
 // Stage 1. The request log line and the trace scope, in place of the framework's default request
 // log, which includes the query string. First, so every rejection a later stage answers is logged
-// and counted; the line carries no value forwarded headers settle, which is why it can be
+// on a request line; all but the method allowlist's 405 are counted too, which waits on
+// MethodAllowlist writing its rule id. The line carries no value forwarded headers settle -- no
+// scheme, no client address, no host -- which is why it can run before they are settled
 // (ADR-0018, at G1b; until then the two stages below ran the other way round).
 app.UsePlatformTelemetry();
 
