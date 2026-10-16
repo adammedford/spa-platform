@@ -104,13 +104,38 @@ else
   missing "AWS CLI v2" "brew install awscli"
 fi
 
+# The project, the profile and the Region have to be the intended ones, which tools/aws-project.env
+# names. This check printed the account and the Region for weeks and compared them to nothing, so a
+# sitting applied the bootstrap root into the wrong project and spent an evening on guardrails that
+# project has and the intended one does not. Having the values and no expectation to hold them to is
+# what made that possible.
+want_profile=""
+want_region=""
+if [ -f tools/aws-project.env ]; then
+  want_profile=$(sed -n 's/^SPA_AWS_PROFILE=//p' tools/aws-project.env | tail -n 1)
+  want_region=$(sed -n 's/^SPA_AWS_REGION=//p' tools/aws-project.env | tail -n 1)
+fi
+
 if [ "$aws_ok" -eq 1 ]; then
   acct=$(AWS_MAX_ATTEMPTS=1 aws sts get-caller-identity --query Account --output text \
           --cli-connect-timeout 5 --cli-read-timeout 10 2>/dev/null)
   if [ -n "$acct" ] && [ "$acct" != "None" ]; then
     tail4=$(printf '%s' "$acct" | sed 's/.*\(....\)$/\1/')
     region=$(aws configure get region 2>/dev/null)
-    ok "AWS credentials" "account ending ${tail4}, region ${region:-not set (the plan uses us-east-1)}"
+    ok "AWS credentials" "account ending ${tail4}, region ${region:-not set}"
+
+    using=${AWS_PROFILE:-default}
+    if [ -z "$want_profile" ]; then
+      info "AWS project" "tools/aws-project.env is absent, so nothing says which project is intended"
+    elif [ "$using" != "$want_profile" ]; then
+      # The profile, not the account id: it resolves to the account, and naming it keeps an account
+      # identifier out of the repository (change request 1.5).
+      missing "AWS project" "using profile '${using}', expected '${want_profile}'. export AWS_PROFILE=${want_profile}"
+    elif [ -n "$want_region" ] && [ "$region" != "$want_region" ]; then
+      missing "AWS Region" "profile '${using}' resolves to '${region:-unset}', expected '${want_region}'. aws configure set region ${want_region} --profile ${using}"
+    else
+      ok "AWS project" "profile '${using}', region ${region}, as tools/aws-project.env names"
+    fi
   else
     missing "AWS credentials" "no working credentials. aws configure sso, or aws configure"
   fi
