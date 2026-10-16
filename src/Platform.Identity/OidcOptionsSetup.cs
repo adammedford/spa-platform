@@ -26,7 +26,8 @@ public sealed class OidcOptionsSetup(
     /// <summary>The callback path, the same on every host: the host is what tells two apps apart (R-A2).</summary>
     public static readonly PathString CallbackPath = new("/signin-oidc");
 
-    private const string Prefix = "oidc:";
+    /// <summary>What every OpenID Connect scheme name starts with: <see cref="SchemeNames.Oidc(string)"/> of no app.</summary>
+    internal static readonly string Prefix = SchemeNames.Oidc(string.Empty);
 
     public void Configure(OpenIdConnectOptions options) => Configure(Options.DefaultName, options);
 
@@ -76,7 +77,7 @@ public sealed class OidcOptionsSetup(
         // Domain, and is the fix for login CSRF (R-D3, R-D4, ADR-0007).
         options.CorrelationCookie.Name = "__Host-spa-corr.";
         options.NonceCookie.Name = "__Host-spa-nonce.";
-        foreach (Microsoft.AspNetCore.Http.CookieBuilder cookie in new[] { options.CorrelationCookie, options.NonceCookie })
+        foreach (CookieBuilder cookie in new[] { options.CorrelationCookie, options.NonceCookie })
         {
             cookie.Path = "/";
             cookie.Domain = null;
@@ -126,7 +127,7 @@ public sealed class OidcOptionsValidation : IValidateOptions<OpenIdConnectOption
 {
     public ValidateOptionsResult Validate(string? name, OpenIdConnectOptions options)
     {
-        if (name is null || !name.StartsWith("oidc:", StringComparison.Ordinal))
+        if (name is null || !name.StartsWith(OidcOptionsSetup.Prefix, StringComparison.Ordinal))
         {
             return ValidateOptionsResult.Skip;
         }

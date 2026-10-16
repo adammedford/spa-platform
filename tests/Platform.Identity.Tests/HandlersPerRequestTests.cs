@@ -60,8 +60,8 @@ public sealed class HandlersPerRequestTests
     [Fact]
     public async Task Any_of_303_apps_is_challenged_through_its_own_openid_connect_scheme()
     {
-        // S-F1, "any app can log in": every host's challenge goes to its own client's scheme. The
-        // login itself needs the OIDC options of task 3.2.
+        // S-F1, "any app can log in": every host's challenge goes to its own client's scheme. A whole
+        // login on those options is LoginTests.
         AppDefinition[] apps = [.. Enumerable.Range(1, 303).Select(i => TestApps.Entry("app" + i))];
         await using Gateway gateway = await Gateway.StartAsync(apps);
         IAuthenticationSchemeProvider schemes = gateway.Services.GetRequiredService<IAuthenticationSchemeProvider>();
