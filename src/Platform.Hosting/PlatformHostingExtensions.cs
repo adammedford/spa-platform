@@ -28,7 +28,8 @@ public static class PlatformHostingExtensions
     /// <summary>
     /// Answers <c>/healthz</c> and <c>/readyz</c> on any host, before host resolution, so the
     /// ALB health check and <c>spactl wait</c> need no registry entry and no known host
-    /// (contracts/pipeline.md, Health endpoints, and the second of its three orderings).
+    /// (contracts/pipeline.md, Health endpoints, and the ordering "Health answers before host
+    /// resolution").
     /// </summary>
     public static IApplicationBuilder UsePlatformHealth(this IApplicationBuilder app)
     {
