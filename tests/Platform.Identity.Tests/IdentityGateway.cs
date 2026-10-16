@@ -32,6 +32,22 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// <summary>A path standing in for an upstream API: 401 when anonymous, 200 when authenticated.</summary>
     public const string ApiPath = "/api/probe";
 
+    /// <summary>The fetch metadata a browser sends on a top-level navigation the user typed.</summary>
+    public static readonly IReadOnlyDictionary<string, string> Navigation = new Dictionary<string, string>
+    {
+        ["Sec-Fetch-Site"] = "none",
+        ["Sec-Fetch-Mode"] = "navigate",
+        ["Sec-Fetch-Dest"] = "document",
+    };
+
+    /// <summary>The fetch metadata a browser sends on a same-origin <c>fetch()</c>.</summary>
+    public static readonly IReadOnlyDictionary<string, string> Fetch = new Dictionary<string, string>
+    {
+        ["Sec-Fetch-Site"] = "same-origin",
+        ["Sec-Fetch-Mode"] = "cors",
+        ["Sec-Fetch-Dest"] = "empty",
+    };
+
     private readonly IHost host;
     private readonly RequestDelegate pipeline;
 
@@ -135,7 +151,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         AppDefinition app,
         string pathAndQuery,
         IReadOnlyDictionary<string, string>? cookies = null,
-        string method = "GET")
+        string method = "GET",
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         using IServiceScope scope = Services.CreateScope();
         HttpContext context = Pin(app);
@@ -146,11 +163,18 @@ internal sealed class IdentityGateway : IAsyncDisposable
         context.Request.Path = query < 0 ? pathAndQuery : pathAndQuery[..query];
         context.Request.QueryString = query < 0 ? QueryString.Empty : new QueryString(pathAndQuery[query..]);
 
+        context.Response.Body = new MemoryStream();
+
         if (method == "POST")
         {
             // An empty form, as a cross-site form post would send.
             context.Request.ContentType = "application/x-www-form-urlencoded";
             context.Request.Body = new MemoryStream();
+        }
+
+        foreach ((string name, string value) in headers ?? new Dictionary<string, string>())
+        {
+            context.Request.Headers[name] = value;
         }
 
         if (cookies is { Count: > 0 })
@@ -161,12 +185,17 @@ internal sealed class IdentityGateway : IAsyncDisposable
         await pipeline(context).WaitAsync(TestContext.Current.CancellationToken);
 
         IList<SetCookieHeaderValue> set = SetCookieHeaderValue.ParseList([.. context.Response.Headers.SetCookie.Select(v => v ?? "")]);
+        context.Response.Body.Position = 0;
+        string body = await new StreamReader(context.Response.Body).ReadToEndAsync(TestContext.Current.CancellationToken);
         return new Answer(
             context.Response.StatusCode,
             context.Response.Headers.Location.ToString(),
             [.. set],
             context.User.FindFirst("sub")?.Value,
-            context.Features.Get<IRequestTelemetryFeature>()!.SessionRef);
+            context.Features.Get<IRequestTelemetryFeature>()!.SessionRef,
+            context.Features.Get<IRequestTelemetryFeature>()!.Rule,
+            context.Response.ContentType,
+            body);
     }
 
     /// <summary>
@@ -194,7 +223,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// </summary>
     public async Task<Authorized> AuthorizeAsync(AppDefinition app)
     {
-        Answer challenge = await SendAsync(app, "/");
+        Answer challenge = await SendAsync(app, "/", headers: Navigation);
         Assert.Equal(302, challenge.Status);
 
         using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false });
@@ -218,11 +247,18 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     /// <summary>
     /// What the gateway answered: the status, the <c>Location</c> header, every cookie it set, the
-    /// authenticated user's <c>sub</c> if there was one, and the <c>session_ref</c> left on the request's
-    /// telemetry feature.
+    /// authenticated user's <c>sub</c> if there was one, the <c>session_ref</c> and rule id left on the
+    /// request's telemetry feature, and the body.
     /// </summary>
     internal sealed record Answer(
-        int Status, string Location, IReadOnlyList<SetCookieHeaderValue> Cookies, string? Subject, string? SessionRef)
+        int Status,
+        string Location,
+        IReadOnlyList<SetCookieHeaderValue> Cookies,
+        string? Subject,
+        string? SessionRef,
+        string? Rule,
+        string? ContentType,
+        string Body)
     {
         /// <summary>
         /// The one cookie set that is not login state: the app's session. Found by elimination so the
