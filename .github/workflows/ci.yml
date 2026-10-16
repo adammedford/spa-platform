@@ -43,6 +43,16 @@ jobs:
         # a progress line sit directly under the paragraph forbidding it for two sessions running.
         run: python3 -I .github/steering.py
 
+      - name: Plan generation stays disabled until its private pipeline is reviewed
+        # A plan's `after` holds the values the apply will write, so the identity root's plan
+        # carries every generated test-user password and the apps root's carries the OAuth client
+        # secrets. Change request 1.1's first half put *.tfplan in .gitignore; this is its second
+        # half, and it is a check rather than a sentence because the sentence is what task 1.9
+        # would read last. It starts green: nothing here uploads an artifact or writes a plan yet.
+        run: |
+          python3 -I .github/plan-secrecy-tests.py
+          python3 -I .github/plan-secrecy.py
+
       - name: The roadmap says what the tags, the merges and the plan say
         # docs/roadmap.md carries the gateway's capability ladder and a generated block saying how
         # far along it the work has got. The block is derived, and this is what keeps it derived: it
@@ -150,6 +160,21 @@ jobs:
         # The allowlist of resource types and counts, plus the assertions on the two security groups
         # and the task role. Task 1.9 writes it at tools/scripts/plan-policy.sh, taking a root as its
         # argument, and it needs the read-only plan role from task 1.0 in vars.AWS_PLAN_ROLE_ARN.
+        #
+        # Two of these plans carry credentials: the identity root's holds every generated test-user
+        # password and the apps root's holds the OAuth client secrets, because a plan's `after` is
+        # what the apply will write. So the plan reaches the checker inside this job and never
+        # leaves it (change request 1.1). Task 1.9 must review this future shape end to end:
+        #
+        #   terraform -chdir="$root" plan -out="$RUNNER_TEMP/plan.tfplan" ...
+        #   terraform -chdir="$root" show -json "$RUNNER_TEMP/plan.tfplan" \
+        #     | tools/scripts/plan-policy.sh "$root"
+        #
+        # $RUNNER_TEMP is outside the checkout and goes with the runner. Never `-out=` a relative
+        # path, never redirect the JSON into the workspace, and never upload either as an artifact:
+        # an uploaded plan is a credential in the Actions retention store for anyone who can read
+        # the run. The guard currently refuses plan/show altogether: it is not a shell sandbox.
+        # Task 1.9 must also check consumer diagnostics and every upload/cache before enabling it.
         run: |
           set -euo pipefail
           if [ ! -x tools/scripts/plan-policy.sh ]; then
