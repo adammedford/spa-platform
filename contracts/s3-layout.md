@@ -4,7 +4,11 @@
 - **Consumed by:** workstreams 1 and 2
 - **Source:** `docs/plan/02-contracts.md` → S3 layout; ADR-0009
 
-One private bucket per cell holds the registry and every release.
+One private bucket per cell holds the registry and every release. Its default name is
+`spa-platform-<cell>-<account id>-<region>-an`, in S3's account regional namespace, so no other
+account can create it between a teardown and the next deployment (change request 1.5a). The cell
+module can override it, so every consumer **reads** the platform root's `bucket` output and never
+derives the name: `spactl`, the scripts, the task environment and the teardown grants alike.
 
 ```text
 registry/registry.json                         one object, every version kept
@@ -19,8 +23,8 @@ from an unchecked path segment.
 
 ## Rules
 
-ADR-0014 specifies the teardown-role implementation workstream 1 must add. At base `070e3fae`,
-bootstrap has no such role; these requirements do not attest to an applied or implemented role.
+`infra/bootstrap` creates the teardown role ADR-0014 specifies (task 1.5). Nothing here attests to
+an applied stack: P-04 checks the policy against the applied bucket at G3.
 
 - **A release prefix is written once.** `spactl` sends `If-None-Match: *` on every object, in
   single-part uploads. The bucket policy requires that header under `apps/` and denies deletes there

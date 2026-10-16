@@ -3,18 +3,18 @@
     "Cell": "poc"
   },
   "Registry": {
-    "Bucket": "spa-platform-poc",
+    "Bucket": "spa-platform-poc-111122223333-us-east-1-an",
     "Key": "registry/registry.json",
     "PollSeconds": 15
   },
   "Assets": {
-    "Bucket": "spa-platform-poc"
+    "Bucket": "spa-platform-poc-111122223333-us-east-1-an"
   },
   "Issuers": {
     "cognito-poc": {
       "Authority": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE",
       "Profile": "cognito",
-      "BrowserOrigin": "https://spa-poc.auth.us-east-1.amazoncognito.com"
+      "BrowserOrigin": "https://spa-platform-poc-111122223333.auth.us-east-1.amazoncognito.com"
     }
   },
   "Policy": {
