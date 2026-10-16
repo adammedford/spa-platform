@@ -34,8 +34,12 @@ So the failure needs the interleaving: write the object, let *another* poll swap
 `UpdateRegistryAsync` makes is then told `NotModified`. Forced directly, that reproduces:
 
 ```
-foreignPoll=Swapped liveRev=2; harnessOwnPoll=NotModified liveRev=2
+foreign=Swapped update=NotModified live=2
 ```
+
+That `update=` is a real `UpdateRegistryAsync` call returning `NotModified` with its own write
+live. With step 2's fix applied the same test reads `update=Swapped`, so this is the shape that is
+red before and green after.
 
 **A caution for whoever picks this up.** A simpler demonstration — `UpdateRegistryAsync`, then
 `RefreshRegistryAsync` again — also prints `first=Swapped ... second=NotModified liveRev=2`, and
@@ -69,9 +73,10 @@ added by `d17839f`, carries this comment:
 > A real poll inside the observation interval reproduces the Linux CI race without depending on
 > the hosted poller's first read winning a scheduling race (N-13).
 
-Same assembly, same week, already merged: the background poller's first read is known to race the
-test window on Linux CI. That is stronger evidence for this mechanism than anything below, and it
-also hands over the reproduction technique — force a real poll inside the window rather than wait.
+Same assembly, same week, already merged. Read it for what it is: the comment *presupposes* the
+race rather than evidencing it, and cites no run, so it is a second author reaching the same
+conclusion independently rather than proof. Its value is the technique — force a real poll inside
+the window rather than wait for one.
 
 ## Observations, with their denominators
 
@@ -95,11 +100,18 @@ Neither #34 nor #35 touches `src/Platform.Registry`, `tests/Gateway.TestHarness`
 
 ## Suggested order of work
 
-1. **Write the test that fails before the fix**, which is the forced interleaving, not a second
-   poll: write the registry object, drive one `RefreshAsync` from outside the harness so it takes
-   the swap, then call the harness's own poll and assert it reports the write it made. A test that
-   merely refreshes twice passes today and characterises `RegistrySource`'s designed conditional
-   GET; it will not go red before the fix or green after it.
+1. **Write the test that fails before the fix and passes after it.** Two shapes do not work: one
+   that merely refreshes twice is green both ways, and one built on a bare `RefreshRegistryAsync`
+   is red both ways, because step 2 changes `UpdateRegistryAsync` and `PublishRegistryAsync` and a
+   bare refresh never calls them. **The write has to go through `UpdateRegistryAsync`**, with a
+   foreign poll held inside `RegistrySource.polling` across it. There is no seam between the
+   `PutAsync` and the refresh inside `PublishRegistryTextAsync` (`GatewayHarness.cs:284-303`), so
+   the way in is a gated `IObjectStore` decorator registered through
+   `GatewayHarnessOptions.ConfigureServices`, which runs at `GatewayHarness.cs:200`, after the
+   store is registered at `:186`; the harness writes through its concrete `Store` property rather
+   than DI, so the decorator intercepts only `RegistrySource`'s reads. Arm the gate, start a
+   refresh so it blocks inside `GetAsync` holding `polling`, call `UpdateRegistryAsync` so it
+   writes and then blocks on `polling`, then release the gate.
 2. **Fix the harness contract.** `UpdateRegistryAsync` and `PublishRegistryAsync` should report
    the outcome of the write they made: on `NotModified`, check whether the written revision is
    live and say so. Correct the doc comment with it.
@@ -108,7 +120,8 @@ Neither #34 nor #35 touches `src/Platform.Registry`, `tests/Gateway.TestHarness`
    `Gateway.SecurityTests` alone.
 
 A printf probe in `PublishRegistryTextAsync` was used to chase this and is **not** recommended: it
-costs a full-solution run per attempt for a ~0.43 chance of learning nothing, and a naive one that
+costs a full-solution run per attempt, each with a 0.9 chance of learning nothing and 0.43
+across eight, and a naive one that
 parses `text` unconditionally throws on the malformed documents that method exists to accept
 (F-09, N-14).
 
