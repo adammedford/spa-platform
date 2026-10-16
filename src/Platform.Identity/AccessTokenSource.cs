@@ -157,7 +157,7 @@ internal sealed partial class AccessTokenSource(
 
             return result.Succeeded
                 ? (result.Token, null)
-                : (null, string.IsNullOrEmpty(result.FailedResult.Error) ? "refresh_failed" : result.FailedResult.Error);
+                : (null, IdentityProviderUnavailableException.SafeError(result.FailedResult.Error));
         }
         catch (OperationCanceledException)
         {
@@ -195,15 +195,21 @@ internal sealed partial class AccessTokenSource(
         ticket.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
 
         SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
-        if (!await sessions.ReplaceAsync(key, next, record.Version, CancellationToken.None)
-            && await OwnedAsync(app, key) is null)
+        if (await sessions.ReplaceAsync(key, next, record.Version, CancellationToken.None))
         {
-            // The session went while the provider answered. The token is the provider's to expire; the
-            // caller has no session to use it for.
+            return new AccessTokenResult.Token(access);
+        }
+
+        // A concurrent writer won the versioned replace (T-D2). Return its persisted token rather
+        // than this response's unpersisted token; a removed or rebound session authenticates nobody.
+        if (await OwnedAsync(app, key) is not { } winner)
+        {
             return new AccessTokenResult.Unauthenticated();
         }
 
-        return new AccessTokenResult.Token(access);
+        return Deserialize(winner).Properties.GetTokenValue(AccessTokenName) is { Length: > 0 } current
+            ? new AccessTokenResult.Token(current)
+            : throw new IdentityProviderUnavailableException(app.AppId, "refresh_failed");
     }
 
     /// <summary>
@@ -258,9 +264,9 @@ internal sealed partial class AccessTokenSource(
 internal sealed class AccessTokenSourceOptions
 {
     /// <summary>
-    /// How long a refresh may take before the call gives up and the session is kept (T-D9). Ten seconds:
-    /// the grace window task 1.8 gives Cognito, so a refresh given up on at the deadline is retried, on
-    /// the next call that comes soon after, while the rotated-out token is still honoured (T-D10).
+    /// How long a refresh may take before the call gives up and the session is kept (T-D9).
+    /// A deadline cannot guarantee the next request arrives inside the provider's rotation grace:
+    /// late retries can end the session, as T-D10 records. This is a bound on this call only.
     /// </summary>
     public TimeSpan ProviderDeadline { get; set; } = TimeSpan.FromSeconds(10);
 }

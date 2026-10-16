@@ -10,16 +10,16 @@ namespace Platform.Identity;
 /// <c>contracts/changes/4.2-access-token-result-provider-unavailable.md</c> asks for; until it is
 /// decided, failing the call is this exception.
 ///
-/// The message names the app and the provider's error code, never a token: the library reports a
-/// failure as an error string (T-A8), which here is an OAuth error code or an HTTP status.
+/// The provider controls its error text, so only fixed outcome codes reach a message or log
+/// (contracts/telemetry.md, N-16); unknown text becomes refresh_failed.
 /// </summary>
 public sealed class IdentityProviderUnavailableException : Exception
 {
     public IdentityProviderUnavailableException(string appId, string error)
-        : base($"The identity provider did not refresh the access token for app '{appId}' ({error}). The session is kept.")
+        : base($"The identity provider did not refresh the access token for app '{appId}' ({SafeError(error)}). The session is kept.")
     {
         AppId = appId;
-        Error = error;
+        Error = SafeError(error);
     }
 
     public IdentityProviderUnavailableException()
@@ -42,9 +42,19 @@ public sealed class IdentityProviderUnavailableException : Exception
         Error = string.Empty;
     }
 
+    // OAuth error values can carry arbitrary provider text. Preserve only known categories,
+    // including invalid_grant, whose distinction determines whether the session ends (ADR-0005).
+    internal static string SafeError(string? error) => error switch
+    {
+        "invalid_grant" or "invalid_client" or "invalid_request" or "invalid_scope"
+            or "unauthorized_client" or "unsupported_grant_type" or "server_error"
+            or "temporarily_unavailable" or "deadline_exceeded" or "unreachable" => error,
+        _ => "refresh_failed",
+    };
+
     /// <summary>The app whose token was due.</summary>
     public string AppId { get; }
 
-    /// <summary>What the provider or the transport reported: an OAuth error code or a status, never a token.</summary>
+    /// <summary>A fixed failure category, with arbitrary provider text discarded.</summary>
     public string Error { get; }
 }
