@@ -115,13 +115,23 @@ fi
 # one directory up is the same silence the incident ran on, printed in a reassuring colour.
 project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
 
-# One key, read the way sourcing the file would read it: last assignment wins, and a CR from a CRLF
-# checkout, a trailing comment, trailing whitespace and surrounding quotes are all removed. The
-# parse has to agree with the shell, because the file documents itself as sourceable: a value that
-# parsed differently here would compare against something no `export` could ever produce, and the
-# remedy this script prints would not satisfy the check it came from.
+# One key, read the way sourcing the file would read it: last assignment wins, an optional `export`
+# prefix is accepted, and a trailing comment, trailing whitespace and surrounding quotes are all
+# removed. The parse has to agree with the shell, because the file documents itself as sourceable:
+# a value that parsed differently here would compare against something no `export` could ever
+# produce, and the remedy this script prints would not satisfy the check it came from.
+#
+# The `export` prefix is accepted because the keys are the canonical AWS ones, which makes writing
+# `export AWS_PROFILE=...` the natural thing to do -- and without this the guard would refuse a
+# correctly configured operator while claiming the file names no profile.
+#
+# A CR is stripped for tidiness, not for correctness: `.gitattributes` line 1 is `* text=auto
+# eol=lf` and `git check-attr -a tools/aws-project.env` reports `eol: lf`, so a CRLF copy cannot
+# come from a checkout on any platform. If one is contrived locally, sourcing it yields a trailing
+# CR that this parse does not, and the guard then fails closed on two strings that look identical.
 project_env_get() {
-  sed -n "s/^$1=//p" "$project_env" 2>/dev/null | tail -n 1 | tr -d '\r' \
+  sed -n "s/^\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "$project_env" 2>/dev/null \
+    | tail -n 1 | tr -d '\r' \
     | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' \
           -e 's/^"\(.*\)"$/\1/' -e 's/^'\''\(.*\)'\''$/\1/'
 }
