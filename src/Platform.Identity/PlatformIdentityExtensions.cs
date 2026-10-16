@@ -39,7 +39,9 @@ public static class PlatformIdentityExtensions
         // AddCookie would register it (ADR-0001: "the framework's own post-configuration then runs as
         // usual"). Without it a cookie scheme's options have no CookieManager or TicketDataFormat, and
         // the authentication middleware's default authenticate on every pinned request throws.
-        // AddCookie itself is not called because it would also name a scheme every host shares.
+        // AddCookie itself is not called because it would also name a scheme every host shares. AddCookie's
+        // own registration of this post-configuration:
+        // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieExtensions.cs
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IPostConfigureOptions<CookieAuthenticationOptions>, PostConfigureCookieAuthenticationOptions>());
         return builder;

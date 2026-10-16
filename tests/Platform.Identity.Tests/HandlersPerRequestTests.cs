@@ -87,6 +87,26 @@ public sealed class HandlersPerRequestTests
         Assert.False(built.User?.Identity?.IsAuthenticated);
     }
 
+    [Fact]
+    public async Task On_app1s_host_the_framework_refuses_app2s_scheme_by_name()
+    {
+        // R-B6 through the framework's own IAuthenticationService, which resolves a named scheme's
+        // handler through the scheme provider and throws when there is none
+        // (https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Http/Authentication.Core/src/AuthenticationService.cs).
+        // The app's own cookie scheme authenticates (with no result, no cookie being sent), so the
+        // refusal is about the name, not about authentication being unavailable.
+        AppDefinition app1 = TestApps.Entry("app1");
+        using Gateway gateway = new([app1, TestApps.Entry("app2")]);
+        using IServiceScope scope = gateway.Services.CreateScope();
+        HttpContext context = gateway.Pin(app1);
+        context.RequestServices = scope.ServiceProvider;
+        context.Request.Scheme = "https";
+
+        Assert.True((await context.AuthenticateAsync("cookie:app1")).None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => context.AuthenticateAsync("cookie:app2"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => context.ChallengeAsync("oidc:app2"));
+    }
+
     private sealed record Handed(string Scheme, IAuthenticationHandler Handler);
 
     private sealed record Built(IReadOnlyList<Handed> Handlers, int Status, System.Security.Claims.ClaimsPrincipal? User);
