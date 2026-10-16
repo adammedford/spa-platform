@@ -9,7 +9,9 @@ using Microsoft.Extensions.Logging;
 namespace Platform.Security;
 
 /// <summary>
-/// Workstream 4's security entry points: stages 1, 5, 6 and 9 of <c>contracts/pipeline.md</c>.
+/// Workstream 4's security entry points in <c>contracts/pipeline.md</c>:
+/// <c>UsePlatformForwardedHeaders</c>, <c>UsePlatformSecurityHeaders</c>, <c>UsePlatformRequestGate</c>
+/// and <c>UsePlatformAntiforgery</c>.
 ///
 /// <b>Stubs.</b> Task I-4 wrote these so <c>Program.cs</c> can call the frozen order on the empty
 /// skeleton. Tasks 4.3 to 4.6 fill them in. Keep these signatures and add no others.
@@ -22,9 +24,10 @@ namespace Platform.Security;
 public static class PlatformSecurityExtensions
 {
     /// <summary>
-    /// The forwarded-header options stage 1 applies, and Kestrel's request limits (task 4.6). The
-    /// framework's antiforgery with the platform's options, the app binding and <see cref="Platform.Abstractions.ICsrfTokens"/>,
-    /// which workstream 3 calls to issue the token and to clear it at logout (task 4.4).
+    /// The forwarded-header options <c>UsePlatformForwardedHeaders</c> applies, and Kestrel's
+    /// request limits (task 4.6). The framework's antiforgery with the platform's options, the app
+    /// binding and <see cref="Platform.Abstractions.ICsrfTokens"/>, which workstream 3 calls to issue
+    /// the token and to clear it at logout (task 4.4).
     /// </summary>
     public static IHostApplicationBuilder AddPlatformSecurity(this IHostApplicationBuilder builder)
     {
@@ -35,17 +38,20 @@ public static class PlatformSecurityExtensions
     }
 
     /// <summary>
-    /// Stage 1, and it is first for a reason: everything after it reads the scheme and the client
-    /// address, and the antiforgery cookie's <c>SecurePolicy = Always</c> has to be applied after it,
-    /// because a <c>__Host-</c> cookie sent without <c>Secure</c> is discarded (ADR-0007).
+    /// It runs straight after <c>UsePlatformTelemetry</c> and before everything else, for a reason:
+    /// everything after it reads the scheme and the client address, and the antiforgery cookie's
+    /// <c>SecurePolicy = Always</c> has to be applied after it, because a <c>__Host-</c> cookie sent
+    /// without <c>Secure</c> is discarded (ADR-0007).
     ///
     /// <c>X-Forwarded-Proto</c> and <c>X-Forwarded-For</c> are trusted from
     /// <c>ForwardedHeaders:TrustedNetworks</c> only, and <c>X-Forwarded-Host</c> is never read.
     /// Task 4.6.
     ///
-    /// The method allowlist runs here too, straight after, because this is the first stage and the
-    /// only one task 4.6 fills: a method no path accepts (<c>TRACE</c>, <c>CONNECT</c>) gets 405
-    /// before any later stage sees it. Per-path methods are the request gate's.
+    /// The method allowlist runs here too, straight after, because this is the earliest stage
+    /// workstream 4 owns and the one task 4.6 fills: a method no path accepts (<c>TRACE</c>,
+    /// <c>CONNECT</c>) gets 405 under <c>gate.method</c> before any later stage sees it, and the
+    /// telemetry stage ahead of it logs and counts the refusal (ADR-0018). Per-path methods are the
+    /// request gate's.
     /// </summary>
     public static IApplicationBuilder UsePlatformForwardedHeaders(this IApplicationBuilder app)
     {
@@ -75,8 +81,9 @@ public static class PlatformSecurityExtensions
     /// The rules in <c>contracts/request-gate.md</c>, one rule id per rejection. It runs before
     /// authentication, because no rule in it needs the user. Task 4.3.
     ///
-    /// The session the contract asks of an asset request is stage 8's, and the token on an unsafe
-    /// <c>/api</c> method is stage 9's: both need the user, which this stage runs before.
+    /// The session the contract asks of an asset request is <c>UsePlatformShellGate</c>'s, and the
+    /// token on an unsafe <c>/api</c> method is <c>UsePlatformAntiforgery</c>'s: both need the user,
+    /// which this stage runs before.
     /// </summary>
     public static IApplicationBuilder UsePlatformRequestGate(this IApplicationBuilder app)
     {

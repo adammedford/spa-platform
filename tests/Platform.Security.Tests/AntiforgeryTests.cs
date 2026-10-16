@@ -8,10 +8,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Stage 9, antiforgery: unsafe methods on <c>/api</c> need a valid <c>X-CSRF-TOKEN</c>, bound to the
-/// user, the cookie token and the app, and read from the header only. Task 4.4; N-06 and the evidence
-/// rows R-E1, R-E2, R-E3b, R-E5 and R-E6 (<c>docs/plan/07-evidence.md</c>), with findings R-E3, R-E4
-/// and R-E7 as the behaviour each setting prevents.
+/// <c>UsePlatformAntiforgery</c>: unsafe methods on <c>/api</c> need a valid <c>X-CSRF-TOKEN</c>,
+/// bound to the user, the cookie token and the app, and read from the header only. Task 4.4; N-06 and
+/// the evidence rows R-E1, R-E2, R-E3b, R-E5 and R-E6 (<c>docs/plan/07-evidence.md</c>), with findings
+/// R-E3, R-E4 and R-E7 as the behaviour each setting prevents.
 /// </summary>
 public sealed class AntiforgeryTests
 {
@@ -32,7 +32,7 @@ public sealed class AntiforgeryTests
         Assert.Equal("csrf_failed", body.RootElement.GetProperty("code").GetString());
 
         // The terminal sends Access-Control-Allow-Origin and counts itself, so either fails if the
-        // request got past stage 9.
+        // request got past the antiforgery check.
         Assert.DoesNotContain(response.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(reachedBefore, host.Reached);
         Assert.Single(host.LinesFor("csrf.token"));
@@ -78,7 +78,8 @@ public sealed class AntiforgeryTests
     public async Task N06_an_unsafe_api_call_with_no_session_gets_403_csrf_failed()
     {
         // No anonymous pair exists to pass: /bff/session issues tokens to a signed-in user only. This
-        // pins the decision that stage 9 checks the anonymous request rather than leaving it to stage 10.
+        // pins the decision that antiforgery checks the anonymous request rather than leaving it to the
+        // endpoint.
         await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct);
         AntiforgeryHost.Issued issued = await host.IssueAsync(App1, "alice", Ct);
 
@@ -297,8 +298,8 @@ public sealed class AntiforgeryTests
     public async Task RE5_the_platform_never_sets_the_cookie_on_a_request_that_did_not_arrive_as_https()
     {
         // With Always, the framework refuses to run on a request whose scheme is http
-        // (DefaultAntiforgery.CheckSSLConfig): no cookie without Secure can leave. This is why stage 1
-        // must apply X-Forwarded-Proto first.
+        // (DefaultAntiforgery.CheckSSLConfig): no cookie without Secure can leave. This is why
+        // UsePlatformForwardedHeaders must apply X-Forwarded-Proto first.
         await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/bff/session", App1, "alice", Ct, https: false);

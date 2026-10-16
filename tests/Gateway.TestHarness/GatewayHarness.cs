@@ -107,7 +107,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The gateway's own listener, e.g. <c>http://127.0.0.1:54321/</c>, for <see cref="RawHttp"/>.</summary>
     public Uri GatewayAddress => factory.Address;
 
-    /// <summary>The live registry, as stage 4 reads it.</summary>
+    /// <summary>The live registry, as host resolution reads it.</summary>
     public IRegistry Registry => Services.GetRequiredService<IRegistry>();
 
     /// <summary>Every app the harness has registered with the provider, by appId, whether or not it is in the registry now.</summary>
@@ -197,6 +197,11 @@ public sealed class GatewayHarness : IAsyncDisposable
                 provider.GetServices<ConsoleFormatter>().FirstOrDefault(formatter =>
                     formatter.Name == provider.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ConsoleLoggerOptions>>()?.CurrentValue.FormatterName)));
 
+            if (options.SessionRequired)
+            {
+                RequireSession(services);
+            }
+
             options.ConfigureServices?.Invoke(services);
         });
 
@@ -227,6 +232,11 @@ public sealed class GatewayHarness : IAsyncDisposable
 
             factory.StartServer();
 
+            if (options.SessionRequired && harness.Services.GetService<IAccessTokenSource>() is null)
+            {
+                throw new InvalidOperationException("SessionRequired is set and the gateway has no IAccessTokenSource.");
+            }
+
             // The poller's first read may still be in flight. One more poll waits for it (the source
             // runs one poll at a time) and settles the outcome either way.
             await harness.RefreshRegistryAsync(ct);
@@ -249,6 +259,46 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>A browser whose network reaches the gateway through the stand-in load balancer.</summary>
     public TestBrowser CreateBrowser() => new(new LoadBalancerTransport(GatewayAddress));
 
+    /// <summary>
+    /// Signs <paramref name="browser"/> in to an app the way a user does: a navigation to <c>/bff/login</c>,
+    /// through the test provider (which approves at once, as <see cref="TestIdentityProvider.DefaultSubject"/>)
+    /// and the app's callback, back to the shell. Returns the shell the browser landed on. Throws, naming
+    /// where the login ended, when it did not land on the app's own origin with a 200.
+    /// </summary>
+    public async Task<BrowserResponse> SignInAsync(TestBrowser browser, string appId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(browser);
+        HarnessApp app = App(appId);
+        BrowserResponse landed = await browser.NavigateAsync(app.Url("/bff/login"), ct: ct);
+        if (landed.StatusCode != System.Net.HttpStatusCode.OK || !FetchMetadata.IsSameOrigin(app.Origin, landed.Url)
+            || landed.RedirectedFrom.All(hop => hop.AbsolutePath != "/signin-oidc"))
+        {
+            throw new InvalidOperationException($"signing in to {app} ended at {landed}, not at the app's shell after its callback.");
+        }
+
+        return landed;
+    }
+
+    /// <summary>A browser signed in to every app of the first registry revision, in the order <see cref="GatewayHarnessOptions.Apps"/> lists them.</summary>
+    public async Task<TestBrowser> CreateSignedInBrowserAsync(CancellationToken ct = default)
+    {
+        TestBrowser browser = CreateBrowser();
+        try
+        {
+            foreach (string appId in Options.Apps)
+            {
+                await SignInAsync(browser, appId, ct);
+            }
+        }
+        catch
+        {
+            browser.Dispose();
+            throw;
+        }
+
+        return browser;
+    }
+
     /// <summary>Polls the registry object once, as the poller would on its next tick.</summary>
     public Task<RefreshOutcome> RefreshRegistryAsync(CancellationToken ct = default) =>
         Services.GetRequiredService<RegistrySource>().RefreshAsync(ct);
@@ -266,7 +316,11 @@ public sealed class GatewayHarness : IAsyncDisposable
         return await PublishRegistryAsync(next, ct);
     }
 
-    /// <summary>Writes <paramref name="next"/> as the registry object, as it stands, and polls once.</summary>
+    /// <summary>
+    /// Writes <paramref name="next"/> as the registry object, as it stands, and polls once. The outcome is
+    /// the write's: <see cref="RefreshOutcome.Swapped"/> when the written document is live and
+    /// <see cref="RefreshOutcome.Rejected"/> when it was rejected, whichever poll read it first.
+    /// </summary>
     public async Task<RefreshOutcome> PublishRegistryAsync(JsonObject next, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(next);
@@ -283,23 +337,48 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// </summary>
     public async Task<RefreshOutcome> PublishRegistryTextAsync(string text, CancellationToken ct = default)
     {
+        string written;
         await registryWrites.WaitAsync(ct);
         try
         {
-            StoredObject current = await Store.GetAsync(RegistryKey, ifNoneMatch: null, ct)
-                ?? throw new InvalidOperationException("the registry object is missing.");
-            current.Body?.Dispose();
-            if (!await Store.PutAsync(RegistryKey, Utf8(text), current.ETag, ct))
+            string before = await RegistryETagAsync(ct);
+            if (!await Store.PutAsync(RegistryKey, Utf8(text), before, ct))
             {
                 throw new InvalidOperationException("the registry object changed under the harness.");
             }
+
+            // Only the harness writes the object, and only under this lock, so this is the write's ETag.
+            written = await RegistryETagAsync(ct);
         }
         finally
         {
             registryWrites.Release();
         }
 
-        return await RefreshRegistryAsync(ct);
+        return OutcomeOfWrite(await RefreshRegistryAsync(ct), written);
+    }
+
+    /// <summary>
+    /// The outcome of the write whose ETag is <paramref name="written"/>, from the outcome of the one poll
+    /// the harness ran after it (task 6.1a). The gateway's own poller runs too, and its tick can land
+    /// between the write and that poll: it swaps the document in, and the harness's conditional read then
+    /// answers 304. So a poll that found the object unchanged reports <see cref="RefreshOutcome.Swapped"/>
+    /// when the live snapshot was built from this write, and <see cref="RefreshOutcome.Rejected"/> when it
+    /// was not: the source answers 304 only for the ETag it settled, and it settles an ETag that is not
+    /// live only by rejecting it (<c>RegistrySource.RefreshOnceAsync</c>). Every other outcome is this
+    /// poll's own, as it stands.
+    /// </summary>
+    private RefreshOutcome OutcomeOfWrite(RefreshOutcome polled, string written) =>
+        polled != RefreshOutcome.NotModified ? polled
+        : string.Equals(Registry.Current.ETag, written, StringComparison.Ordinal) ? RefreshOutcome.Swapped
+        : RefreshOutcome.Rejected;
+
+    private async Task<string> RegistryETagAsync(CancellationToken ct)
+    {
+        StoredObject current = await Store.GetAsync(RegistryKey, ifNoneMatch: null, ct)
+            ?? throw new InvalidOperationException("the registry object is missing.");
+        current.Body?.Dispose();
+        return current.ETag;
     }
 
     /// <summary>Writes one release of an app into the bucket under <c>apps/{appId}/releases/{release}/</c>.</summary>
@@ -396,6 +475,25 @@ public sealed class GatewayHarness : IAsyncDisposable
 
         apps[appId] = app;
         return app;
+    }
+
+    /// <summary>
+    /// Switches on the shell gate and the <see cref="IAccessTokenSource"/> binding, which workstream 3
+    /// registers outside <c>AddPlatformIdentity</c> (tasks 3.8 and 3.9) so that a suite making sessionless
+    /// requests is not gated. Each is an internal method of <c>Platform.Identity</c>, named in that project's own comments
+    /// as the line that moves into <c>AddPlatformIdentity</c>; the harness calls it by name so the gateway
+    /// runs the real gate and the real source, with nothing standing in for either. Both only add what is
+    /// missing, so once <c>AddPlatformIdentity</c> registers them this changes nothing, and a method that
+    /// is no longer there has been folded in.
+    /// </summary>
+    public static void RequireSession(IServiceCollection services)
+    {
+        foreach (string name in (string[])["AddPlatformAccessTokenSource", "AddPlatformShellGate"])
+        {
+            typeof(Platform.Identity.PlatformIdentityExtensions)
+                .GetMethod(name, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
+                ?.Invoke(null, [services]);
+        }
     }
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>

@@ -109,9 +109,12 @@ bucket.
   because a delete followed by a write would otherwise replace a release.
 
 `teardown_principal_arns` has no default and refuses to be empty: a bucket nobody may
-empty cannot be destroyed, and P-05 would then fail for ever. Change request 1.5 asks
-the integrator where that ARN should come from, because no root creates a teardown
-role today.
+empty cannot be destroyed, and P-05 would then fail for ever. The platform root fills
+it with the teardown role `infra/bootstrap` creates, `spa-platform-<cell>-teardown`,
+looked up by that derived name, followed by any `additional_teardown_principal_arns`
+(change request 1.5, ADR-0014). Bootstrap grants that role the delete on
+`spa-platform-<cell>`, this module's default bucket name; override `bucket_name` only
+together with bootstrap's `platform_bucket_name`.
 
 The permission and resource assertions run at plan time. One additional mock-only apply run checks
 that each grant and trust document is attached to its intended role. Mock resources exist only in

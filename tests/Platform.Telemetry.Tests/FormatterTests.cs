@@ -98,7 +98,25 @@ public sealed class FormatterTests
     }
 
     [Theory]
-    [InlineData("Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler", LogLevel.Information)]
+    [InlineData(LogLevel.Trace)]
+    [InlineData(LogLevel.Debug)]
+    [InlineData(LogLevel.Information)]
+    [InlineData(LogLevel.Warning)]
+    [InlineData(LogLevel.Error)]
+    [InlineData(LogLevel.Critical)]
+    public void N16_provider_controlled_token_library_errors_never_reach_the_log(LogLevel level)
+    {
+        // The provider may echo a token in OAuth error fields; the library logs those fields even
+        // at Error. The formatter is the final guard when configuration overrides logging filters.
+        Assert.Empty(Write("Duende.AccessTokenManagement.OpenIdConnect.Internal.Endpoint",
+            level, "Error refreshing access token. Error = {Error}", "CANARY-REFRESH-TOKEN"));
+        Assert.Empty(Write("Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler",
+            level, "Remote error: {ErrorDescription}", "CANARY-CALLBACK-CREDENTIAL"));
+        Assert.Contains("kept", Write("Duende.AccessTokenManagementOther", level, "kept"), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Platform.Identity.AuthenticationEvents", LogLevel.Information)]
     [InlineData("Microsoft.AspNetCore.AuthenticationOther", LogLevel.Debug)]
     [InlineData("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning)]
     public void A_line_at_or_above_its_floor_or_outside_every_floor_is_written(string category, LogLevel level)

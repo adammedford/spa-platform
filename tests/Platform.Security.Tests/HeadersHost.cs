@@ -12,21 +12,23 @@ using Platform.Testing;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Workstream 4's gateway cut down to stage 5, <c>UsePlatformSecurityHeaders</c>, with what it stands
-/// on and one real stage after it. The composed gateway cannot show stage 5 until task 2.3 resolves a
-/// host (<c>contracts/pipeline.md</c>), so it is proven here and again by workstream 6.
+/// Workstream 4's gateway cut down to <c>UsePlatformSecurityHeaders</c>, with what it stands
+/// on and one real stage after it. The composed gateway cannot show the headers until task 2.3 resolves
+/// a host (<c>contracts/pipeline.md</c>), so it is proven here and again by workstream 6.
 ///
 /// <list type="bullet">
-/// <item>Stage 1 trusts loopback, so a request carries <c>X-Forwarded-Proto: https</c> as the ALB
-/// sends it.</item>
-/// <item>Stage 4's stand-in pins the app whose <c>host</c> equals the request's <c>Host</c> header, as
-/// task 2.3 will, so one host serves several apps with different <c>csp</c> additions (F-06).</item>
-/// <item>Stage 6, the real request gate, follows stage 5. A refusal it writes is an API error written
-/// by a later stage, which is the response N-24 most needs stage 5 to cover.</item>
-/// <item>The terminal stands for stage 10: an HTML shell, an asset, <c>/bff/session</c> and a
-/// proxied API response. Every one of them first sets its own copy of each header stage 5 owns, plus
-/// two <c>Access-Control-*</c> headers, as a careless upstream would. An overwrite that failed would
-/// then show as a second value or the wrong one.</item>
+/// <item><c>UsePlatformForwardedHeaders</c> trusts loopback, so a request carries
+/// <c>X-Forwarded-Proto: https</c> as the ALB sends it.</item>
+/// <item>Host resolution's stand-in pins the app whose <c>host</c> equals the request's <c>Host</c>
+/// header, as task 2.3 will, so one host serves several apps with different <c>csp</c> additions
+/// (F-06).</item>
+/// <item><c>UsePlatformRequestGate</c>, the real one, follows the headers stage. A refusal it writes is
+/// an API error written by a later stage, which is the response N-24 most needs the headers stage to
+/// cover.</item>
+/// <item>The terminal stands for the endpoints: an HTML shell, an asset, <c>/bff/session</c> and a
+/// proxied API response. Every one of them first sets its own copy of each header the headers stage
+/// owns, plus two <c>Access-Control-*</c> headers, as a careless upstream would. An overwrite that
+/// failed would then show as a second value or the wrong one.</item>
 /// </list>
 /// </summary>
 public sealed class HeadersHost : IAsyncDisposable
@@ -34,7 +36,7 @@ public sealed class HeadersHost : IAsyncDisposable
     /// <summary>The provider origin configured for issuer <c>primary</c>, the issuer <see cref="TestApps"/> uses.</summary>
     public const string BrowserOrigin = "https://login.idp.test";
 
-    /// <summary>What the terminal sends as its own copy of every header stage 5 owns.</summary>
+    /// <summary>What the terminal sends as its own copy of every header the headers stage owns.</summary>
     public static readonly IReadOnlyDictionary<string, string> UpstreamCopies = new Dictionary<string, string>
     {
         ["Content-Security-Policy"] = "default-src *",
@@ -64,7 +66,7 @@ public sealed class HeadersHost : IAsyncDisposable
     public List<string> Log { get; }
 
     /// <param name="ct">The test's token.</param>
-    /// <param name="apps">The registry stage 4's stand-in resolves against, by <c>host</c>.</param>
+    /// <param name="apps">The registry the host-resolution stand-in reads, by <c>host</c>.</param>
     /// <param name="issuers">
     /// <c>Issuers:{name}:BrowserOrigin</c> settings. Null configures <c>primary</c> as
     /// <see cref="BrowserOrigin"/>.

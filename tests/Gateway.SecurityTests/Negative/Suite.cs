@@ -3,17 +3,20 @@ using Gateway.TestHarness;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// The session-independent portion of plan row 6.3, task 6.3a, exercised through the composed
-/// gateway. Each test observes a client response, rendered logs or the upstream request rather
-/// than invoking middleware directly (docs/plan/04-tests.md).
+/// Plan row 6.3, the negative suite N-01 to N-25 and N-27, exercised through the composed gateway.
+/// Each test observes a client response, rendered logs, the session store or an upstream's record
+/// rather than invoking middleware directly (docs/plan/04-tests.md).
 ///
-/// <para>Whole rows: N-08, N-09, N-13, N-14, N-16 and N-20. Partial rows: N-07, N-10, N-12,
-/// N-24, N-25 and N-27. Cookie-prefix enforcement requires a real browser; remote-signout session
-/// preservation requires a live session. Those behaviours are outside these requests' evidence.</para>
+/// <para>Two kinds of cell. The sessionless rows (task 6.3a) run on the gateway as <c>Program.cs</c>
+/// composes it. Every row that needs a session runs on a cell that requires one
+/// (<see cref="SignedIn.StartAsync"/>), with a browser signed in through the test provider, and a
+/// row whose sessionless half landed first (N-07, N-10, N-12, N-24, N-27) has its session half beside
+/// it in the same class. N-25's browser clause and N-26 rest on the browser enforcing the
+/// <c>__Host-</c> prefix, which the test browser does not do (R-D3); the deployed suite holds
+/// them.</para>
 ///
 /// <para>Canary coverage spans this project's harnesses through <see cref="StartAsync"/> and the
-/// assembly's final <see cref="SuiteSweep"/>. The individual tests' assertions define the coverage;
-/// a partial row must not be read as proof of its session or browser clauses.</para>
+/// assembly's final <see cref="SuiteSweep"/>.</para>
 /// </summary>
 internal static class Suite
 {

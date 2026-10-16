@@ -6,24 +6,23 @@ using Platform.Registry;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// N-12, <b>partial</b>: "Upstream answers with <c>Set-Cookie</c>, a CORS header and its own CSP, on
+/// N-12: "Upstream answers with <c>Set-Cookie</c>, a CORS header and its own CSP, on
 /// a 200 and on a 500 -> The browser receives no cookie, no CORS header and the gateway's CSP, both
 /// times." (docs/plan/04-tests.md.)
 ///
-/// <para><b>What is proven: the CORS header and the policy, on both statuses.</b> Both are stage 5's
+/// <para><b>What is proven: the CORS header and the policy, on both statuses.</b> Both are UsePlatformSecurityHeaders'
 /// (task 4.5): <c>contracts/http-contract.md</c> -> Response headers says the header set is
 /// "Set on every response, including proxied ones, where they overwrite what the upstream sent", and
-/// "No <c>Access-Control-*</c> header, ever. One sent by an upstream is stripped." Stage 5 applies
+/// "No <c>Access-Control-*</c> header, ever. One sent by an upstream is stripped." UsePlatformSecurityHeaders applies
 /// them from <c>Response.OnStarting</c>, so they land after YARP has copied the upstream's — and the
 /// composed gateway is the only place that can be read, because workstream 4's own project has no
-/// stage 10 and no upstream to be overwritten.</para>
+/// proxy endpoint and no upstream to be overwritten.</para>
 ///
-/// <para>This class proves only the CORS and CSP clauses. The Set-Cookie clause and N-11
-/// require separate proxy-pipeline evidence under plan row 4.2 and are not asserted here.</para>
-///
-/// <para>These requests isolate the HTTP contract named above. Session establishment and
-/// preservation require separate acceptance evidence; a successful response here proves only the
-/// asserted routing, policy or telemetry behaviour.</para>
+/// <para><b>The <c>Set-Cookie</c> clause</b> is held on a cell that requires a session, by a signed-in
+/// browser, because that is the call an upstream can answer in production: the proxy's token step
+/// refuses a sessionless call before it is forwarded. The proxy strips the header on every status
+/// (task 4.2, T-C7); the browser's jar is read as well as the response, because the row's words are
+/// "the browser receives no cookie".</para>
 /// </summary>
 public sealed class UpstreamResponseTests
 {
@@ -75,6 +74,32 @@ public sealed class UpstreamResponseTests
         }
     }
 
+    [Theory]
+    [InlineData(200)]
+    [InlineData(500)]
+    public async Task An_upstreams_set_cookie_never_reaches_a_signed_in_browser_on_any_status(int status)
+    {
+        await using HostileUpstream upstream = HostileUpstream.Start();
+        upstream.Status = status;
+
+        await using GatewayHarness harness = await StartWith(upstream, sessionRequired: true);
+        HarnessApp app = harness.App("app1");
+        using TestBrowser browser = harness.CreateBrowser();
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
+        string[] before = [.. browser.AllCookies.Select(cookie => cookie.Name + "=" + cookie.Value)];
+
+        BrowserResponse proxied = await browser.GetAsync($"/api/{ApiName}/thing", ct: Suite.Ct);
+
+        // The upstream's own answer, so the absence below is about a response it really wrote.
+        Assert.Equal(status, (int)proxied.StatusCode);
+        Assert.Equal(upstream.Body, proxied.Body);
+
+        Assert.Empty(proxied.SetCookies);
+        Assert.DoesNotContain(browser.AllCookies, cookie => cookie.Name == HostileUpstream.PlantedCookie);
+        Assert.Equal(before, browser.AllCookies.Select(cookie => cookie.Name + "=" + cookie.Value));
+        Assert.True(SignedIn.HoldsSessionCookie(browser, app));
+    }
+
     [Fact]
     public async Task The_upstream_really_does_send_what_the_gateway_has_to_overwrite()
     {
@@ -101,13 +126,14 @@ public sealed class UpstreamResponseTests
     /// operator's would be — the validator refuses an upstream the policy does not name, so a
     /// mistake in either half shows up as a rejected document rather than as a passing test.</para>
     /// </summary>
-    private static async Task<GatewayHarness> StartWith(HostileUpstream upstream)
+    private static async Task<GatewayHarness> StartWith(HostileUpstream upstream, bool sessionRequired = false)
     {
         // The harness lists one allowed upstream per distinct API origin it set up. With no echo API
         // there are two, at indices 0 and 1, so this adds a third rather than overwriting one.
         GatewayHarnessOptions options = new()
         {
             EchoApi = null,
+            SessionRequired = sessionRequired,
             Configuration = new Dictionary<string, string?>
             {
                 ["Policy:AllowedUpstreams:2"] = upstream.Address.GetLeftPart(UriPartial.Authority),

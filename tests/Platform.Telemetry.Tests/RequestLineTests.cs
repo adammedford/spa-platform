@@ -1,10 +1,12 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Platform.Abstractions;
 
 namespace Platform.Telemetry.Tests;
 
 /// <summary>
-/// Stage 2's request log line (contracts/pipeline.md, contracts/telemetry.md): one JSON line per
+/// <c>UsePlatformTelemetry</c>'s request log line (contracts/pipeline.md, contracts/telemetry.md): one JSON line per
 /// request, carrying the contract's fields and never the query string.
 /// </summary>
 public sealed class RequestLineTests
@@ -128,6 +130,26 @@ public sealed class RequestLineTests
         Assert.Equal(JsonValueKind.Null, line.GetProperty("app_id").ValueKind);
         Assert.Equal(JsonValueKind.Null, line.GetProperty("registry_rev").ValueKind);
         Assert.Equal("host.unknown", line.GetProperty("rule").GetString());
+    }
+
+    [Fact]
+    public async Task N16_vendor_error_fields_are_dropped_even_when_configuration_reenables_the_categories()
+    {
+        const string library = "Duende.AccessTokenManagement.OpenIdConnect.Internal.Endpoint";
+        const string authentication = "Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler";
+        const string canary = "CANARY-PROVIDER-REFRESH-TOKEN";
+        await using TelemetryHost host = await TelemetryHost.StartAsync(Ct, configuration: new Dictionary<string, string?>
+        {
+            ["Logging:LogLevel:" + library] = "Trace",
+            ["Logging:LogLevel:" + authentication] = "Trace",
+        });
+        ILoggerFactory logs = host.Services.GetRequiredService<ILoggerFactory>();
+        logs.CreateLogger(library).LogError("Error refreshing access token. Error = {Error}", canary);
+        logs.CreateLogger(authentication).LogWarning("Remote error: {ErrorDescription}", canary);
+        logs.CreateLogger("Platform.Identity.AuthenticationEvents").LogWarning("Safe callback outcome {Rule}", "auth.callback");
+
+        Assert.DoesNotContain(host.Log.Lines, line => line.Contains(canary, StringComparison.Ordinal));
+        Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "Safe callback outcome auth.callback");
     }
 
     [Fact]

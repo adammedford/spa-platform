@@ -19,12 +19,12 @@ public sealed class ConcurrentApiCallsTests
     public async Task Two_concurrent_calls_carry_two_trace_ids()
     {
         CapturedTelemetry telemetry = new();
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(telemetry.Options(), Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(telemetry.Options(new GatewayHarnessOptions { SessionRequired = true }), Ct);
 
         using TestBrowser one = harness.CreateBrowser();
         using TestBrowser two = harness.CreateBrowser();
-        await one.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
-        await two.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
+        await harness.SignInAsync(one, "app1", Ct);
+        await harness.SignInAsync(two, "app1", Ct);
 
         // Two tabs of the same app calling the same API at the same time, which is the case an
         // operator reads a trace for.
@@ -45,7 +45,7 @@ public sealed class ConcurrentApiCallsTests
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         Assert.NotEqual(first, second);
 
-        // Ordered on both sides: the two calls race, so which request line stage 2 wrote first is
+        // Ordered on both sides: the two calls race, so which request line the telemetry stage wrote first is
         // not this row's claim.
         Assert.Equal(new[] { first, second }.Order(), logged.Order());
 

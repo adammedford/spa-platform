@@ -7,9 +7,15 @@ variable "cell" {
   type        = string
   default     = "poc"
 
+  # The same rule as the platform root and modules/cell, character for character (change request
+  # 1.5, ADR-0014 item 7). The lower bound of 3 is the frozen appId shape the cell is published as
+  # (contracts/infra-outputs.schema.json -> cell, which references registry.schema.json -> appId).
+  # The upper bound of 22 is the longest name every resource name still fits: the load balancer is
+  # spa-<cell>, within its 32-character limit, and the platform root's test pins it. No edge
+  # hyphen, because the cell ends bucket and role names.
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{1,19}$", var.cell))
-    error_message = "cell must be 2 to 20 characters of lowercase letters, digits or hyphens, starting with a letter."
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
+    error_message = "cell must be 3 to 22 lowercase letters, digits or hyphens, and must not start or end with a hyphen."
   }
 }
 
@@ -126,4 +132,46 @@ variable "plan_can_read_parameters" {
   EOT
   type        = bool
   default     = true
+}
+
+# --- The teardown role (change request 1.5, ADR-0014) ------------------------------------------
+
+variable "teardown_trusted_principal_arns" {
+  description = <<-EOT
+    The humans allowed to assume the teardown role, which may delete published releases under
+    apps/ in the platform bucket. Its own list, not additional_trusted_principal_arns: the CI
+    role's principals read everything, these delete releases, and the two are different people.
+
+    Explicit IAM user and role ARNs only. A user assumes the role only with MFA. A role here is an
+    allowlisted federated human role (an IAM Identity Center permission set's role, say), whose MFA
+    its identity provider enforces. Never the account root, never an
+    arn:aws:sts::...:assumed-role/... session ARN (the form `aws sts get-caller-identity` prints),
+    and never the CI plan role. No default, and the apply fails on an empty list: the humans cannot
+    be derived, and a teardown role nobody can assume leaves a bucket nobody can empty.
+  EOT
+  type        = list(string)
+
+  validation {
+    condition = alltrue([
+      for arn in var.teardown_trusted_principal_arns :
+      can(regex("^arn:aws(-[a-z]+)*:iam::[0-9]{12}:(user|role)/[A-Za-z0-9+=,.@_/-]+$", arn))
+    ])
+    error_message = "teardown_trusted_principal_arns takes IAM user or role ARNs (arn:aws:iam::<account>:user/... or :role/...). Not the account root, and not an arn:aws:sts::...:assumed-role/... session ARN."
+  }
+}
+
+variable "platform_bucket_name" {
+  description = <<-EOT
+    The platform bucket the teardown role may empty. Leave empty for spa-platform-<cell>, the
+    default modules/cell gives the bucket. Set it to the same value as the cell module's
+    bucket_name if that is ever overridden: the grant names this one bucket's ARN, never a
+    spa-platform-<cell>-* glob (ADR-0014 item 6).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.platform_bucket_name == "" || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.platform_bucket_name))
+    error_message = "platform_bucket_name must be empty or a valid S3 bucket name."
+  }
 }

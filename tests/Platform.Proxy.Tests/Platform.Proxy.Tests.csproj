@@ -5,6 +5,9 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Platform.Proxy/Platform.Proxy.csproj" />
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <!-- Workstream 4's own: N-12's "the gateway's CSP" is UsePlatformSecurityHeaders overwriting what
+         the proxy copied, so the one test of it puts that stage in front. A-03 binds src projects only. -->
+    <ProjectReference Include="../../src/Platform.Security/Platform.Security.csproj" />
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 

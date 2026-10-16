@@ -5,23 +5,20 @@ using Platform.Testing;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// N-24, partial: "Read framing and embedding headers on a
+/// N-24: "Read framing and embedding headers on a
 /// shell, an asset, a <c>/bff</c> response and an API error -> <c>frame-ancestors 'none'</c>,
 /// <c>nosniff</c> and <c>Cross-Origin-Resource-Policy</c> on all four." (docs/plan/04-tests.md.)
 ///
-/// <para>This class covers shells, assets and API errors, plus gateway refusals and an upstream
-/// 500. It does not exercise a successful BFF response, so its evidence covers three of N-24
-///'s four required response shapes.</para>
+/// <para>The class fixture covers shells, assets and API errors, plus gateway refusals and an upstream
+/// 500. The fourth shape, a successful <c>/bff</c> response, needs a session, so
+/// <see cref="A_signed_in_bff_answer_carries_them"/> reads it on a cell that requires one.</para>
 ///
-/// <para><b>Why that holds by construction, and why it is still worth asserting.</b> Stage 5 applies
+/// <para><b>Why that holds by construction, and why it is still worth asserting.</b> UsePlatformSecurityHeaders applies
 /// the headers from <c>Response.OnStarting</c> rather than writing them as it runs, so they are
 /// applied as the response begins — after every later stage has written its own, and after YARP has
 /// copied an upstream's. The composed pipeline is the only place that claim can be read, because in
-/// workstream 4's own project there is no stage 10 and no upstream to be overwritten.</para>
+/// workstream 4's own project there is no proxy endpoint and no upstream to be overwritten.</para>
 ///
-/// <para>These requests isolate the HTTP contract named above. Session establishment and
-/// preservation require separate acceptance evidence; a successful response here proves only the
-/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClassFixture<EmbeddingHeaderTests.Cell>
 {
@@ -69,7 +66,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         BrowserResponse missing = await browser.GetAsync("/nothing-here.js", ct: Suite.Ct);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
 
-        // The gateway's own 403, written by stage 6 — the earliest shape that could omit them.
+        // The gateway's own 403, written by the request gate — the earliest shape that could omit them.
         BrowserResponse refused = await browser.GetAsync(
             "/api/echo/thing", RequestOptions.With(("Sec-Fetch-Site", FetchMetadata.CrossSite)), Suite.Ct);
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
@@ -85,7 +82,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
     {
         // Over the socket, because the path that produces this refusal is one no client will send
         // (a doubled slash). It is the shape with the fewest stages behind it that still reaches
-        // stage 5.
+        // UsePlatformSecurityHeaders.
         RawResponse response = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "//double", Harness.App("app1").Host, ct: Suite.Ct);
 
@@ -119,7 +116,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
     public async Task A_404_on_an_unknown_host_carries_them_only_if_an_app_was_resolved()
     {
         // The one shape that cannot carry an app's policy, and the reason this is a separate test
-        // rather than a sixth row above: stage 5 reads the app stage 4 pinned, so a host the
+        // rather than a sixth row above: UsePlatformSecurityHeaders reads the app host resolution pinned, so a host the
         // registry does not name is refused before there is any policy to send. Reading that as a
         // gap in N-24 would be wrong — there is no app whose framing rules could apply, the body is
         // a fixed problem document, and ADR-0008's session requirement never arises. Asserted so
@@ -129,6 +126,24 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
 
         Assert.Equal(404, response.StatusCode);
         Assert.Empty(response.Values("Content-Security-Policy"));
+    }
+
+    [Fact]
+    public async Task A_signed_in_bff_answer_carries_them()
+    {
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        using TestBrowser browser = harness.CreateBrowser();
+        BrowserResponse shell = await harness.SignInAsync(browser, "app1", Suite.Ct);
+
+        BrowserResponse session = await browser.GetAsync("/bff/session", ct: Suite.Ct);
+        BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
+
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, api.StatusCode);
+        foreach (BrowserResponse response in (BrowserResponse[])[shell, session, api])
+        {
+            AssertEmbeddingHeaders(response);
+        }
     }
 
     private static void AssertEmbeddingHeaders(BrowserResponse response) =>

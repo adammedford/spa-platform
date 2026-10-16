@@ -22,7 +22,7 @@ namespace Gateway.SecurityTests.Negative;
 /// reaches into a stage:</para>
 /// <list type="bullet">
 /// <item><b>The scheme</b>, through the request gate. The app origin an <c>Origin</c> header is
-/// compared against is built from the scheme stage 1 settled
+/// compared against is built from the scheme UsePlatformForwardedHeaders settled
 /// (<c>contracts/request-gate.md</c>: "<c>Origin</c>, when sent, equals the app origin"), so a
 /// browser claiming <c>https</c> is admitted by a cell that believes <c>X-Forwarded-Proto</c> and
 /// refused with <see cref="RuleIds.GateOrigin"/> by one that does not. Asserted both ways round, so

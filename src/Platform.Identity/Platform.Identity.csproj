@@ -3,6 +3,15 @@
   <!-- Owner: workstream 3. References Platform.Abstractions and no other workstream's project (check A-03). -->
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Platform.Identity.Tests" />
+  </ItemGroup>
+
+  <!-- Refresh and revocation (ADR-0005). This is the one project allowed to reference it (check A-04). -->
+  <ItemGroup>
+    <PackageReference Include="Duende.AccessTokenManagement.OpenIdConnect" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
 

@@ -5,7 +5,7 @@ using Platform.Testing;
 namespace Platform.Hosting.Tests;
 
 /// <summary>
-/// Stage 4, <c>UsePlatformHostResolution</c> (contracts/pipeline.md; GLOSSARY.md, Host): the request
+/// <c>UsePlatformHostResolution</c> (contracts/pipeline.md; GLOSSARY.md, Host): the request
 /// authority must equal a registry <c>host</c> exactly, the app and the snapshot are pinned for the
 /// request as <see cref="IAppFeature"/>, and any other host gets 404 before routing runs.
 /// </summary>
@@ -84,11 +84,12 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// N-08, third row: a spoofed <c>X-Forwarded-Host</c> changes nothing. Stage 4 reads the
-    /// authority the request carries and never the forwarded header (contracts/pipeline.md, stage 1:
-    /// <c>X-Forwarded-Host</c> is never read). Both directions: a known name in the header does not
-    /// admit an unknown host, and an unknown one does not move a known host to another app or refuse
-    /// it. Stage 1 is workstream 4's; workstream 6 proves the two together in the composed gateway.
+    /// N-08, third row: a spoofed <c>X-Forwarded-Host</c> changes nothing. Host resolution reads
+    /// the authority the request carries and never the forwarded header (contracts/pipeline.md,
+    /// <c>UsePlatformForwardedHeaders</c>: <c>X-Forwarded-Host</c> is never read). Both directions:
+    /// a known name in the header does not admit an unknown host, and an unknown one does not move
+    /// a known host to another app or refuse it. <c>UsePlatformForwardedHeaders</c> is workstream
+    /// 4's; workstream 6 proves the two together in the composed gateway.
     /// </summary>
     [Fact]
     public async Task N_08_a_spoofed_X_Forwarded_Host_changes_nothing()
@@ -112,9 +113,9 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// Exact means ordinal (GLOSSARY.md, Host: the authority the browser sends, lowercase). Proven on
-    /// a snapshot whose index ignores case, <c>InMemoryRegistry.SnapshotOf</c>'s, so the test fails if
-    /// stage 4 leaves exactness to whichever comparer the snapshot was built with.
+    /// Exact means ordinal (GLOSSARY.md, Host: the authority the browser sends, lowercase). Proven
+    /// on a snapshot whose index ignores case, <c>InMemoryRegistry.SnapshotOf</c>'s, so the test
+    /// fails if host resolution leaves exactness to whichever comparer the snapshot was built with.
     /// </summary>
     [Theory]
     [InlineData("APP1.spa-poc.test")]
@@ -166,11 +167,12 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// The rejection carries its rule id, <c>host.unknown</c> (contracts/request-gate.md, Rule ids),
-    /// to the one request line stage 2 writes and to <c>security.rejections</c> counted from the same
-    /// field (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
-    /// line"). Stage 2 is workstream 6's and is not in this pipeline, so the feature here is
-    /// <c>Platform.Testing</c>'s settable one, installed by the test host in stage 2's place.
+    /// The rejection carries its rule id, <c>host.unknown</c> (contracts/request-gate.md, Rule
+    /// ids), to the one request line <c>UsePlatformTelemetry</c> writes and to
+    /// <c>security.rejections</c> counted from the same field (contracts/telemetry.md -> "How
+    /// <c>rule</c> and <c>session_ref</c> reach the request line"). <c>UsePlatformTelemetry</c> is
+    /// workstream 6's and is not in this pipeline, so the feature here is <c>Platform.Testing</c>'s
+    /// settable one, installed by the test host in its place.
     ///
     /// The control is the second half: a host the registry does name is not a rejection and leaves
     /// the field null. Without it, a stage that set the id on every request would pass.
@@ -190,9 +192,9 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// The write is null-conditional, so stage 4 refuses an unknown host the same way with no feature
-    /// installed, as required by contracts/changes/6.4-request-telemetry-feature.md. This case
-    /// explicitly protects component pipelines that omit stage 2.
+    /// The write is null-conditional, so host resolution refuses an unknown host the same way with
+    /// no feature installed, as required by contracts/changes/6.4-request-telemetry-feature.md.
+    /// This case explicitly protects component pipelines that omit <c>UsePlatformTelemetry</c>.
     /// </summary>
     [Fact]
     public async Task An_unknown_host_is_refused_the_same_way_with_no_feature_installed()
@@ -206,9 +208,9 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// Stage 4 writes no log line of its own for an unknown host: those requests are the cheapest
-    /// traffic anyone can send, so a line each would let a stranger flood the log, and the request
-    /// line plus <c>security.rejections</c> record the rejection once
+    /// Host resolution writes no log line of its own for an unknown host: those requests are the
+    /// cheapest traffic anyone can send, so a line each would let a stranger flood the log, and the
+    /// request line plus <c>security.rejections</c> record the rejection once
     /// (contracts/changes/6.4-request-telemetry-feature.md, decided 14 October 2026). Only hosting
     /// categories are held to that; other stages own their own log lines.
     /// </summary>

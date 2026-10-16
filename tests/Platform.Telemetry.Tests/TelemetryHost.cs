@@ -23,8 +23,8 @@ using Platform.Testing;
 namespace Platform.Telemetry.Tests;
 
 /// <summary>
-/// Workstream 6's own gateway, cut down to stage 2 and what stands either side of it: the
-/// telemetry entry points, a stand-in for stage 4 that pins <c>app1</c> as <see cref="IAppFeature"/>
+/// Workstream 6's own gateway, cut down to <c>UsePlatformTelemetry</c> and what stands either side of
+/// it: the telemetry entry points, a stand-in for host resolution that pins <c>app1</c> as <see cref="IAppFeature"/>
 /// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), a
 /// stand-in for the later stages that write <see cref="IRequestTelemetryFeature"/>, the framework's
 /// authentication with one real OpenID Connect scheme, and a terminal that calls an upstream over a
@@ -162,7 +162,7 @@ public sealed class TelemetryHost : IAsyncDisposable
             web.UsePlatformTelemetry();
         }
 
-        // Stand-in for stage 4: app1 on every host except unknown.invalid, which gets the 404 and
+        // Stand-in for host resolution: app1 on every host except unknown.invalid, which gets the 404 and
         // the host.unknown rule id (overridable to isolate metric tests) the real stage gives an
         // unknown host (change request 6.4 ->
         // Decision). Written null-conditionally, as every real stage writes it.

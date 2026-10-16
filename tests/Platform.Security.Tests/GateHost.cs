@@ -14,11 +14,12 @@ using Platform.Testing;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Workstream 4's gateway cut down to stage 6, <c>UsePlatformRequestGate</c>, with what it stands on:
-/// stage 1 trusting loopback, so a test sends <c>X-Forwarded-Proto: https</c> the way the ALB does,
-/// and a stand-in for stage 4 that pins <see cref="App"/> as <see cref="IAppFeature"/>, which is what
-/// task 2.3's host resolution will do. The composed gateway cannot show stage 6 until task 2.3 lands
-/// (<c>contracts/pipeline.md</c>), so the gate is proven here and again by workstream 6.
+/// Workstream 4's gateway cut down to <c>UsePlatformRequestGate</c>, with what it stands on:
+/// <c>UsePlatformForwardedHeaders</c> trusting loopback, so a test sends
+/// <c>X-Forwarded-Proto: https</c> the way the ALB does, and a stand-in for host resolution that pins
+/// <see cref="App"/> as <see cref="IAppFeature"/>, which is what task 2.3 will do. The composed
+/// gateway cannot show the request gate until task 2.3 lands (<c>contracts/pipeline.md</c>), so the
+/// gate is proven here and again by workstream 6.
 ///
 /// The terminal stands for everything after the gate. It answers 200 with <c>passed</c>, and it sends
 /// <c>Access-Control-Allow-Origin: *</c> and a <c>Set-Cookie</c>, the way a careless upstream or a
@@ -27,7 +28,9 @@ namespace Platform.Security.Tests;
 /// </summary>
 public sealed class GateHost : IAsyncDisposable
 {
-    /// <summary>The app stage 4 pins. Its origin, behind the ALB, is <see cref="AppOrigin"/>.</summary>
+    /// <summary>
+    /// The app host resolution's stand-in pins. Its origin, behind the ALB, is <see cref="AppOrigin"/>.
+    /// </summary>
     public static readonly AppDefinition App = TestApps.Entry("app1");
 
     public static readonly string AppOrigin = "https://" + App.Host;
@@ -60,8 +63,8 @@ public sealed class GateHost : IAsyncDisposable
     /// <summary>
     /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
     /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
-    /// the host was started with <c>telemetry: true</c>, because stage 2 is the only thing that creates
-    /// that feature and this host is cut down to one stage.
+    /// the host was started with <c>telemetry: true</c>, because UsePlatformTelemetry is the only thing
+    /// that creates that feature and this host is cut down to one stage.
     /// </summary>
     public IReadOnlyList<string?> TelemetryRules
     {
@@ -81,9 +84,10 @@ public sealed class GateHost : IAsyncDisposable
 
     private readonly List<SettableRequestTelemetryFeature> telemetryFeatures;
 
-    /// <param name="pinApp">false leaves out stage 4's stand-in, so the gate finds no app.</param>
+    /// <param name="pinApp">false leaves out the host-resolution stand-in, so the gate finds no app.</param>
     /// <param name="telemetry">
-    /// true installs stage 2's stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
+    /// true installs UsePlatformTelemetry's stand-in, ahead of <c>UsePlatformForwardedHeaders</c> as in
+    /// the real order, a <see cref="SettableRequestTelemetryFeature"/> per request,
     /// and records what each request left on it in <see cref="TelemetryRules"/>.
     /// </param>
     public static async Task<GateHost> StartAsync(CancellationToken ct, bool pinApp = true, bool telemetry = false)
@@ -103,13 +107,11 @@ public sealed class GateHost : IAsyncDisposable
         GateHost? self = null;
         List<SettableRequestTelemetryFeature> telemetryFeatures = [];
 
-        web.UsePlatformForwardedHeaders();
-
-        // Stage 2's stand-in, when a test asks for it: the feature stage 2 sets on the request before
-        // calling the rest of the pipeline and reads back once it returns
-        // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
-        // by default, so every other test here runs the stage with no feature installed, which is what
-        // holds the stage's write to being null-conditional.
+        // UsePlatformTelemetry's stand-in, when a test asks for it, first as the real stage is: the
+        // feature that stage sets on the request before calling the rest of the pipeline and reads back
+        // once it returns (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request
+        // line"). It is off by default, so every other test here runs the stage with no feature
+        // installed, which is what holds the stage's write to being null-conditional.
         //
         // The feature is recorded before the request runs rather than after: each stage sets the rule
         // id before it writes the response, so a test reading the recorded feature cannot race the
@@ -128,6 +130,8 @@ public sealed class GateHost : IAsyncDisposable
                 return next(context);
             });
         }
+
+        web.UsePlatformForwardedHeaders();
 
         web.Use((context, next) =>
         {

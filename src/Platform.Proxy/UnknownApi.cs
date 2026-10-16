@@ -26,9 +26,9 @@ internal static class UnknownApi
             .CreateLogger(typeof(UnknownApi).FullName!)
             .LogWarning("The app lists no upstream under that name. rule={Rule}", Rule);
 
-        // Task 4.3a: the same constant on stage 2's request line, null-conditionally because this
-        // project's own tests run without stage 2 (contracts/telemetry.md -> "How `rule` and
-        // `session_ref` reach the request line").
+        // Task 4.3a: the same constant on UsePlatformTelemetry's request line, null-conditionally
+        // because this project's own tests run without UsePlatformTelemetry (contracts/telemetry.md ->
+        // "How `rule` and `session_ref` reach the request line").
         context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
 
         return Problems.WriteAsync(context, StatusCodes.Status404NotFound, "unknown_api");

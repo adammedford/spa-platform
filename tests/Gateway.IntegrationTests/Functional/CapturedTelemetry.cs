@@ -85,7 +85,7 @@ public sealed class CapturedTelemetry
 
     /// <summary>
     /// Waits for <paramref name="ready"/>, which is how a test waits for the request log line and the
-    /// spans of a request whose response it has already read: stage 2 writes the line after the rest of
+    /// spans of a request whose response it has already read: the telemetry stage writes the line after the rest of
     /// the pipeline has returned (contracts/telemetry.md), and the server span stops after that again.
     /// It fails rather than returning when the wait runs out, so a missing line is never a pass.
     /// </summary>
@@ -100,7 +100,7 @@ public sealed class CapturedTelemetry
         Assert.True(ready(), $"waited five seconds for {what}, which never arrived.");
     }
 
-    /// <summary>The request log lines stage 2 wrote, parsed (<c>msg</c> is <c>request</c>).</summary>
+    /// <summary>The request log lines the telemetry stage wrote, parsed (<c>msg</c> is <c>request</c>).</summary>
     public static IReadOnlyList<JsonElement> RequestLines(GatewayHarness harness)
     {
         ArgumentNullException.ThrowIfNull(harness);

@@ -14,7 +14,7 @@ namespace Gateway.SecurityTests.Negative;
 /// <see cref="RawHttp"/> writes the request line and <c>Host</c> itself over a bare socket, which is
 /// the only way this row can be driven.</para>
 ///
-/// <para><b>Stage 4 answers before routing</b> (<c>contracts/pipeline.md</c>), which is what keeps an
+/// <para><b>Host resolution answers before routing</b> (<c>contracts/pipeline.md</c>), which is what keeps an
 /// authentication callback and a proxy route out of reach on a host the registry does not name
 /// (evidence S-A3). That is asserted here as a client can see it: an <c>/api</c> path on an unknown
 /// host comes back as the host refusal, not as the proxy's own <c>unknown_api</c>, and no upstream
@@ -41,9 +41,9 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
     [Fact]
     public async Task The_gateway_answers_on_this_socket_so_a_404_is_a_refusal_and_not_a_dead_port()
     {
-        // The control for every assertion below. Stage 3 answers /healthz "on any host" before host
+        // The control for every assertion below. UsePlatformHealth answers /healthz "on any host" before host
         // resolution runs (contracts/pipeline.md), so a 200 here on a host the registry does not name
-        // proves the socket is live and the 404s that follow were decided by stage 4.
+        // proves the socket is live and the 404s that follow were decided by host resolution.
         RawResponse health = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "/healthz", "nobody.spa-poc.test:8443", ct: Suite.Ct);
 
@@ -65,7 +65,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
     public async Task The_right_host_with_the_wrong_port_is_404_under_host_unknown()
     {
         // The registry's host carries a port (fixtures/apps/app1.json, "app1.spa-poc.test:8443"), and
-        // stage 4 compares the whole authority ordinally. The name alone is therefore not the host:
+        // host resolution compares the whole authority ordinally. The name alone is therefore not the host:
         // a listener reachable on another port must not serve the app.
         string name = KnownHost.Split(':')[0];
         string wrongPort = name + ":9443";
@@ -86,7 +86,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
     [Fact]
     public async Task A_spoofed_x_forwarded_host_cannot_select_another_app()
     {
-        // Stage 1 never reads X-Forwarded-Host, and the harness's stand-in load balancer passes one
+        // UsePlatformForwardedHeaders never reads X-Forwarded-Host, and the harness's stand-in load balancer passes one
         // through untouched exactly as the ALB does, so this is the request the cell would see.
         // The observable is whose policy comes back: app 2's entry adds a source app 1's does not
         // (fixtures/apps/app2.json), read from the fixture rather than written down here.
@@ -123,7 +123,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
 
         // An API path the app does list. If routing ran, this would reach the echo upstream; if
         // routing ran and the name were unknown, the proxy's catch-all would answer unknown_api.
-        // Stage 4 is before both, so the answer is the host refusal and nothing was forwarded.
+        // Host resolution is before both, so the answer is the host refusal and nothing was forwarded.
         RawResponse response = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "/api/echo/anything", "nobody.spa-poc.test:8443", ct: Suite.Ct);
 

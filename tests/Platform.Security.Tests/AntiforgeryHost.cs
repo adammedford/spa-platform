@@ -17,27 +17,28 @@ using Platform.Testing;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Workstream 4's gateway cut down to stage 9, <c>UsePlatformAntiforgery</c>, with stand-ins for what
-/// it stands on and for the two endpoints that call <see cref="ICsrfTokens"/>. The composed gateway
-/// cannot show stage 9 until task 2.3 resolves a host (<c>contracts/pipeline.md</c>), so it is proven
-/// here and again by workstream 6.
+/// Workstream 4's gateway cut down to <c>UsePlatformAntiforgery</c>, with stand-ins for what it
+/// stands on and for the two endpoints that call <see cref="ICsrfTokens"/>. The composed gateway cannot
+/// show the antiforgery check until task 2.3 resolves a host (<c>contracts/pipeline.md</c>), so it is
+/// proven here and again by workstream 6.
 ///
 /// <list type="bullet">
-/// <item>Stage 1 trusts loopback, so a request carries <c>X-Forwarded-Proto: https</c> the way the ALB
-/// sends it. Without it the framework's antiforgery refuses to run at all (see
-/// <see cref="SendAsync"/>).</item>
-/// <item>Stage 4's stand-in pins <c>app1</c> or <c>app2</c> by the <c>Host</c> header, as task 2.3 will.
-/// Both apps are served by one host, so one data-protection key ring signs both apps' tokens, as in the
-/// real gateway: a refusal across apps is then the app binding's doing, not a key mismatch (R-E3b).</item>
-/// <item>Stage 7's stand-in signs in the user named in <c>X-Test-User</c>, with a <c>sub</c> claim and an
-/// authentication type, because the framework binds a token to the user only when the identity is
-/// authenticated, and then by its <c>sub</c> claim first
+/// <item><c>UsePlatformForwardedHeaders</c> trusts loopback, so a request carries
+/// <c>X-Forwarded-Proto: https</c> the way the ALB sends it. Without it the framework's antiforgery
+/// refuses to run at all (see <see cref="SendAsync"/>).</item>
+/// <item>Host resolution's stand-in pins <c>app1</c> or <c>app2</c> by the <c>Host</c> header, as task
+/// 2.3 will. Both apps are served by one host, so one data-protection key ring signs both apps' tokens,
+/// as in the real gateway: a refusal across apps is then the app binding's doing, not a key mismatch
+/// (R-E3b).</item>
+/// <item>Authentication's stand-in signs in the user named in <c>X-Test-User</c>, with a <c>sub</c>
+/// claim and an authentication type, because the framework binds a token to the user only when the
+/// identity is authenticated, and then by its <c>sub</c> claim first
 /// (https://github.com/dotnet/aspnetcore/blob/main/src/Antiforgery/src/Internal/DefaultClaimUidExtractor.cs).</item>
 /// <item><c>GET /bff/session</c> stands for workstream 3's endpoint, calling <see cref="ICsrfTokens.Issue"/>,
 /// and <c>POST /bff/logout</c> for logout, calling <see cref="ICsrfTokens.Clear"/>.</item>
 /// <item>Every other request reaches a terminal standing for the proxy. It reports how many body bytes
 /// had been read before it, then echoes the body, and it sends <c>Access-Control-Allow-Origin</c>, so a
-/// refusal that carries none shows the request stopped at stage 9.</item>
+/// refusal that carries none shows the request stopped at the antiforgery check.</item>
 /// </list>
 /// </summary>
 public sealed class AntiforgeryHost : IAsyncDisposable
@@ -74,8 +75,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
     /// <summary>
     /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
     /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
-    /// the host was started with <c>telemetry: true</c>, because stage 2 is the only thing that creates
-    /// that feature and this host is cut down to one stage.
+    /// the host was started with <c>telemetry: true</c>, because UsePlatformTelemetry is the only thing
+    /// that creates that feature and this host is cut down to one stage.
     /// </summary>
     public IReadOnlyList<string?> TelemetryRules
     {
@@ -88,7 +89,7 @@ public sealed class AntiforgeryHost : IAsyncDisposable
         }
     }
 
-    /// <summary>How many requests reached the terminal, which stands for everything after stage 9.</summary>
+    /// <summary>How many requests reached the terminal, which stands for everything after this stage.</summary>
     public int Reached => Volatile.Read(ref reached);
 
     /// <summary>How many bytes of the last request's body anything read before the terminal.</summary>
@@ -100,8 +101,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
     /// the platform's setting prevents.
     /// </param>
     /// <param name="telemetry">
-    /// true installs stage 2's stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
-    /// and records what each request left on it in <see cref="TelemetryRules"/>.
+    /// true installs UsePlatformTelemetry's stand-in, a <see cref="SettableRequestTelemetryFeature"/>
+    /// per request, and records what each request left on it in <see cref="TelemetryRules"/>.
     /// </param>
     public static async Task<AntiforgeryHost> StartAsync(
         CancellationToken ct, Action<IServiceCollection>? configure = null, bool telemetry = false)
@@ -128,8 +129,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
 
         web.UsePlatformForwardedHeaders();
 
-        // Stage 2's stand-in, when a test asks for it: the feature stage 2 sets on the request before
-        // calling the rest of the pipeline and reads back once it returns
+        // UsePlatformTelemetry's stand-in, when a test asks for it: the feature that stage sets on the
+        // request before calling the rest of the pipeline and reads back once it returns
         // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
         // by default, so every other test here runs the stage with no feature installed, which is what
         // holds the stage's write to being null-conditional.
@@ -152,7 +153,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             });
         }
 
-        // Stage 4's stand-in: the app whose host the request names. Any other host is a test error.
+        // Host resolution's stand-in: the app whose host the request names. Any other host is a test
+        // error.
         web.Use((context, next) =>
         {
             AppDefinition pinned = context.Request.Host.Host switch
@@ -165,7 +167,7 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             return next(context);
         });
 
-        // Stage 7's stand-in: the signed-in user, if the test names one.
+        // Authentication's stand-in: the signed-in user, if the test names one.
         web.Use((context, next) =>
         {
             string? user = context.Request.Headers[UserHeader];
@@ -177,7 +179,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             return next(context);
         });
 
-        // Counts what anything after this point reads of the body, so a test can show stage 9 read none.
+        // Counts what anything after this point reads of the body, so a test can show the antiforgery
+        // check read none.
         web.Use(async (context, next) =>
         {
             CountingStream counting = new(context.Request.Body);

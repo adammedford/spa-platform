@@ -13,18 +13,21 @@ using Platform.Testing;
 namespace Platform.Hosting.Tests;
 
 /// <summary>
-/// Workstream 2's gateway cut down to stages 3 and 4, <c>UsePlatformHealth</c> then
-/// <c>UsePlatformHostResolution</c>, over an <see cref="InMemoryRegistry"/> the test swaps by hand.
-/// The in-memory registry isolates these stages from object-store configuration; workstream 6
+/// Workstream 2's gateway cut down to its two middleware entry points, <c>UsePlatformHealth</c>
+/// then <c>UsePlatformHostResolution</c>, over an <see cref="InMemoryRegistry"/> the test swaps by
+/// hand. The in-memory registry isolates these stages from object-store configuration; workstream 6
 /// proves them again in the composed gateway.
 ///
-/// The terminal stands for stages 5 to 10. It records the <see cref="IAppFeature"/> it was handed and
-/// answers 200 with <see cref="Passed"/>, so a test that asserts a refusal can fail if stage 4 let the
-/// request through. A test can give it work to do mid-request through <see cref="DuringRequest"/>.
+/// The terminal stands for everything after host resolution, <c>UsePlatformSecurityHeaders</c> to
+/// the endpoints. It records the <see cref="IAppFeature"/> it was handed and answers 200 with
+/// <see cref="Passed"/>, so a test that asserts a refusal can fail if
+/// <c>UsePlatformHostResolution</c> let the request through. A test can give it work to do
+/// mid-request through <see cref="DuringRequest"/>.
 ///
-/// Given an <see cref="IObjectStore"/>, the terminal is stage 10's asset endpoint instead:
-/// <c>UseRouting</c> then <c>MapPlatformAssets</c> over that store (task 2.4). Stages 5 to 9 are other
-/// workstreams' and are left out, so what the endpoint refuses it refuses on its own.
+/// Given an <see cref="IObjectStore"/>, the terminal is the asset endpoint instead:
+/// <c>UseRouting</c> then <c>MapPlatformAssets</c> over that store (task 2.4).
+/// <c>UsePlatformSecurityHeaders</c> to <c>UsePlatformAntiforgery</c> are other workstreams' and
+/// are left out, so what the endpoint refuses it refuses on its own.
 /// </summary>
 public sealed class HostingHost : IAsyncDisposable
 {
@@ -46,7 +49,9 @@ public sealed class HostingHost : IAsyncDisposable
 
     public InMemoryRegistry Registry { get; }
 
-    /// <summary>How many requests reached the terminal, which stands for every stage after 4.</summary>
+    /// <summary>
+    /// How many requests reached the terminal, which stands for every stage after host resolution.
+    /// </summary>
     public int Reached => Volatile.Read(ref reached);
 
     /// <summary>The feature the terminal last saw, read when it saw it.</summary>
@@ -58,17 +63,19 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>
     /// The <see cref="IRequestTelemetryFeature"/> the last request carried, for a host started with
     /// <c>telemetry: true</c>, and null for one started without. Reading it after the response is
-    /// what stage 2 does with the real feature: it sets one on the request, calls the rest of the
-    /// pipeline, then reads back the rule id whichever stage rejected left on it
-    /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
+    /// what <c>UsePlatformTelemetry</c> does with the real feature: it sets one on the request,
+    /// calls the rest of the pipeline, then reads back the rule id whichever stage rejected left on
+    /// it (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
+    /// line").
     /// </summary>
     public SettableRequestTelemetryFeature? LastTelemetry => telemetry?.Last;
 
     /// <param name="telemetry">
     /// <c>true</c> installs a fresh <see cref="SettableRequestTelemetryFeature"/> on every request,
-    /// before stages 3 and 4, standing in for stage 2, which this project's pipeline does not have.
-    /// Left <c>false</c> by default to exercise component pipelines without the feature, as required
-    /// by contracts/changes/6.4-request-telemetry-feature.md.
+    /// before <c>UsePlatformHealth</c>, standing in for <c>UsePlatformTelemetry</c>, which this
+    /// project's pipeline does not have. Left <c>false</c> by default to exercise component
+    /// pipelines without the feature, as required by
+    /// contracts/changes/6.4-request-telemetry-feature.md.
     /// </param>
     public static async Task<HostingHost> StartAsync(
         RegistrySnapshot initial,
@@ -114,8 +121,9 @@ public sealed class HostingHost : IAsyncDisposable
 
         if (store is not null)
         {
-            // Explicit, and after stage 4 as in src/Gateway/Program.cs: a WebApplication with endpoints
-            // and no UseRouting call puts routing at the front of the pipeline, before stages 3 and 4.
+            // Explicit, and after UsePlatformHostResolution as in src/Gateway/Program.cs: a
+            // WebApplication with endpoints and no UseRouting call puts routing at the front of the
+            // pipeline, before health and host resolution.
             web.UseRouting();
             web.MapPlatformAssets();
             return await StartedAsync(web, registry, stand, ct);
@@ -185,7 +193,10 @@ public sealed class HostingHost : IAsyncDisposable
         await web.DisposeAsync();
     }
 
-    /// <summary>Where the stand-in for stage 2 leaves the feature it put on the last request.</summary>
+    /// <summary>
+    /// Where the stand-in for <c>UsePlatformTelemetry</c> leaves the feature it put on the last
+    /// request.
+    /// </summary>
     private sealed class TelemetryStand
     {
         public SettableRequestTelemetryFeature? Last { get; set; }

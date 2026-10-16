@@ -12,8 +12,8 @@ using Microsoft.Extensions.Logging;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Workstream 4's own gateway, cut down to what task 4.6 fills: <c>AddPlatformSecurity</c> and stage
-/// 1, <c>UsePlatformForwardedHeaders</c>. Behind them is a terminal that echoes what the later
+/// Workstream 4's own gateway, cut down to what task 4.6 fills: <c>AddPlatformSecurity</c> and
+/// <c>UsePlatformForwardedHeaders</c>. Behind them is a terminal that echoes what the later
 /// stages would read: the scheme, the client address and the host.
 ///
 /// It listens on loopback, so a test's client address is 127.0.0.1, and the trusted networks are the
@@ -21,10 +21,10 @@ namespace Platform.Security.Tests;
 /// that lists it shows the same header being applied, which is what makes the first assertion able
 /// to fail.
 ///
-/// The composed gateway cannot show stage 1 on its own yet: everything after it stops at the stage-4
-/// stub until task 2.3. Workstream 6 proves these behaviours again in the composed suites.
-/// <c>Platform.Proxy.Tests.Loopback</c> does the same loopback set-up, and a shared helper belongs in
-/// <c>Platform.Testing</c>, which is an integrator path.
+/// The composed gateway cannot show <c>UsePlatformForwardedHeaders</c> on its own yet: everything after
+/// it stops at the host-resolution stub until task 2.3. Workstream 6 proves these behaviours again in
+/// the composed suites. <c>Platform.Proxy.Tests.Loopback</c> does the same loopback set-up, and a
+/// shared helper belongs in <c>Platform.Testing</c>, which is an integrator path.
 /// </summary>
 public sealed class SecurityHost : IAsyncDisposable
 {

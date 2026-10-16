@@ -9,11 +9,11 @@ namespace Platform.Proxy;
 
 /// <summary>
 /// Workstream 4's proxy entry points: the YARP registration, and <c>/api/{name}/{rest}</c> at
-/// stage 10 of <c>contracts/pipeline.md</c>.
+/// <c>MapPlatformProxy</c>, among the endpoints that end <c>contracts/pipeline.md</c>.
 ///
-/// Task 4.1 fills in the configuration provider and the route. Task 4.2 adds the pipeline that
-/// acquires the token ahead of the forwarder and strips the headers the upstream contract forbids;
-/// it waits for G1b. Keep these signatures and add no others.
+/// The configuration provider and the route are task 4.1's. The token step ahead of the forwarder
+/// and the header rules in each direction are task 4.2's (<see cref="AccessTokenStep"/>,
+/// <see cref="UpstreamHeaders"/>). Keep these signatures and add no others.
 /// </summary>
 public static class PlatformProxyExtensions
 {
@@ -23,7 +23,9 @@ public static class PlatformProxyExtensions
     /// </summary>
     public static IHostApplicationBuilder AddPlatformProxy(this IHostApplicationBuilder builder)
     {
-        builder.Services.AddReverseProxy();
+        // Every generated route gets the same header rules (task 4.2); a route's own transforms are only
+        // its prefix removal (RegistryProxyConfig).
+        builder.Services.AddReverseProxy().AddTransforms(UpstreamHeaders.Apply);
 
         // GetService, not GetRequiredService: AddPlatformRegistry is a stub until task 2.2, and
         // G1a's exit test starts the composed gateway on the stubs. No registry means no route.
@@ -40,7 +42,13 @@ public static class PlatformProxyExtensions
     /// </summary>
     public static IEndpointRouteBuilder MapPlatformProxy(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapReverseProxy(UpstreamFailure.Use);
+        endpoints.MapReverseProxy(proxy =>
+        {
+            // The token first, so a 401 is answered before anything is forwarded and the failure
+            // check below never sees it.
+            AccessTokenStep.Use(proxy);
+            UpstreamFailure.Use(proxy);
+        });
         endpoints.Map("/api/{**rest}", UnknownApi.WriteAsync);
 
         return endpoints;

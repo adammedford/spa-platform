@@ -31,6 +31,9 @@ namespace Gateway.SecurityTests.Negative;
 /// <item>The <b>credentials the suite sends</b>: <see cref="Canaries"/>, each tagged with the run's
 /// own identifier. They travel as a cookie value, a bearer token, a CSRF header and an authorization
 /// code and state in a query string — the five kinds the row names.</item>
+/// <item>The <b>tokens the test provider issued</b> to every enrolled harness: each access and refresh
+/// token a signed-in row obtained, rotated ones included. These are the real credentials the gateway
+/// held, so a line that logged one would be the leak the row is about, not a planted value.</item>
 /// </list>
 ///
 /// <para>The search is ordinal and case-sensitive over the <b>rendered</b> line, which is what
@@ -55,13 +58,14 @@ internal static class CanarySweep
     public static IReadOnlyList<string> Lines => [.. watched.SelectMany(harness => harness.Log.Lines)];
 
     /// <summary>
-    /// Every value that may not appear in a log line: the suite's own canaries, and every client
-    /// secret any enrolled harness minted.
+    /// Every value that may not appear in a log line: the suite's own canaries, every client secret
+    /// any enrolled harness minted, and every token its provider issued.
     /// </summary>
     public static IReadOnlyList<string> Values =>
     [
         .. Canaries.All,
         .. watched.SelectMany(harness => harness.Apps.Values.Select(app => app.ClientSecret)),
+        .. watched.SelectMany(harness => harness.Idp.IssuedAccessTokens.Concat(harness.Idp.IssuedRefreshTokens)),
     ];
 
     /// <summary>
@@ -116,7 +120,7 @@ internal static class CanarySweep
     /// </summary>
     private static string Describe(string line, string value)
     {
-        string kind = Canaries.KindOf(value) ?? "a client secret";
+        string kind = Canaries.KindOf(value) ?? "a client secret or an issued token";
         int at = line.IndexOf(value, StringComparison.Ordinal);
         return $"{kind} appears at offset {at} of a {line.Length}-character line";
     }

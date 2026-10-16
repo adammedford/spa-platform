@@ -11,7 +11,8 @@ namespace Platform.Telemetry;
 
 /// <summary>
 /// Workstream 6's entry points: <see cref="AddPlatformTelemetry"/> first in the service table and
-/// <see cref="UsePlatformTelemetry"/> at stage 2 of <c>contracts/pipeline.md</c>. Task 6.4.
+/// <see cref="UsePlatformTelemetry"/> first in the middleware table of <c>contracts/pipeline.md</c>.
+/// Task 6.4.
 /// </summary>
 public static class PlatformTelemetryExtensions
 {

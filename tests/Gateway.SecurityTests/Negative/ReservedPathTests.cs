@@ -8,9 +8,11 @@ namespace Gateway.SecurityTests.Negative;
 /// N-27: "<c>GET</c> and <c>POST</c> to <c>/signout-oidc</c> with a live session -> 404. The session
 /// survives." (docs/plan/04-tests.md.)
 ///
-/// <para>These requests prove the 404 for both methods. They establish no session and therefore
-/// do not prove session survival. Threat T18 motivates both clauses: provider-shaped remote-signout
-/// requests must not end a browser's session (docs/plan/04-tests.md, N-27).</para>
+/// <para>The class fixture's requests prove the 404 for both methods with no session.
+/// <see cref="With_a_live_session_both_methods_are_404_and_the_session_survives"/> sends both from a
+/// signed-in browser on a cell that requires a session, and reads the session afterwards. Threat T18
+/// motivates both clauses: provider-shaped remote-signout requests must not end a browser's session
+/// (docs/plan/04-tests.md, N-27).</para>
 ///
 /// <para>The refusal is the request gate's reserved row, so it carries
 /// <see cref="RuleIds.PathReserved"/> and the body's <c>code</c> is <c>not_found</c>
@@ -58,6 +60,43 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
         BrowserResponse response = await browser.SubmitFormAsync("/signout-oidc", ct: Suite.Ct);
 
         await AssertReservedAsync(response, before);
+    }
+
+    [Fact]
+    public async Task With_a_live_session_both_methods_are_404_and_the_session_survives()
+    {
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        HarnessApp app = harness.App("app1");
+        using TestBrowser browser = harness.CreateBrowser();
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
+        string cookie = SignedIn.SessionCookie(browser, app);
+        string key = SignedIn.KeyOf(harness, "app1", cookie);
+        string? subject = SignedIn.Property(await SignedIn.SessionAsync(browser), "sub");
+        Assert.NotNull(subject);
+
+        // A provider-shaped remote signout, with the parameters a front-channel logout carries.
+        string query = "?iss=" + Uri.EscapeDataString(harness.Idp.Issuer) + "&sid=anything";
+        BrowserResponse get = await browser.ClickAsync("/signout-oidc" + query, SignedIn.Manual, Suite.Ct);
+        BrowserResponse post = await browser.SubmitFormAsync(
+            "/signout-oidc", [new("iss", harness.Idp.Issuer), new("sid", "anything")], options: SignedIn.Manual, ct: Suite.Ct);
+
+        Contract.ErrorRow expected = Contract.Error("a reserved path that is switched off");
+        foreach (BrowserResponse response in (BrowserResponse[])[get, post])
+        {
+            Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
+            Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);
+            Assert.Contains(SignedIn.SessionCookieName + "=", response.Sent("Cookie"), StringComparison.Ordinal);
+            Assert.DoesNotContain(response.SetCookies, line => line.StartsWith(SignedIn.SessionCookieName, StringComparison.Ordinal));
+        }
+
+        // The session survives: same cookie, same record, same identity, and nothing went to the provider.
+        Assert.Equal(cookie, SignedIn.SessionCookie(browser, app));
+        Assert.NotNull(await SignedIn.Store(harness).GetAsync(key, Suite.Ct));
+        BrowserResponse after = await SignedIn.SessionAsync(browser);
+        Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+        Assert.Equal(subject, SignedIn.Property(after, "sub"));
+        Assert.Empty(harness.Idp.Revocations);
+        Assert.Empty(harness.Idp.Logouts);
     }
 
     private async Task AssertReservedAsync(BrowserResponse response, int before)

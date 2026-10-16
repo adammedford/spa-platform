@@ -13,11 +13,10 @@ namespace Gateway.SecurityTests.Negative;
 /// <list type="bullet">
 /// <item><c>TRACE</c> and <c>CONNECT</c> are refused by the method allowlist, which runs in
 /// <c>UsePlatformForwardedHeaders</c>, behind <c>UsePlatformTelemetry</c> since ADR-0018 put
-/// telemetry first. The rule id is asserted on the allowlist's own line, and the request line the
-/// telemetry stage writes for the 405 is asserted to exist with its status. That line's
-/// <c>rule</c> field is not read here yet: the allowlist's write of <c>gate.method</c> to
-/// <c>IRequestTelemetryFeature</c> is workstream 4's (overnight ticket 63), and the assertion that
-/// it reaches this line and <c>security.rejections</c> is ticket 64's, which waits on 63.</item>
+/// telemetry first. The rule id is asserted on the allowlist's own line, on the request line the
+/// telemetry stage writes for the 405, and in the two counters that stage keeps:
+/// <c>security.rejections</c> under <c>gate.method</c> with no app, because the allowlist answers
+/// before host resolution pins one, and <c>gateway.requests</c>.</item>
 /// <item>An unsafe method on an <b>asset path</b> is the request gate's per-path rule
 /// (<c>UsePlatformRequestGate</c>), which runs after the telemetry stage like every other, so that
 /// one does carry its rule id on the request line.</item>
@@ -39,13 +38,25 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
     {
         public GatewayHarness Harness { get; private set; } = null!;
 
-        public async ValueTask InitializeAsync() =>
-            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+        /// <summary>The gateway's counters, which the request line alone cannot show were kept.</summary>
+        public CountedMetrics Counts { get; private set; } = null!;
 
-        public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
+        public async ValueTask InitializeAsync()
+        {
+            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+            Counts = CountedMetrics.Watch(Harness);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Counts.Dispose();
+            await Harness.DisposeAsync();
+        }
     }
 
     private GatewayHarness Harness => cell.Harness;
+
+    private CountedMetrics Counts => cell.Counts;
 
     /// <summary>
     /// The methods no path of the gateway accepts, which the row names. <c>CONNECT</c> carries the
@@ -66,6 +77,12 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
         int warnings = MethodRefusals().Count;
 
+        // The counts are this gateway's own, and its other requests either name app1 (the request
+        // gate's 405 on an asset path counts under the same rule with app1 named) or are not refused
+        // under gate.method, so each difference below is this request's alone.
+        long rejected = Rejections();
+        long answered = Answered405s();
+
         RawResponse response = await RawHttp.SendAsync(
             Harness.GatewayAddress, method, target, Harness.App("app1").Host, ct: Suite.Ct);
 
@@ -84,12 +101,28 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         Assert.Equal(RuleIds.GateMethod, Observed.Field(MethodRefusals()[warnings], "rule"));
 
         // And the request line, now that the telemetry stage runs first (ADR-0018): exactly one,
-        // carrying the status. Its rule id is ticket 63's to write and ticket 64's to assert.
+        // carrying the status and the same rule id, with no app because none was resolved.
         await Observed.UntilAsync(() => Observed.RequestLines(Harness).Count > before, "the request's own log line", Suite.Ct);
         IReadOnlyList<JsonElement> lines = Observed.RequestLines(Harness);
         Assert.Equal(before + 1, lines.Count);
         Assert.Equal((long?)expected.Status, Observed.Number(lines[before], "status"));
+        Assert.Equal(RuleIds.GateMethod, Observed.Field(lines[before], "rule"));
+        Assert.Null(Observed.Field(lines[before], "app_id"));
+
+        // The telemetry stage adds both counts before it writes the line, so the line being here
+        // means the counts are too: one rejection under gate.method with no app, and one answered
+        // request. N-20's composed half (contracts/telemetry.md -> The instruments).
+        Assert.Equal(rejected + 1, Rejections());
+        Assert.Equal(answered + 1, Answered405s());
     }
+
+    /// <summary><c>security.rejections</c> under <c>gate.method</c> for no app.</summary>
+    private long Rejections() =>
+        Counts.Sum("security.rejections", ("rule", RuleIds.GateMethod), ("app_id", null));
+
+    /// <summary><c>gateway.requests</c> answered 405 for no app.</summary>
+    private long Answered405s() =>
+        Counts.Sum("gateway.requests", ("status", 405), ("app_id", null));
 
     [Theory]
     [InlineData("POST")]
