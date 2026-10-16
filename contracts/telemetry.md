@@ -77,8 +77,11 @@ for Phase 1 because Cognito documents no `form_post` mode. Three things follow, 
 this contract's, not a workstream's preference:
 
 - The framework's default request log includes the query string, so workstream 6 replaces it.
-- The OpenID Connect handler logs the callback URL at Trace and redirect headers at Debug, so the
-  authentication loggers are held at Information or above.
+- Authentication handlers can log callback error fields at Warning, and the token-management
+  library can log a provider's token-endpoint error at Error. Both fields may contain credentials.
+  Those vendor categories are suppressed at every level by the filter and the final formatter,
+  even when configuration asks to enable them. Platform.Identity records bounded failure outcomes;
+  the request line and counters remain available (N-16).
 - Test N-16 runs the full suite with canary values for tokens, secrets, cookies, codes and state,
   then searches every log line. No canary may appear.
 

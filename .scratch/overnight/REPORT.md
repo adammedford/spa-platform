@@ -1,6 +1,6 @@
 # Overnight report — 2026-10-16
 
-**13 integrated, 7 partial, 0 failed, 2 need you, 10 blocked.**
+**12 integrated, 8 partial, 0 failed, 2 need you, 10 blocked.**
 
 Base `bf36a81` (tracker commit on `integrator/tracker-2026-10-16`). Integration branch
 `overnight/2026-10-16` at `04d41c2`, worktree `/Users/adammedford/.worktrees/overnight-2026-10-16/overnight`.
@@ -10,7 +10,7 @@ on the branch (6.1a) was green at 1502 of 1502 tests. Questions are in
 
 Highlights:
 
-- **Workstream 3's whole chain landed tonight (3.1 to 3.9 and 3.5a).** The gateway now has
+- **Identity components integrated (3.1 to 3.9 and 3.5a); 3.8 and 3.9 remain partial.** The gateway now has
   per-app OIDC and cookie schemes, a session store, refresh and `/bff`. The shell gate and the
   token-source binding are still switched off in the shipping gateway (see Partial and Q24).
 - **The composed suites now sign in.** 6.2, 6.3 and 6.5 run against the gateway with a session
@@ -33,12 +33,14 @@ Highlights:
 | 3.7 | `6d30d1f` | `standard` and `cognito` IdP profiles; the issuer's profile owns the sign-out redirect |
 | 3.5a | `afb888f` | Identity held to the shared rule ids by a source scan; N-16 follows a session key through every log line |
 | 6.3b | `a5296b3` | N-20's composed 405 carries `gate.method` on the line and in the counts; telemetry names its stages |
-| 6.3 | `d0e81ad` | Negative suite session rows N-01 to N-06, N-11, N-15, N-17 to N-19 and N-21 to N-23, plus the session halves of N-07, N-10, N-12, N-24 and N-27 |
 | 6.1a | `04d41c2` | The harness reports the outcome of its own registry write, not of one poll (the CI flake) |
 
 Full log: `git -C /Users/adammedford/Projects/spa-platform log --oneline bf36a81..overnight/2026-10-16`.
 
 ## Partial (Outstanding)
+
+- **6.3:** the signed-in negative rows are implemented and tested hermetically. Plan row 6.3
+  requires green at G4; that gate is not closed. Outstanding: deployed negative evidence and G4.
 
 - **3.8**, `6919def`: `IAccessTokenSource` with gateway-owned refresh locking over the token
   library. *Outstanding:* the shipping gateway does not bind it yet. Binding it turned 18
@@ -105,7 +107,7 @@ raise. The Answer lines are still empty so that you can confirm.
 | 6.7 | 6.9 | Needs G3, which 6.9 carries |
 | 6.9 | G2, 1.6b, 1.7, 6.5 | G2 is not tagged, and 1.6b and 1.7 are blocked; 6.5 has now landed as partial |
 | 2.1b | MR-1 | ADR-0015 decision 4 defers the `timeoutSeconds` maximum to MR-1, which has no plan row (Q26) |
-| 6.3a | 6.3 | No work of its own. 6.3 landed tonight, so it can close (Q30) |
+| 6.3a | 6.3 | Hermetic session halves integrated; parent 6.3 remains partial until G4 |
 | CR-6.x | 6.1a | The symptom report for 6.1a. 6.1a landed tonight, so it can close (Q29) |
 
 ## Claimed branches to merge
@@ -166,3 +168,14 @@ PR of their own.
 - `pgrep -fl /Users/adammedford/.worktrees/overnight-2026-10-16`: no output. No process is running
   from the run's worktrees.
 - Nothing was killed. Six run worktrees are still in place, all clean (step 6).
+
+## PR41 review correction
+
+The original 6.3 merge subject claimed the whole row, but its done-when is green at G4.
+The reviewed branch corrects that subject to part-landed and regenerates the roadmap. The
+historical implementation and review records above do not establish a deployed gate.
+
+Refresh-failure regressions reproduced a token echoed through a provider error in an exception
+and in both vendor and platform loggers. A callback error description also reached vendor logs.
+The review fixes bound identity outcomes and suppress credential-bearing vendor categories at
+both filters and the formatter, while retaining platform request telemetry.
