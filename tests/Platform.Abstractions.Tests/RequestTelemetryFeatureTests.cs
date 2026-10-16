@@ -4,8 +4,8 @@ using Platform.Abstractions;
 namespace Platform.Abstractions.Tests;
 
 /// <summary>
-/// <see cref="IRequestTelemetryFeature"/> exists so that a stage after stage 2 can write a value
-/// stage 2 reads back. Both of those are properties of the interface rather than of any
+/// <see cref="IRequestTelemetryFeature"/> exists so that a stage after <c>UsePlatformTelemetry</c> can write a value
+/// <c>UsePlatformTelemetry</c> reads back. Both of those are properties of the interface rather than of any
 /// implementation, so they are asserted here: a get-only property would compile and would silently
 /// make the whole contract useless to the six stages that have to write it.
 /// </summary>

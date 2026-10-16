@@ -6,7 +6,8 @@ using Platform.Registry;
 using Platform.Security;
 using Platform.Telemetry;
 
-// The composition root, written once at task I-4 and frozen with the contracts at G1a.
+// The composition root, written once at task I-4 and frozen with the contracts at G1a. Changed once,
+// at G1b, when ADR-0018 swapped the first two stages.
 //
 // The order below is contracts/pipeline.md. It is security-relevant, not a preference, and the
 // contracts index names this file as part of that contract: the entry-point signatures are here.
@@ -26,14 +27,16 @@ builder.AddPlatformSecurity();      // 4
 
 WebApplication app = builder.Build();
 
-// Stage 1. First, because everything after it reads the scheme and the client address, and because
-// the antiforgery cookie's SecurePolicy = Always has to be applied after it: a __Host- cookie sent
-// without Secure is discarded (ADR-0007).
-app.UsePlatformForwardedHeaders();
-
-// Stage 2. The request log line and the trace scope, in place of the framework's default request
-// log, which includes the query string.
+// Stage 1. The request log line and the trace scope, in place of the framework's default request
+// log, which includes the query string. First, so every rejection a later stage answers is logged
+// and counted; the line carries no value forwarded headers settle, which is why it can be
+// (ADR-0018, at G1b; until then the two stages below ran the other way round).
 app.UsePlatformTelemetry();
+
+// Stage 2. Before everything that reads the scheme and the client address, and before the
+// antiforgery cookie's SecurePolicy = Always is applied: a __Host- cookie sent without Secure is
+// discarded (ADR-0007). The method allowlist runs here too.
+app.UsePlatformForwardedHeaders();
 
 // Stage 3. Before host resolution, so the ALB health check and `spactl wait` need no registry entry
 // and no known host.

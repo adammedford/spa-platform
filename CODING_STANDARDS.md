@@ -76,6 +76,17 @@ The cost of leaving it out is not a lost argument: a reviewer who cannot find
 they were right is a bucket that looks compliant and fails P-04 at a gate. One URL in a comment
 retires the whole exchange.
 
+## A stage is named, not numbered
+
+Outside `contracts/pipeline.md`, a stage is its entry point: `UsePlatformRequestGate`, not "stage 6".
+The number is the row's position in that one table, and a position moves when the order does: it
+did at G1b, when ADR-0018 put `UsePlatformTelemetry` first and every "stage 1" and "stage 2" in the
+tree started naming the other stage. A number in a comment, a test name or a document is a copy of
+the table, and a copy is wrong one reorder after it is written.
+
+The relation is still worth stating — "runs after host resolution, which pins the app" — and the
+name carries it. A reviewer reads a bare number as a copy to be replaced.
+
 ## A reviewer verifies before reporting
 
 The two worst defects found in task 5.3 were found by running the thing: a listener logging query

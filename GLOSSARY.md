@@ -100,6 +100,27 @@ unique within an app.
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
 identifier. One audience per app in Phase 1.
 
+**Stage** — one entry point in the middleware table of `contracts/pipeline.md`, in the position that
+table gives it. The number is the position and nothing more: it is normative only in that table, and
+it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is named by its entry
+point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A stage is named, not
+numbered).
+
+**Rejection** — a response a stage ends the request with, under a rule id: a 400, 403, 404, 405 or a
+401 that `contracts/request-gate.md` has an id for. Every rejection reaches the request line and
+`security.rejections`. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
+the server's answer and not a rejection. The code's log messages say "refused"; the contracts and
+the metric say "rejection", and that is the word.
+
+**Rule id** — the identifier of the rule a rejection fired under, from the table in
+`contracts/request-gate.md` → Rule ids, held once as `Platform.Abstractions.RuleIds` (ADR-0015). It
+is the `rule` field of the request line and the tag of `security.rejections`; the `code` in a
+problem body is deliberately less specific.
+
+**Request line** — the one JSON log line `UsePlatformTelemetry` writes per request, after the rest of
+the pipeline has returned, with exactly the fields the "Log fields" row of `contracts/telemetry.md`
+names. It carries no value forwarded headers settle, which is what lets the first stage write it.
+
 ## Sessions
 
 **Session record** — the serialized ticket and saved tokens held server-side behind `ITicketStore`,
