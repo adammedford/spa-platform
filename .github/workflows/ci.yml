@@ -37,12 +37,13 @@ jobs:
           # got from the tags and the merge subjects, and the default depth-1 checkout has neither.
           fetch-depth: 0
 
-      - name: The documents a session steers by say what the repository says
+      - name: What a session steers by says what the repository says, and every cited ticket resolves
         # Before the build, because it costs a second and a stale AGENTS.md misleads every session
         # from the top of its context window. Every rule it holds was prose first, and prose let
         # a progress line sit directly under the paragraph forbidding it for two sessions running.
-        # It covers the two steering files and the contracts index, whose freeze column makes a
-        # claim about a file two directories away.
+        # It covers the two steering files; the contracts index, whose freeze column makes a claim
+        # about a file two directories away; and the ticket citations in every tracked file, each
+        # of which claims that a number resolves to a spec somebody can open.
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         run: |
