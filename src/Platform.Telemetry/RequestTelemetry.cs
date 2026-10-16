@@ -8,20 +8,22 @@ using Platform.Abstractions;
 namespace Platform.Telemetry;
 
 /// <summary>
-/// Stage 2 (contracts/pipeline.md): the request log line, the app on the request's span, and the
+/// <c>UsePlatformTelemetry</c> (contracts/pipeline.md): the request log line, the app on the request's span, and the
 /// <c>gateway.requests</c> and <c>security.rejections</c> counts, all written once the rest of the
 /// pipeline has returned.
 ///
-/// The app is read after the pipeline because stage 4 pins it later than this stage runs. A request
-/// stage 4 rejected has no <see cref="IAppFeature"/>, and its line says so with a null <c>app_id</c>.
+/// The app is read after the pipeline because host resolution pins it later than this stage runs. A
+/// request host resolution rejected, or one refused before it ran, has no <see cref="IAppFeature"/>, and its line says so with a null <c>app_id</c>.
 ///
 /// <c>rule</c> and <c>session_ref</c> are not this stage's to compute (contracts/telemetry.md -> How
 /// <c>rule</c> and <c>session_ref</c> reach the request line). This stage sets a fresh
 /// <see cref="IRequestTelemetryFeature"/> on the request before calling the rest of the pipeline, a
 /// later stage writes it, and this stage reads it back afterwards. A request with a <c>rule</c> is a
 /// rejection, and is counted under <c>security.rejections</c> here and nowhere else, so the count
-/// equals the request lines that carry a rule. The stage-1 method allowlist answers before this
-/// stage runs; its 405 is outside both, as contracts/telemetry.md records.
+/// equals the request lines that carry a rule. That holds for every rejection the application
+/// answers, because this stage runs first (ADR-0018): the method allowlist's 405 in
+/// <c>UsePlatformForwardedHeaders</c> carries <c>gate.method</c> on its line and in the count, with a
+/// null <c>app_id</c>, like any other.
 /// </summary>
 internal sealed class RequestTelemetry
 {
@@ -95,7 +97,7 @@ internal sealed class RequestTelemetry
             new KeyValuePair<string, object?>("route", route),
             new KeyValuePair<string, object?>("status", status));
 
-        // contracts/telemetry.md -> The instruments: stage 2 is the one owner of this count.
+        // contracts/telemetry.md -> The instruments: this stage is the one owner of this count.
         if (rule is not null)
         {
             rejections.Add(1,

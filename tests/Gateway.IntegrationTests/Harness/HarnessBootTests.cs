@@ -12,7 +12,7 @@ namespace Gateway.IntegrationTests.Harness;
 /// <summary>
 /// Task 6.1, "Done when: a stub gateway boots in the harness". The gateway is the shipped composition
 /// with workstream 3's stages still stubs, so every assertion here is about a stage that is already
-/// real and runs before the shell gate (stages 1 to 6 of contracts/pipeline.md), or about the harness's
+/// real and runs before the shell gate (every stage before the shell gate in contracts/pipeline.md), or about the harness's
 /// own parts. Nothing here depends on what an unauthenticated request gets once task 3.9 fills the
 /// shell gate in.
 /// </summary>
@@ -94,8 +94,8 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         BrowserResponse unknown = await browser.NavigateAsync("https://nope.spa-poc.test:8443/", ct: Ct);
         BrowserResponse wrongPort = await browser.NavigateAsync("https://app1.spa-poc.test:9443/", ct: Ct);
 
-        // Stage 5 writes the app's content security policy on every response for a resolved host, so its
-        // presence says stage 4 resolved the app, whatever the stages after it answer.
+        // UsePlatformSecurityHeaders writes the app's content security policy on every response for a
+        // resolved host, so its presence says host resolution resolved the app, whatever the stages after it answer.
         Assert.Contains("frame-ancestors 'none'", known.Header("Content-Security-Policy"));
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, wrongPort.StatusCode);
@@ -158,7 +158,7 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         await browser.NavigateAsync(Harness.App("app2").Url("/healthz"), ct: Ct);
         await browser.NavigateAsync(Harness.App("app2").Url("/"), new RequestOptions { Redirect = RedirectMode.Manual }, Ct);
 
-        // Stage 2 logs after the downstream response returns (contracts/telemetry.md), so the
+        // UsePlatformTelemetry logs after the downstream response returns (contracts/telemetry.md), so the
         // client receiving the body does not prove the request line has been captured yet.
         static bool IsAppRequest(JsonElement line) =>
             line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == "app2"

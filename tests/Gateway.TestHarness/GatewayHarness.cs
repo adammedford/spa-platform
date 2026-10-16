@@ -107,7 +107,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The gateway's own listener, e.g. <c>http://127.0.0.1:54321/</c>, for <see cref="RawHttp"/>.</summary>
     public Uri GatewayAddress => factory.Address;
 
-    /// <summary>The live registry, as stage 4 reads it.</summary>
+    /// <summary>The live registry, as host resolution reads it.</summary>
     public IRegistry Registry => Services.GetRequiredService<IRegistry>();
 
     /// <summary>Every app the harness has registered with the provider, by appId, whether or not it is in the registry now.</summary>

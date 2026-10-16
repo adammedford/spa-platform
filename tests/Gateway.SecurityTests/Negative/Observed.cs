@@ -18,7 +18,7 @@ namespace Gateway.SecurityTests.Negative;
 internal static class Observed
 {
     /// <summary>
-    /// Waits for <paramref name="ready"/> and fails if it never becomes true. Stage 2 writes the
+    /// Waits for <paramref name="ready"/> and fails if it never becomes true. UsePlatformTelemetry writes the
     /// request line after the rest of the pipeline has returned
     /// (<c>contracts/telemetry.md</c> -> "How <c>rule</c> and <c>session_ref</c> reach the request
     /// line"), so a test that has already read the response may still be ahead of its own log line.
@@ -34,7 +34,7 @@ internal static class Observed
         Assert.True(ready(), $"waited five seconds for {what}, which never arrived.");
     }
 
-    /// <summary>The request lines stage 2 wrote: one per request, <c>msg</c> of <c>request</c>.</summary>
+    /// <summary>The request lines the telemetry stage wrote: one per request, <c>msg</c> of <c>request</c>.</summary>
     public static IReadOnlyList<JsonElement> RequestLines(GatewayHarness harness) =>
         [.. harness.Log.Json.Where(line => Field(line, "msg") == "request")];
 
@@ -57,7 +57,7 @@ internal static class Observed
     /// How many request lines the gateway has written, once it has stopped writing them: the count a
     /// test takes <b>before</b> the request it is about to make.
     ///
-    /// <para>The wait is not caution. Stage 2 writes its line after the rest of the pipeline has
+    /// <para>The wait is not caution. The telemetry stage writes its line after the rest of the pipeline has
     /// returned, which is after the response has reached the client, so a test that read the count
     /// the instant a previous response arrived could take it before that response's own line landed
     /// and then attribute two lines to one request. Settling first is what makes "the one line this

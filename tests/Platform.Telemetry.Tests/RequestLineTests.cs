@@ -4,7 +4,7 @@ using Platform.Abstractions;
 namespace Platform.Telemetry.Tests;
 
 /// <summary>
-/// Stage 2's request log line (contracts/pipeline.md, contracts/telemetry.md): one JSON line per
+/// <c>UsePlatformTelemetry</c>'s request log line (contracts/pipeline.md, contracts/telemetry.md): one JSON line per
 /// request, carrying the contract's fields and never the query string.
 /// </summary>
 public sealed class RequestLineTests

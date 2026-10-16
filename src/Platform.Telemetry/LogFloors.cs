@@ -27,14 +27,14 @@ internal static class LogFloors
         ("Duende.AccessTokenManagement", LogLevel.Information),
 
         // The framework's default request log: "Request starting" and "Request finished" at
-        // Information, each with the query string. Stage 2's line replaces it (contracts/pipeline.md).
+        // Information, each with the query string. UsePlatformTelemetry's line replaces it (contracts/pipeline.md).
         ("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning),
 
         // Request logging middleware writes headers and query strings by design, if anyone enables it.
         ("Microsoft.AspNetCore.HttpLogging", LogLevel.Warning),
 
         // YARP logs "Proxying to {destination}" at Information with the query string, and the
-        // HttpClient factory logs each request URI. Stage 2's line and the spans cover both.
+        // HttpClient factory logs each request URI. UsePlatformTelemetry's line and the spans cover both.
         ("Yarp.ReverseProxy.Forwarder", LogLevel.Warning),
         ("System.Net.Http.HttpClient", LogLevel.Warning),
     ];
