@@ -159,6 +159,27 @@ public sealed class AccessTokenSourceTests
         Assert.Equal(302, (await gateway.SendAsync(App1, "/", jar, headers: IdentityGateway.Navigation)).Status);
     }
 
+    [Fact]
+    public async Task A_due_token_with_no_refresh_token_ends_the_session_without_a_grant()
+    {
+        // Decision 5 of the landing: a session whose access token is due and which holds no refresh token
+        // can never yield a token again, so it ends rather than being kept to fail every call.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        (string key, SessionRecord record) = await gateway.Sessions.SingleAsync();
+        AuthenticationTicket ticket = Assert.IsType<AuthenticationTicket>(TicketSerializer.Default.Deserialize(record.Ticket.ToArray()));
+        ticket.Properties.StoreTokens(ticket.Properties.GetTokens().Where(t => t.Name != "refresh_token").ToList());
+        Assert.True(await gateway.Sessions.ReplaceAsync(
+            key, record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) }, record.Version, ct));
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal((401, "session_ended"), (answer.Status, answer.Body));
+        Assert.Empty(gateway.Idp.RefreshGrants);
+        Assert.Null(await gateway.Sessions.GetAsync(key, ct));
+    }
+
     [Theory]
     [InlineData(503)]
     [InlineData(500)]
