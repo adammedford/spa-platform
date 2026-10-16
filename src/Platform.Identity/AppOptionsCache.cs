@@ -57,7 +57,11 @@ internal sealed class AppOptionsCache<TOptions>(IHttpContextAccessor accessor, I
         Entry chosen = cached is null
             ? entries.GetOrAdd(name, fresh)
             : entries.TryUpdate(name, fresh, cached) ? fresh : entries.GetOrAdd(name, fresh);
-        return Value(name, chosen);
+
+        // A concurrent request can put another entry under the name between the read above and the
+        // write: one pinned before a swap that read the live fingerprint just before it moved on. Its
+        // options are served only to requests pinned to the fingerprint they were built from.
+        return chosen.Fingerprint == pinned ? Value(name, chosen) : fresh.Options.Value;
     }
 
     public bool TryAdd(string? name, TOptions options)

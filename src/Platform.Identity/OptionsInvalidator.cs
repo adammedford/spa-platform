@@ -59,6 +59,9 @@ public sealed partial class OptionsInvalidator : IDisposable
 
     private void Swapped(RegistrySnapshot old, RegistrySnapshot next)
     {
+        // Every eviction first, then the purges: a purge waits on the session store, and no app's
+        // eviction should wait behind another app's purge.
+        List<(string AppId, string Reason)> purges = [];
         foreach (string appId in old.ByAppId.Keys.Union(next.ByAppId.Keys, StringComparer.Ordinal))
         {
             old.ByAppId.TryGetValue(appId, out AppDefinition? before);
@@ -81,6 +84,11 @@ public sealed partial class OptionsInvalidator : IDisposable
                 continue;
             }
 
+            purges.Add((appId, reason));
+        }
+
+        foreach ((string appId, string reason) in purges)
+        {
             Purge(appId, reason, next.Revision);
         }
     }
@@ -88,8 +96,9 @@ public sealed partial class OptionsInvalidator : IDisposable
     /// <summary>
     /// Removes every session of the app. <see cref="IRegistry.OnSwapped"/> takes a synchronous callback,
     /// so the purge is waited for here, on the thread that swapped (the registry poller, never a
-    /// request). A purge that fails is logged and does not stop the other apps' eviction; the ticket
-    /// store's client binding still refuses the sessions of a replaced client.
+    /// request), after every eviction of the swap. A purge that fails is logged and does not stop the
+    /// other apps' purges; the ticket store's client binding still refuses the sessions of a replaced
+    /// client.
     /// </summary>
     private void Purge(string appId, string reason, long revision)
     {

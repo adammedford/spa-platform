@@ -286,6 +286,30 @@ public sealed class OptionsInvalidatorTests
         Assert.Null(await gateway.Sessions.GetAsync(gateway.Sessions.Created[1], Ct));
     }
 
+    [Fact]
+    public async Task A_purge_that_fails_leaves_the_swap_standing_and_the_other_apps_evicted_and_purged()
+    {
+        // Plan row 3.6: the purge runs inside the registry's synchronous swap callback, so a session store
+        // that throws must not escape into the swap, nor stop the eviction or purge of the other apps.
+        FailingPurgeStore store = new("app1");
+        AppDefinition app3 = TestApps.Entry("app3", issuer: IdentityGateway.IssuerName);
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1, App2, app3], services => services.AddSingleton<ISessionStore>(store));
+        foreach (AppDefinition app in new[] { App1, App2, app3 })
+        {
+            Oidc(gateway, app);
+        }
+
+        await gateway.SwapAsync(app3 with { Fingerprint = "sha256:app3-changed" });
+
+        Assert.Equal(["app1", "app2"], store.Purged.Order(StringComparer.Ordinal));
+        var oidc = gateway.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConnectOptions>>();
+        foreach (string appId in new[] { "app1", "app2", "app3" })
+        {
+            Assert.True(oidc.TryAdd(SchemeNames.Oidc(appId), new OpenIdConnectOptions()));
+        }
+    }
+
     private static OpenIdConnectOptions Oidc(IdentityGateway gateway, AppDefinition app, RegistrySnapshot? pinnedTo = null)
     {
         gateway.Pin(app, pinnedTo);
@@ -301,5 +325,31 @@ public sealed class OptionsInvalidatorTests
     {
         gateway.Pin(app);
         return gateway.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>().Get(SchemeNames.Cookie(app.AppId));
+    }
+}
+
+/// <summary>A session store whose purge of one app throws, and which records every purge it was asked for.</summary>
+internal sealed class FailingPurgeStore(string failingAppId) : ISessionStore
+{
+    private readonly InMemorySessionStore inner = new();
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> purged = new();
+
+    public IReadOnlyList<string> Purged => [.. purged];
+
+    public Task<string> CreateAsync(SessionRecord record, CancellationToken ct) => inner.CreateAsync(record, ct);
+
+    public Task<SessionRecord?> GetAsync(string key, CancellationToken ct) => inner.GetAsync(key, ct);
+
+    public Task<bool> ReplaceAsync(string key, SessionRecord record, long expectedVersion, CancellationToken ct) =>
+        inner.ReplaceAsync(key, record, expectedVersion, ct);
+
+    public Task RemoveAsync(string key, CancellationToken ct) => inner.RemoveAsync(key, ct);
+
+    public Task RemoveAppAsync(string appId, CancellationToken ct)
+    {
+        purged.Enqueue(appId);
+        return appId == failingAppId
+            ? Task.FromException(new InvalidOperationException("The session store is unavailable."))
+            : inner.RemoveAppAsync(appId, ct);
     }
 }
