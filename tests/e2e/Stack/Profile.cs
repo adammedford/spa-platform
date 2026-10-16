@@ -109,16 +109,14 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
         (await CookiesOfAsync(app)).Any(cookie => cookie.Name == name);
 
     /// <summary>
-    /// Serves <paramref name="html"/> at <paramref name="url"/> to this profile only, as a page some
-    /// other party controls: a hostile sibling under the app domain, or a site elsewhere. Only the
-    /// document is answered by the test; every request the page then makes leaves the browser as usual.
+    /// Opens a page some other party controls at <paramref name="url"/> (<see cref="TlsLoadBalancer.ServeForeign"/>):
+    /// a hostile sibling under the app domain, or <see cref="LocalStack.ForeignSite"/>. Every request the
+    /// page makes leaves the browser as usual.
     /// </summary>
     public async Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>")
     {
-        string target = url.ToString();
-        await Context.RouteAsync(candidate => candidate == target, route =>
-            route.FulfillAsync(new() { Status = 200, ContentType = "text/html", Body = html }));
-        await Page.GotoAsync(target);
+        Stack.LoadBalancer.ServeForeign(url, html);
+        await Page.GotoAsync(url.ToString());
     }
 
     /// <summary>The stack this profile is on.</summary>

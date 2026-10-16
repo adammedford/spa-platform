@@ -40,6 +40,7 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     private HttpClient? raw;
     private volatile Func<Uri, bool>? hold;
     private readonly List<Uri> held = [];
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> foreign = new(StringComparer.OrdinalIgnoreCase);
 
     private TlsLoadBalancer(WebApplication app, HttpMessageInvoker transport)
     {
@@ -85,9 +86,19 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
         HttpRequest request = context.Request;
 
         // The URL the browser asked for: its own host and port, which is what the transport writes into
-        // Host and X-Forwarded-Port.
-        Uri url = new($"https://{request.Host}{request.PathBase}{request.Path}{request.QueryString}");
+        // Host and X-Forwarded-Port, and the request target as it arrived. Request.Path is decoded, and a
+        // path the browser sent with %2e in it would reach the gateway as another path (N-10).
+        string target = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()?.RawTarget
+            ?? $"{request.PathBase}{request.Path}{request.QueryString}";
+        Uri url = new($"https://{request.Host}{target}");
         using HttpRequestMessage message = new(new HttpMethod(request.Method), url);
+
+        if (foreign.TryGetValue(url.Authority, out string? page))
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync(page, context.RequestAborted);
+            return;
+        }
 
         if (hold is { } match && match(url))
         {
@@ -159,6 +170,17 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// hop of a login after the first is a redirect.
     /// </summary>
     public void Hold(Func<Uri, bool> match) => hold = match;
+
+    /// <summary>
+    /// Answers every request for <paramref name="origin"/> with <paramref name="html"/>, as a page some
+    /// other party serves: a hostile sibling under the app domain, or a site elsewhere. It is served from
+    /// here, on loopback like the apps, rather than fulfilled by a Playwright route: a fetch from a
+    /// route-fulfilled page to an app host never left Chromium 153 while this suite was built, most
+    /// likely refused by its local network access rules, which treat a page with no address of its own
+    /// as public (https://developer.chrome.com/blog/local-network-access). That would hide the gateway's
+    /// answer behind the browser's.
+    /// </summary>
+    public void ServeForeign(Uri origin, string html) => foreign[origin.Authority] = html;
 
     /// <summary>Passes every request to the gateway again.</summary>
     public void Release() => hold = null;
