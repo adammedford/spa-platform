@@ -22,7 +22,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Registry document | [`registry.schema.json`](registry.schema.json), [`registry.example.json`](registry.example.json) | G1a, except the `oauth` section at G1b | Workstreams 2, 3, 4 and `spactl` |
 | App definition | [`app-definition.schema.json`](app-definition.schema.json), [`app-definition.example.json`](app-definition.example.json) | With the registry document | Workstreams 1, 2 and 5 |
 | Platform configuration | [`platform-config.schema.json`](platform-config.schema.json), [`platform-config.example.json`](platform-config.example.json) | G1a | Workstream 1 for the task environment, then everyone |
-| Pipeline and entry points | [`pipeline.md`](pipeline.md), `src/Gateway/Program.cs` | G1a | Everyone |
+| Pipeline and entry points | [`pipeline.md`](pipeline.md), `src/Gateway/Program.cs` | G1a; stage order changed at G1b | Everyone |
 | Browser contract | [`http-contract.md`](http-contract.md) | G1a | Workstreams 3, 4, 5, 6 |
 | Request gate | [`request-gate.md`](request-gate.md) | G1a, with the browser contract | Workstream 4, and workstream 6's negative suite |
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
@@ -69,8 +69,11 @@ contract and abstraction tests read the artifacts and assert that no draft part 
 
 What G1b changed, rather than only froze: `IIdpProfile` gained `ClientCredentialStyle`, because
 Cognito's revocation endpoint takes only a Basic header while its other endpoints take either
-(ADR-0017, evidence C-2.19 and C-2.21). The `oauth` section, the `Profile` enum and the session
-record keep their shapes. The browser
+(ADR-0017, evidence C-2.19 and C-2.21). **The pipeline's stage order moved**: telemetry is now the
+outermost stage, ahead of forwarded headers, so every rejection the application answers reaches a
+request line (ADR-0018, settling change request 6.4 and ticket 53). The method allowlist's 405 is
+on the line but not yet in `security.rejections`, which `contracts/telemetry.md` records. The
+`oauth` section, the `Profile` enum and the session record keep their shapes. The browser
 contract clarifies nullable display claims, session expiry and unconditional local logout removal.
 
 ## Using the schemas
