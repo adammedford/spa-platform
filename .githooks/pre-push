@@ -56,7 +56,7 @@ esac
 #
 # An integration branch is judged per commit instead of by its whole diff, so a branch that merges
 # single-owner lanes passes here rather than needing --no-verify -- which would have skipped the
-# three checks below it as well. .github/path-ownership.py carries the reasoning.
+# other checks below it as well. .github/path-ownership.py carries the reasoning.
 #
 # The default branch, not this branch's upstream. The question is what this branch adds to main;
 # against its own upstream it would compare a branch to itself after the first push and pass on an

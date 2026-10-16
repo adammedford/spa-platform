@@ -13,24 +13,20 @@ with nobody to verify it against -- is a permissions model for a team of one.
 So there is no escape hatch, because none is needed. When this fails, look at what it names and
 either split the change or, if you mean it, `git push --no-verify`.
 
-Two rules, and an integration branch needs the second
------------------------------------------------------
-A task branch is one owner's change, so the whole diff is checked at once. An integration branch is
-several, each already single-owner, merged in order -- and judged by the whole diff it fails every
-time, which is why the overnight run used to prescribe `--no-verify` as a routine step. That is the
-expensive part: `--no-verify` skips the steering, roadmap, artifact and build checks too, so a
-branch that only ever needed a different ownership rule pushed past four unrelated ones. A stale
-roadmap rode through twice that way before a push without the flag caught it.
+Task branches and integration histories
+--------------------------------------
+A linear task branch is checked by its whole diff, so splitting a change across commits does not
+allow it to cross owners. A history containing a merge is checked commit by commit, including
+commits later reverted. This lets integration branches combine single-owner work without bypassing
+the other pre-push checks. Ordinary commits must each be single-owner; merge commits answer only
+for their resolution edits, since their parents' commits are checked separately.
 
-So when the whole diff spans owners, each commit is checked on its own, and the branch passes when
-every commit is single-owner. The second rule is the stricter reading of A-05, not a softer one: one
-task, one owner, per commit rather than per branch.
+A merge is a history-shape signal, not proof of a task's identity or authorization. A task branch
+that merges main also uses the per-commit rule. Review still checks the task's scope against its
+plan row and OWNERSHIP.md; this guard does not replace that review. Octopus merges are refused:
+Git's remerge diff supports two parents, so integrate lanes with successive two-parent merges.
 
-It applies only to a branch that merged something, which is what keeps it from excusing a task
-branch that split one owner-crossing change into two commits. A task branch has no merges, so it is
-judged by its whole diff, exactly as before.
-
-Two paths are always allowed
+Change requests are always allowed
 ----------------------------
 Anyone may add a file under `contracts/changes/`. That is how a change to an integrator path is
 requested, and a workstream that could not write there would have no way to ask.
@@ -113,8 +109,8 @@ def matches(pattern: str, path: str) -> bool:
 
 def changed_files(base: str, head: str) -> list[str]:
     merge_base = run(["git", "merge-base", base, head])
-    listing = run(["git", "diff", "--name-only", f"{merge_base}..{head}"])
-    return [line for line in listing.splitlines() if line]
+    listing = run(["git", "diff", "--no-renames", "--name-only", "-z", f"{merge_base}..{head}"])
+    return [path for path in listing.split("\0") if path]
 
 
 def commits(base: str, head: str) -> list[str]:
@@ -131,15 +127,23 @@ def merged_anything(base: str, head: str) -> bool:
 
 
 def files_in(commit: str) -> list[str]:
-    """What one commit changed, against its first parent.
+    """Paths authored by a commit, including both ends of a rename.
 
-    First parent, so a merge is read as what it brought in -- the lane's own files -- rather than as
-    the union of both sides. A root commit has no parent and is diffed against the empty tree.
+    Git remerges two parents and compares that result with the committed merge, exposing resolution
+    edits rather than counting imported lanes twice. See https://git-scm.com/docs/git-show under
+    --diff-merges=remerge. Refuse unsupported parent counts rather than silently skipping a merge.
     """
     parents = run(["git", "rev-list", "--parents", "-n", "1", commit]).split()[1:]
-    against = parents[0] if parents else EMPTY_TREE
-    listing = run(["git", "diff", "--name-only", against, commit])
-    return [line for line in listing.splitlines() if line]
+    if len(parents) > 2:
+        raise ValueError(f"{commit[:9]} has {len(parents)} parents; use two-parent merges for A-05.")
+    if len(parents) == 2:
+        listing = run(["git", "show", "--format=", "--remerge-diff", "--no-renames",
+                       "--name-only", "-z", commit])
+    else:
+        # The empty tree is only needed for a root commit.
+        against = parents[0] if parents else EMPTY_TREE
+        listing = run(["git", "diff", "--no-renames", "--name-only", "-z", against, commit])
+    return [path for path in listing.split("\0") if path]
 
 
 def owners_of(paths: list[str], parsed: list[tuple[str, str]]) -> tuple[dict[str, list[str]], list[str]]:
@@ -166,6 +170,41 @@ def run(command: list[str]) -> str:
     return completed.stdout.strip()
 
 
+def check_commits(base: str, head: str, files: list[str], parsed: list[tuple[str, str]]) -> int:
+    """Audit all newly introduced commits, even if their net changes cancel out."""
+    crossing: list[tuple[str, dict[str, list[str]], list[str]]] = []
+    per_commit: list[tuple[str, str]] = []
+
+    for commit in commits(base, head):
+        owners, missing = owners_of(files_in(commit), parsed)
+        if missing or len(owners) > 1:
+            crossing.append((commit, owners, missing))
+        elif owners:
+            per_commit.append((commit, next(iter(owners))))
+
+    if not crossing:
+        print(f"A-05: {len(files)} file(s) in the final diff, and every commit is")
+        print("single-owner. Merge resolutions are checked separately from imported commits:")
+        for commit, owner in per_commit:
+            subject = run(["git", "log", "--format=%s", "-n", "1", commit])
+            print(f"  {commit[:9]}  {owner:<17} {subject[:60]}")
+        return 0
+
+    print("A-05 FAILED: a commit crosses owners or has unowned paths.")
+    for commit, owners, missing in crossing:
+        subject = run(["git", "log", "--format=%s", "-n", "1", commit])
+        print(f"  {commit[:9]}  {subject[:60]}")
+        for owner, paths in sorted(owners.items()):
+            print(f"    {owner}:")
+            for path in sorted(paths):
+                print(f"      {path}")
+        for path in missing:
+            print(f"    no owner: {path}")
+    print()
+    print("Split that commit, or push with --no-verify if you mean it.")
+    return 1
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
@@ -175,6 +214,15 @@ def main() -> int:
     parsed = rules()
 
     files = changed_files(base, head)
+    if merged_anything(base, head):
+        try:
+            return check_commits(base, head, files, parsed)
+        except (ValueError, subprocess.CalledProcessError) as error:
+            print(f"A-05 FAILED: cannot audit this integration history: {error}")
+            if isinstance(error, subprocess.CalledProcessError):
+                print(error.stderr.strip())
+                print("Use Git with --remerge-diff support (2.36 or later).")
+            return 1
     if not files:
         print("A-05: nothing changed.")
         return 0
@@ -196,39 +244,6 @@ def main() -> int:
         owner = next(iter(by_owner))
         print(f"A-05: {len(files)} file(s), all owned by {owner}.")
         return 0
-
-    # The whole diff spans owners. On a branch that merged something, that is what an integration
-    # branch looks like, so read it the stricter way: every commit single-owner.
-    if merged_anything(base, head):
-        crossing: list[tuple[str, dict[str, list[str]]]] = []
-        per_commit: list[tuple[str, str]] = []
-
-        for commit in commits(base, head):
-            owners, missing = owners_of(files_in(commit), parsed)
-            if missing or len(owners) > 1:
-                crossing.append((commit, owners))
-            elif owners:
-                per_commit.append((commit, next(iter(owners))))
-
-        if not crossing:
-            print(f"A-05: {len(files)} file(s) across {len(by_owner)} owners, and every commit is")
-            print("one owner's. An integration branch, so each commit answers for itself:")
-            for commit, owner in per_commit:
-                subject = run(["git", "log", "--format=%s", "-n", "1", commit])
-                print(f"  {commit[:9]}  {owner:<17} {subject[:60]}")
-            return 0
-
-        print("A-05 FAILED: a commit on this branch touches more than one owner's paths.")
-        for commit, owners in crossing:
-            subject = run(["git", "log", "--format=%s", "-n", "1", commit])
-            print(f"  {commit[:9]}  {subject[:60]}")
-            for owner, paths in sorted(owners.items()):
-                print(f"    {owner}:")
-                for path in sorted(paths):
-                    print(f"      {path}")
-        print()
-        print("Split that commit, or push with --no-verify if you mean it.")
-        return 1
 
     print("A-05 FAILED: this change touches more than one owner's paths.")
     for owner, paths in sorted(by_owner.items()):

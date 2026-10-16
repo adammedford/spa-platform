@@ -9,7 +9,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
-| Git | Any 2.x | `xcode-select --install` | Everything |  |
+| Git | 2.36+ (`--remerge-diff` for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
 | Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for |

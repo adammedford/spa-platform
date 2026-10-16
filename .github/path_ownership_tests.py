@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("path_ownership", ROOT / ".github/path-ownership.py")
@@ -139,8 +140,131 @@ class RuleTests(unittest.TestCase):
 
         code, out = self.check("overnight/today")
         self.assertEqual(1, code, out)
-        self.assertIn("a commit on this branch touches more than one owner", out.lower())
+        self.assertIn("a commit crosses owners", out.lower())
         self.assertIn("a stray fix across two owners", out)
+
+    def test_split_task_without_merges_still_fails(self):
+        self.repo.branch("task/split")
+        self.repo.commit("hosting", "src/Platform.Hosting/A.cs")
+        self.repo.commit("proxy", "src/Platform.Proxy/B.cs")
+        code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+
+    def test_nested_integration_merge_passes(self):
+        self.repo.branch("lane-a")
+        self.repo.commit("hosting", "src/Platform.Hosting/A.cs")
+        self.repo.checkout("main")
+        self.repo.branch("lane-b")
+        self.repo.commit("proxy", "src/Platform.Proxy/B.cs")
+        self.repo.checkout("main")
+        self.repo.branch("integration/inner")
+        self.repo.merge("lane-a", "hosting lane")
+        self.repo.merge("lane-b", "proxy lane")
+        self.repo.checkout("main")
+        self.repo.branch("integration/outer")
+        self.repo.merge("integration/inner", "merge the integrated lanes")
+        code, out = self.check("HEAD")
+        self.assertEqual(0, code, out)
+
+    def test_reverted_crossing_commit_still_fails(self):
+        for empty in (False, True):
+            with self.subTest(empty=empty):
+                self.repo.checkout("main")
+                self.repo.branch(f"lane-{empty}")
+                bad = self.repo.commit("crossing before revert",
+                                       "src/Platform.Hosting/A.cs", "src/Platform.Proxy/B.cs")
+                self.repo.git("revert", "--no-edit", bad)
+                if not empty:
+                    self.repo.commit("keep hosting", "src/Platform.Hosting/C.cs")
+                self.repo.checkout("main")
+                self.repo.branch(f"integration-{empty}")
+                self.repo.merge(f"lane-{empty}", "integrate the lane")
+                code, out = self.check("HEAD")
+                self.assertEqual(1, code, out)
+                self.assertIn(bad[:9], out)
+
+    def merge_with_edits(self, *paths):
+        self.repo.branch("lane")
+        self.repo.commit("hosting", "src/Platform.Hosting/A.cs")
+        self.repo.checkout("main")
+        self.repo.branch("integration")
+        self.repo.git("merge", "--no-ff", "--no-commit", "lane")
+        self.repo.commit("merge with edits", *paths)
+
+    def test_single_owner_merge_edit_passes(self):
+        self.merge_with_edits("src/Platform.Proxy/B.cs")
+        code, out = self.check("HEAD")
+        self.assertEqual(0, code, out)
+
+    def test_crossing_merge_edit_fails(self):
+        self.merge_with_edits("src/Platform.Proxy/B.cs", "infra/main.tf")
+        code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+        self.assertIn("merge with edits", out)
+
+    def test_rename_across_owners_fails(self):
+        self.repo.commit("initial hosting", "src/Platform.Hosting/A.cs")
+        self.repo.branch("task/rename")
+        self.repo.git("mv", "src/Platform.Hosting", "src/Platform.Proxy")
+        self.repo.commit("move between owners")
+        code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+        self.assertIn("ws2-hosting", out)
+        self.assertIn("ws4-proxy", out)
+
+    def test_octopus_merge_fails_with_instruction(self):
+        for name, path in (("hosting", "src/Platform.Hosting/A.cs"),
+                           ("proxy", "src/Platform.Proxy/B.cs"),
+                           ("infra", "infra/main.tf")):
+            self.repo.branch(name)
+            self.repo.commit(name, path)
+        self.repo.checkout("main")
+        self.repo.branch("integration/octopus")
+        self.repo.git("merge", "--no-ff", "-m", "octopus", "hosting", "proxy", "infra")
+        code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+        self.assertIn("use two-parent merges", out)
+
+    def test_unsupported_remerge_diff_fails_closed(self):
+        self.merge_with_edits("src/Platform.Proxy/B.cs")
+        original = ownership.run
+
+        def old_git(command):
+            if "--remerge-diff" in command:
+                raise subprocess.CalledProcessError(129, command, stderr="unknown option")
+            return original(command)
+
+        with mock.patch.object(ownership, "run", side_effect=old_git):
+            code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+        self.assertIn("unknown option", out)
+        self.assertIn("Git with --remerge-diff support", out)
+
+    def test_quoted_paths_keep_their_actual_owner(self):
+        self.repo.branch("task/quoted")
+        self.repo.commit("tab in hosting path", "src/Platform.Hosting/A\tB.cs")
+        code, out = self.check("HEAD")
+        self.assertEqual(0, code, out)
+        self.assertIn("all owned by ws2-hosting", out)
+
+    def test_conflict_resolution_cannot_cross_owners(self):
+        paths = ("src/Platform.Hosting/A.cs", "src/Platform.Proxy/B.cs")
+        self.repo.commit("initial hosting", paths[0])
+        self.repo.commit("initial proxy", paths[1])
+        for lane in ("left", "right"):
+            self.repo.branch(lane)
+            for path in paths:
+                self.repo.write(path, lane + "\n")
+                self.repo.commit("edit one owned path")
+        self.repo.checkout("left")
+        self.repo.git("merge", "--no-ff", "--no-commit", "-s", "ours", "right")
+        # Commit hand-authored resolutions in both owners' paths.
+        for path in paths:
+            self.repo.write(path, "resolved\n")
+        bad = self.repo.commit("crossing resolution")
+        code, out = self.check("HEAD")
+        self.assertEqual(1, code, out)
+        self.assertIn(bad[:9], out)
 
     def test_a_change_request_is_allowed_beside_another_owner(self):
         self.repo.branch("task/with-request")

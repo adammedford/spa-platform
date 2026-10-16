@@ -11,10 +11,11 @@ however many merges landed while the session was reviewing. A review that reads 
 on neither the branch nor `main`.
 
 ```bash
-git diff main...origin/<branch>          # three-dot: against the merge base
-git log main..origin/<branch> --oneline
-git show origin/<branch>:<path>          # a file at its branch version
-git show origin/main:<path>              # a file as main has it now
+git fetch origin --tags                        # current trunk, branches and gate evidence
+git diff origin/main...origin/<branch>          # three-dot: against the merge base
+git log origin/main..origin/<branch> --oneline
+git show origin/<branch>:<path>                 # a file at its branch version
+git show origin/main:<path>                     # a file as main has it now
 ```
 
 Never check the branch out, and never reset the shared tree. When a finding genuinely needs a build
@@ -24,9 +25,11 @@ or a test run, make a throwaway worktree outside the repo, run the one project t
 
 **Standards** is `CODING_STANDARDS.md`, plus `AGENTS.md` and `CLAUDE.md` for the rules an
 implementation agent carries, plus `OWNERSHIP.md`: a diff that writes outside its owner's paths is a
-finding on its own, and `.github/path-ownership.py <base> <head>` decides it. It reads a task
-branch by its whole diff and an integration branch per commit, so on a multi-owner branch the
-finding is a single commit that crossed owners, not the branch's breadth.
+finding on its own, and `.github/path-ownership.py <base> <head>` decides it. A linear branch is
+checked by its whole diff. A history containing a merge is audited per commit, including reverted
+commits, with merge resolutions checked separately from imported commits. This signal also applies
+when a task branch merges main: it establishes history shape, not task scope or authorization.
+Review the plan row and ownership scope even when the mechanical check passes.
 
 **Spec** has no per-task spec file. `docs/agents/landing-work.md` fixes it: the plan row plus the
 contracts rows naming it, cited by path. In practice:
