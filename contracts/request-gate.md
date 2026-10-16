@@ -9,12 +9,12 @@
 The gate runs before authentication (`UsePlatformRequestGate` in `contracts/pipeline.md`). The CSRF
 token check runs after it, because that one needs the user. Each rejection is logged and counted
 under a rule id. A rejection is an answer the application gives: a response some stage ends the
-request with. Every one of them reaches the request line, because `UsePlatformTelemetry` is the first
-stage (ADR-0018), and every one but the method allowlist's 405 reaches
-`security.rejections`. That 405 is on the line with `rule: null` until `MethodAllowlist`
-writes its id to `IRequestTelemetryFeature`; `contracts/telemetry.md` says the same. What Kestrel refuses before any stage runs,
-the 431 for oversized headers in `contracts/http-contract.md` → Errors, is the server's answer,
-carries no rule id, and is outside this sentence.
+request with. Every one of them reaches the request line, because `UsePlatformTelemetry` is the
+first stage (ADR-0018), and every one but the method allowlist's 405 reaches
+`security.rejections`. That 405 is on the line with `rule: null` until `MethodAllowlist` writes
+its id to `IRequestTelemetryFeature`; `contracts/telemetry.md` says the same. What Kestrel
+refuses before any stage runs, the 431 for oversized headers in `contracts/http-contract.md` →
+Errors, is the server's answer, carries no rule id, and is outside this sentence.
 
 ## Rules by path
 
