@@ -120,8 +120,8 @@ Neither #34 nor #35 touches `src/Platform.Registry`, `tests/Gateway.TestHarness`
    `Gateway.SecurityTests` alone.
 
 A printf probe in `PublishRegistryTextAsync` was used to chase this and is **not** recommended: it
-costs a full-solution run per attempt, each with a 0.9 chance of learning nothing and 0.43
-across eight, and a naive one that
+costs a full-solution run per attempt, each with a 0.9 chance of learning nothing and 0.43 across
+eight, and a naive one that
 parses `text` unconditionally throws on the malformed documents that method exists to accept
 (F-09, N-14).
 
@@ -162,5 +162,5 @@ The arithmetic is also corrected: 0.43 is the chance across eight runs, 0.9 per 
 Note for triage: another session has an unlanded ticket on the same race, task id 6.1a, also
 numbered 61, reaching the same mechanism independently and marked ready-for-agent. These should be
 merged into one before either is worked, and the number collision resolved by whoever lands
-second. Given that twin is `ready-for-agent` with a prescribed fix, it is probably the better
+second. 62 to 65 are taken, so 66 is the next free number. Given that twin is `ready-for-agent` with a prescribed fix, it is probably the better
 starting point and this one is the evidence trail.

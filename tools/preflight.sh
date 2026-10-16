@@ -119,7 +119,9 @@ project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
 # and an optional `export` prefix are accepted, and a trailing comment, trailing whitespace and
 # surrounding quotes are all removed. Accepting an indent assumes what this file is -- a flat list
 # of comments and assignments. In a file with shell constructs it would also match an assignment
-# indented inside an `if`, a function or a heredoc, which sourcing would not reach. The parse has to agree with the shell, because the file documents itself as sourceable:
+# indented inside an `if`, a function or a heredoc, which sourcing would not reach.
+#
+# The parse has to agree with the shell, because the file documents itself as sourceable:
 # a value that parsed differently here would compare against something no `export` could ever
 # produce, and the remedy this script prints would not satisfy the check it came from.
 #
