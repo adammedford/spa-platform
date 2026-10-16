@@ -31,7 +31,7 @@ after landing a row; `--check` runs in `.githooks/pre-push` and in CI.
 | S3 The identity surface is frozen | G1b, tagged `contracts-v1` | 1 of 1 | nothing |
 | S4 Feature complete, hermetically | G2, not tagged | 25 of 29 | part-landed: `3.8`, `3.9`, `4.2`, `6.2` |
 | S5 The same gateway on real infrastructure | G3, not tagged | 0 of 9 | `1.6b`, `1.7`, `1.9`, `6.9`; part-landed: `1.2`, `1.3`, `1.4`, `1.5`, `6.5` |
-| S6 Hardened: every attempt is refused | G4, not tagged | 1 of 1 | nothing |
+| S6 Hardened: every attempt is refused | G4, not tagged | 0 of 1 | part-landed: `6.3` |
 | S7 Operable, and accepted for Phase 1 | G5, not tagged | 0 of 1 | `6.7` |
 | S8 Continuous: it survives its own deployment | G6, not tagged | 0 of 5 | `P2-1`, `P2-2`, `P2-3`, `P2-4`, `P2-5` |
 | S9 Portable: a second provider behind the same seam | G7, not tagged | 0 of 1 | `P2-6` |
