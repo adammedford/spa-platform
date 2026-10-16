@@ -57,6 +57,24 @@ public sealed class AuthenticationEventsTests
     }
 
     [Fact]
+    public async Task A_frame_loading_the_shell_is_not_treated_as_a_navigation()
+    {
+        // contracts/request-gate.md reads a navigation as Sec-Fetch-Mode: navigate with
+        // Sec-Fetch-Dest: document (gate.navigation); an iframe's load has the mode and not the dest.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1, App2]);
+
+        IdentityGateway.Answer framed = await gateway.SendAsync(App1, "/", headers: new Dictionary<string, string>
+        {
+            ["Sec-Fetch-Site"] = "same-origin",
+            ["Sec-Fetch-Mode"] = "navigate",
+            ["Sec-Fetch-Dest"] = "iframe",
+        });
+
+        Assert.Equal(401, framed.Status);
+        Assert.Equal("", framed.Location);
+    }
+
+    [Fact]
     public async Task A_profiles_redirect_event_still_runs_on_a_navigation_and_never_on_a_fetch()
     {
         // ADR-0011: the profile configures last, so the gateway's events wrap what it set rather than

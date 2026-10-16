@@ -118,12 +118,18 @@ internal static class AuthenticationEvents
     }
 
     /// <summary>
-    /// A navigation is what the browser says it is: <c>Sec-Fetch-Mode: navigate</c>, sent once
-    /// (https://www.w3.org/TR/fetch-metadata/#sec-fetch-mode-header). A request without fetch
-    /// metadata is not one: the gateway never redirects a request it cannot show is a navigation,
-    /// the same reading the request gate gives a missing header (ADR-0007).
+    /// A navigation is what the browser says it is, read the way contracts/request-gate.md reads one
+    /// for <c>/bff/login</c> (<c>gate.navigation</c>): <c>Sec-Fetch-Mode: navigate</c> and
+    /// <c>Sec-Fetch-Dest: document</c>, each sent once
+    /// (https://www.w3.org/TR/fetch-metadata/#sec-fetch-mode-header). A frame or object loading the
+    /// shell is not one, so it is not sent to a provider that would only be framed. A request without
+    /// fetch metadata is not one either: the gateway never redirects a request it cannot show is a
+    /// navigation, the same reading the request gate gives a missing header (ADR-0007).
     /// </summary>
     private static bool IsNavigation(HttpRequest request) =>
-        request.Headers["Sec-Fetch-Mode"] is { Count: 1 } mode
-        && string.Equals(mode[0], "navigate", StringComparison.Ordinal);
+        Single(request, "Sec-Fetch-Mode", "navigate") && Single(request, "Sec-Fetch-Dest", "document");
+
+    private static bool Single(HttpRequest request, string header, string value) =>
+        request.Headers[header] is { Count: 1 } values
+        && string.Equals(values[0], value, StringComparison.Ordinal);
 }
