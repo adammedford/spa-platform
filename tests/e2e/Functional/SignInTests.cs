@@ -41,14 +41,7 @@ public sealed class SignInTests
     {
         await using LocalStack stack = await LocalStack.StartAsync();
         await using Profile profile = await stack.OpenAsync();
-        List<Uri> navigations = [];
-        profile.Page.Request += (_, request) =>
-        {
-            if (request.IsNavigationRequest)
-            {
-                navigations.Add(new Uri(request.Url));
-            }
-        };
+        List<Uri> navigations = profile.RecordNavigations();
 
         foreach (string appId in new[] { "app1", "app2" })
         {

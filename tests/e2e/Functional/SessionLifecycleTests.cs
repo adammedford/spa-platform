@@ -47,14 +47,7 @@ public sealed class SessionLifecycleTests
         Assert.True(await profile.HoldsAsync(app, Contract.PlatformCookie("-csrf")));
         BrowserContextCookiesResult session = Assert.Single(await profile.CookiesOfAsync(app), cookie => cookie.Name == Contract.PlatformCookie("-session"));
 
-        List<Uri> navigations = [];
-        profile.Page.Request += (_, request) =>
-        {
-            if (request.IsNavigationRequest)
-            {
-                navigations.Add(new Uri(request.Url));
-            }
-        };
+        List<Uri> navigations = profile.RecordNavigations();
 
         // The test provider approves every authorization at once, so a browser left alone would sign
         // straight back in and hide what the row is about. The load balancer holds the next callback:
@@ -62,9 +55,11 @@ public sealed class SessionLifecycleTests
         TlsLoadBalancer balancer = stack.LoadBalancer;
         balancer.Hold(url => url.AbsolutePath == "/signin-oidc");
 
-        // The shell's own logout form. Its post ends in a redirect to the provider's logout, which
-        // form-action must allow: contracts/http-contract.md leaves to this test whether Chromium applies
-        // form-action to that redirect. It does not block it.
+        // The shell's own logout form. Its post ends in a redirect to the provider's logout, and Chromium
+        // applies form-action to that redirect (contracts/http-contract.md -> "The baseline content
+        // security policy"): with the provider origin taken out of form-action, Chromium 153 stays on the
+        // shell and this test fails at the title below. The provider origin in the policy is what lets
+        // the logout through.
         await profile.Page.ClickAsync("form[action='/bff/logout'] button");
         await Assertions.Expect(profile.Page).ToHaveTitleAsync(TlsLoadBalancer.HeldTitle);
         Assert.Equal(1, stack.Harness.Idp.EndSessions);

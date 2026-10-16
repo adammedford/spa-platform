@@ -10,7 +10,8 @@ namespace Gateway.E2ETests.Functional;
 /// <summary>
 /// F-07 in a real browser (docs/plan/04-tests.md, tier D), the third-SPA scenario: onboard app 3 while
 /// apps 1 and 2 are in use. The clauses only AWS can show (the task id, start time and task definition
-/// unchanged, and the onboarding and platform plans) are task 6.9's, against the deployed stack.
+/// unchanged, and the onboarding and platform plans) are not asserted: a local stack has no ECS task and
+/// no Terraform plan to read them from.
 /// </summary>
 public sealed class OnboardingTests
 {
@@ -30,14 +31,7 @@ public sealed class OnboardingTests
         (HarnessApp app3, RefreshOutcome outcome) = await stack.Harness.OnboardAsync("app3", TestContext.Current.CancellationToken);
         Assert.Equal(RefreshOutcome.Swapped, outcome);
 
-        List<Uri> navigations = [];
-        user.Page.Request += (_, request) =>
-        {
-            if (request.IsNavigationRequest)
-            {
-                navigations.Add(new Uri(request.Url));
-            }
-        };
+        List<Uri> navigations = user.RecordNavigations();
         await user.Page.GotoAsync(app3.Url("/").ToString());
         await user.WaitSignedInAsync(app3);
 
