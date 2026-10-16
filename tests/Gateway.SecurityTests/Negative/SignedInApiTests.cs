@@ -103,6 +103,10 @@ public sealed class SignedInApiTests
         Assert.Contains("\"error\":\"client_not_admitted\"", app1OnReports.Body, StringComparison.Ordinal);
 
         // orders binds its audience, and app 2 asks for no resource: its token fails validation there.
+        // The mock API's invalid_token does not say why, so the provider's record of each login says
+        // it: app 1 named a resource (its token's aud), app 2 named none (no aud for orders to accept).
+        Assert.NotNull(harness.Idp.Authorizations.Last(authorization => authorization.ClientId == harness.App("app1").ClientId).Resource);
+        Assert.Null(harness.Idp.Authorizations.Last(authorization => authorization.ClientId == harness.App("app2").ClientId).Resource);
         Assert.Equal(HttpStatusCode.Unauthorized, app2OnOrders.StatusCode);
         Assert.Contains("\"error\":\"invalid_token\"", app2OnOrders.Body, StringComparison.Ordinal);
         Assert.Contains("\"api\":\"orders\"", app2OnOrders.Body, StringComparison.Ordinal);

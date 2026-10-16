@@ -37,7 +37,7 @@ public sealed class LoginTests
         using TestBrowser browser = harness.CreateBrowser();
         Uri callback = await SignedIn.UpToCallbackAsync(harness, browser, app1);
         string loginCookies = SignedIn.CookieHeader(browser, app1);
-        Assert.Contains("__Host-spa-corr.", loginCookies, StringComparison.Ordinal);
+        Assert.Contains(Prefix(Contract.PlatformCookie("corr.*")), loginCookies, StringComparison.Ordinal);
 
         Uri replay = new(app2.Url("/signin-oidc"), callback.Query);
         BrowserResponse rejected = await browser.ClickAsync(

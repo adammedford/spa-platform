@@ -169,7 +169,7 @@ public sealed class SessionBindingTests
         // A new client at the provider, its secret where the gateway reads it, and the entry pointed at
         // both: an operator's client rotation (task 3.6).
         string clientId = app.ClientId + "-replaced";
-        string secretRef = $"ssm:/spa-platform/harness/apps/app1/client-secret-replaced:1";
+        string secretRef = "ssm:/spa-platform/harness/apps/app1/client-secret-replaced:1";
         string secret = "secret-replaced-" + Guid.NewGuid().ToString("N");
         harness.Idp.AddClient(new TestIdpClient(
             clientId,
