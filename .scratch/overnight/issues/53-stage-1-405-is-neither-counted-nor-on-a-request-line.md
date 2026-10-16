@@ -2,7 +2,20 @@
 **Task:** CR-6.4a
 **Owner:** integrator
 **Blocked by:** None
-**Status:** ready-for-human
+**Status:** resolved
+
+## Answer
+
+Decided 2026-10-15 by the integrator, on Adam's acceptance of Q105–Q116: **swap the first two
+stages**, the fifth option the grilling found. `UsePlatformTelemetry` is now first and
+`UsePlatformForwardedHeaders` second, so the allowlist's 405 reaches the request line and
+`security.rejections` like every other rejection. Recorded as ADR-0018 on branch
+`integrator/stage-order-g1b` (commit `abcfd9c`, with the ws6 assertion flip in `b795a0c`): pipeline
+and Program.cs swapped, request-gate.md bounds "rejection" to what the application answers,
+telemetry.md's gap paragraph replaced by the rule, stages named not numbered outside the pipeline
+table (CODING_STANDARDS.md, GLOSSARY.md). Follow-ups: tickets 62 (ws2 sweep), 63 (ws4: the
+allowlist's feature write, plus its sweep) and 64 (ws6: the composed rule and counter assertion,
+plus its sweep). This was the last G1b prerequisite ADR-0017 named.
 
 **What to decide:** `contracts/request-gate.md` says "Each rejection is logged and counted under a
 rule id". One rejection is not: the 405 for a method no path accepts (`gate.method` from
