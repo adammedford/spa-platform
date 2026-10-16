@@ -1,14 +1,12 @@
 namespace Platform.Abstractions;
 
 /// <summary>
-/// Which gate freezes this part of the contract. The schemas carry the same marker as an
-/// <c>x-freeze</c> annotation, so that the gate travels with the thing it governs rather than only
-/// with contracts/README.md.
+/// Marks a draft part with its freeze gate. Schemas use <c>x-freeze</c> annotations for the
+/// same draft set, retaining their frozen status after code draft markers are removed.
 ///
-/// An unmarked type freezes at G1a; a type marked <c>G1b</c> froze at G1b. The marker records
-/// which gate froze the part, not whether it is still draft: G1b closed on 2026-10-16 when task
-/// I-6 folded the G0 findings in (ADR-0017) and tagged <c>contracts-v1</c>. Both sets now need a
-/// change request to alter.
+/// A marked type is draft until its gate is tagged; an unmarked type is frozen. At I-6 the
+/// G1b markers are removed under the freeze decision (ADR-0017). The annotated contracts-v1
+/// tag on main records that freeze; identity work stays blocked until it is reachable from main.
 /// </summary>
 [AttributeUsage(AttributeTargets.All, AllowMultiple = false)]
 public sealed class FreezeAttribute(string gate) : Attribute

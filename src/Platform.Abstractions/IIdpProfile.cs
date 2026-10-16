@@ -16,7 +16,6 @@ public sealed record IssuerDefinition(string Authority, string Profile, Uri Brow
 /// C-2.3), and task I-6 folded that in (ADR-0017). The revocation endpoint comes from discovery,
 /// so no member is needed for it.
 /// </summary>
-[Freeze("G1b")]
 public interface IIdpProfile
 {
     /// <summary>"standard" or "cognito". Selected by <c>Issuers:{name}:Profile</c>.</summary>
@@ -25,7 +24,7 @@ public interface IIdpProfile
     /// <summary>
     /// How this provider's client presents its secret, for the code exchange, the refresh and the
     /// revocation alike. Cognito's revocation endpoint takes only
-    /// <see cref="ClientCredentialStyle.AuthorizationHeader"/> (C-2.21), so the cognito profile
+    /// <see cref="ClientCredentialStyle.AuthorizationHeader"/> (C-2.19, C-2.21), so the cognito profile
     /// states that one and every call uses it.
     /// </summary>
     ClientCredentialStyle ClientCredentialStyle { get; }

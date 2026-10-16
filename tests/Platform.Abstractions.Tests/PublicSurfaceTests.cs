@@ -4,12 +4,11 @@ using Platform.Abstractions;
 namespace Platform.Abstractions.Tests;
 
 /// <summary>
-/// What <c>Platform.Abstractions</c> exposes, and which parts of it are still draft.
+/// What <c>Platform.Abstractions</c> exposes, and which parts remain draft.
 ///
 /// This is the project every workstream builds against and it freezes at G1a, so an addition is a
-/// contract change and not a convenience. contracts/README.md says of the schemas that "every draft
-/// subschema carries an x-freeze annotation naming the gate, so the marker travels with the schema
-/// rather than only with this page". <see cref="FreezeAttribute"/> is the same idea for the code.
+/// contract change and not a convenience. The schema x-freeze annotations in contracts/README.md
+/// record gate provenance; <see cref="FreezeAttribute"/> marks code drafts until their gate.
 /// </summary>
 public sealed class PublicSurfaceTests
 {
@@ -49,24 +48,10 @@ public sealed class PublicSurfaceTests
     ];
 
     /// <summary>
-    /// The parts that wait for G0. contracts/README.md -> "What is draft until G1b": scheme names,
-    /// the session record, IAccessTokenSource and IIdpProfile, plus the oauth section of a registry
-    /// entry, whose code form is OAuthDefinition. Task I-6 folds the G0 findings in, removes these
-    /// markers and tags contracts-v1.
+    /// I-6 removes the G1b markers (ADR-0017). Every identity part is prepared for the freeze;
+    /// the annotated contracts-v1 tag records closure before implementation can start.
     /// </summary>
-    /// <summary>
-    /// What Gate G1b froze, as opposed to what G1a froze. G1b closed on 2026-10-16 (ADR-0017),
-    /// so this is a record of which gate governs each part, not a list of what may still change.
-    /// </summary>
-    private static readonly string[] FrozenAtG1b =
-    [
-        "ClientCredentialStyle",
-        "IAccessTokenSource",
-        "IIdpProfile",
-        "OAuthDefinition",
-        "SchemeNames",
-        "SessionRecord",
-    ];
+    private static readonly string[] DraftUntilG1b = [];
 
     [Fact]
     public void The_public_surface_is_exactly_what_the_contract_names()
@@ -82,7 +67,7 @@ public sealed class PublicSurfaceTests
     }
 
     [Fact]
-    public void The_parts_marked_draft_are_exactly_the_ones_waiting_for_G1b()
+    public void No_part_remains_marked_draft_until_G1b()
     {
         string[] marked =
         [
@@ -92,7 +77,7 @@ public sealed class PublicSurfaceTests
                 .Order(),
         ];
 
-        Assert.Equal(FrozenAtG1b, marked);
+        Assert.Equal(DraftUntilG1b, marked);
     }
 
     [Fact]

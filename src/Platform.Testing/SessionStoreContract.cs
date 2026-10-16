@@ -11,7 +11,7 @@ namespace Platform.Testing;
 /// the in-memory store in <c>Platform.Identity</c>, and a double that evicted under load would make
 /// another workstream's test flake. A store is free to add them; nothing here forbids it.
 ///
-/// <b>Draft until G1b</b>, with <see cref="SessionRecord"/>: task I-6 folds the G0 findings in.
+/// Shares the G1b contract with <see cref="SessionRecord"/> (ADR-0017).
 /// </summary>
 public abstract class SessionStoreContract
 {

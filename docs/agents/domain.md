@@ -18,7 +18,7 @@ This repo is **single-context**: one glossary and one ADR directory at the root.
 /
 ├── GLOSSARY.md                     ← vocabulary
 ├── docs/
-│   ├── adr/                        ← live decision record, ADR-0001 to ADR-0012
+│   ├── adr/                        ← live decision record, indexed by README.md
 │   │   ├── README.md               ← index, and the plan/ADR split explained
 │   │   └── 0001-<slug>.md
 │   └── plan/                       ← frozen export, read-only
@@ -52,6 +52,5 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 > _Contradicts ADR-0008 (session required before any asset), but worth reopening because…_
 
-Three ADRs have open gate work and are the likeliest to move: ADR-0001, ADR-0005 and ADR-0011, all
-waiting on Gate G0 items 2 and 3 against Cognito. Check an ADR's **Status** line before treating it
-as settled.
+ADR-0017 records how the G0 report changes ADR-0001, ADR-0005 and ADR-0011. Check an ADR's
+**Status** line and the annotated gate tags reachable from origin/main before treating a gate as closed.

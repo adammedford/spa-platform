@@ -139,7 +139,7 @@ properties, `A-` architecture reference rules. A test id in a task names a behav
 workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
-harness (G0 items 4 and 5). Listed in `docs/plan/07-evidence.md`. Separate from test ids.
+harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). Listed in `docs/plan/07-evidence.md`. Separate from test ids.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.
@@ -148,5 +148,5 @@ sandbox could not reach NuGet. 34 of 34 checks passed.
 source, then repeated on the shipped package with the overrides on. 32 of 32 expectations held.
 
 **Reserve design** — the gateway-owned locking over the library's refresh call, proven in the harness
-but **not adopted**. It reopens only if G0 item 2 finds Cognito's grace window insufficient, or at
-the PingFederate gate. See ADR-0005.
+and adopted for task 3.8 after the Cognito inside-window successor failure (C-2.17).
+The late-replay control C-2.18 is a separate observation. See ADR-0005 and ADR-0017.

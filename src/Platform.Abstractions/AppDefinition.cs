@@ -4,7 +4,7 @@ namespace Platform.Abstractions;
 
 /// <summary>
 /// One registry entry, validated. Source: docs/plan/02-contracts.md -> Interfaces. Freezes at G1a,
-/// except <see cref="OAuthDefinition"/>, which the registry document marks draft until G1b.
+/// except <see cref="OAuthDefinition"/>, which the registry document assigns to G1b (ADR-0017).
 /// </summary>
 /// <param name="Fingerprint">
 /// Hash of the entry's canonical JSON, computed by the validator in task 2.1. This decides eviction,
@@ -25,7 +25,6 @@ public sealed record AppDefinition(
 /// The entry's OAuth client. <paramref name="Issuer"/> names an issuer in platform configuration; it
 /// is not an authority URL. <paramref name="Resource"/> is null for an app with no resource binding.
 /// </summary>
-[Freeze("G1b")]
 public sealed record OAuthDefinition(
     string Issuer,
     string ClientId,

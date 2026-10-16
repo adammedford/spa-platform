@@ -49,28 +49,29 @@ schema file; the plan describes it inside the registry document section, as an e
 
 ## What G1b froze
 
-**Nothing here is draft any more.** Gate G0 passed on 2026-10-16, task I-6 folded its findings in as
-[ADR-0017](../docs/adr/0017-g0-findings-fold-into-the-identity-contracts.md) and tagged
-`contracts-v1`. These parts now need a change request to alter, exactly like the G1a parts, and
-workstream 3 is open:
+Task I-6 prepares these identity parts for the `contracts-v1` freeze using the G0 report and
+[ADR-0017](../docs/adr/0017-g0-findings-fold-into-the-identity-contracts.md). The annotated tag on
+`main`, citing its green CI run, closes G1b; until that tag is reachable from `origin/main`,
+workstream 3 stays blocked. After the tag, these parts need a change request to alter:
 
 | Part G1b froze | Where |
 | --- | --- |
 | The `oauth` section of a registry entry | `registry.schema.json#/$defs/oauth`, `app-definition.schema.json#/properties/oauth` |
 | `IIdpProfile` names, which `Issuers:{name}:Profile` selects | `platform-config.schema.json`, the `Profile` enum |
 | The `/bff` endpoints and the session record behind `__Host-spa-session` | `http-contract.md` |
-| Scheme names, the session record, `IAccessTokenSource`, `IIdpProfile`, `ClientCredentialStyle` | `src/Platform.Abstractions` (task I-3) |
+| Scheme names, the session record, `IAccessTokenSource`, `AccessTokenResult`, `ISessionStore`, `IIdpProfile`, `ClientCredentialStyle` | `src/Platform.Abstractions` (task I-3) |
 
-Every subschema carries an `x-freeze` annotation naming the gate that froze it, so the marker
-travels with the schema rather than only with this page. `x-freeze` is an annotation: it constrains
-no instance. The G1b parts read `"status": "frozen-at-g1b"`, the G1a parts `"frozen-at-g1a"`, and
-`tests/Platform.Abstractions.Tests/FreezeMarkersTests.cs` holds the code's markers to what the
-schemas say.
+The schema annotations record `"status": "frozen-at-g1b"` for these parts and
+`"frozen-at-g1a"` for the rest; root `exceptions` arrays are removed. These annotations constrain
+no instance. In code, I-6 removes every `[Freeze("G1b")]` marker: marked means draft until its
+gate is tagged, unmarked means frozen. `FreezeAttribute` stays available for later gates. The
+contract and abstraction tests read the artifacts and assert that no draft part remains.
 
 What G1b changed, rather than only froze: `IIdpProfile` gained `ClientCredentialStyle`, because
 Cognito's revocation endpoint takes only a Basic header while its other endpoints take either
-(ADR-0017, evidence C-2.21). The `oauth` section, the `Profile` enum, the `/bff` endpoints and the
-session record froze as they were drafted.
+(ADR-0017, evidence C-2.19 and C-2.21). The `oauth` section, the `Profile` enum and the session
+record keep their shapes. The browser
+contract clarifies nullable display claims, session expiry and unconditional local logout removal.
 
 ## Using the schemas
 

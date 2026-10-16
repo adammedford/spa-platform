@@ -19,8 +19,11 @@ namespace Platform.Abstractions;
 ///
 /// Gate G0 found that Cognito accepts either style for the code exchange and the refresh, but
 /// refuses a form-body secret at the revocation endpoint with <c>401 Unauthorized</c> and accepts
-/// a Basic header there (evidence C-2.21). One style therefore serves all three calls: per call
+/// a Basic header there (evidence C-2.19, C-2.21). One style therefore serves all three calls: per call
 /// site it would be three places to get wrong, and the one that fails is only exercised at logout.
+///
+/// AWS requires Basic for a secret client at revocation:
+/// https://docs.aws.amazon.com/cognito/latest/developerguide/revocation-endpoint.html
 ///
 /// The names match the token-management library's own vocabulary so the mapping in
 /// <c>Platform.Identity</c> is obvious, but this is the platform's own type: A-04 keeps that
@@ -28,7 +31,6 @@ namespace Platform.Abstractions;
 ///
 /// Source: docs/plan/02-contracts.md -> Interfaces. Frozen at G1b.
 /// </summary>
-[Freeze("G1b")]
 public enum ClientCredentialStyle
 {
     /// <summary>
@@ -39,7 +41,7 @@ public enum ClientCredentialStyle
 
     /// <summary>
     /// HTTP Basic authentication, the secret in the <c>Authorization</c> header. What Cognito's
-    /// revocation endpoint requires (C-2.21).
+    /// revocation endpoint requires (C-2.19, C-2.21).
     /// </summary>
     AuthorizationHeader = 1,
 }

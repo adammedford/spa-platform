@@ -12,7 +12,7 @@ The five canonical triage roles, each label string equal to its name. See `docs/
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` at the root, ADR-0001 to ADR-0012 in `docs/adr/`, and `docs/plan/` as a read-only export. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` at the root, the numbered decisions indexed by `docs/adr/README.md` in `docs/adr/`, and `docs/plan/` as a read-only export. See `docs/agents/domain.md`.
 
 ## AWS
 

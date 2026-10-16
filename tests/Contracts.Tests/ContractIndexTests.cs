@@ -81,8 +81,8 @@ public sealed class ContractIndexTests
     public void The_oauth_section_of_an_entry_is_marked_frozen_at_G1b()
     {
         // Task I-2 marked the identity parts draft until G1b. Task I-6 folded in the G0 findings
-        // (ADR-0017) and tagged contracts-v1 on 2026-10-16, so the marker now records which gate
-        // froze the subschema. It still has to be on it: that is what ties the schema to the code.
+        // (ADR-0017); contracts-v1 records the freeze once tagged on a green main commit. The
+        // schema marker records gate provenance; code draft markers are cleared at I-6.
         AssertFrozenAtG1b(ContractFiles.SchemaSource(ContractFiles.RegistrySchema)["$defs"]!["oauth"]!);
         AssertFrozenAtG1b(ContractFiles.SchemaSource(ContractFiles.AppDefinitionSchema)["properties"]!["oauth"]!);
     }
@@ -96,10 +96,13 @@ public sealed class ContractIndexTests
         AssertFrozenAtG1b(profile);
     }
 
-    [Fact]
-    public void The_schemas_that_freeze_whole_at_G1a_carry_no_draft_part()
+    [Theory]
+    [MemberData(nameof(EverySchema))]
+    public void The_G1b_freeze_leaves_no_draft_part_in_any_schema(string fileName)
     {
-        Assert.Null(FindDraft(ContractFiles.SchemaSource(ContractFiles.InfraOutputsSchema)));
+        // ADR-0017 prepares an empty draft set, including newly added subschemas that have no
+        // code counterpart. Reintroducing a draft marker must fail instead of escaping the map.
+        Assert.Null(FindDraft(ContractFiles.SchemaSource(fileName)));
     }
 
     [Theory]

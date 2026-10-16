@@ -11,7 +11,7 @@ namespace Platform.Testing.Tests;
 /// asked to do so another workstream can assert the profile was consulted without depending on
 /// either one.
 ///
-/// <b>Draft until G1b</b>, with <see cref="IIdpProfile"/>.
+/// Shares the G1b contract with <see cref="IIdpProfile"/> (ADR-0017).
 /// </summary>
 public sealed class StubIdpProfileTests
 {

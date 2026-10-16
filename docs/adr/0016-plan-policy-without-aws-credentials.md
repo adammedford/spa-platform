@@ -22,10 +22,10 @@ o-ruixwwk14j/service_control_policy/p-1d03w2pr
 
 The same policy denies `iam:ListOpenIDConnectProviders`, so the provider can neither be created nor
 found. **This is not a permission the account can grant itself.** A service control policy overrides
-every IAM policy in a member account and binds every principal in it, including an administrator who
-assumes a role into it. The organization's management account is exempt from service control
-policies, but an OIDC provider must be created in the account that will use it, so the exemption does
-not help. Enabling it means amending `p-1d03w2pr`, detaching it, or moving the account to an
+every IAM allow in a member account and restricts its IAM principals, including administrators.
+Service-linked roles are exempt; this human-assumed role is not. The organization's management account is exempt from service control
+policies, but [an OIDC provider must be in the same account as the role that trusts it](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html),
+so the exemption does not help this role. Enabling it means amending `p-1d03w2pr`, detaching it, or moving the account to an
 organizational unit it is not attached to — all work in account `215472107744`, by someone who is not
 this project.
 
@@ -68,9 +68,10 @@ credentials.**
 4. **The GitHub Actions OIDC provider is not created, and `create_github_oidc_provider` stays
    false.** `github_repository` is empty, which drops the provider resource and the whole
    `sts:AssumeRoleWithWebIdentity` statement.
-5. **The CI plan role still exists, trusted by the account** (`additional_trusted_principal_arns`),
-   so a human or another runner inside the account can assume it to run a read-only plan. Its name
-   and its read-only policy are unchanged. What changed is who assumes it and when: a person
+5. **The bootstrap configuration retains the plan role and its explicit additional trust list**
+   (`additional_trusted_principal_arns`), so after a successful apply an allowlisted principal can
+   assume it to run a read-only plan. The failed apply above does not prove that role exists. Its
+   configured name and read-only policy are unchanged. What changed is who assumes it and when: a person
    investigating, not a workflow on every push.
 6. **The three checks that genuinely need AWS stay where they were.** P-04 (release immutability),
    P-05 (teardown) and P-06 (network reachability) are deployed-tier checks run at a gate by whoever

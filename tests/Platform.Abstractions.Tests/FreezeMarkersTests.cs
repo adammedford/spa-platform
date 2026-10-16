@@ -6,13 +6,9 @@ using Platform.Abstractions;
 namespace Platform.Abstractions.Tests;
 
 /// <summary>
-/// The schemas and the code have to agree about which gate froze each part.
+/// The schemas and the code have to agree about what is draft; I-6 leaves that set empty.
 ///
-/// Until 2026-10-16 that meant agreeing about what was draft. G1b closed that day (ADR-0017), so
-/// the G1b parts are frozen rather than draft and the rule is unchanged: a subschema marked
-/// <c>frozen-at-g1b</c> has a C# counterpart carrying the same marker.
-///
-/// contracts/README.md says "every subschema carries an x-freeze annotation naming the gate,
+/// contracts/README.md says "every draft subschema carries an x-freeze annotation naming the gate,
 /// so the marker travels with the schema rather than only with this page", and
 /// <see cref="FreezeAttribute"/> is that idea for the code. Two halves of one rule, and until this
 /// file existed only the schema half was derived from the artifact: Contracts.Tests walks the
@@ -26,31 +22,27 @@ namespace Platform.Abstractions.Tests;
 public sealed class FreezeMarkersTests
 {
     /// <summary>
-    /// The code form of each subschema G1b froze, as <c>file#json-pointer</c>. The mapping is
-    /// written out because nothing in a schema names a C# type, and a test below fails on a G1b
+    /// The code form of each subschema marked draft, as <c>file#json-pointer</c>. The mapping is
+    /// written out because nothing in a schema names a C# type, and a test below fails on a draft
     /// subschema missing from here: adding one is then a decision about its code counterpart
     /// rather than something that passes in silence.
     ///
     /// Two of the three are the same type, because a registry entry and an app definition share
-    /// the subschema by <c>$ref</c>. A null would mean the part has no counterpart in
+    /// the subschema by <c>$ref</c>. A null means the draft part has no counterpart in
     /// <c>Platform.Abstractions</c> at all.
     /// </summary>
-    private static readonly Dictionary<string, string?> CodeForm = new()
-    {
-        ["app-definition.schema.json#/properties/oauth"] = nameof(OAuthDefinition),
-        ["registry.schema.json#/$defs/oauth"] = nameof(OAuthDefinition),
-        ["platform-config.schema.json#/properties/Issuers/additionalProperties/properties/Profile"] =
-            nameof(IIdpProfile),
-    };
+    // ADR-0017 / I-6 clears the draft set. A new draft subschema must deliberately add its
+    // code counterpart here and reopen a gate, rather than passing because no code reads it.
+    private static readonly Dictionary<string, string?> CodeForm = new();
 
     [Fact]
-    public void Every_g1b_subschema_names_its_code_form()
+    public void Every_draft_subschema_names_its_code_form()
     {
-        Assert.Equal(CodeForm.Keys.Order(), G1bSubschemas().Order());
+        Assert.Equal(CodeForm.Keys.Order(), DraftSubschemas().Order());
     }
 
     [Fact]
-    public void Every_code_form_of_a_g1b_subschema_carries_the_marker()
+    public void Every_code_form_of_a_draft_subschema_carries_the_marker()
     {
         string[] unmarked =
         [
@@ -68,35 +60,35 @@ public sealed class FreezeMarkersTests
     }
 
     /// <summary>
-    /// Every <c>file#json-pointer</c> in <c>contracts/</c> whose <c>x-freeze</c> names G1b, found
+    /// Every <c>file#json-pointer</c> in <c>contracts/</c> whose <c>x-freeze</c> says draft, found
     /// by walking each schema rather than by being listed.
     /// </summary>
-    private static IEnumerable<string> G1bSubschemas()
+    private static IEnumerable<string> DraftSubschemas()
     {
         foreach (string file in Directory.EnumerateFiles(ContractsDirectory(), "*.schema.json").Order())
         {
             JsonNode? schema = JsonNode.Parse(File.ReadAllText(file));
-            foreach (string pointer in G1bPointers(schema, string.Empty))
+            foreach (string pointer in DraftPointers(schema, string.Empty))
             {
                 yield return $"{Path.GetFileName(file)}#{pointer}";
             }
         }
     }
 
-    private static IEnumerable<string> G1bPointers(JsonNode? node, string pointer)
+    private static IEnumerable<string> DraftPointers(JsonNode? node, string pointer)
     {
         switch (node)
         {
             case JsonObject objectNode:
                 if (objectNode.TryGetPropertyValue("x-freeze", out JsonNode? freeze)
-                    && freeze?["status"]?.GetValue<string>() == "frozen-at-g1b")
+                    && freeze?["status"]?.GetValue<string>() == "draft")
                 {
                     yield return pointer;
                 }
 
                 foreach (KeyValuePair<string, JsonNode?> property in objectNode)
                 {
-                    foreach (string found in G1bPointers(property.Value, $"{pointer}/{property.Key}"))
+                    foreach (string found in DraftPointers(property.Value, $"{pointer}/{property.Key}"))
                     {
                         yield return found;
                     }
@@ -107,7 +99,7 @@ public sealed class FreezeMarkersTests
             case JsonArray arrayNode:
                 for (int index = 0; index < arrayNode.Count; index++)
                 {
-                    foreach (string found in G1bPointers(arrayNode[index], $"{pointer}/{index}"))
+                    foreach (string found in DraftPointers(arrayNode[index], $"{pointer}/{index}"))
                     {
                         yield return found;
                     }
