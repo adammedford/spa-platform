@@ -47,6 +47,7 @@ internal sealed class AppBoundTicketStore(string appId, string clientId) : ITick
             ?? throw new InvalidOperationException("The cookie handler signs in with an issue time.");
         string key = await Store(httpContext).CreateAsync(Record(ticket, createdAt, version: 0), cancellationToken);
         Reference(httpContext, key);
+        httpContext.Features.Set(new SessionKeyFeature(key));
         return key;
     }
 
@@ -69,9 +70,14 @@ internal sealed class AppBoundTicketStore(string appId, string clientId) : ITick
     public async Task<AuthenticationTicket?> RetrieveAsync(string key, HttpContext httpContext, CancellationToken cancellationToken)
     {
         Reference(httpContext, key);
-        return await Owned(Store(httpContext), key, cancellationToken) is { } record
-            ? TicketSerializer.Default.Deserialize(record.Ticket.ToArray())
-            : null;
+        if (await Owned(Store(httpContext), key, cancellationToken) is not { } record)
+        {
+            return null;
+        }
+
+        // Only a session this app owns is named to the token source (task 3.8).
+        httpContext.Features.Set(new SessionKeyFeature(key));
+        return TicketSerializer.Default.Deserialize(record.Ticket.ToArray());
     }
 
     /// <summary>Removes a session this app owns. Another app's key is left alone.</summary>
