@@ -32,6 +32,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// <summary>A path standing in for an upstream API: 401 when anonymous, 200 when authenticated.</summary>
     public const string ApiPath = "/api/probe";
 
+    /// <summary>
+    /// A path standing in for <c>/bff/logout</c> (task 3.9): it signs out of the app's cookie scheme and
+    /// then of its OpenID Connect scheme, which hands the browser to the issuer's profile (task 3.7).
+    /// </summary>
+    public const string LogoutPath = "/logout/probe";
+
     /// <summary>The fetch metadata a browser sends on a top-level navigation the user typed.</summary>
     public static readonly IReadOnlyDictionary<string, string> Navigation = new Dictionary<string, string>
     {
@@ -70,6 +76,13 @@ internal sealed class IdentityGateway : IAsyncDisposable
         app.UseAuthentication();
         app.Run(async context =>
         {
+            if (context.Request.Path == LogoutPath && context.Features.Get<IAppFeature>()?.App is { } pinned)
+            {
+                await context.SignOutAsync(SchemeNames.Cookie(pinned.AppId));
+                await context.SignOutAsync(SchemeNames.Oidc(pinned.AppId), new AuthenticationProperties { RedirectUri = "/" });
+                return;
+            }
+
             bool authenticated = context.User.Identity?.IsAuthenticated == true;
             if (context.Request.Path == "/" && !authenticated)
             {
@@ -108,9 +121,33 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// <summary>The redirect URI the handler builds on an app's host: one callback path for every app.</summary>
     public static string RedirectUriOf(AppDefinition app) => $"https://{app.Host}/signin-oidc";
 
+    /// <summary>
+    /// The URIs the provider accepts after logout for an app: the handler's signed-out callback, where
+    /// the standard profile returns (R-C6), and the app's root, where the cognito profile lands (R-C7).
+    /// </summary>
+    public static IReadOnlySet<string> PostLogoutUrisOf(AppDefinition app) =>
+        new HashSet<string>(StringComparer.Ordinal) { $"https://{app.Host}/signout-callback-oidc", $"https://{app.Host}/" };
+
+    private static void Register(TestIdentityProvider idp, AppDefinition app) =>
+        idp.AddClient(new TestIdpClient(
+            app.OAuth.ClientId,
+            SecretOf(app),
+            new HashSet<string>(StringComparer.Ordinal) { RedirectUriOf(app) },
+            PostLogoutUrisOf(app)));
+
+    /// <param name="apps">The registry's entries.</param>
+    /// <param name="services">Registrations made after <c>AddPlatformIdentity</c>.</param>
+    /// <param name="issuerProfile">What platform configuration names as the issuer's profile.</param>
+    /// <param name="stubProfile">
+    /// True to register <see cref="Profile"/> ahead of the real profiles, so it is the one consulted
+    /// for <paramref name="issuerProfile"/>; false to leave the real profiles of task 3.7 in charge,
+    /// with <see cref="Profile"/> registered under a name no issuer uses.
+    /// </param>
     public static async Task<IdentityGateway> StartAsync(
         IEnumerable<AppDefinition> apps,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null,
+        string issuerProfile = "standard",
+        bool stubProfile = true)
     {
         AppDefinition[] entries = [.. apps];
         TestIdentityProvider idp = new();
@@ -119,20 +156,20 @@ internal sealed class IdentityGateway : IAsyncDisposable
         FakeClientSecretSource secrets = new();
         foreach (AppDefinition app in entries)
         {
-            idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), $"https://{app.Host}/");
+            Register(idp, app);
             secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
         }
 
         await secrets.PreloadAsync(entries.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
 
         InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"r1\"", entries));
-        StubIdpProfile profile = new("standard");
+        StubIdpProfile profile = new(stubProfile ? issuerProfile : "stub-unused");
 
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             [$"Issuers:{IssuerName}:Authority"] = idp.BaseUrl,
-            [$"Issuers:{IssuerName}:Profile"] = "standard",
+            [$"Issuers:{IssuerName}:Profile"] = issuerProfile,
             [$"Issuers:{IssuerName}:BrowserOrigin"] = idp.BaseUrl,
         });
         builder.Services.AddLogging();
@@ -156,7 +193,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
     {
         foreach (AppDefinition app in apps.Where(a => !Idp.Clients.ContainsKey(a.OAuth.ClientId)))
         {
-            Idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), $"https://{app.Host}/");
+            Register(Idp, app);
             Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
         }
 
