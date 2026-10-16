@@ -146,8 +146,8 @@ public sealed class ShellGateTests
 
         Assert.Equal(302, navigation.Status);
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, navigation.Location, StringComparison.Ordinal);
-        Assert.Equal(RuleIds.AuthSession, navigation.Rule);
+        Assert.Equal("auth.session", navigation.Rule);
         Assert.Equal(401, fetch.Status);
-        Assert.Equal(RuleIds.AuthSession, fetch.Rule);
+        Assert.Equal("auth.session", fetch.Rule);
     }
 }

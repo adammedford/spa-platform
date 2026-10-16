@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
 using TestIdp;
@@ -84,6 +85,31 @@ public sealed class AccessTokenSourceTests
         IdentityGateway.Answer shell = await gateway.SendAsync(App1, "/", jar);
         Assert.Equal(200, shell.Status);
         Assert.Equal(SessionRef.Of(key), shell.SessionRef);
+    }
+
+    [Fact]
+    public async Task The_session_key_reaches_no_log_line_and_its_reference_reaches_the_request()
+    {
+        // Task 3.5a, contracts/telemetry.md: session_ref is this workstream's to set, on the request
+        // telemetry feature, as SessionRef.Of(key). N-16: across a session's life (sign-in, a refresh,
+        // a request, logout) the key itself is written to no log line; its reference is what a line
+        // that names the session carries.
+        CapturingLoggerProvider logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+
+        IdentityGateway.Answer refreshed = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer shell = await gateway.SendAsync(App1, "/", jar);
+        await gateway.SendAsync(App1, "/bff/logout", jar, "POST");
+
+        Assert.Equal(200, refreshed.Status);
+        Assert.Equal(SessionRef.Of(key), refreshed.SessionRef);
+        Assert.Equal(SessionRef.Of(key), shell.SessionRef);
+        string refresh = Assert.Single(logs.Lines, l => l.Category == typeof(AccessTokenSource).FullName).Message;
+        Assert.Contains(SessionRef.Of(key), refresh, StringComparison.Ordinal);
+        Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Message, StringComparison.Ordinal));
     }
 
     [Fact]
