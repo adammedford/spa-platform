@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Platform.Abstractions;
 
 namespace Platform.Identity;
 
@@ -64,6 +65,11 @@ public static class PlatformIdentityExtensions
             IPostConfigureOptions<OpenIdConnectOptions>, OpenIdConnectPostConfigureOptions>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<OpenIdConnectOptions>, OidcOptionsValidation>());
+
+        // The session store of task 3.4, unless the host brought its own. Built on first use, not at
+        // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
+        // no session settings.
+        services.TryAddSingleton<ISessionStore>(MemorySessionStore.FromConfiguration);
         return builder;
     }
 
