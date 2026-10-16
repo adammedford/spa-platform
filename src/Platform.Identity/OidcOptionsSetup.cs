@@ -102,6 +102,7 @@ public sealed class OidcOptionsSetup(
         if (profiles.FirstOrDefault(p => string.Equals(p.Name, issuer.Profile, StringComparison.Ordinal)) is { } profile)
         {
             profile.Configure(options, app, issuer);
+            CodeExchange.Apply(options, profile.ClientCredentialStyle, shared);
 
             // The redirect to the provider's logout is the profile's (plan row 3.7): the handler raises
             // this event after it has built the RP-initiated request from discovery and before it adds

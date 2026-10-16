@@ -17,7 +17,7 @@ namespace Platform.Identity;
 /// <summary>
 /// Workstream 3's entry points in <c>contracts/pipeline.md</c>: <c>AddPlatformIdentity</c> in the
 /// service table, <see cref="UsePlatformShellGate"/>, and <see cref="MapPlatformBff"/> for
-/// <c>/bff/*</c>. Tasks 3.1 to 3.9 fill them in. Keep these signatures and add no others.
+/// <c>/bff/*</c>. These signatures are fixed by the pipeline contract.
 /// </summary>
 public static class PlatformIdentityExtensions
 {
@@ -114,12 +114,10 @@ public static class PlatformIdentityExtensions
     /// <summary>
     /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
     ///
-    /// Separate from <see cref="AddPlatformIdentity"/> because a bound source makes the proxy's token step
-    /// answer every sessionless <c>/api</c> call 401 (contracts/http-contract.md -> Errors), and the
-    /// composed suites in <c>tests/Gateway.*</c> still call <c>/api</c> without signing in, although
-    /// <see cref="MapPlatformBff"/> can now establish a session (task 3.9). Without one, the proxy forwards
-    /// with no <c>Authorization</c>, which the upstream refuses on its own (assumption A5). It moves into
-    /// <see cref="AddPlatformIdentity"/> with <see cref="AddPlatformShellGate"/>, once those suites sign in.
+    /// An explicit binding lets component and composed hosts select token enforcement independently
+    /// of installing the identity services. A bound source makes the proxy answer sessionless API
+    /// requests with 401 (contracts/http-contract.md); hosts that omit it retain the proxy's
+    /// optional-source behavior.
     /// </summary>
     internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
     {
@@ -128,12 +126,9 @@ public static class PlatformIdentityExtensions
     }
 
     /// <summary>
-    /// Switches <see cref="UsePlatformShellGate"/> on. Separate from <see cref="AddPlatformIdentity"/> for
-    /// the reason <see cref="AddPlatformAccessTokenSource"/> is: with the gate on, every asset request
-    /// without a session is challenged or answered 401, and the composed suites in <c>tests/Gateway.*</c>
-    /// (workstream 6) still request assets without signing in, which turned fifteen of them red. The
-    /// identity tests call it; <see cref="AddPlatformIdentity"/> calls it, with the token source's binding,
-    /// once those suites sign in first (tasks 6.2, 6.3 and 6.5 behind this one).
+    /// Switches <see cref="UsePlatformShellGate"/> on for a host that requires authenticated assets
+    /// (ADR-0008). The binding is separate from installing the identity services so that a host's
+    /// explicit policy decides whether anonymous asset requests are challenged.
     /// </summary>
     internal static IServiceCollection AddPlatformShellGate(this IServiceCollection services)
     {
