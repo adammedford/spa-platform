@@ -130,7 +130,7 @@ project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
 # come from a checkout on any platform. If one is contrived locally, sourcing it yields a trailing
 # CR that this parse does not, and the guard then fails closed on two strings that look identical.
 project_env_get() {
-  sed -n "s/^\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "$project_env" 2>/dev/null \
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "$project_env" 2>/dev/null \
     | tail -n 1 | tr -d '\r' \
     | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' \
           -e 's/^"\(.*\)"$/\1/' -e 's/^'\''\(.*\)'\''$/\1/'

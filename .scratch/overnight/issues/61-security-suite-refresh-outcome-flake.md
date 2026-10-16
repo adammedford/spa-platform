@@ -16,27 +16,40 @@ Actual:   NotModified
 It is intermittent and the row it lands on changes between occurrences. Both observations are in
 `tests/Gateway.SecurityTests/Negative/`.
 
-## The important part: half of this needs no race, and is proven
+## The mechanism, and why the race is needed to trigger it
 
-`RegistrySource.RefreshOnceAsync` ends a successful swap with `settledETag = stored.ETag`, and
-every poll opens with `store.GetAsync(key, settledETag ?? cold?.ETag, ct)`. So **whichever poll
-performs the swap, the next poll is told `NotModified` while the document is live.** The outcome
-token describes what one poll did. It is not a statement about liveness.
+`RegistrySource.RefreshOnceAsync` ends a successful swap with `settledETag = stored.ETag`
+(`RegistrySource.cs:183`), and every poll opens with
+`store.GetAsync(key, settledETag ?? cold?.ETag, ct)` (`:96`). So **whichever poll performs the
+swap, the next poll is told `NotModified` while the document is live.** The outcome token
+describes what one poll did; it is not a statement about liveness.
 
-Proven directly, no race involved, by a throwaway test against `origin/main` at `34f3f0e`: start a
-harness, `UpdateRegistryAsync`, then `RefreshRegistryAsync` again.
+**The race is strictly necessary to reach that state after a write.**
+`InMemoryObjectStore.NextETag()` is `Interlocked.Increment` on a counter, not a content hash, so
+every `PutAsync` yields a fresh ETag and no race-free path exists from a write to `NotModified`.
+Measured: 40 consecutive `UpdateRegistryAsync` calls with no interleaving returned **`Swapped`
+40/40**, revisions 2 to 41. Absent a foreign poll, the doc comment holds.
+
+So the failure needs the interleaving: write the object, let *another* poll swap it, and the poll
+`UpdateRegistryAsync` makes is then told `NotModified`. Forced directly, that reproduces:
 
 ```
-first=Swapped liveRev=2; second=NotModified liveRev=2; writtenRev=2
+foreignPoll=Swapped liveRev=2; harnessOwnPoll=NotModified liveRev=2
 ```
 
-The second refresh reports `NotModified` with the written revision live. **That makes
-`UpdateRegistryAsync`'s own doc comment — "The outcome says whether it went live" — false in
-general**, independently of any scheduling race.
+**A caution for whoever picks this up.** A simpler demonstration — `UpdateRegistryAsync`, then
+`RefreshRegistryAsync` again — also prints `first=Swapped ... second=NotModified liveRev=2`, and
+it proves nothing. `RefreshRegistryAsync` is documented as "Polls the registry object once, as the
+poller would on its next tick" and makes no liveness claim, so a second poll finding nothing
+changed is the conditional GET working as designed. An earlier revision of this ticket mistook
+that for proof that `UpdateRegistryAsync`'s contract was broken. It is not: only the forced
+interleaving above shows the defect.
 
-**So the fix does not depend on reproducing the flake.** On `NotModified`, the harness should do
-what `StartAsync` already does at `GatewayHarness.cs:232`: check whether the written revision is
-live, and report accordingly. That removes the flake whether or not anyone ever catches the race.
+**What is true regardless: the fix does not require reproducing the race.**
+`UpdateRegistryAsync`'s doc comment says "The outcome says whether it went live", and on the
+interleaving above it does not. Checking liveness when the poll returns `NotModified` — what
+`StartAsync` already does at `GatewayHarness.cs:233-234` — removes the flake whether or not anyone
+catches the race in the wild.
 
 ## The racy half: which other poll is it
 
@@ -64,8 +77,8 @@ also hands over the reproduction technique — force a real poll inside the wind
 
 | When | Where | Row |
 | --- | --- | --- |
-| 2026-10-16, CI run 38849080050 attempt 1 | GitHub runner, Release | `UpstreamResponseTests...(status: 200)` and `UnknownApiTests.An_api_name_another_app_lists_is_still_unlisted_for_this_one` |
-| 2026-10-16, local full-solution run | macOS arm64, Release | `UpstreamResponseTests...(status: 500)` |
+| 2026-10-16, CI run 38849080050 attempt 1 | GitHub runner, Release | `UpstreamResponseTests.An_upstreams_cors_header_and_policy_are_replaced_by_the_gateways_on_any_status(status: 200)` and `UnknownApiTests.An_api_name_another_app_lists_is_still_unlisted_for_this_one` |
+| 2026-10-16, local full-solution run | macOS arm64, Release | `UpstreamResponseTests.An_upstreams_cors_header_and_policy_are_replaced_by_the_gateways_on_any_status(status: 500)` |
 
 That run's head is **`55c4599`**, the two-line roadmap-refresh commit that landed after #34 and
 #35 — not the merge of either, though its tree contains both. Attempt 2 of the same run passed.
@@ -82,15 +95,17 @@ Neither #34 nor #35 touches `src/Platform.Registry`, `tests/Gateway.TestHarness`
 
 ## Suggested order of work
 
-1. **Pin the deterministic half** with a unit test in `tests/Platform.Registry.Tests`: write once,
-   `RefreshAsync` twice, assert the second is `NotModified` while `Current.Revision` is the new
-   revision. Seconds, no flake.
-2. **Fix the harness contract**, which step 1 shows is wrong on its own terms: `UpdateRegistryAsync`
-   and `PublishRegistryAsync` should report the outcome of the write they made. Correct the doc
-   comment with it.
-3. **Only if the race itself still matters**, force it rather than wait: gate the poller's first
+1. **Write the test that fails before the fix**, which is the forced interleaving, not a second
+   poll: write the registry object, drive one `RefreshAsync` from outside the harness so it takes
+   the swap, then call the harness's own poll and assert it reports the write it made. A test that
+   merely refreshes twice passes today and characterises `RegistrySource`'s designed conditional
+   GET; it will not go red before the fix or green after it.
+2. **Fix the harness contract.** `UpdateRegistryAsync` and `PublishRegistryAsync` should report
+   the outcome of the write they made: on `NotModified`, check whether the written revision is
+   live and say so. Correct the doc comment with it.
+3. **Only if the wild race still matters**, force it rather than wait: gate the poller's first
    `RefreshAsync` on a `TaskCompletionSource`, or delay after `Task.Yield()`, and run
-   `Gateway.SecurityTests` alone. That turns a 1-in-10 observation into 10-in-10.
+   `Gateway.SecurityTests` alone.
 
 A printf probe in `PublishRegistryTextAsync` was used to chase this and is **not** recommended: it
 costs a full-solution run per attempt for a ~0.43 chance of learning nothing, and a naive one that
@@ -115,14 +130,24 @@ assertion bug behind the same reflex.
 
 ## Comments
 
-Reported by the integrator session that landed #34 and #35 on 2026-10-16.
+Reported by the integrator session that landed #34 and #35 on 2026-10-16, after the merge of #34
+went red and the re-run of the same commit went green.
 
-Revised the same day after `/code-review` on PR #36: the deterministic half is now proven rather
-than suspected, the failing run is attributed to `55c4599` rather than to the merge of #34, the
-`d17839f` corroboration and reproduction technique are recorded, the evidence from eight
-non-reproducing runs is given its actual weight, and the probe is withdrawn in favour of the unit
-test and the forced race.
+Revised 2026-10-16 after `/code-review` on PR #36: the failing run is attributed to `55c4599`
+rather than to the merge of #34, the `d17839f` reproduction technique is recorded, the evidence
+from eight non-reproducing runs is given its actual weight, and the probe is withdrawn.
 
-Note for triage: another session has an unlanded ticket on the same race, numbered 6.1a against
-the harness, reaching the same mechanism independently and marked ready-for-agent. These should be
-merged into one before either is worked, and the number collision on 61 resolved.
+Corrected 2026-10-16 after `/code-review` on PR #38, which found the previous revision's headline
+claim wrong. It asserted that a second `RefreshRegistryAsync` returning `NotModified` proved
+`UpdateRegistryAsync`'s contract false "independently of any scheduling race". It does not: that
+call is documented as polling once with no liveness claim, `InMemoryObjectStore.NextETag()` is a
+counter so every write yields a fresh ETag, and 40 consecutive race-free `UpdateRegistryAsync`
+calls returned `Swapped` 40/40. The race is necessary, and the work order has been rewritten --
+the earlier step 1 would have had someone write a test that is green before and after the fix.
+The arithmetic is also corrected: 0.43 is the chance across eight runs, 0.9 per run.
+
+Note for triage: another session has an unlanded ticket on the same race, task id 6.1a, also
+numbered 61, reaching the same mechanism independently and marked ready-for-agent. These should be
+merged into one before either is worked, and the number collision resolved by whoever lands
+second. Given that twin is `ready-for-agent` with a prescribed fix, it is probably the better
+starting point and this one is the evidence trail.
