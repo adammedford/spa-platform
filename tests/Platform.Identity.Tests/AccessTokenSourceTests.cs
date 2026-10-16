@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Net;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -284,6 +287,31 @@ public sealed class AccessTokenSourceTests
     }
 
     [Fact]
+    public async Task A_successful_refresh_that_loses_the_session_version_race_uses_the_stored_winner()
+    {
+        // T-D2: another gateway may update the session after this gateway's read. A successful
+        // provider response cannot override the versioned winner or return an unpersisted token.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        int reads = 0;
+        gateway.Sessions.AfterRead = async _ =>
+        {
+            if (++reads == 2)
+            {
+                gateway.Sessions.AfterRead = null;
+                await RefreshElsewhereAsync(gateway, App1, key);
+            }
+        };
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal(2, gateway.Idp.RefreshGrants.Count);
+        Assert.All(gateway.Idp.RefreshGrants, grant => Assert.True(grant.Ok));
+        Assert.Equal(await StoredTokenAsync(gateway, "access_token", key), answer.Body);
+    }
+
+    [Fact]
     public async Task A_browser_that_disconnects_mid_refresh_does_not_strand_the_rotated_token()
     {
         // T-B16, at a provider with no grace window: the browser goes 100 ms into a refresh the provider
@@ -393,6 +421,37 @@ public sealed class AccessTokenSourceTests
         builder.AddPlatformIdentity();
         builder.Services.AddPlatformAccessTokenSource();
         Assert.Contains(builder.Services, d => d.ServiceType == typeof(IAccessTokenSource));
+    }
+
+    [Fact]
+    public async Task Provider_error_text_never_reaches_the_failure_or_identity_log()
+    {
+        // N-16: an OAuth error field is provider-controlled, even when it contains a credential.
+        CapturingLoggerProvider logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        string canary = await StoredTokenAsync(gateway, "refresh_token");
+        using HttpClient backchannel = new(new ErrorAnswer(canary));
+        gateway.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(SchemeNames.Oidc(App1.AppId)).Backchannel = backchannel;
+
+        IdentityProviderUnavailableException failure = await Assert.ThrowsAsync<IdentityProviderUnavailableException>(
+            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar));
+
+        Assert.DoesNotContain(canary, failure.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, failure.Error, StringComparison.Ordinal);
+        Assert.All(logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName),
+            line => Assert.DoesNotContain(canary, line.Message, StringComparison.Ordinal));
+    }
+
+    private sealed class ErrorAnswer(string error) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { error }), System.Text.Encoding.UTF8, "application/json"),
+            });
     }
 
     private static Action<IServiceCollection> Deadline(TimeSpan deadline) =>
