@@ -52,12 +52,18 @@ internal sealed class IdentityGateway : IAsyncDisposable
     private readonly RequestDelegate pipeline;
 
     private IdentityGateway(
-        TestIdentityProvider idp, IHost host, RegistrySnapshot snapshot, StubIdpProfile profile, RecordingSessionStore sessions)
+        TestIdentityProvider idp,
+        IHost host,
+        InMemoryRegistry registry,
+        FakeClientSecretSource secrets,
+        StubIdpProfile profile,
+        RecordingSessionStore sessions)
     {
         Idp = idp;
         Sessions = sessions;
         this.host = host;
-        Snapshot = snapshot;
+        Registry = registry;
+        Secrets = secrets;
         Profile = profile;
 
         ApplicationBuilder app = new(host.Services);
@@ -80,7 +86,14 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     public TestIdentityProvider Idp { get; }
 
-    public RegistrySnapshot Snapshot { get; }
+    /// <summary>The live snapshot: the one a request is pinned to unless it names another.</summary>
+    public RegistrySnapshot Snapshot => Registry.Current;
+
+    /// <summary>The registry, which <see cref="Swap"/> moves on as the registry poller of task 2.2 would.</summary>
+    public InMemoryRegistry Registry { get; }
+
+    /// <summary>The secret source the options setup reads; a test that rotates a secret sets and preloads it here.</summary>
+    public FakeClientSecretSource Secrets { get; }
 
     public StubIdpProfile Profile { get; }
 
@@ -112,7 +125,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
         await secrets.PreloadAsync(entries.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
 
-        RegistrySnapshot snapshot = InMemoryRegistry.SnapshotOf(1, "\"r1\"", entries);
+        InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"r1\"", entries));
         StubIdpProfile profile = new("standard");
 
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
@@ -123,7 +136,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
             [$"Issuers:{IssuerName}:BrowserOrigin"] = idp.BaseUrl,
         });
         builder.Services.AddLogging();
-        builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(snapshot));
+        builder.Services.AddSingleton<IRegistry>(registry);
         builder.Services.AddSingleton<IClientSecretSource>(secrets);
         builder.Services.AddSingleton<IIdpProfile>(profile);
         RecordingSessionStore sessions = new(new InMemorySessionStore());
@@ -131,31 +144,65 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.AddPlatformIdentity();
         services?.Invoke(builder.Services);
 
-        return new IdentityGateway(idp, builder.Build(), snapshot, profile, sessions);
+        return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);
     }
 
-    /// <summary>Makes <paramref name="app"/> the pinned app of the current request, without sending one.</summary>
-    public HttpContext Pin(AppDefinition app)
+    /// <summary>
+    /// Swaps the registry onto a snapshot of <paramref name="apps"/>, one revision on, after registering
+    /// at the provider and preloading the secret of every entry it has not seen. Returns the snapshot
+    /// that was live before, for a test that sends a request still pinned to it.
+    /// </summary>
+    public async Task<RegistrySnapshot> SwapAsync(params AppDefinition[] apps)
+    {
+        foreach (AppDefinition app in apps.Where(a => !Idp.Clients.ContainsKey(a.OAuth.ClientId)))
+        {
+            Idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), $"https://{app.Host}/");
+            Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+        }
+
+        await Secrets.PreloadAsync(apps.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
+
+        RegistrySnapshot previous = Registry.Current;
+        Registry.Swap(InMemoryRegistry.SnapshotOf(previous.Revision + 1, $"\"r{previous.Revision + 1}\"", apps));
+        return previous;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="app"/> the pinned app of the current request, without sending one. The
+    /// request is pinned to <paramref name="snapshot"/>, or to the live snapshot when it names none.
+    /// </summary>
+    public HttpContext Pin(AppDefinition app, RegistrySnapshot? snapshot = null)
     {
         DefaultHttpContext context = new();
         context.Request.Scheme = "https";
         context.Request.Host = new HostString(app.Host);
-        context.Features.Set<IAppFeature>(new SettableAppFeature(app, Snapshot));
+        context.Features.Set<IAppFeature>(new SettableAppFeature(app, snapshot ?? Snapshot));
         context.Features.Set<IRequestTelemetryFeature>(new SettableRequestTelemetryFeature());
         Services.GetRequiredService<IHttpContextAccessor>().HttpContext = context;
         return context;
     }
 
-    /// <summary>One request on <paramref name="app"/>'s host, in its own scope.</summary>
+    /// <summary>
+    /// One request on <paramref name="app"/>'s host, in its own scope, pinned to
+    /// <paramref name="pinnedTo"/> or to the live snapshot. A host the pinned snapshot does not have
+    /// gets 404 without reaching authentication, as <c>UsePlatformHostResolution</c> answers it.
+    /// </summary>
     public async Task<Answer> SendAsync(
         AppDefinition app,
         string pathAndQuery,
         IReadOnlyDictionary<string, string>? cookies = null,
         string method = "GET",
-        IReadOnlyDictionary<string, string>? headers = null)
+        IReadOnlyDictionary<string, string>? headers = null,
+        RegistrySnapshot? pinnedTo = null)
     {
+        RegistrySnapshot snapshot = pinnedTo ?? Snapshot;
+        if (!snapshot.ByHost.ContainsKey(app.Host))
+        {
+            return new Answer(404, "", [], null, null, null, null, "");
+        }
+
         using IServiceScope scope = Services.CreateScope();
-        HttpContext context = Pin(app);
+        HttpContext context = Pin(app, snapshot);
         context.RequestServices = scope.ServiceProvider;
         context.Request.Method = method;
 

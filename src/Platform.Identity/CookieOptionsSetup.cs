@@ -10,7 +10,7 @@ namespace Platform.Identity;
 /// name (plan row 3.3, ADR-0001, ADR-0004). A name that matches no app is left as the framework
 /// builds it.
 /// </summary>
-public sealed class CookieOptionsSetup(IHttpContextAccessor accessor, IRegistry registry)
+public sealed class CookieOptionsSetup(IHttpContextAccessor accessor, IRegistry registry, OptionsInvalidator invalidator)
     : IConfigureNamedOptions<CookieAuthenticationOptions>
 {
     /// <summary>The session cookie's name, the same on every host: the host is what tells two apps apart.</summary>
@@ -23,6 +23,9 @@ public sealed class CookieOptionsSetup(IHttpContextAccessor accessor, IRegistry 
 
     public void Configure(string? name, CookieAuthenticationOptions options)
     {
+        // Held, not called: building this setup builds the invalidator, so it has subscribed to the
+        // registry before the first options it would evict exist (plan row 3.6).
+        _ = invalidator;
         if (name is null || !name.StartsWith(Prefix, StringComparison.Ordinal)
             || SchemeApp.Find(accessor, registry, name[Prefix.Length..]) is not { } app)
         {

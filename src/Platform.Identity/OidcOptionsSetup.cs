@@ -21,7 +21,8 @@ public sealed class OidcOptionsSetup(
     IRegistry registry,
     IClientSecretSource secrets,
     IssuerDirectory issuers,
-    IEnumerable<IIdpProfile> profiles) : IConfigureNamedOptions<OpenIdConnectOptions>
+    IEnumerable<IIdpProfile> profiles,
+    OptionsInvalidator invalidator) : IConfigureNamedOptions<OpenIdConnectOptions>
 {
     /// <summary>The callback path, the same on every host: the host is what tells two apps apart (R-A2).</summary>
     public static readonly PathString CallbackPath = new("/signin-oidc");
@@ -33,6 +34,9 @@ public sealed class OidcOptionsSetup(
 
     public void Configure(string? name, OpenIdConnectOptions options)
     {
+        // Held, not called: building this setup builds the invalidator, so it has subscribed to the
+        // registry before the first options it would evict exist (plan row 3.6).
+        _ = invalidator;
         if (AppFor(name) is not { } app)
         {
             return;
