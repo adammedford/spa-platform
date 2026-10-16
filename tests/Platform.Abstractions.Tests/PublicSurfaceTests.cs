@@ -20,6 +20,7 @@ public sealed class PublicSurfaceTests
     private static readonly string[] Contracted =
     [
         "AccessTokenResult",
+        "AccessTokenResult+ProviderUnavailable",
         "AccessTokenResult+SessionEnded",
         "AccessTokenResult+Token",
         "AccessTokenResult+Unauthenticated",

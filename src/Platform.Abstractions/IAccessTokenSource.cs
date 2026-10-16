@@ -16,6 +16,14 @@ public abstract record AccessTokenResult
 
     /// <summary>Refresh failed with <c>invalid_grant</c> and the session was removed (task 3.8).</summary>
     public sealed record SessionEnded : AccessTokenResult;
+
+    /// <summary>
+    /// The provider could not be reached, or failed the refresh other than with <c>invalid_grant</c>.
+    /// The session is kept. The proxy answers 503 <c>idp_unavailable</c>, which is not a rejection and
+    /// carries no rule id. ADR-0005 and evidence T-A9 and T-A15 named this outcome; change request 4.2
+    /// added it after the G1b freeze, as a new type that changes no existing signature.
+    /// </summary>
+    public sealed record ProviderUnavailable : AccessTokenResult;
 }
 
 /// <summary>

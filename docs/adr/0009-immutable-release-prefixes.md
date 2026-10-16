@@ -1,6 +1,6 @@
 # ADR-0009: Publish releases as immutable prefixes named by the registry
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-16 by change request 1.5a:** one alternative added (Object Lock); the decision is unchanged.
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D9 (Doc revision 36)
@@ -23,6 +23,7 @@ role.
 | Option | Why not |
 | --- | --- |
 | A mutable "current" prefix | A switch becomes a copy with a half-written window, and history is lost. |
+| S3 Object Lock in place of the bucket policy | Object Lock protects versions, not keys: a simple `DELETE` with no version id adds an unprotected delete marker, and a conditional `If-None-Match: *` write then succeeds, so a release could still be replaced. It would not replace the policy at all. It is also irreversible once enabled; compliance mode would block the teardown P-05 requires for the length of the retention; governance mode permits explicitly authorized retention bypass, while a legal hold lasts until an authorized `s3:PutObjectLegalHold` request removes it. Neither replaces write-once key protection. The delete stays denied by policy to everyone but the teardown role (ADR-0014). Source: [S3 User Guide, Object Lock considerations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-managing.html), read 2026-10-16 for ticket 65. |
 
 ## Consequences
 

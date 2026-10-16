@@ -330,7 +330,7 @@ later shape gets a later number, never a changed meaning. The gateway side of th
 Deployment pushes by digest, so a build is identified by a hash and nothing else; there is no
 version to put in a log line, a header or a runbook. The sharp edge is S8, where a rolling
 deployment runs two builds against one registry document: nothing states that both accept it, and
-no test covers an old build reading a new document or the reverse. Until it does, a rolling
+no test covers an old build reading a new document or the reverse. ADR-0019 settles the narrow half: a build accepts the `schemaVersion` its schema names, and refusing a value no build could apply is not a new version. Until it does, a rolling
 deployment during an onboarding is a hope.
 
 **MR-2. Start-up and shut-down under load are undefined.** `/readyz` gates the ALB on the first

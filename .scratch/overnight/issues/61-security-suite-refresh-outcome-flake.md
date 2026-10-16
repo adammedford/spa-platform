@@ -3,7 +3,7 @@
 **Task:** CR-6.x
 **Owner:** ws6-verification
 **Blocked by:** None
-**Status:** needs-triage
+**Status:** resolved
 
 **What happens:** a row that publishes a registry revision and asserts the outcome fails with
 
@@ -164,3 +164,7 @@ numbered 61, reaching the same mechanism independently and marked ready-for-agen
 merged into one before either is worked, and the number collision resolved by whoever lands
 second. 62 to 65 are taken, so 66 is the next free number. Given that twin is `ready-for-agent` with a prescribed fix, it is probably the better
 starting point and this one is the evidence trail.
+
+**Resolved 2026-10-16 (Q29):** closed by task 6.1a (`61-6.1a-harness-update-registry-race.md`),
+which reproduced this failure and fixed it in the harness, and whose review fixed the matching
+`Rejected` case in six more asserts.

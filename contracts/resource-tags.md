@@ -39,9 +39,8 @@ the three resources that are meant to survive, and teardown would then report a 
 
 ## The bootstrap exemption
 
-The teardown role below is required by ADR-0014 and awaits workstream 1 implementation; at base
-`070e3fae`, only the state bucket and CI plan role exist in bootstrap. The three-resource exemption
-is the target design, not evidence of an applied stack.
+Bootstrap creates three things, and all three are exempt (ADR-0014; the teardown role landed with
+task 1.5). That is the written configuration, not evidence of an applied stack.
 
 Resources in `infra/bootstrap` — the Terraform state bucket, the read-only CI plan role and the
 teardown role (ADR-0014) — carry a

@@ -98,7 +98,13 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 404 | `unknown_api` | The app lists no upstream under that name |
 | 405 | `method_not_allowed` | The path does not accept the method |
 | 502 | `upstream_unavailable` | The upstream could not be reached |
+| 503 | `idp_unavailable` | The identity provider could not be reached to refresh the token; the session is kept |
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |
+
+One refusal is not a problem body. A login callback the OpenID Connect handler refuses (a bad state,
+correlation or nonce, or a provider error) is answered with the one static failure page: HTML, 400,
+`Cache-Control: no-store`, nothing reflected from the request, rule id `auth.callback`. It is a page
+because the browser arrived by navigation and a person reads it (task 3.5, N-05, N-18).
 
 The `code` says little on purpose. Which rule fired is in the log line and in
 `security.rejections`, under the rule ids in `contracts/request-gate.md`. Both the method
