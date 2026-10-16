@@ -50,8 +50,8 @@ public sealed record GatewayHarnessOptions
     /// asset request without a session, and the proxy's token step takes the session's access token, so a
     /// sessionless <c>/api</c> call gets 401. True switches on the two registrations workstream 3 keeps
     /// out of <c>AddPlatformIdentity</c> until the composed suites sign in (<see cref="GatewayHarness.RequireSession"/>).
-    /// False leaves the gateway as <c>Program.cs</c> composes it today, which the suites that call
-    /// <c>/api</c> without a session still rely on.
+    /// False leaves the gateway as <c>Program.cs</c> composes it, for a suite that calls <c>/api</c> or
+    /// requests an asset without a session.
     /// </summary>
     public bool SessionRequired { get; init; }
 

@@ -20,8 +20,6 @@ public sealed class SignInTests
     {
         await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
         using TestBrowser browser = harness.CreateBrowser();
-        IServiceProvider services = harness.Services;
-
         await harness.SignInAsync(browser, "app1", Ct);
         await harness.SignInAsync(browser, "app2", Ct);
         BrowserResponse one = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
@@ -39,8 +37,8 @@ public sealed class SignInTests
         Assert.Empty(one.RedirectedFrom);
         Assert.Empty(two.RedirectedFrom);
 
-        // One process answered both: the in-process equivalent of one task behind one load balancer.
-        Assert.Same(services, harness.Services);
+        // One process answered both: the harness has one gateway address behind one stand-in load
+        // balancer, the in-process equivalent of one task behind one ALB, and one registry names both apps.
         Assert.Equal(2, harness.Registry.Current.ByAppId.Count);
     }
 

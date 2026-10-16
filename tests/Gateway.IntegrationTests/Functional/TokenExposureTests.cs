@@ -47,13 +47,19 @@ public sealed partial class TokenExposureTests
         // Two cookies: the session and the antiforgery token. The provider's correlation and nonce
         // cookies were removed on the way back from the callback.
         Assert.Equal(
-            ["__Host-spa-csrf", SessionCookieName(browser, app)],
+            new[] { "__Host-spa-csrf", SessionCookieName(browser, app) }.Order(StringComparer.Ordinal),
             browser.Cookies.GetCookies(app.Origin).Where(cookie => !cookie.Expired).Select(cookie => cookie.Name).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(browser.AllCookies, cookie => !cookie.Expired && cookie.Domain != app.Origin.Host);
 
         // Every exchange the browser saw, with the provider's included: status line, headers and body,
         // and every cookie value it holds.
         string dump = Dump(browser);
+
+        // The dump holds what the browser received, so the searches below can fail: the API's answer
+        // and the session cookie's value are in it (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        Assert.Contains(whoami.Body, dump, StringComparison.Ordinal);
+        string sessionValue = browser.Cookies.GetCookies(app.Origin)[SessionCookieName(browser, app)]!.Value;
+        Assert.True(dump.Contains(sessionValue, StringComparison.Ordinal), "the session cookie's value is not in the dump");
         Assert.NotEmpty(harness.Idp.IssuedAccessTokens);
         Assert.NotEmpty(harness.Idp.IssuedRefreshTokens);
         foreach (string token in harness.Idp.IssuedAccessTokens.Concat(harness.Idp.IssuedRefreshTokens))
