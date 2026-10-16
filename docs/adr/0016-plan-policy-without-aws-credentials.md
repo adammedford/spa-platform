@@ -1,132 +1,90 @@
 # ADR-0016: Assert plan policy with mock providers, and keep AWS credentials out of CI
 
-- **Status:** Accepted
+- **Status:** Accepted; rationale corrected after the AWS profile mismatch reported in PR35
 - **Date:** 2026-10-15
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task 1.0 ("the read-only role CI assumes to
   run plans") and task 1.9 ("P-01 to P-03 in CI"); `docs/plan/01-plan.md` → assumption A7.
-  `docs/plan/` is a frozen export, so this ADR is where those three read differently from now on.
+  `docs/plan/` is a frozen export; this ADR records the changed CI mechanism.
 
 ## Context
 
-Task 1.0's bootstrap root was applied on 15 October 2026. The state bucket and the CI plan policy
-were created; the CI plan **role** was not, because the apply failed creating the GitHub Actions
-OIDC provider the role's trust needs:
+The initial rationale for this decision treated a failed bootstrap apply as proof that the intended
+project prohibited GitHub's IAM OIDC provider. That inference was wrong. PR35 reports that the apply
+used the default profile's different project and Region, rather than the intended `spa-platform`
+profile. An SCP refusal in that other project establishes no restriction in the intended one. No
+fresh AWS query or apply was made for this review, and this ADR claims no current account state.
 
-```
-Error: creating IAM OIDC Provider: AccessDenied: User: arn:aws:sts::160102056803:assumed-role/
-AccountFullAccessRole/... is not authorized to perform: iam:CreateOpenIDConnectProvider ... with an
-explicit deny in a service control policy: arn:aws:organizations::215472107744:policy/
-o-ruixwwk14j/service_control_policy/p-1d03w2pr
-```
+The CI choice stands on the properties being checked, independently of that failed apply. P-01 is
+an allowlist of resource types and counts in the platform configuration. P-02 is the resource delta
+when a definition is added to the apps root. P-03 limits task-role statements to the cell's bucket
+prefixes, client-secret parameter path and four `ssmmessages` permissions. A mock-provider plan can
+exercise those configuration properties without account credentials; it cannot establish drift,
+effective IAM permission or deployed service behaviour.
 
-The same policy denies `iam:ListOpenIDConnectProviders`, so the provider can neither be created nor
-found. **This is not a permission the account can grant itself.** A service control policy overrides
-every IAM allow in a member account and restricts its IAM principals, including administrators.
-Service-linked roles are exempt; this human-assumed role is not. The organization's management account is exempt from service control
-policies, but [an OIDC provider must be in the same account as the role that trusts it](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html),
-so the exemption does not help this role. Enabling it means amending `p-1d03w2pr`, detaching it, or moving the account to an
-organizational unit it is not attached to — all work in account `215472107744`, by someone who is not
-this project.
-
-That turns a plan assumption into a question: the plan has CI assume a read-only role to run
-`terraform plan`, and asserts P-01 to P-03 on the result. Without the provider, GitHub Actions has no
-way to assume any role in this account.
-
-**Reading the three tests settles it.** P-01 is an allowlist of resource types and counts in the
-platform plan. P-02 is the resource delta when a definition is added to the apps root. P-03 is the
-task role's statements: this cell's bucket prefixes and client-secret parameter path, the four
-`ssmmessages` permissions, and nothing else. None of the three asserts anything about the live
-account. All three are properties of the configuration, and a plan against a mock provider produces
-them.
-
-Task 1.4a demonstrated exactly that on 15 October 2026: 28 plan-time assertions in
-`infra/modules/cell/tests/module.tftest.hcl` and the platform root's own test file, against
-`mock_provider "aws" {}`, with no credentials and no network beyond `terraform init`. Thirty
-mutations were caught, including a bucket prefix widened by one segment, a parameter path widened to
-every cell, a fifth `ssmmessages` action, and a fourth statement on the task role that the assertions
-did not recognise. The last of those is P-03's own failure mode.
-
-CI already runs these: the workflow step "Test every root and module with tests under `infra/`"
-discovers every `*.tftest.hcl` and runs it on the pinned Terraform 1.11.0.
+The existing example is `infra/modules/cell/tests/module.tftest.hcl`, with the platform root's own
+tests. CI discovers `*.tftest.hcl` files and runs `terraform test` on pinned Terraform 1.11.0. Review
+of task 1.4a also widened that example's mutations to cover the actual permission attachments and
+trust conditions. The test files and their individual mutation records are the evidence; an old
+aggregate assertion count is not a claim that all of P-01 to P-03 is complete.
 
 ## Decision
 
-**P-01 to P-03 are asserted with mock providers in `terraform test`, and CI holds no AWS
-credentials.**
+**P-01 to P-03 use mock-provider assertions in `terraform test`; CI holds no AWS credentials.**
 
-1. **Task 1.9 writes `*.tftest.hcl` assertions, not a credentialed plan.** The allowlist, the two
-   security groups and the task role are asserted against a mock provider, in the root or module
-   whose configuration they describe. `tools/scripts/plan-policy.sh` is not written, and the
-   workflow's placeholder "Plan policy (P-01 to P-03)" step is removed by the same task rather than
-   filled in.
-2. **P-02 is a comparison of two plans, not of two accounts:** the apps root planned with the
-   fixture definitions, and again with one more, asserting the delta is one Cognito client, one
-   branding style and one parameter.
-3. **`vars.AWS_PLAN_ROLE_ARN` is left unset, and no AWS credential is added to the repository.** CI
-   builds, tests, validates and plans against mocks. Nothing in CI reaches AWS.
-4. **The GitHub Actions OIDC provider is not created, and `create_github_oidc_provider` stays
-   false.** `github_repository` is empty, which drops the provider resource and the whole
-   `sts:AssumeRoleWithWebIdentity` statement.
-5. **The bootstrap configuration retains the plan role and its explicit additional trust list**
-   (`additional_trusted_principal_arns`), so after a successful apply an allowlisted principal can
-   assume it to run a read-only plan. The failed apply above does not prove that role exists. Its
-   configured name and read-only policy are unchanged. What changed is who assumes it and when: a person
-   investigating, not a workflow on every push.
-6. **The three checks that genuinely need AWS stay where they were.** P-04 (release immutability),
-   P-05 (teardown) and P-06 (network reachability) are deployed-tier checks run at a gate by whoever
-   holds credentials, exactly as the Tests tab already marks them. This decision does not touch them.
+1. **Task 1.9 writes `*.tftest.hcl` assertions rather than a credentialed plan.** It proves the
+   resource allowlist, security-group rules and task-role restrictions in their owning roots or
+   modules. The workflow's placeholder step is removed when those checks are implemented;
+   `tools/scripts/plan-policy.sh` is not required. Until then the existing plan-generation guard
+   remains in force; this decision does not bypass it or claim those outstanding tests pass.
+2. **P-02 compares configuration plans.** Plan the apps root with its fixture definitions and then
+   one additional definition, asserting the exact added resources and unchanged existing ones.
+   The comparison must inspect all managed resources, including branding resources where configured.
+3. **No AWS credential is added to the repository or CI.** `vars.AWS_PLAN_ROLE_ARN` stays unset.
+   CI builds, tests and validates; Terraform tests use mocks. Downloads during init remain necessary.
+4. **CI needs no GitHub OIDC provider.** For this CI setup, `create_github_oidc_provider` stays false
+   and `github_repository` empty. This is a project choice, not a claim that the intended project's
+   organization forbids creating a provider. A future credentialed pipeline needs a new decision.
+5. **The bootstrap configuration retains the plan role and its explicit additional trust list.**
+   After a successful apply, an allowlisted principal can assume it to investigate a read-only
+   plan. Its configured name and policy are unchanged. This ADR does not assert that the role was
+   successfully created or that its effective permissions were verified.
+6. **Account-level checks stay deployed.** P-04 (release immutability), P-05 (teardown) and P-06
+   (network reachability) still run at their gates with credentials. Mock-provider assertions do
+   not replace those checks or establish successful provisioning.
 
 ## Alternatives rejected
 
 | Option | Why not |
 | --- | --- |
-| Get the service control policy amended | The right answer if CI must reach AWS, and the wrong cost for what it buys. It is a change in another account, by another team, to a guardrail that exists on purpose — and once P-01 to P-03 run against mocks, nothing in CI needs it. Revisit if a later gate needs CI to read the account. |
-| An OIDC provider in a shared account, with cross-account role chaining | Works, and adds a second account's trust configuration to a proof of concept that has one. The same guardrail may well apply there. |
-| CodeBuild with a service role, or a self-hosted runner with an instance role | Both avoid the provider and both move CI off GitHub Actions for this one step, which buys a credentialed plan nobody needs. |
-| Long-lived IAM access keys as GitHub secrets | A static credential with read access to the account, to replace a federated one. This is what OIDC exists to avoid, and the assumption behind the project's "tokens stay on the server" posture argues against it everywhere else. |
-| Assert P-01 to P-03 on a real plan run locally, recorded as evidence | A check that runs where someone remembers to run it is the thing CI exists to replace. It is also what the gate evidence already does for P-04 to P-06, which is why those three are the ones left there. |
-| Drop P-01 to P-03 | They are the only automated statement of what the infrastructure may contain, and the task role assertion is the one guard on the most security-sensitive object in the cell. |
+| Give GitHub Actions an OIDC role for P-01 to P-03 | Technically separate from the profile error, but adds account access for properties that mocks can assert. Revisit if a future CI requirement needs real account state. |
+| CodeBuild or a self-hosted runner with an instance role | Moves the same account access into another runner without improving these configuration assertions. |
+| Long-lived access keys in GitHub secrets | Adds persistent credentials for checks that need none. |
+| Run the configuration checks only in an operator's local plan | Makes a repeatable change-time guard depend on someone remembering it. |
+| Drop P-01 to P-03 | Removes the automated statement of what resources, rules and task-role permissions the configuration may contain. |
 
 ## Consequences
 
-- **A mock-provider assertion proves the configuration, never the account.** It catches a widened
-  grant, an unlisted resource type and a changed count at the moment someone writes them, which is
-  what P-01 to P-03 are for. It cannot catch drift: a resource changed in the console is invisible to
-  it. Nothing in Phase 1 claimed otherwise — P-05's teardown query and P-06's reachability test are
-  the account-level checks, and they remain.
-- **CI needs no AWS account, which makes it reproducible by anyone who clones the repository.** A
-  contributor with no credentials can run everything CI runs. That is a gain this decision did not
-  set out to buy.
-- **Task 1.0's "the read-only role CI assumes to run plans" is now "the read-only role a person or
-  another runner assumes to run plans".** The role, its name and its policy are unchanged.
-- **Assumption A7 narrows.** It lists three kinds of run that touch the AWS account: every Terraform
-  apply, G0, and the deployed test runs. CI is not a fourth, and was never meant to be, but the plan
-  role implied it might be.
-- **Task 1.9's shape changes before it starts.** Its needs (1.2 to 1.5, 1.8) are unchanged, and its
-  done-when — "it fails on an unlisted resource type, a widened rule or a new permission" — is
-  unchanged. Only the mechanism moves, from a credentialed plan to a mock-provider test, and task
-  1.4a is the worked example to follow.
-- **The bootstrap root keeps a variable nobody sets.** `create_github_oidc_provider`,
-  `github_repository` and `github_subject_claims` stay, unused, for an account without this
-  guardrail. They cost nothing and a second cell may need them.
-- **If a later gate does need CI to read the account**, the route is the service control policy, and
-  this ADR is the record of why it was not taken first.
+- **Task 1.9's mechanism changes; its completion bar does not.** It must still fail on an unlisted
+  resource type, widened rule or new permission. Its dependency list remains unchanged, and no
+  mock test is counted as complete without a failing mutation and a restored passing run.
+- **Task 1.0's plan role is for an authorized person or runner, rather than CI on every push.**
+  Its configured policy remains available; deployed existence and effective permission need their
+  own account evidence.
+- **A mock-provider assertion proves configuration, not the account.** Drift, provisioning errors,
+  effective policy and real service behaviour require the deployed-tier evidence the plan assigns.
+- **The profile mistake needs its own guard.** PR35 records the project/profile expectation and
+  asks workstream 1 to apply it in its recipes. Choosing mock CI does not correct a local operator's
+  profile or Region and must not be presented as that fix.
+- **If CI later needs AWS**, revisit this decision, the plan-generation secrecy guard and the
+  intended project's actual permissions. The wrong-project SCP error is not evidence for that work.
 
 ## Evidence
 
-- The apply that failed, and the policy that denied it: the error quoted above, account
-  `160102056803`, 15 October 2026. `iam:ListOpenIDConnectProviders` is denied by the same policy,
-  observed in a second account in the same organization.
-- Service control policies cannot be overridden by an identity-based policy in a member account, and
-  do not apply to the management account:
-  [AWS Organizations User Guide, service control
-  policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html),
-  read 15 October 2026.
-- Plan-time assertions against a mock provider, with no credentials: task 1.4a's merge `04c7489`,
-  `infra/modules/cell/tests/module.tftest.hcl`, 28 assertions and 30 caught mutations including the
-  task-role widenings P-03 describes.
-- CI already discovers and runs every `*.tftest.hcl` under `infra/`: the workflow step "Test every
-  root and module with tests under `infra/`".
-- The three tests' own wording, which is what makes them configuration properties:
-  `docs/plan/04-tests.md`, rows P-01, P-02 and P-03.
+- The profile diagnosis and bounded follow-up: [PR35](https://github.com/adammedford/spa-platform/pull/35).
+  It reports that the default and intended profiles selected different projects and Regions.
+- The properties: `docs/plan/04-tests.md`, P-01, P-02 and P-03.
+- Existing mock-provider configuration assertions: `infra/modules/cell/tests/module.tftest.hcl`
+  and `infra/platform/tests/platform.tftest.hcl`; CI's discovery step in `.github/workflows/ci.yml`.
+- [Terraform test mocking](https://developer.hashicorp.com/terraform/language/tests/mocking):
+  mocks supply provider data for tests and do not contact the real provider API.
