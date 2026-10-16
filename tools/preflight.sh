@@ -104,15 +104,82 @@ else
   missing "AWS CLI v2" "brew install awscli"
 fi
 
+# The project, the profile and the Region have to be the intended ones, which tools/aws-project.env
+# names. This check printed the account and the Region for weeks and compared them to nothing, so a
+# sitting applied the bootstrap root into the wrong project and spent an evening on guardrails that
+# project has and the intended one does not. Having the values and no expectation to hold them to is
+# what made that possible.
+#
+# Resolved from the script's own directory rather than the caller's. Every other row here is
+# cwd-independent, and a guard that reports "nothing says which project is intended" when run from
+# one directory up is the same silence the incident ran on, printed in a reassuring colour.
+project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
+
+# One key, read the way sourcing the file would read it: last assignment wins, and a CR from a CRLF
+# checkout, a trailing comment, trailing whitespace and surrounding quotes are all removed. The
+# parse has to agree with the shell, because the file documents itself as sourceable: a value that
+# parsed differently here would compare against something no `export` could ever produce, and the
+# remedy this script prints would not satisfy the check it came from.
+project_env_get() {
+  sed -n "s/^$1=//p" "$project_env" 2>/dev/null | tail -n 1 | tr -d '\r' \
+    | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' \
+          -e 's/^"\(.*\)"$/\1/' -e 's/^'\''\(.*\)'\''$/\1/'
+}
+
+want_profile=""
+want_region=""
+if [ -f "$project_env" ]; then
+  want_profile=$(project_env_get AWS_PROFILE)
+  want_region=$(project_env_get AWS_REGION)
+fi
+
 if [ "$aws_ok" -eq 1 ]; then
   acct=$(AWS_MAX_ATTEMPTS=1 aws sts get-caller-identity --query Account --output text \
           --cli-connect-timeout 5 --cli-read-timeout 10 2>/dev/null)
+
+  # Two Regions, because they can disagree and both matter. cfg_region is what the profile is
+  # configured for; eff_region is what this shell will actually build in. The AWS CLI and the
+  # Terraform AWS provider both read AWS_REGION, then AWS_DEFAULT_REGION, then the profile's
+  # config, so `aws configure get region` alone sees only the last of the three and would pass a
+  # run that creates everything somewhere else.
+  #   https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
+  #   https://registry.terraform.io/providers/hashicorp/aws/latest/docs#environment-variables
+  cfg_region=$(aws configure get region 2>/dev/null)
+  eff_region=${AWS_REGION:-${AWS_DEFAULT_REGION:-$cfg_region}}
+
   if [ -n "$acct" ] && [ "$acct" != "None" ]; then
     tail4=$(printf '%s' "$acct" | sed 's/.*\(....\)$/\1/')
-    region=$(aws configure get region 2>/dev/null)
-    ok "AWS credentials" "account ending ${tail4}, region ${region:-not set (the plan uses us-east-1)}"
+    ok "AWS credentials" "account ending ${tail4}, region ${eff_region:-not set}"
   else
-    missing "AWS credentials" "no working credentials. aws configure sso, or aws configure"
+    missing "AWS credentials" "no working credentials for profile '${AWS_PROFILE:-default}'. aws configure sso, or aws configure"
+  fi
+
+  # Checked whether or not the credentials resolved. Which profile is in use is a string comparison
+  # that needs no account, and a profile that does not exist in ~/.aws/config is better diagnosed
+  # by name here than as the "no working credentials" above, which sends the reader to aws
+  # configure when the export they were told to run is the thing that is wrong.
+  using=${AWS_PROFILE:-default}
+  if [ ! -f "$project_env" ]; then
+    missing "AWS project" "${project_env} is absent, so nothing says which project is intended"
+  elif [ -z "$want_profile" ]; then
+    missing "AWS project" "tools/aws-project.env names no AWS_PROFILE, so nothing says which project is intended"
+  elif [ "$using" != "$want_profile" ]; then
+    # The profile, not the account id: change request 1.5 kept account identifiers out of the
+    # tracked tree, and on a correctly configured workstation the profile resolves to the account.
+    missing "AWS project" "using profile '${using}', expected '${want_profile}'. export AWS_PROFILE=${want_profile}"
+  elif [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+    # Naming the right profile is not the same as using it. Static keys in the environment outrank
+    # a profile's own credentials, so the account reached is whichever one those keys belong to
+    # while every row above still says 'spa-platform'. Checked without a call: the variable's
+    # presence is the whole condition.
+    #   https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html
+    missing "AWS project" "profile '${using}' is named, but AWS_ACCESS_KEY_ID in the environment outranks it. unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN"
+  elif [ -n "$want_region" ] && [ "$eff_region" != "$want_region" ]; then
+    missing "AWS Region" "this shell resolves to '${eff_region:-unset}', expected '${want_region}'. set -a; . tools/aws-project.env; set +a"
+  elif [ -n "$want_region" ] && [ "$cfg_region" != "$want_region" ]; then
+    missing "AWS Region" "profile '${using}' is configured for '${cfg_region:-unset}', expected '${want_region}', so a shell that has not sourced tools/aws-project.env would use it. aws configure set region ${want_region} --profile ${using}"
+  else
+    ok "AWS project" "profile '${using}', region ${eff_region}, as tools/aws-project.env names"
   fi
 else
   missing "AWS credentials" "not checked: the AWS CLI is missing"
