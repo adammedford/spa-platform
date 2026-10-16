@@ -34,15 +34,18 @@ internal sealed partial class SessionEnd(
     public async Task EndAsync(AppDefinition app, string key)
     {
         using SessionGates.Lease lease = await gates.EnterAsync(key);
+
+        // A record that is gone, or is not this app's and this client's, is left alone: the cookie
+        // manager removes only a session the app owns (AppBoundTicketStore.RemoveAsync), and so does this.
+        if (await sessions.GetAsync(key, CancellationToken.None) is not { } record
+            || !string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
+            || !string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         try
         {
-            if (await sessions.GetAsync(key, CancellationToken.None) is not { } record
-                || !string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
-                || !string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal))
-            {
-                return;
-            }
-
             string? refreshToken = TicketSerializer.Default.Deserialize(record.Ticket.ToArray())?
                 .Properties.GetTokenValue(RefreshTokenName);
             string outcome = refreshToken is { Length: > 0 } ? await RevokeAsync(app, refreshToken) : "no_refresh_token";
@@ -101,6 +104,6 @@ internal sealed partial class SessionEnd(
     }
 
     [LoggerMessage(Level = LogLevel.Information,
-        Message = "Logout for app {AppId} removed session {SessionRef}; revoking its refresh token: {Outcome}.")]
+        Message = "Logout for app {AppId} is removing session {SessionRef}; revoking its refresh token: {Outcome}.")]
     private static partial void Revocation(ILogger logger, string appId, string sessionRef, string outcome);
 }
