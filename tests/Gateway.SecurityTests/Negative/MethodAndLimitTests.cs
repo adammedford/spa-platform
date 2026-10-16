@@ -39,12 +39,19 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         public GatewayHarness Harness { get; private set; } = null!;
 
         /// <summary>The gateway's counters, which the request line alone cannot show were kept.</summary>
-        public CountedMetrics Counts { get; } = new();
+        public CountedMetrics Counts { get; private set; } = null!;
 
-        public async ValueTask InitializeAsync() =>
-            Harness = await Suite.StartAsync(Counts.Options(), TestContext.Current.CancellationToken);
+        public async ValueTask InitializeAsync()
+        {
+            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+            Counts = CountedMetrics.Watch(Harness);
+        }
 
-        public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            Counts.Dispose();
+            await Harness.DisposeAsync();
+        }
     }
 
     private GatewayHarness Harness => cell.Harness;
@@ -70,9 +77,9 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
         int warnings = MethodRefusals().Count;
 
-        // No other request in this test process is refused before host resolution under gate.method,
-        // and none other is a 405 with no app, so each difference below is this request's alone.
-        // The request gate's 405 on an asset path counts under the same rule with app1 named.
+        // The counts are this gateway's own, and its other requests either name app1 (the request
+        // gate's 405 on an asset path counts under the same rule with app1 named) or are not refused
+        // under gate.method, so each difference below is this request's alone.
         long rejected = Rejections();
         long answered = Answered405s();
 
@@ -111,11 +118,11 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
     /// <summary><c>security.rejections</c> under <c>gate.method</c> for no app.</summary>
     private long Rejections() =>
-        Counts.Sum(Harness, "security.rejections", ("rule", RuleIds.GateMethod), ("app_id", null));
+        Counts.Sum("security.rejections", ("rule", RuleIds.GateMethod), ("app_id", null));
 
     /// <summary><c>gateway.requests</c> answered 405 for no app.</summary>
     private long Answered405s() =>
-        Counts.Sum(Harness, "gateway.requests", ("status", 405), ("app_id", null));
+        Counts.Sum("gateway.requests", ("status", 405), ("app_id", null));
 
     [Theory]
     [InlineData("POST")]
