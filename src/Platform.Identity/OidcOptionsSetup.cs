@@ -97,9 +97,19 @@ public sealed class OidcOptionsSetup(
         // The provider's own part last, so a profile may refine any of the above (ADR-0011). The
         // profile is chosen by the issuer's configured name, never by branching on it here. Every
         // setting above is plain OpenID Connect, so an issuer whose profile is not registered gets
-        // those settings and no provider-specific refinement.
-        profiles.FirstOrDefault(p => string.Equals(p.Name, issuer.Profile, StringComparison.Ordinal))
-            ?.Configure(options, app, issuer);
+        // those settings and no provider-specific refinement, and its logout is the handler's own
+        // RP-initiated one.
+        if (profiles.FirstOrDefault(p => string.Equals(p.Name, issuer.Profile, StringComparison.Ordinal)) is { } profile)
+        {
+            profile.Configure(options, app, issuer);
+
+            // The redirect to the provider's logout is the profile's (plan row 3.7): the handler raises
+            // this event after it has built the RP-initiated request from discovery and before it adds
+            // its state and redirects, so a profile may keep that request or send the browser elsewhere
+            // and mark the response handled.
+            // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectHandler.cs, SignOutAsync
+            options.Events.OnRedirectToIdentityProviderForSignOut = context => profile.RedirectToSignOutAsync(context, app, issuer);
+        }
 
         // The gateway's events after the profile, so they wrap what it set (plan row 3.5).
         AuthenticationEvents.Apply(options);

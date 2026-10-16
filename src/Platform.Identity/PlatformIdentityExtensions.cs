@@ -81,6 +81,11 @@ public static class PlatformIdentityExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<OpenIdConnectOptions>, OidcOptionsValidation>());
 
+        // The profiles of task 3.7, one per value of Issuers:{name}:Profile. The options setup picks the
+        // first registered under the issuer's name, so a host that registers its own ahead of these wins.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IIdpProfile, StandardIdpProfile>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IIdpProfile, CognitoIdpProfile>());
+
         // The session store of task 3.4, unless the host brought its own. Built on first use, not at
         // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
         // no session settings.
