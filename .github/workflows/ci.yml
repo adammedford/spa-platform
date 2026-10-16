@@ -41,7 +41,11 @@ jobs:
         # Before the build, because it costs a second and a stale AGENTS.md misleads every session
         # from the top of its context window. Both rules it holds were prose first, and prose let
         # a progress line sit directly under the paragraph forbidding it for two sessions running.
-        run: python3 -I .github/steering.py
+        # The tests run first, on trees built to trip each rule, because the repository is green and
+        # a green repository cannot show that a widened check stopped catching what it was for.
+        run: |
+          python3 -I .github/steering_tests.py
+          python3 -I .github/steering.py
 
       - name: Plan generation stays disabled until its private pipeline is reviewed
         # A plan's `after` holds the values the apply will write, so the identity root's plan
