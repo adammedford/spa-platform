@@ -9,22 +9,24 @@ using Platform.Abstractions;
 namespace Platform.Hosting;
 
 /// <summary>
-/// Workstream 2's entry points: stages 3 and 4 of <c>contracts/pipeline.md</c>, and the asset
-/// endpoint at stage 10. Keep these signatures and add no others.
+/// Workstream 2's entry points in <c>contracts/pipeline.md</c>: <c>UsePlatformHealth</c> then
+/// <c>UsePlatformHostResolution</c>, and the asset endpoint, <c>MapPlatformAssets</c>. Keep these
+/// signatures and add no others.
 ///
-/// Task 2.3 filled stages 3 and 4; task 2.4 filled the asset endpoint.
+/// Task 2.3 filled <c>UsePlatformHealth</c> and <c>UsePlatformHostResolution</c>; task 2.4 filled
+/// the asset endpoint.
 /// </summary>
 public static class PlatformHostingExtensions
 {
     /// <summary>
-    /// Registers nothing yet. Stages 3 and 4 need only <see cref="IRegistry"/>, which
+    /// Registers nothing yet. Health and host resolution need only <see cref="IRegistry"/>, which
     /// <c>AddPlatformRegistry</c> registers before this runs (contracts/pipeline.md, Service
     /// registration).
     /// </summary>
     public static IHostApplicationBuilder AddPlatformHosting(this IHostApplicationBuilder builder) => builder;
 
     /// <summary>
-    /// Stage 3. Answers <c>/healthz</c> and <c>/readyz</c> on any host, before host resolution, so the
+    /// Answers <c>/healthz</c> and <c>/readyz</c> on any host, before host resolution, so the
     /// ALB health check and <c>spactl wait</c> need no registry entry and no known host
     /// (contracts/pipeline.md, Health endpoints, and the second of its three orderings).
     /// </summary>
@@ -37,9 +39,9 @@ public static class PlatformHostingExtensions
     }
 
     /// <summary>
-    /// Stage 4. The request authority must equal a registry <c>host</c> exactly; the app and the
-    /// snapshot are pinned for the request as <see cref="IAppFeature"/>, and any other host gets 404
-    /// before routing runs (contracts/pipeline.md; N-08, S-A3).
+    /// The request authority must equal a registry <c>host</c> exactly; the app and the snapshot
+    /// are pinned for the request as <see cref="IAppFeature"/>, and any other host gets 404 before
+    /// routing runs (contracts/pipeline.md; N-08, S-A3).
     /// </summary>
     public static IApplicationBuilder UsePlatformHostResolution(this IApplicationBuilder app)
     {
@@ -48,11 +50,12 @@ public static class PlatformHostingExtensions
     }
 
     /// <summary>
-    /// Stage 10's third endpoint: everything that is not <c>/bff/*</c> or <c>/api/*</c>, served from
-    /// the app's live release in S3 (plan row 2.4; contracts/s3-layout.md). The key is built from
-    /// registry values and a validated path, <c>If-None-Match</c> is passed through, the content type
-    /// comes from the extension, the cache policy from the path, an extensionless path that accepts
-    /// HTML gets <c>index.html</c>, and the platform's reserved paths are never read.
+    /// The third endpoint, after <c>MapPlatformBff</c> and <c>MapPlatformProxy</c>: everything that
+    /// is not <c>/bff/*</c> or <c>/api/*</c>, served from the app's live release in S3 (plan row
+    /// 2.4; contracts/s3-layout.md). The key is built from registry values and a validated path,
+    /// <c>If-None-Match</c> is passed through, the content type comes from the extension, the cache
+    /// policy from the path, an extensionless path that accepts HTML gets <c>index.html</c>, and
+    /// the platform's reserved paths are never read.
     /// </summary>
     public static IEndpointRouteBuilder MapPlatformAssets(this IEndpointRouteBuilder endpoints)
     {
