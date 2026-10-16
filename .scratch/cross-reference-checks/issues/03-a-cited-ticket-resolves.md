@@ -23,20 +23,24 @@ for the next one.
 **Blocked by:** 01 (the test companion). Shares a file with 02 and 04, so they land one at a time,
 but neither gates this.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The check scans tracked files for ticket citations and fails when a number resolves to no
+- [x] The check scans tracked files for ticket citations and fails when a number resolves to no
       file under the feature directory the citation resolves against.
-- [ ] All three citation shapes in the tree are matched: `ticket NN`, `tickets NN and NN`, and
+- [x] All three citation shapes in the tree are matched: `ticket NN`, `tickets NN and NN`, and
       `overnight ticket NN`. The session that introduced the dangling citation wrote two of them
       and a narrower grep found neither.
-- [ ] The resolution rule -- which directory a citation resolves against, and how a document
+- [x] The resolution rule -- which directory a citation resolves against, and how a document
       outside the tracker names one -- is written into `docs/agents/issue-tracker.md`.
-- [ ] A ticket named before it is filed goes on an explicit allow-list in the script, following
+- [x] A ticket named before it is filed goes on an explicit allow-list in the script, following
       `PLANNED`'s precedent, and the check fails once that ticket appears so the list cannot
       outlive its entries.
-- [ ] The failure names the citing file and line and the number that resolved to nothing.
-- [ ] A red case per citation shape and a green case on the current tree, in
+- [x] The failure names the citing file and line and the number that resolved to nothing.
+- [x] A red case per citation shape and a green case on the current tree, in
       `.github/steering_tests.py`. Each red case is built from a shape actually seen in the tree:
       a rule whose pattern misses the real shape passes silently and reads identical to a clean
       repository.
+
+## Answer
+
+Landed on `integrator/g2-prep` in d2523bf. A citation inside `.scratch/<slug>/` resolves against its own tracker; one anywhere else resolves against `.scratch/overnight/issues/`; `<tracker> ticket NN` crosses trackers. Written into `docs/agents/issue-tracker.md`. Scans whole files, so a citation wrapped across one line break is read. `UNFILED` ships empty.

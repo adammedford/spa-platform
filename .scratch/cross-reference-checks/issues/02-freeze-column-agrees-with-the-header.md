@@ -25,21 +25,25 @@ a change, is the failure.
 **Blocked by:** 01 (the test companion). Shares a file with 03 and 04, so they land one at a time,
 but neither gates this.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The check parses the index table in `contracts/README.md`, and fails when a row's leading
+- [x] The check parses the index table in `contracts/README.md`, and fails when a row's leading
       gate token differs from its target's own freeze header.
-- [ ] The failure message names the row, the cell, the target file and the header, so neither side
+- [x] The failure message names the row, the cell, the target file and the header, so neither side
       has to be opened to see the disagreement.
-- [ ] The two header shapes in the tree are both read: the markdown contracts' `**Freezes at:**`
+- [x] The two header shapes in the tree are both read: the markdown contracts' `**Freezes at:**`
       line, and the `Freezes at <gate>.` sentence inside a JSON schema's `description`.
-- [ ] A relational cell that names no gate -- `With the registry document`, `With the interface
+- [x] A relational cell that names no gate -- `With the registry document`, `With the interface
       each one stands in for` -- is not a failure.
-- [ ] A row whose target is source code rather than a contract file, and so carries no header, is
+- [x] A row whose target is source code rather than a contract file, and so carries no header, is
       not a failure.
-- [ ] A red case per shape above, built from a row shape actually in the tree, and a green case on
+- [x] A red case per shape above, built from a row shape actually in the tree, and a green case on
       the current index, in `.github/steering_tests.py`.
-- [ ] `steering.py`'s module docstring and the CI step's name both describe the wider charter; the
+- [x] `steering.py`'s module docstring and the CI step's name both describe the wider charter; the
       current name describes only the two steering files. Later rules keep both accurate.
-- [ ] The check still reports that it did not run when `python3` is absent, matching how the
+- [x] The check still reports that it did not run when `python3` is absent, matching how the
       existing hook checks degrade.
+
+## Answer
+
+Landed on `integrator/g2-prep` in 3d03f35. The freeze-header rule compares each index row's leading gate against its target's header, in both the markdown and JSON-schema shapes, and the success line names the count it compared. Widened the charter text in the CI step, the module docstring and `.githooks/pre-push`.

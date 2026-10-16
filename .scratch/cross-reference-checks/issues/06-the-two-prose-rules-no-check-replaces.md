@@ -21,13 +21,19 @@ from the tree, so no check substitutes for them:
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `CODING_STANDARDS.md` carries the scoping rule, in the voice of the rules already there, with
+- [x] `CODING_STANDARDS.md` carries the scoping rule, in the voice of the rules already there, with
       the reason an identifier is the wrong scope.
-- [ ] `docs/agents/review.md` carries the search discipline as a step a reviewer performs, not as
+- [x] `docs/agents/review.md` carries the search discipline as a step a reviewer performs, not as
       advice.
 - [ ] Both state why they are prose and not a check: they are judgement calls about cross-file
       consistency, which is what `CODING_STANDARDS.md` is for, and the three rules in tickets 02 to
       04 are the part that was decidable from the tree.
-- [ ] No check is added here, and neither addition restates one.
+- [x] No check is added here, and neither addition restates one.
+
+## Answer
+
+Landed on `integrator/g2-prep` in c15f58f. `CODING_STANDARDS.md` gains "A universal names its exceptions by the writer"; `docs/agents/review.md` gains "Grep the noun, then check the scope". The worked example is told as history, because the 405 exception it describes was retired by `1a058d1`.
+
+Box 3 is met in substance but stated generically, without citing tickets 02 to 04 by path, because this directory was untracked when the box was written.

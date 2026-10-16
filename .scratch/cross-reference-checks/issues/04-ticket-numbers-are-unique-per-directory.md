@@ -22,14 +22,18 @@ kept the number, so it is not among them. Fix the citations in the same change a
 but neither gates this. Lands after 03 if both are taken, since 03's citation rule reads the
 numbers this one renames.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The check fails when two files share a leading number inside one
+- [x] The check fails when two files share a leading number inside one
       `.scratch/<feature-slug>/issues/`, and the failure names the directory and both files.
-- [ ] A number repeated across two different feature directories is not a failure.
-- [ ] The `61` collision in `.scratch/overnight/issues/` is renumbered, and every
+- [x] A number repeated across two different feature directories is not a failure.
+- [x] The `61` collision in `.scratch/overnight/issues/` is renumbered, and every
       document citing a renamed ticket by number is updated in the same change.
-- [ ] `docs/agents/issue-tracker.md` states what a session does when the number it wants is
+- [x] `docs/agents/issue-tracker.md` states what a session does when the number it wants is
       already claimed, so concurrent filing has an answer and not just a failing check.
-- [ ] A red case with two files sharing a number, a green case with the number repeated across
+- [x] A red case with two files sharing a number, a green case with the number repeated across
       directories, and a green case on the current tree, in `.github/steering_tests.py`.
+
+## Answer
+
+Landed on `integrator/g2-prep` in 1f559cc. The rule fails on two tickets sharing a number in one tracker. The `61` collision is resolved: task 6.1a's ticket is now 68, because the security-flake ticket reached `origin/main` first; every citation of 61 was read in context. The `66` collision had already been resolved on main, by `113c4a3`. `docs/agents/issue-tracker.md` says the ticket that lands second renumbers.
