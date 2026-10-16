@@ -316,7 +316,11 @@ public sealed class GatewayHarness : IAsyncDisposable
         return await PublishRegistryAsync(next, ct);
     }
 
-    /// <summary>Writes <paramref name="next"/> as the registry object, as it stands, and polls once.</summary>
+    /// <summary>
+    /// Writes <paramref name="next"/> as the registry object, as it stands, and polls once. The outcome is
+    /// the write's: <see cref="RefreshOutcome.Swapped"/> when the written document is live and
+    /// <see cref="RefreshOutcome.Rejected"/> when it was rejected, whichever poll read it first.
+    /// </summary>
     public async Task<RefreshOutcome> PublishRegistryAsync(JsonObject next, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(next);
@@ -333,23 +337,48 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// </summary>
     public async Task<RefreshOutcome> PublishRegistryTextAsync(string text, CancellationToken ct = default)
     {
+        string written;
         await registryWrites.WaitAsync(ct);
         try
         {
-            StoredObject current = await Store.GetAsync(RegistryKey, ifNoneMatch: null, ct)
-                ?? throw new InvalidOperationException("the registry object is missing.");
-            current.Body?.Dispose();
-            if (!await Store.PutAsync(RegistryKey, Utf8(text), current.ETag, ct))
+            string before = await RegistryETagAsync(ct);
+            if (!await Store.PutAsync(RegistryKey, Utf8(text), before, ct))
             {
                 throw new InvalidOperationException("the registry object changed under the harness.");
             }
+
+            // Only the harness writes the object, and only under this lock, so this is the write's ETag.
+            written = await RegistryETagAsync(ct);
         }
         finally
         {
             registryWrites.Release();
         }
 
-        return await RefreshRegistryAsync(ct);
+        return OutcomeOfWrite(await RefreshRegistryAsync(ct), written);
+    }
+
+    /// <summary>
+    /// The outcome of the write whose ETag is <paramref name="written"/>, from the outcome of the one poll
+    /// the harness ran after it (task 6.1a). The gateway's own poller runs too, and its tick can land
+    /// between the write and that poll: it swaps the document in, and the harness's conditional read then
+    /// answers 304. So a poll that found the object unchanged reports <see cref="RefreshOutcome.Swapped"/>
+    /// when the live snapshot was built from this write, and <see cref="RefreshOutcome.Rejected"/> when it
+    /// was not: the source answers 304 only for the ETag it settled, and it settles an ETag that is not
+    /// live only by rejecting it (<c>RegistrySource.RefreshOnceAsync</c>). Every other outcome is this
+    /// poll's own, as it stands.
+    /// </summary>
+    private RefreshOutcome OutcomeOfWrite(RefreshOutcome polled, string written) =>
+        polled != RefreshOutcome.NotModified ? polled
+        : string.Equals(Registry.Current.ETag, written, StringComparison.Ordinal) ? RefreshOutcome.Swapped
+        : RefreshOutcome.Rejected;
+
+    private async Task<string> RegistryETagAsync(CancellationToken ct)
+    {
+        StoredObject current = await Store.GetAsync(RegistryKey, ifNoneMatch: null, ct)
+            ?? throw new InvalidOperationException("the registry object is missing.");
+        current.Body?.Dispose();
+        return current.ETag;
     }
 
     /// <summary>Writes one release of an app into the bucket under <c>apps/{appId}/releases/{release}/</c>.</summary>
