@@ -73,7 +73,7 @@ public sealed class AssetPathTests : IAsyncLifetime
     [MemberData(nameof(Traversals))]
     public async Task A_traversal_shape_is_refused_and_reads_nothing_at_all(string target)
     {
-        int readsBefore = recorder.Reads.Count;
+        int readsBefore = recorder.RequestReads.Count;
         int lines = await Observed.SettledCountAsync(harness, Suite.Ct);
 
         RawResponse response = await RawHttp.SendAsync(
@@ -87,7 +87,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         Assert.Equal(RuleIds.PathInvalid, await Observed.RuleOfOneRequestAsync(harness, lines, Suite.Ct));
 
         // The claim this class exists for: not one key was asked for, inside the prefix or out.
-        Assert.Empty(recorder.Since(readsBefore));
+        Assert.Empty(recorder.RequestsSince(readsBefore));
     }
 
     [Fact]
@@ -98,15 +98,38 @@ public sealed class AssetPathTests : IAsyncLifetime
         // server: the row's "400 or 404" is met, there is no rule id to read because no stage ran,
         // and the bucket is untouched. Asserted apart from the rows above for that reason — a test
         // that demanded a rule id here would be holding the wrong component to the row.
-        int readsBefore = recorder.Reads.Count;
+        int readsBefore = recorder.RequestReads.Count;
         int lines = await Observed.SettledCountAsync(harness, Suite.Ct);
 
         RawResponse response = await RawHttp.SendAsync(
             harness.GatewayAddress, "GET", "/index%00.html", harness.App("app1").Host, ct: Suite.Ct);
 
         Assert.Equal(400, response.StatusCode);
-        Assert.Empty(recorder.Since(readsBefore));
+        Assert.Empty(recorder.RequestsSince(readsBefore));
         Assert.Equal(lines, await Observed.SettledCountAsync(harness, Suite.Ct));
+    }
+
+    [Fact]
+    public async Task A_background_registry_poll_does_not_count_as_a_request_store_read()
+    {
+        int requestReadsBefore = recorder.RequestReads.Count;
+        int allReadsBefore = recorder.Reads.Count;
+
+        // A real poll inside the observation interval reproduces the Linux CI race without
+        // depending on the hosted poller's first read winning a scheduling race (N-13).
+        await harness.RefreshRegistryAsync(Suite.Ct);
+        Assert.Contains(GatewayHarness.RegistryKey, recorder.Reads.Skip(allReadsBefore));
+
+        RawResponse rejected = await RawHttp.SendAsync(
+            harness.GatewayAddress, "GET", "/assets%2f..%2findex.html", harness.App("app1").Host, ct: Suite.Ct);
+        Assert.Equal(Contract.Error("The path failed normalisation").Status, rejected.StatusCode);
+        Assert.Empty(recorder.RequestsSince(requestReadsBefore));
+
+        // Positive control: request reads still reach the observer; ignoring all reads is not a fix.
+        RawResponse served = await RawHttp.SendAsync(
+            harness.GatewayAddress, "GET", "/index.html", harness.App("app1").Host, ct: Suite.Ct);
+        Assert.Equal(200, served.StatusCode);
+        Assert.Equal(ReleasePrefix("app1") + "index.html", Assert.Single(recorder.RequestsSince(requestReadsBefore)));
     }
 
     [Fact]
@@ -115,13 +138,13 @@ public sealed class AssetPathTests : IAsyncLifetime
         // The control, and without it every row above is vacuous: a gateway that read nothing ever,
         // or a recorder that recorded nothing, would satisfy all of them
         // (CODING_STANDARDS.md -> "An assertion must be able to fail").
-        int readsBefore = recorder.Reads.Count;
+        int readsBefore = recorder.RequestReads.Count;
 
         RawResponse response = await RawHttp.SendAsync(
             harness.GatewayAddress, "GET", "/index.html", harness.App("app1").Host, ct: Suite.Ct);
 
         Assert.Equal(200, response.StatusCode);
-        string key = Assert.Single(recorder.Since(readsBefore));
+        string key = Assert.Single(recorder.RequestsSince(readsBefore));
         Assert.Equal(ReleasePrefix("app1") + "index.html", key);
     }
 
@@ -131,13 +154,13 @@ public sealed class AssetPathTests : IAsyncLifetime
         // The other half of the row's "400 or 404": a path that is well formed but names nothing.
         // It does reach the bucket, once, under this app's own prefix — which is what distinguishes
         // "refused" from "looked for and not found".
-        int readsBefore = recorder.Reads.Count;
+        int readsBefore = recorder.RequestReads.Count;
 
         RawResponse response = await RawHttp.SendAsync(
             harness.GatewayAddress, "GET", "/assets/not-shipped.js", harness.App("app1").Host, ct: Suite.Ct);
 
         Assert.Equal(404, response.StatusCode);
-        string key = Assert.Single(recorder.Since(readsBefore));
+        string key = Assert.Single(recorder.RequestsSince(readsBefore));
         Assert.StartsWith(ReleasePrefix("app1"), key, StringComparison.Ordinal);
     }
 
@@ -155,10 +178,10 @@ public sealed class AssetPathTests : IAsyncLifetime
         await RawHttp.SendAsync(harness.GatewayAddress, "GET", "/index.html", harness.App("app2").Host, ct: Suite.Ct);
         await RawHttp.SendAsync(harness.GatewayAddress, "GET", "/missing.js", harness.App("app1").Host, ct: Suite.Ct);
 
-        string[] allowed = [ReleasePrefix("app1"), ReleasePrefix("app2"), GatewayHarness.RegistryKey];
+        string[] allowed = [ReleasePrefix("app1"), ReleasePrefix("app2")];
 
-        Assert.NotEmpty(recorder.Reads);
-        foreach (string key in recorder.Reads)
+        Assert.NotEmpty(recorder.RequestReads);
+        foreach (string key in recorder.RequestReads)
         {
             Assert.Contains(allowed, prefix => key.StartsWith(prefix, StringComparison.Ordinal));
         }
