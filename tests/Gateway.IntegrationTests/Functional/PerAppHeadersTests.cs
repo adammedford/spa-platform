@@ -32,7 +32,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         public GatewayHarness Harness { get; private set; } = null!;
 
         public async ValueTask InitializeAsync() =>
-            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
+            Harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -46,7 +46,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     [Fact]
     public async Task Each_app_is_served_the_baseline_plus_its_own_entrys_additions_and_no_other_apps()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse one = await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Ct);
         BrowserResponse two = await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Ct);
@@ -65,7 +65,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     [Fact]
     public async Task The_two_policies_differ_only_where_the_entry_differs_and_agree_on_the_baseline()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse one = await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Ct);
         BrowserResponse two = await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Ct);
@@ -85,7 +85,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     [Fact]
     public async Task The_served_policy_names_exactly_the_baselines_ten_directives()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse served = await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Ct);
 
@@ -100,7 +100,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
     [Fact]
     public async Task The_fixed_header_set_is_on_both_apps_and_no_cross_origin_grant_is()
     {
-        using TestBrowser browser = Harness.CreateBrowser();
+        using TestBrowser browser = await Harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse one = await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Ct);
         BrowserResponse two = await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Ct);
@@ -126,8 +126,8 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         // does not. The input the clause above cannot supply: no app fixture names an out-of-set
         // directive, and fixtures/ is workstream 5's, so the entry arrives the way an operator's
         // would -- by publishing one (CODING_STANDARDS.md -> "An assertion must be able to fail").
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
-        using TestBrowser browser = harness.CreateBrowser();
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse before = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
         RefreshOutcome outcome = await harness.UpdateRegistryAsync(

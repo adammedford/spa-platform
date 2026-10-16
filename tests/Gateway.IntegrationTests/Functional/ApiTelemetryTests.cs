@@ -54,10 +54,10 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         public async ValueTask InitializeAsync()
         {
             CancellationToken ct = TestContext.Current.CancellationToken;
-            Harness = await GatewayHarness.StartAsync(Telemetry.Options(), ct);
+            Harness = await GatewayHarness.StartAsync(Telemetry.Options(new GatewayHarnessOptions { SessionRequired = true }), ct);
 
             using TestBrowser browser = Harness.CreateBrowser();
-            await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: ct);
+            await Harness.SignInAsync(browser, "app1", ct);
             BrowserResponse response = await browser.GetAsync(Harness.App("app1").Url(ApiPath).ToString(), ct: ct);
             Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
 
@@ -149,9 +149,12 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         Assert.Equal("information", TheCall.Line.GetProperty("level").GetString());
         Assert.Equal(200, TheCall.Line.GetProperty("status").GetInt32());
 
-        // This call establishes no session. Assert the telemetry contract's null session_ref
-        // explicitly, so attributing this request to a session is a failure.
-        Assert.Equal(JsonValueKind.Null, TheCall.Line.GetProperty("session_ref").ValueKind);
+        // The call is made in a session, so the line carries the session's reference: twelve hex
+        // characters (contracts/telemetry.md), the same reference the login's callback line carries.
+        string? sessionRef = TheCall.Line.GetProperty("session_ref").GetString();
+        Assert.Matches("^[0-9a-f]{12}$", sessionRef);
+        Assert.Equal(sessionRef, Assert.Single(CapturedTelemetry.RequestLines(TheCall.Harness),
+            line => line.GetProperty("route").GetString() == "callback").GetProperty("session_ref").GetString());
 
         // Not a rejection either, so no rule id: an upstream's own 4xx and this 200 both leave it null.
         Assert.Equal(JsonValueKind.Null, TheCall.Line.GetProperty("rule").ValueKind);
