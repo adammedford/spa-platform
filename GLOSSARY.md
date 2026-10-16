@@ -107,8 +107,9 @@ point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A st
 numbered).
 
 **Rejection** — a response a stage ends the request with, under a rule id: a 400, 403, 404, 405 or a
-401 that `contracts/request-gate.md` has an id for. Every rejection reaches the request line and
-`security.rejections`. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
+401 that `contracts/request-gate.md` has an id for. Every rejection reaches the request line, and
+every one but the method allowlist's 405 reaches `security.rejections` — that one is on the line
+with `rule: null` until `MethodAllowlist` writes its id. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
 the server's answer and not a rejection. The code's log messages say "refused"; the contracts and
 the metric say "rejection", and that is the word.
 
