@@ -106,10 +106,12 @@ it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is na
 point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A stage is named, not
 numbered).
 
-**Rejection** — a response a stage ends the request with, under a rule id: a 400, 403, 404, 405 or a
-401 that `contracts/request-gate.md` has an id for. Every rejection reaches the request line, and
-every one but the method allowlist's 405 reaches `security.rejections` — that one is on the line
-with `rule: null` until `MethodAllowlist` writes its id. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
+**Rejection** — a response a stage ends the request with **under a rule id**: a 400, 403, 404, 405 or
+a 401 that `contracts/request-gate.md` has an id for. The rule id is what makes it one, not the
+status: a 404 for an asset that is simply absent carries no id and is an answer, not a rejection.
+Every rejection reaches the request line, and every one but the method allowlist's 405 reaches
+`security.rejections` — that one is on the line with `rule: null` until `MethodAllowlist` writes
+its id. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
 the server's answer and not a rejection. The code's log messages say "refused"; the contracts and
 the metric say "rejection", and that is the word.
 

@@ -22,7 +22,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Registry document | [`registry.schema.json`](registry.schema.json), [`registry.example.json`](registry.example.json) | G1a, except the `oauth` section at G1b | Workstreams 2, 3, 4 and `spactl` |
 | App definition | [`app-definition.schema.json`](app-definition.schema.json), [`app-definition.example.json`](app-definition.example.json) | With the registry document | Workstreams 1, 2 and 5 |
 | Platform configuration | [`platform-config.schema.json`](platform-config.schema.json), [`platform-config.example.json`](platform-config.example.json) | G1a | Workstream 1 for the task environment, then everyone |
-| Pipeline and entry points | [`pipeline.md`](pipeline.md), `src/Gateway/Program.cs` | G1a, except the stage order at G1b | Everyone |
+| Pipeline and entry points | [`pipeline.md`](pipeline.md), `src/Gateway/Program.cs` | G1a; stage order changed at G1b | Everyone |
 | Browser contract | [`http-contract.md`](http-contract.md) | G1a | Workstreams 3, 4, 5, 6 |
 | Request gate | [`request-gate.md`](request-gate.md) | G1a, with the browser contract | Workstream 4, and workstream 6's negative suite |
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
