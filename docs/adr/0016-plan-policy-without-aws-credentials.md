@@ -85,6 +85,6 @@ aggregate assertion count is not a claim that all of P-01 to P-03 is complete.
   It reports that the default and intended profiles selected different projects and Regions.
 - The properties: `docs/plan/04-tests.md`, P-01, P-02 and P-03.
 - Existing mock-provider configuration assertions: `infra/modules/cell/tests/module.tftest.hcl`
-  and `infra/platform/tests/platform.tftest.hcl`; CI's discovery step in `.github/workflows/ci.yml`.
+  and `infra/envs/poc/platform/tests/root.tftest.hcl`; CI's discovery step in `.github/workflows/ci.yml`.
 - [Terraform test mocking](https://developer.hashicorp.com/terraform/language/tests/mocking):
   mocks supply provider data for tests and do not contact the real provider API.
