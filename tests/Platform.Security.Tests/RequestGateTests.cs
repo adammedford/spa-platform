@@ -4,9 +4,9 @@ using System.Text.Json;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Stage 6, the request gate: the rules in <c>contracts/request-gate.md</c>, each refusal under its
-/// rule id, with the codes in <c>contracts/http-contract.md</c> -> Errors. Task 4.3; N-07, N-25, N-27,
-/// and the escape paths of N-10.
+/// <c>UsePlatformRequestGate</c>, the request gate: the rules in <c>contracts/request-gate.md</c>,
+/// each refusal under its rule id, with the codes in <c>contracts/http-contract.md</c> -> Errors. Task
+/// 4.3; N-07, N-25, N-27, and the escape paths of N-10.
 /// </summary>
 public sealed class RequestGateTests
 {
@@ -203,7 +203,7 @@ public sealed class RequestGateTests
     public async Task Assets_and_callbacks_pass_from_any_site(string method, string path)
     {
         // Sec-Fetch-Site: Any. A navigation from another site, the provider's redirect included, lands
-        // here, and the session these need is the shell gate's to judge (stage 8).
+        // here, and the session these need is the shell gate's to judge (UsePlatformShellGate).
         await using GateHost host = await GateHost.StartAsync(Ct);
 
         using HttpResponseMessage response = await host.SendAsync(method, path, Ct, FetchSite("cross-site"));
@@ -360,8 +360,8 @@ public sealed class RequestGateTests
     [Fact]
     public async Task Without_host_resolution_the_gate_fails_closed()
     {
-        // No IAppFeature means stage 4 did not run, and there is no app origin to judge by. The gate
-        // throws rather than pass the request on, so nothing after it runs.
+        // No IAppFeature means host resolution did not run, and there is no app origin to judge by. The
+        // gate throws rather than pass the request on, so nothing after it runs.
         await using GateHost host = await GateHost.StartAsync(Ct, pinApp: false);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/", Ct);

@@ -7,18 +7,18 @@ using Platform.Abstractions;
 namespace Platform.Security;
 
 /// <summary>
-/// Stage 6, the request gate: <c>contracts/request-gate.md</c>, one rule id per refusal, with the
-/// status and code from <c>contracts/http-contract.md</c> -> Errors. The ids come from
-/// <see cref="RuleIds"/>, which holds that contract's table so that no owner keeps a copy of its own
-/// (ADR-0015): <c>path.invalid</c> and <c>path.reserved</c> are raised by the asset endpoint too.
+/// <c>UsePlatformRequestGate</c>, the request gate: <c>contracts/request-gate.md</c>, one rule id
+/// per refusal, with the status and code from <c>contracts/http-contract.md</c> -> Errors. The ids come
+/// from <see cref="RuleIds"/>, which holds that contract's table so that no owner keeps a copy of its
+/// own (ADR-0015): <c>path.invalid</c> and <c>path.reserved</c> are raised by the asset endpoint too.
 /// Task 4.3; tests N-07, N-25, N-27 and the escape paths of N-10. ADR-0007 is why it judges
 /// <c>Sec-Fetch-Site</c> and <c>Origin</c> rather than trusting <c>SameSite</c>: a sibling SPA under
 /// the same parent domain is same-site.
 ///
 /// It runs before authentication because no rule here needs the user. Two rows of the contract's
 /// table are finished by later stages and are not checked here: the session that "everything else"
-/// needs is stage 8's (the shell gate, workstream 3), and the <c>X-CSRF-TOKEN</c> on unsafe
-/// <c>/api</c> methods is stage 9's (task 4.4), because both need the user.
+/// needs is <c>UsePlatformShellGate</c>'s (workstream 3), and the <c>X-CSRF-TOKEN</c> on unsafe
+/// <c>/api</c> methods is <c>UsePlatformAntiforgery</c>'s (task 4.4), because both need the user.
 ///
 /// The checks run in this order: the path's form, the cookie names, then the path's own row. Within a
 /// row the origin checks come before the method, so a cross-site caller learns nothing about which
@@ -57,11 +57,12 @@ internal sealed partial class RequestGate(ILogger logger)
 
     internal Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        // Stage 4 pins the app before this stage runs. Without it there is no app origin to judge
-        // against, and passing the request on would be failing open, so a misordered pipeline throws.
+        // Host resolution pins the app before this stage runs. Without it there is no app origin to
+        // judge against, and passing the request on would be failing open, so a misordered pipeline
+        // throws.
         IAppFeature app = context.Features.Get<IAppFeature>()
             ?? throw new InvalidOperationException(
-                "The request gate (stage 6) runs after host resolution (stage 4), which sets IAppFeature.");
+                "UsePlatformRequestGate runs after UsePlatformHostResolution, which sets IAppFeature.");
 
         HttpRequest request = context.Request;
 
@@ -116,7 +117,7 @@ internal sealed partial class RequestGate(ILogger logger)
                 return RefuseAsync(context, StatusCodes.Status403Forbidden, "origin_rejected", RuleIds.GateNavigation);
         }
 
-        // /api takes every method stage 1's allowlist lets through.
+        // /api takes every method the allowlist in UsePlatformForwardedHeaders lets through.
         return next(context);
     }
 
@@ -303,8 +304,9 @@ internal sealed partial class RequestGate(ILogger logger)
         };
 
     /// <summary>
-    /// The origin a browser on this app's page sends: the scheme stage 1 settled, which is https behind
-    /// the ALB, and the registry host stage 4 pinned. Host names compare without regard to case.
+    /// The origin a browser on this app's page sends: the scheme UsePlatformForwardedHeaders
+    /// settled, which is https behind the ALB, and the registry host that host resolution pinned. Host
+    /// names compare without regard to case.
     /// </summary>
     private static string AppOrigin(HttpRequest request, AppDefinition app) => request.Scheme + "://" + app.Host;
 
@@ -329,10 +331,11 @@ internal sealed partial class RequestGate(ILogger logger)
         // a cookie name is the client's to choose (contracts/telemetry.md -> Never logged).
         Refused(logger, rule);
 
-        // Task 4.3a: the same id on the one request line stage 2 writes, and the field it counts
-        // security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach the
-        // request line"). The same `rule` the line above logged, so the two cannot drift. Null
-        // conditional because this project's own tests run with no stage 2 to create the feature.
+        // Task 4.3a: the same id on the one request line UsePlatformTelemetry writes, and the field it
+        // counts security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach
+        // the request line"). The same `rule` the line above logged, so the two cannot drift. Null
+        // conditional because this project's own tests run with no UsePlatformTelemetry to create the
+        // feature.
         context.Features.Get<IRequestTelemetryFeature>()?.Rule = rule;
 
         return Problems.WriteAsync(context, status, code);

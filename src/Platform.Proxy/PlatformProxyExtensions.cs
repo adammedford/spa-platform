@@ -9,7 +9,7 @@ namespace Platform.Proxy;
 
 /// <summary>
 /// Workstream 4's proxy entry points: the YARP registration, and <c>/api/{name}/{rest}</c> at
-/// stage 10 of <c>contracts/pipeline.md</c>.
+/// <c>MapPlatformProxy</c>, among the endpoints that end <c>contracts/pipeline.md</c>.
 ///
 /// The configuration provider and the route are task 4.1's. The token step ahead of the forwarder
 /// and the header rules in each direction are task 4.2's (<see cref="AccessTokenStep"/>,

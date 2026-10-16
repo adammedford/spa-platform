@@ -6,8 +6,9 @@ using Platform.Testing;
 namespace Platform.Security.Tests;
 
 /// <summary>
-/// Stage 5, the security headers: <c>contracts/http-contract.md</c> -> Response headers and "The
-/// baseline content security policy". Task 4.5; F-06's per-app headers and N-24.
+/// <c>UsePlatformSecurityHeaders</c>, the security headers: <c>contracts/http-contract.md</c> ->
+/// Response headers and "The baseline content security policy". Task 4.5; F-06's per-app headers and
+/// N-24.
 ///
 /// Every expected policy below is written out by hand from the contract, not built the way the code
 /// builds it, so a builder that drifted from the contract cannot agree with itself here.
@@ -144,8 +145,9 @@ public sealed class SecurityHeadersTests
     [Fact]
     public async Task A_request_no_app_was_pinned_for_fails_rather_than_pass_without_a_policy()
     {
-        // The stand-in for stage 4 pins nothing for an unknown host, as a misordered pipeline would
-        // leave it. The real stage 4 answers 404 itself and never calls stage 5.
+        // The stand-in for host resolution pins nothing for an unknown host, as a misordered pipeline
+        // would leave it. The real host resolution answers 404 itself and never calls the headers
+        // stage.
         await using HeadersHost host = await HeadersHost.StartAsync(Ct, [App1]);
 
         using HttpResponseMessage response = await host.SendAsync(TestApps.Entry("stranger"), "GET", "/", Ct);
@@ -171,9 +173,9 @@ public sealed class SecurityHeadersTests
     ];
 
     /// <summary>
-    /// The four responses N-24 names, and a proxied API success. The API error is a real one: stage 6
-    /// refuses a cross-site call after stage 5 has run, so the set has to reach a refusal a later stage
-    /// wrote.
+    /// The four responses N-24 names, and a proxied API success. The API error is a real one: the
+    /// request gate refuses a cross-site call after the headers stage has run, so the set has to reach
+    /// a refusal a later stage wrote.
     /// </summary>
     public static TheoryData<string, string, string?, int, string> Responses() => new()
     {

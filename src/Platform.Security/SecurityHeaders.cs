@@ -9,9 +9,9 @@ using Platform.Abstractions;
 namespace Platform.Security;
 
 /// <summary>
-/// Stage 5: the app's content security policy and the fixed header set, on every response, overwriting
-/// any copy an upstream sent. Task 4.5; F-06's per-app headers and N-24. The header set and the
-/// baseline policy are <c>contracts/http-contract.md</c> -> Response headers.
+/// <c>UsePlatformSecurityHeaders</c>: the app's content security policy and the fixed header set,
+/// on every response, overwriting any copy an upstream sent. Task 4.5; F-06's per-app headers and N-24.
+/// The header set and the baseline policy are <c>contracts/http-contract.md</c> -> Response headers.
 /// </summary>
 internal sealed partial class SecurityHeaders(IConfiguration configuration, ILogger logger)
 {
@@ -43,18 +43,19 @@ internal sealed partial class SecurityHeaders(IConfiguration configuration, ILog
 
     internal Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        // Stage 4 pins the app before this stage runs. Without it there is no policy to send, and
-        // sending none would be failing open, so a misordered pipeline throws, as stages 6 and 9 do.
+        // Host resolution pins the app before this stage runs. Without it there is no policy to send,
+        // and sending none would be failing open, so a misordered pipeline throws, as the request gate
+        // and antiforgery do.
         AppDefinition app = context.Features.Get<IAppFeature>()?.App
             ?? throw new InvalidOperationException(
-                "The security headers (stage 5) run after host resolution (stage 4), which sets IAppFeature.");
+                "UsePlatformSecurityHeaders runs after UsePlatformHostResolution, which sets IAppFeature.");
 
         string policy = policies.GetValue(app, Build);
 
         // OnStarting rather than a write here: the headers are applied as the response begins, after
         // every later stage has written its own. That is what makes the contract's "overwrite what the
         // upstream sent" true, because YARP copies the upstream's headers into the response before the
-        // body starts, and a refusal written by stage 6 or 9 gets the same set.
+        // body starts, and a refusal written by the request gate or antiforgery gets the same set.
         // https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.http.httpresponse.onstarting
         context.Response.OnStarting(() =>
         {

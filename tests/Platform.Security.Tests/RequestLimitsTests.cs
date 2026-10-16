@@ -7,7 +7,8 @@ namespace Platform.Security.Tests;
 /// <summary>
 /// N-20: <c>TRACE</c>, <c>CONNECT</c> and oversized headers give 405 or 431. The unsafe method on an
 /// asset path is the request gate's per-path rule (<c>contracts/request-gate.md</c>, rule
-/// <c>gate.method</c>, task 4.3); stage 1 refuses the methods no path accepts.
+/// <c>gate.method</c>, task 4.3); the allowlist in <c>UsePlatformForwardedHeaders</c> refuses the
+/// methods no path accepts.
 /// </summary>
 public sealed class RequestLimitsTests
 {

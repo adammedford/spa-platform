@@ -4,15 +4,16 @@ using Platform.Testing;
 namespace Platform.Proxy.Tests;
 
 /// <summary>
-/// Task 4.3a: the one refusal this project answers, <c>404 unknown_api</c> at stage 10, leaves its
-/// rule id on <c>IRequestTelemetryFeature.Rule</c>, where stage 2 reads it for the request log line
-/// and for <c>security.rejections</c> (<c>contracts/telemetry.md</c> -> "How <c>rule</c> and
-/// <c>session_ref</c> reach the request line"). The id is <c>api.unknown</c>
-/// (<c>contracts/request-gate.md</c> -> Rule ids).
+/// Task 4.3a: the one refusal this project answers, <c>404 unknown_api</c> from
+/// <c>MapPlatformProxy</c>, leaves its rule id on <c>IRequestTelemetryFeature.Rule</c>, where
+/// <c>UsePlatformTelemetry</c> reads it for the request log line and for <c>security.rejections</c>
+/// (<c>contracts/telemetry.md</c> -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
+/// The id is <c>api.unknown</c> (<c>contracts/request-gate.md</c> -> Rule ids).
 ///
-/// Stage 2 belongs to workstream 6, so these component tests install <c>Platform.Testing</c>'s
-/// <see cref="SettableRequestTelemetryFeature"/> in its place. Every other test in this project
-/// starts its host without one, which is what exercises the null-conditional write.
+/// <c>UsePlatformTelemetry</c> belongs to workstream 6, so these component tests install
+/// <c>Platform.Testing</c>'s <see cref="SettableRequestTelemetryFeature"/> in its place. Every other
+/// test in this project starts its host without one, which is what exercises the null-conditional
+/// write.
 /// </summary>
 public sealed class RuleIdTelemetryTests
 {
@@ -52,8 +53,8 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task An_unlisted_api_name_is_still_refused_with_no_telemetry_feature_installed()
     {
-        // The write is null-conditional: this component host omits stage 2, so the refusal must
-        // remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
+        // The write is null-conditional: this component host omits UsePlatformTelemetry, so the refusal
+        // must remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
         await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, TestApps.Entry("app1"));
         using HttpClient client = new();
 
