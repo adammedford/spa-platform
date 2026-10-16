@@ -142,6 +142,7 @@ internal sealed class MemorySessionStore : ISessionStore, IDisposable
         ct.ThrowIfCancellationRequested();
         lock (gate)
         {
+            // Removing inside the foreach is safe: see RemoveExpired.
             foreach (KeyValuePair<string, SessionRecord> session in sessions)
             {
                 if (string.Equals(session.Value.AppId, appId, StringComparison.Ordinal))
@@ -163,6 +164,12 @@ internal sealed class MemorySessionStore : ISessionStore, IDisposable
     }
 
     /// <summary>Removes every expired session. Call under the lock.</summary>
+    /// <remarks>
+    /// Removing from the map while enumerating it does not invalidate the enumerator on .NET Core 3.0
+    /// and later: "This mutating method may be safely called without invalidating active enumerators"
+    /// (https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2.remove).
+    /// It is not thread safety; the lock is still what makes it safe here.
+    /// </remarks>
     private void RemoveExpired()
     {
         DateTimeOffset now = clock.GetUtcNow();
