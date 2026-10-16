@@ -18,20 +18,28 @@ namespace Platform.Identity.Tests;
 /// stands in for host resolution, which runs before authentication and pins the app.
 ///
 /// The terminal handler stands in for what later rows build: an anonymous request to <c>/</c> is
-/// challenged (the shell gate of task 3.9), and every other path is 404, as routing answers a path
-/// nothing claims. Platform configuration carries one issuer, <see cref="IssuerName"/>, whose
-/// authority is the provider's loopback origin.
+/// challenged (the shell gate of task 3.9), an anonymous request to <see cref="ApiPath"/> gets 401
+/// and an authenticated one 200 (the API's answer, task 4.2), and every other path is 404, as routing
+/// answers a path nothing claims. Platform configuration carries one issuer, <see cref="IssuerName"/>,
+/// whose authority is the provider's loopback origin. Sessions go to <see cref="Sessions"/>, the
+/// Platform.Testing store behind a recorder, and every request carries a
+/// <see cref="SettableRequestTelemetryFeature"/> in place of <c>UsePlatformTelemetry</c>.
 /// </summary>
 internal sealed class IdentityGateway : IAsyncDisposable
 {
     public const string IssuerName = "primary";
 
+    /// <summary>A path standing in for an upstream API: 401 when anonymous, 200 when authenticated.</summary>
+    public const string ApiPath = "/api/probe";
+
     private readonly IHost host;
     private readonly RequestDelegate pipeline;
 
-    private IdentityGateway(TestIdentityProvider idp, IHost host, RegistrySnapshot snapshot, StubIdpProfile profile)
+    private IdentityGateway(
+        TestIdentityProvider idp, IHost host, RegistrySnapshot snapshot, StubIdpProfile profile, RecordingSessionStore sessions)
     {
         Idp = idp;
+        Sessions = sessions;
         this.host = host;
         Snapshot = snapshot;
         Profile = profile;
@@ -40,13 +48,16 @@ internal sealed class IdentityGateway : IAsyncDisposable
         app.UseAuthentication();
         app.Run(async context =>
         {
-            if (context.Request.Path == "/" && context.User.Identity?.IsAuthenticated != true)
+            bool authenticated = context.User.Identity?.IsAuthenticated == true;
+            if (context.Request.Path == "/" && !authenticated)
             {
                 await context.ChallengeAsync();
                 return;
             }
 
-            context.Response.StatusCode = context.Request.Path == "/" ? 200 : 404;
+            context.Response.StatusCode = context.Request.Path == "/" ? 200
+                : context.Request.Path == ApiPath ? (authenticated ? 200 : 401)
+                : 404;
         });
         pipeline = app.Build();
     }
@@ -56,6 +67,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
     public RegistrySnapshot Snapshot { get; }
 
     public StubIdpProfile Profile { get; }
+
+    /// <summary>Every session the gateway stored, keyed by session key.</summary>
+    public RecordingSessionStore Sessions { get; }
 
     public IServiceProvider Services => host.Services;
 
@@ -96,10 +110,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(snapshot));
         builder.Services.AddSingleton<IClientSecretSource>(secrets);
         builder.Services.AddSingleton<IIdpProfile>(profile);
+        RecordingSessionStore sessions = new(new InMemorySessionStore());
+        builder.Services.AddSingleton<ISessionStore>(sessions);
         builder.AddPlatformIdentity();
         services?.Invoke(builder.Services);
 
-        return new IdentityGateway(idp, builder.Build(), snapshot, profile);
+        return new IdentityGateway(idp, builder.Build(), snapshot, profile, sessions);
     }
 
     /// <summary>Makes <paramref name="app"/> the pinned app of the current request, without sending one.</summary>
@@ -109,6 +125,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         context.Request.Scheme = "https";
         context.Request.Host = new HostString(app.Host);
         context.Features.Set<IAppFeature>(new SettableAppFeature(app, Snapshot));
+        context.Features.Set<IRequestTelemetryFeature>(new SettableRequestTelemetryFeature());
         Services.GetRequiredService<IHttpContextAccessor>().HttpContext = context;
         return context;
     }
@@ -144,14 +161,38 @@ internal sealed class IdentityGateway : IAsyncDisposable
         await pipeline(context).WaitAsync(TestContext.Current.CancellationToken);
 
         IList<SetCookieHeaderValue> set = SetCookieHeaderValue.ParseList([.. context.Response.Headers.SetCookie.Select(v => v ?? "")]);
-        return new Answer(context.Response.StatusCode, context.Response.Headers.Location.ToString(), [.. set]);
+        return new Answer(
+            context.Response.StatusCode,
+            context.Response.Headers.Location.ToString(),
+            [.. set],
+            context.User.FindFirst("sub")?.Value,
+            context.Features.Get<IRequestTelemetryFeature>()!.SessionRef);
     }
 
     /// <summary>
     /// A whole login on <paramref name="app"/>'s host, as a browser would make it: the challenge, the
-    /// provider's authorize endpoint, then the callback carrying the cookies the challenge set.
+    /// provider's authorize endpoint, then the callback carrying the cookies the challenge set, and
+    /// any <paramref name="planted"/> cookies besides.
     /// </summary>
-    public async Task<Login> LoginAsync(AppDefinition app)
+    public async Task<Login> LoginAsync(AppDefinition app, IReadOnlyDictionary<string, string>? planted = null)
+    {
+        Authorized authorized = await AuthorizeAsync(app);
+        Dictionary<string, string> jar = new(authorized.LoginState, StringComparer.Ordinal);
+        foreach ((string name, string value) in planted ?? new Dictionary<string, string>())
+        {
+            jar[name] = value;
+        }
+
+        Answer callback = await SendAsync(app, authorized.Callback.PathAndQuery, jar);
+        return new Login(authorized.Challenge, callback);
+    }
+
+    /// <summary>
+    /// The first two legs of a login: the challenge on <paramref name="app"/>'s host and the provider's
+    /// authorize endpoint. What comes back is the callback the provider redirected to, unsent, and the
+    /// login-state cookies the challenge set.
+    /// </summary>
+    public async Task<Authorized> AuthorizeAsync(AppDefinition app)
     {
         Answer challenge = await SendAsync(app, "/");
         Assert.Equal(302, challenge.Status);
@@ -166,8 +207,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         Dictionary<string, string> jar = challenge.Cookies
             .Where(c => !c.Expires.HasValue || c.Expires > DateTimeOffset.UtcNow)
             .ToDictionary(c => c.Name.ToString(), c => c.Value.ToString() ?? "", StringComparer.Ordinal);
-        Answer callback = await SendAsync(app, back.PathAndQuery, jar);
-        return new Login(challenge, callback);
+        return new Authorized(challenge, back, jar);
     }
 
     public async ValueTask DisposeAsync()
@@ -176,8 +216,13 @@ internal sealed class IdentityGateway : IAsyncDisposable
         await Idp.DisposeAsync();
     }
 
-    /// <summary>What the gateway answered: the status, the <c>Location</c> header and every cookie it set.</summary>
-    internal sealed record Answer(int Status, string Location, IReadOnlyList<SetCookieHeaderValue> Cookies)
+    /// <summary>
+    /// What the gateway answered: the status, the <c>Location</c> header, every cookie it set, the
+    /// authenticated user's <c>sub</c> if there was one, and the <c>session_ref</c> left on the request's
+    /// telemetry feature.
+    /// </summary>
+    internal sealed record Answer(
+        int Status, string Location, IReadOnlyList<SetCookieHeaderValue> Cookies, string? Subject, string? SessionRef)
     {
         /// <summary>
         /// The one cookie set that is not login state: the app's session. Found by elimination so the
@@ -193,5 +238,14 @@ internal sealed class IdentityGateway : IAsyncDisposable
                 .ToDictionary(p => p.Key, p => p.Value.ToString(), StringComparer.Ordinal);
     }
 
-    internal sealed record Login(Answer Challenge, Answer Callback);
+    internal sealed record Login(Answer Challenge, Answer Callback)
+    {
+        /// <summary>The session cookie the callback set, as a browser's jar would hold it.</summary>
+        public Dictionary<string, string> Jar => new(StringComparer.Ordinal)
+        {
+            [Callback.SessionCookie.Name.Value!] = Callback.SessionCookie.Value.Value!,
+        };
+    }
+
+    internal sealed record Authorized(Answer Challenge, Uri Callback, IReadOnlyDictionary<string, string> LoginState);
 }
