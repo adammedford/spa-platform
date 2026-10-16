@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -59,6 +60,20 @@ public static class PlatformIdentityExtensions
         // for every OpenID Connect scheme instead (R-D9). AddOpenIdConnect's own registrations:
         // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectExtensions.cs
         services.TryAddSingleton<IssuerDirectory>();
+
+        // The options invalidator of task 3.6. Both options setups depend on it, so it subscribes to
+        // the registry before the first scheme's options are built.
+        services.TryAddSingleton<OptionsInvalidator>();
+
+        // The caches the invalidator evicts from, in place of the framework's: a closed registration wins
+        // over the open-generic OptionsCache<> that AddOptions registers. They keep no failed build
+        // (R-D10) and no options built for an entry a swap has replaced.
+        services.TryAddSingleton<IOptionsMonitorCache<CookieAuthenticationOptions>>(sp =>
+            new AppOptionsCache<CookieAuthenticationOptions>(
+                sp.GetRequiredService<IHttpContextAccessor>(), sp.GetRequiredService<IRegistry>(), CookieOptionsSetup.Prefix));
+        services.TryAddSingleton<IOptionsMonitorCache<OpenIdConnectOptions>>(sp =>
+            new AppOptionsCache<OpenIdConnectOptions>(
+                sp.GetRequiredService<IHttpContextAccessor>(), sp.GetRequiredService<IRegistry>(), OidcOptionsSetup.Prefix));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IConfigureOptions<OpenIdConnectOptions>, OidcOptionsSetup>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
