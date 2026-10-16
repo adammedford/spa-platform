@@ -98,22 +98,10 @@ public sealed class OidcOptionsSetup(
             ?.Configure(options, app, issuer);
     }
 
-    private AppDefinition? AppFor(string? name)
-    {
-        if (name is null || !name.StartsWith(Prefix, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        string appId = name[Prefix.Length..];
-        if (accessor.HttpContext?.Features.Get<IAppFeature>() is { } pinned
-            && string.Equals(pinned.App.AppId, appId, StringComparison.Ordinal))
-        {
-            return pinned.App;
-        }
-
-        return registry.Current.ByAppId.TryGetValue(appId, out AppDefinition? app) ? app : null;
-    }
+    private AppDefinition? AppFor(string? name) =>
+        name is not null && name.StartsWith(Prefix, StringComparison.Ordinal)
+            ? SchemeApp.Find(accessor, registry, name[Prefix.Length..])
+            : null;
 }
 
 /// <summary>

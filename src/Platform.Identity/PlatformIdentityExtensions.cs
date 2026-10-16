@@ -46,6 +46,11 @@ public static class PlatformIdentityExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IPostConfigureOptions<CookieAuthenticationOptions>, PostConfigureCookieAuthenticationOptions>());
 
+        // The session cookie of task 3.3, configured ahead of that post-configuration as AddCookie's
+        // own configure delegate would be.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IConfigureOptions<CookieAuthenticationOptions>, CookieOptionsSetup>());
+
         // The OpenID Connect options of task 3.2. The framework's post-configuration is registered as
         // AddOpenIdConnect would register it, for the same reason as the cookie handler's above; it
         // supplies the state and nonce protectors and keeps the shared backchannel and metadata manager
