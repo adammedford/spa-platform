@@ -64,4 +64,6 @@ table below and fails if the two drift. ADR-0015 decided it.
 | `auth.session` | A cookie that resolves to no session for this app |
 | `api.unknown` | The app lists no upstream under that name |
 
-Tests assert on both the `code` and the rule id. A refusal by an upstream API is the API's to log.
+Tests assert on both the `code` and the rule id, for every id a stage writes today;
+`auth.callback` and `auth.session` wait on workstream 3, which nothing writes them from yet. A
+refusal by an upstream API is the API's to log.

@@ -102,5 +102,5 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 
 The `code` says little on purpose. Which rule fired is in the log line, and in
 `security.rejections` for every rule but `gate.method`, under the rule ids in
-`contracts/request-gate.md`. Tests assert on the line for all of them and on the count for all but
-that one, which waits on `MethodAllowlist` writing its id.
+`contracts/request-gate.md`. `gate.method` reaches the line with no id and the count not at all
+until `MethodAllowlist` writes it.
