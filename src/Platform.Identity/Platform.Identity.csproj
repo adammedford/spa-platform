@@ -3,6 +3,10 @@
   <!-- Owner: workstream 3. References Platform.Abstractions and no other workstream's project (check A-03). -->
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Platform.Identity.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
 
