@@ -3,8 +3,8 @@
 #
 # It catches, locally, the things that are expensive to find later: a change that touches a path
 # outside its owner's set, a steering document that misleads every session that reads it, a ticket
-# citation that opens nothing, a build that does not compile and a Terraform root that does not
-# validate. The first three cost about a second.
+# citation that opens nothing, two tickets claiming one number, a build that does not compile and a
+# Terraform root that does not validate. All but the last two cost about a second.
 # The build and Terraform run only when the push changes their half of the repository, so a docs
 # push or a branch delete does not pay for either.
 # The tests stay in CI, where they cost nothing to wait for.
@@ -87,16 +87,19 @@ else
   echo "pre-push: A-05 not checked: python3 is not on PATH." >&2
 fi
 
-# --- the documents a session steers by, and every ticket any file cites ------------------------
+# --- the documents a session steers by, every ticket any file cites, and the tickets' numbers ---
 #
 # AGENTS.md and CLAUDE.md are loaded into every session, and the contracts index is read by every
 # workstream before it builds. A progress claim, a pointer at a file that does not exist, a freeze
 # cell the contract it indexes denies, or a ticket number that resolves to no spec costs every
 # later session, so catch it at the push that writes it.
-# The last of the four is not scoped to those documents: an ADR, a contract or a code comment
-# cites tickets too, so the rule reads every tracked file. One consequence worth knowing before it
-# surprises someone: deleting a ticket file turns every citation of it red, in whatever push comes
-# next and whatever it happened to touch.
+# The citation rule is not scoped to those documents: an ADR, a contract or a code comment cites
+# tickets too, so it reads every tracked file. One consequence worth knowing before it surprises
+# someone: deleting a ticket file turns every citation of it red, in whatever push comes next and
+# whatever it happened to touch.
+# The numbering rule fails when two tickets in one tracker directory share a number, which is how
+# two sessions that filed concurrently find out at the second push rather than after it. This is
+# where that has to be caught: neither session's branch is wrong until the other's lands.
 if command -v python3 > /dev/null; then
   python3 -I .github/steering.py || fail "the steering check failed."
 else
@@ -146,7 +149,7 @@ fi
 # Warnings are errors, so this catches what a reviewer should never have to. Skipped when nothing
 # that compiles changed: the solution's projects live under src, tests, fixtures and tools/spactl,
 # and the build settings in the root files.
-ran="A-05, the steering documents, every ticket citation, the roadmap, the artifacts"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts"
 
 if touches '^(src|tests|fixtures|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^global\.json$'; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
