@@ -103,8 +103,24 @@ public static class PlatformIdentityExtensions
         services.TryAddSingleton<SessionGates>();
         services.TryAddSingleton<AccessTokenSourceOptions>();
         services.TryAddSingleton(TimeProvider.System);
-        services.TryAddSingleton<IAccessTokenSource, AccessTokenSource>();
+        services.TryAddSingleton<AccessTokenSource>();
         return builder;
+    }
+
+    /// <summary>
+    /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
+    ///
+    /// Separate from <see cref="AddPlatformIdentity"/>, so the composed gateway does not get the binding
+    /// yet. With a source bound, the proxy's token step answers every sessionless <c>/api</c> call 401
+    /// (contracts/http-contract.md -> Errors), and the composed gateway has no way to establish a session
+    /// while <see cref="UsePlatformShellGate"/> and <see cref="MapPlatformBff"/> are empty: nothing in it
+    /// challenges. Without one, the proxy forwards with no <c>Authorization</c>, which the upstream refuses
+    /// on its own (assumption A5).
+    /// </summary>
+    internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IAccessTokenSource>(sp => sp.GetRequiredService<AccessTokenSource>());
+        return services;
     }
 
     /// <summary>

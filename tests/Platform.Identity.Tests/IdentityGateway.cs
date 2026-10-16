@@ -201,6 +201,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         RecordingSessionStore sessions = new(new InMemorySessionStore());
         builder.Services.AddSingleton<ISessionStore>(sessions);
         builder.AddPlatformIdentity();
+        builder.Services.AddPlatformAccessTokenSource();
         services?.Invoke(builder.Services);
 
         return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);

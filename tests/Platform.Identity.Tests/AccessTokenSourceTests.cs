@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Platform.Abstractions;
 using Platform.Testing;
 using TestIdp;
@@ -321,6 +322,30 @@ public sealed class AccessTokenSourceTests
         Assert.Collection(gateway.Idp.RefreshGrants,
             g => Assert.Equal("ok", g.Outcome),
             g => Assert.Equal("invalid_grant", g.Outcome));
+    }
+
+    [Fact]
+    public void AddPlatformIdentity_builds_the_token_source_outside_a_request_and_leaves_the_interface_unbound()
+    {
+        // The library's endpoint is built once per credential style from its own registration, outside
+        // any request: with the sentinel the options hook needs none (T-A3). The interface binding is
+        // AddPlatformAccessTokenSource's, so a composed gateway forwards sessionless /api calls as before.
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Services.AddLogging();
+        builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(InMemoryRegistry.SnapshotOf(1, "\"r1\"", [App1])));
+        builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource());
+        builder.Services.AddSingleton<ISessionStore>(new InMemorySessionStore());
+        builder.AddPlatformIdentity();
+        using IHost host = builder.Build();
+
+        Assert.NotNull(host.Services.GetRequiredService<AccessTokenSource>());
+        Assert.Null(host.Services.GetService<IAccessTokenSource>());
+
+        builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Services.AddLogging();
+        builder.AddPlatformIdentity();
+        builder.Services.AddPlatformAccessTokenSource();
+        Assert.Contains(builder.Services, d => d.ServiceType == typeof(IAccessTokenSource));
     }
 
     private static Action<IServiceCollection> Deadline(TimeSpan deadline) =>
