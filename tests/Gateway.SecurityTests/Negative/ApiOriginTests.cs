@@ -5,14 +5,16 @@ using Platform.Abstractions;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// N-07, <b>partial</b>: "Call <c>/api</c> and <c>/bff</c> with <c>Sec-Fetch-Site</c> of
+/// N-07: "Call <c>/api</c> and <c>/bff</c> with <c>Sec-Fetch-Site</c> of
 /// <c>cross-site</c>, <c>same-site</c> or absent, or a foreign <c>Origin</c> -> 403
 /// <c>origin_rejected</c>. No <c>Access-Control-Allow-*</c> header on any response, including
 /// preflight." (docs/plan/04-tests.md.)
 ///
-/// <para>These requests prove the request gate's refusals on API and BFF paths, before
-/// authentication (contracts/pipeline.md). They do not establish an authenticated session or
-/// exercise a successful BFF endpoint; those require separate N-07 acceptance evidence.</para>
+/// <para>The class fixture's requests prove the request gate's refusals on API and BFF paths, before
+/// authentication (contracts/pipeline.md), with no session.
+/// <see cref="A_signed_in_browser_is_refused_the_same_way_and_its_successful_answers_grant_no_cross_origin_read"/>
+/// repeats them for a browser holding a live session on a cell that requires one, and reads the
+/// successful <c>/bff/session</c> and <c>/api</c> answers for the row's "on any response".</para>
 ///
 /// <para><b>The two refusals are told apart.</b> Both answer 403 <c>origin_rejected</c>, because the
 /// <c>code</c> "says little on purpose"; the rule id is what distinguishes them
@@ -20,9 +22,6 @@ namespace Gateway.SecurityTests.Negative;
 /// says tests assert on both. A test that read only the status could not tell a gate that lost its
 /// <c>Origin</c> check from one that kept it.</para>
 ///
-/// <para>These requests isolate the HTTP contract named above. Session establishment and
-/// preservation require separate acceptance evidence; a successful response here proves only the
-/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<ApiOriginTests.Cell>
 {
@@ -204,19 +203,62 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
         }
     }
 
+    [Fact]
+    public async Task A_signed_in_browser_is_refused_the_same_way_and_its_successful_answers_grant_no_cross_origin_read()
+    {
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        HarnessApp app = harness.App("app1");
+        using TestBrowser browser = harness.CreateBrowser();
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
+
+        // The controls: with the session, both paths answer.
+        BrowserResponse session = await browser.GetAsync(BffPath, ct: Suite.Ct);
+        BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, api.StatusCode);
+
+        // The session cookie travels on every refused request below, so the refusal is the gate's and
+        // a session does not buy past it.
+        foreach (string path in (string[])[BffPath, ApiPath])
+        {
+            foreach (string? site in (string?[])[FetchMetadata.CrossSite, FetchMetadata.SameSite, null])
+            {
+                int before = await Observed.SettledCountAsync(harness, Suite.Ct);
+                BrowserResponse refused = await browser.GetAsync(path, RequestOptions.With(("Sec-Fetch-Site", site)), Suite.Ct);
+                Assert.Contains(SignedIn.SessionCookieName + "=", refused.Sent("Cookie"), StringComparison.Ordinal);
+                await AssertRefusedAsync(harness, refused, before, RuleIds.GateFetchSite);
+            }
+
+            int count = await Observed.SettledCountAsync(harness, Suite.Ct);
+            BrowserResponse foreign = await browser.GetAsync(path, RequestOptions.With(("Origin", "https://evil.test")), Suite.Ct);
+            await AssertRefusedAsync(harness, foreign, count, RuleIds.GateOrigin);
+        }
+
+        Assert.NotEmpty(browser.Exchanges);
+        foreach (BrowserResponse exchange in browser.Exchanges)
+        {
+            AssertNoCorsGrant(exchange);
+        }
+
+        Assert.True(SignedIn.HoldsSessionCookie(browser, app));
+    }
+
     private static void AssertNoCorsGrant(BrowserResponse response) =>
         Assert.DoesNotContain(
             response.Headers.Keys,
             name => name.StartsWith(Contract.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
 
-    private async Task AssertRefusedAsync(BrowserResponse response, int before, string rule)
+    private Task AssertRefusedAsync(BrowserResponse response, int before, string rule) =>
+        AssertRefusedAsync(Harness, response, before, rule);
+
+    private static async Task AssertRefusedAsync(GatewayHarness harness, BrowserResponse response, int before, string rule)
     {
         Contract.ErrorRow expected = Contract.Error("The request gate refused the request");
         Assert.Equal(expected.Status, (int)response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);
 
-        Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
+        Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
         AssertNoCorsGrant(response);
     }
 }

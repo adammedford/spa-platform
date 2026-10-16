@@ -11,9 +11,10 @@ namespace Gateway.SecurityTests.Negative;
 /// prefix -> 404 <c>unknown_api</c> for the unlisted name, 400 or 404 for the escape paths. No
 /// upstream logs the request." (docs/plan/04-tests.md.)
 ///
-/// <para>The requests establish no session. They prove unknown-name and escape-path refusals,
-/// plus the absence of upstream requests, against that explicit caller state. They do not prove
-/// the same refusals for an authenticated caller.</para>
+/// <para>The class fixture's requests carry no session.
+/// <see cref="A_signed_in_caller_meets_the_same_refusals_and_no_upstream_sees_the_request"/> repeats
+/// both refusals for a caller with a live session, on a cell that requires one, so a session is not
+/// what stands between an attacker and an unlisted upstream.</para>
 ///
 /// <para><b>Why the unlisted name cannot reach an upstream.</b> ADR-0006: YARP's routes are
 /// generated from the registry snapshot, one per app and API, and nothing reads the request to
@@ -47,8 +48,10 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
     /// escaped forms of <c>.</c>, <c>/</c> and <c>\</c>, a literal backslash, and a doubled slash.
     /// The target is sent exactly as written.
     /// </summary>
-    public static TheoryData<string> EscapeTargets =>
-        new(
+    public static TheoryData<string> EscapeTargets => new(Escapes);
+
+    private static readonly string[] Escapes =
+        [
             "/api/echo/../../secret",
             "/api/echo/..;/secret",
             "/api/echo/%2e%2e/secret",
@@ -56,7 +59,8 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
             "/api/echo/%5csecret",
             "/api/echo\\..\\secret",
             "/api/echo//secret",
-            "/api/./echo/thing");
+            "/api/./echo/thing",
+        ];
 
     [Fact]
     public async Task An_api_name_the_app_does_not_list_is_404_unknown_api()
@@ -193,6 +197,41 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
 
         // The prefix is removed, as the upstream contract says: the upstream sees /thing.
         Assert.Equal("/thing", Harness.Echo.Requests[^1].Path);
+    }
+
+    [Fact]
+    public async Task A_signed_in_caller_meets_the_same_refusals_and_no_upstream_sees_the_request()
+    {
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        HarnessApp app = harness.App("app1");
+        using TestBrowser browser = harness.CreateBrowser();
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
+        string cookie = SignedIn.SessionCookieName + "=" + SignedIn.SessionCookie(browser, app);
+
+        // Control first: the session reaches a listed upstream.
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/api/echo/thing", ct: Suite.Ct)).StatusCode);
+        int upstreams = harness.Echo.Requests.Count;
+
+        int before = await Observed.SettledCountAsync(harness, Suite.Ct);
+        BrowserResponse unlisted = await browser.GetAsync("/api/nosuch/thing", ct: Suite.Ct);
+        Contract.ErrorRow unknown = Contract.Error("The app lists no upstream under that name");
+        Assert.Equal(unknown.Status, (int)unlisted.StatusCode);
+        Assert.Contains($"\"code\":\"{unknown.Code}\"", unlisted.Body, StringComparison.Ordinal);
+        Assert.Equal(RuleIds.ApiUnknown, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
+
+        Contract.ErrorRow invalid = Contract.Error("The path failed normalisation");
+        foreach (string target in Escapes)
+        {
+            before = await Observed.SettledCountAsync(harness, Suite.Ct);
+            RawResponse escaped = await RawHttp.SendAsync(
+                harness.GatewayAddress, "GET", target, app.Host,
+                [("Sec-Fetch-Site", FetchMetadata.SameOrigin), ("Cookie", cookie)], Suite.Ct);
+
+            Assert.Equal(invalid.Status, escaped.StatusCode);
+            Assert.Equal(RuleIds.PathInvalid, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
+        }
+
+        Assert.Equal(upstreams, harness.Echo.Requests.Count);
     }
 
     /// <summary>

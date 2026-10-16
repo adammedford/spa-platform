@@ -5,13 +5,13 @@ using Platform.Testing;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// N-24, partial: "Read framing and embedding headers on a
+/// N-24: "Read framing and embedding headers on a
 /// shell, an asset, a <c>/bff</c> response and an API error -> <c>frame-ancestors 'none'</c>,
 /// <c>nosniff</c> and <c>Cross-Origin-Resource-Policy</c> on all four." (docs/plan/04-tests.md.)
 ///
-/// <para>This class covers shells, assets and API errors, plus gateway refusals and an upstream
-/// 500. It does not exercise a successful BFF response, so its evidence covers three of N-24
-///'s four required response shapes.</para>
+/// <para>The class fixture covers shells, assets and API errors, plus gateway refusals and an upstream
+/// 500. The fourth shape, a successful <c>/bff</c> response, needs a session, so
+/// <see cref="A_signed_in_bff_answer_carries_them"/> reads it on a cell that requires one.</para>
 ///
 /// <para><b>Why that holds by construction, and why it is still worth asserting.</b> UsePlatformSecurityHeaders applies
 /// the headers from <c>Response.OnStarting</c> rather than writing them as it runs, so they are
@@ -19,9 +19,6 @@ namespace Gateway.SecurityTests.Negative;
 /// copied an upstream's. The composed pipeline is the only place that claim can be read, because in
 /// workstream 4's own project there is no proxy endpoint and no upstream to be overwritten.</para>
 ///
-/// <para>These requests isolate the HTTP contract named above. Session establishment and
-/// preservation require separate acceptance evidence; a successful response here proves only the
-/// asserted routing, policy or telemetry behaviour.</para>
 /// </summary>
 public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClassFixture<EmbeddingHeaderTests.Cell>
 {
@@ -129,6 +126,24 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
 
         Assert.Equal(404, response.StatusCode);
         Assert.Empty(response.Values("Content-Security-Policy"));
+    }
+
+    [Fact]
+    public async Task A_signed_in_bff_answer_carries_them()
+    {
+        await using GatewayHarness harness = await SignedIn.StartAsync();
+        using TestBrowser browser = harness.CreateBrowser();
+        BrowserResponse shell = await harness.SignInAsync(browser, "app1", Suite.Ct);
+
+        BrowserResponse session = await browser.GetAsync("/bff/session", ct: Suite.Ct);
+        BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
+
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, api.StatusCode);
+        foreach (BrowserResponse response in (BrowserResponse[])[shell, session, api])
+        {
+            AssertEmbeddingHeaders(response);
+        }
     }
 
     private static void AssertEmbeddingHeaders(BrowserResponse response) =>
