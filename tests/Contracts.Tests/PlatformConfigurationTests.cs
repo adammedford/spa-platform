@@ -99,7 +99,8 @@ public sealed class PlatformConfigurationTests
     [Fact]
     public void Profile_is_an_IIdpProfile_name()
     {
-        // Draft until G1b: the enum may gain or lose a member when the G0 findings land.
+        // Frozen at G1b: ADR-0017 folded the G0 findings in and the member set is settled, so a
+        // change here needs a change request.
         Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Profile"] = "standard"), "the standard profile");
         Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Profile"] = "cognito"), "the cognito profile");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Profile"] = "pingfederate"), "a profile that does not exist yet");

@@ -26,10 +26,19 @@ namespace Platform.Abstractions;
 /// https://docs.aws.amazon.com/cognito/latest/developerguide/revocation-endpoint.html
 ///
 /// The names match the token-management library's own vocabulary so the mapping in
-/// <c>Platform.Identity</c> is obvious, but this is the platform's own type: A-04 keeps that
+/// <c>Platform.Identity</c> reads obviously, but this is the platform's own type: A-04 keeps that
 /// package out of every project but <c>Platform.Identity</c>.
 ///
-/// Source: docs/plan/02-contracts.md -> Interfaces. Frozen at G1b.
+/// <b>Map by name, never by cast.</b> <c>Duende.IdentityModel.Client.ClientCredentialStyle</c> in
+/// the pinned 8.1.0 orders its two members the other way round -- <c>AuthorizationHeader = 0</c>,
+/// <c>PostBody = 1</c> -- so the same two names carry the opposite numbers on the two types. An
+/// enum-to-enum cast therefore compiles, needs no conversion, and silently inverts the style, which
+/// produces exactly the failure this type exists to prevent: a form-body secret at the revocation
+/// endpoint, refused with 401 and only ever exercised at logout. A <c>switch</c> on the member
+/// names is the mapping; task 3.8 writes it.
+///
+/// Source: ADR-0017 -> the profile gains a client credential style, which is where this member was
+/// decided; it postdates the interface list in docs/plan/02-contracts.md. Frozen at G1b.
 /// </summary>
 public enum ClientCredentialStyle
 {

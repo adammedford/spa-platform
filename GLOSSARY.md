@@ -139,7 +139,7 @@ properties, `A-` architecture reference rules. A test id in a task names a behav
 workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
-harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). Listed in `docs/plan/07-evidence.md`. Separate from test ids.
+harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.

@@ -6,15 +6,15 @@ using Platform.Abstractions;
 namespace Platform.Abstractions.Tests;
 
 /// <summary>
-/// The schemas and the code have to agree about what is draft; I-6 leaves that set empty.
+/// The schemas and the code have to agree about what is still draft; I-6 leaves that set empty.
 ///
-/// contracts/README.md says "every draft subschema carries an x-freeze annotation naming the gate,
-/// so the marker travels with the schema rather than only with this page", and
-/// <see cref="FreezeAttribute"/> is that idea for the code. Two halves of one rule, and until this
-/// file existed only the schema half was derived from the artifact: Contracts.Tests walks the
-/// schema tree for every draft subschema, while the code half was a hand-typed list. So the halves
-/// drifted. <see cref="OAuthDefinition"/> is the C# form of a subschema marked draft in two
-/// schemas and carried no marker, and it passed CI, a review and a retrospective that way.
+/// contracts/README.md → "What G1b froze" says the schema annotations record
+/// <c>"status": "frozen-at-g1b"</c> for the frozen parts, and <see cref="FreezeAttribute"/> is the
+/// code's half of the same idea. Two halves of one rule, and until this file existed only the
+/// schema half was derived from the artifact: Contracts.Tests walks the schema tree for every
+/// draft subschema, while the code half was a hand-typed list. So the halves drifted.
+/// <see cref="OAuthDefinition"/> is the C# form of a subschema marked draft in two schemas and
+/// carried no marker, and it passed CI, a review and a retrospective that way.
 ///
 /// This walks the schemas and holds the code to what they say. <see cref="PublicSurfaceTests"/>
 /// checks the other direction, that the marked set is the one the contract names.
@@ -27,12 +27,13 @@ public sealed class FreezeMarkersTests
     /// subschema missing from here: adding one is then a decision about its code counterpart
     /// rather than something that passes in silence.
     ///
-    /// Two of the three are the same type, because a registry entry and an app definition share
-    /// the subschema by <c>$ref</c>. A null means the draft part has no counterpart in
-    /// <c>Platform.Abstractions</c> at all.
+    /// <b>Empty, because ADR-0017 / I-6 leaves no subschema marked draft.</b> It stays here rather
+    /// than going away with the last entry: a new draft subschema has to add its code counterpart
+    /// deliberately and reopen a gate, instead of passing because no code reads it. A value may be
+    /// null, for a draft part with no counterpart in <c>Platform.Abstractions</c> at all; two keys
+    /// may share a value, as a registry entry and an app definition share a subschema by
+    /// <c>$ref</c>.
     /// </summary>
-    // ADR-0017 / I-6 clears the draft set. A new draft subschema must deliberately add its
-    // code counterpart here and reopen a gate, rather than passing because no code reads it.
     private static readonly Dictionary<string, string?> CodeForm = new();
 
     [Fact]

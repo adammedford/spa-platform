@@ -8,7 +8,7 @@ namespace Platform.Testing.Tests;
 /// The token source double, which workstream 4 builds the proxy pipeline against (task 4.2: get the
 /// token before forwarding, answer 401 when there is none).
 ///
-/// <b>Draft until G1b</b>, with <see cref="IAccessTokenSource"/>.
+/// <b>Frozen at G1b</b>, with <see cref="IAccessTokenSource"/> (ADR-0017).
 /// </summary>
 public sealed class FakeAccessTokenSourceTests
 {
