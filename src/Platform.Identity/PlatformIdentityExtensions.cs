@@ -114,10 +114,9 @@ public static class PlatformIdentityExtensions
     /// <summary>
     /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
     ///
-    /// An explicit binding lets component and composed hosts select token enforcement independently
-    /// of installing the identity services. A bound source makes the proxy answer sessionless API
-    /// requests with 401 (contracts/http-contract.md); hosts that omit it retain the proxy's
-    /// optional-source behavior.
+    /// This internal registration is an assembly seam for component hosts. The HTTP contract
+    /// requires the proxy to answer sessionless API requests with 401; the registered source supplies
+    /// that authentication outcome (contracts/http-contract.md).
     /// </summary>
     internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
     {
@@ -126,9 +125,9 @@ public static class PlatformIdentityExtensions
     }
 
     /// <summary>
-    /// Switches <see cref="UsePlatformShellGate"/> on for a host that requires authenticated assets
-    /// (ADR-0008). The binding is separate from installing the identity services so that a host's
-    /// explicit policy decides whether anonymous asset requests are challenged.
+    /// Installs <see cref="UsePlatformShellGate"/>'s internal binding when assembling a component host.
+    /// ADR-0008 requires a session before any asset; this registration supplies the gate implementing
+    /// that requirement.
     /// </summary>
     internal static IServiceCollection AddPlatformShellGate(this IServiceCollection services)
     {
@@ -138,8 +137,8 @@ public static class PlatformIdentityExtensions
 
     /// <summary>
     /// A session before any asset (ADR-0008): an unauthenticated navigation is challenged, an
-    /// unauthenticated fetch gets 401. Task 3.9; see <see cref="ShellGate"/>. In the pipeline only when
-    /// <see cref="AddPlatformShellGate"/> has been called.
+    /// unauthenticated fetch gets 401. See <see cref="ShellGate"/>. Component hosts assemble this
+    /// middleware through the internal <see cref="AddPlatformShellGate"/> binding.
     /// </summary>
     public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) =>
         app.ApplicationServices.GetService<ShellGate.Binding>() is null ? app : app.Use(ShellGate.InvokeAsync);
