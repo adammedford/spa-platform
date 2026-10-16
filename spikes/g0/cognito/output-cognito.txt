@@ -1,0 +1,114 @@
+MODE    Cognito: Gate G0 items 2 and 3 (task 3.0b)
+run     2026-10-16 01:10Z, .NET 10.0.12, macOS 27.0.0
+        Microsoft.AspNetCore.Authentication.OpenIdConnect 10.0.12
+        Duende.AccessTokenManagement.OpenIdConnect 4.2.0
+        Duende.IdentityModel 8.1.0
+        Microsoft.Playwright 1.63.0
+        Chromium for Playwright, revision 1243 (153.0.8010.12)
+driver  playwright
+
+Prerequisites (Q9)
+present 1.1 applied: the user pool, its managed-login domain and the test users (infra/envs/poc/idp)
+               [issuer and cognitoDomain from spikes/g0/cognito/outputs.local.json; discovery loads and names the issuer]
+present 1.8 applied: an OAuth client, branding style and secret parameter for app1 and app2 (infra/envs/poc/apps)
+               [clients.app1 and clients.app2 in the outputs document; fixtures/apps/app1.json and app2.json. The 1.8 README's manual code-flow login is the person's to confirm]
+present certs.sh run on this workstation (1.6a): the *.spa-poc.test certificate, trusted
+               [spa-platform-poc-wildcard.fullchain.pem and its key load; trust is checked by the browser at the first login]
+present the hosts-file line: 127.0.0.1 app1.spa-poc.test app2.spa-poc.test app3.spa-poc.test
+               [app1 and app2 resolve to loopback]
+present local port 8443 free (stop tunnel.sh first: the harness takes 8443 itself)
+               [nothing accepts connections on 127.0.0.1:8443]
+present AWS credentials as in assumption A7, able to read the secret and password parameters
+               [credentials found; every parameter the run needs was read]
+present Chromium for Microsoft.Playwright 1.63.0 (or pass --manual)
+               [it launches]
+
+setup   issuer https://cognito-idp.us-east-2.amazonaws.com/us-east-2_iRHq0u84V, managed login at https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com, outputs from spikes/g0/cognito/outputs.local.json
+setup   gateway on https://127.0.0.1:8443 for the browser; the harness's own calls reach it on loopback as the load balancer would
+
+The harness: redaction self-check (Q4)
+OK      H-1     a line holding app1's client secret, which the harness was given, is withheld
+OK      H-2     a line holding a JWT the harness was never told about is withheld
+OK      H-3     a line holding a callback URL's code or state is withheld
+OK      H-4     a line holding only lengths, hashes and URLs without a query is printed
+OK      H-5     a line holding a token in a JSON member, or a code parameter at the start of a line, is withheld
+
+Item 2: discovery
+OK      C-2.1   the issuer's discovery document loads, names the issuer the outputs give, and puts authorization at the managed-login origin
+               [issuer https://cognito-idp.us-east-2.amazonaws.com/us-east-2_iRHq0u84V; authorize at https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com; token endpoint https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/token; client authentication client_secret_basic, client_secret_post]
+not-rep C-2.2   discovery lists no end_session_endpoint (item 2: what discovery advertises for logout)
+               [end_session_endpoint https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/logout]
+               -> the standard profile's RP-initiated logout would also work; ADR-0011's cognito profile stays
+not-rep C-2.3   discovery lists no revocation_endpoint (Q16, T-B14)
+               [revocation_endpoint https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/revoke]
+               -> the library's revoke call finds the endpoint in discovery; no IIdpProfile member is needed for it
+
+Item 2: login, callback, refresh and logout, as tasks 3.8 and 3.9 configure them (browser A)
+OK      C-2.4   app1: login and callback complete through managed login, and the gateway holds app1's session
+               [asked for a password: yes; managed login seen: yes; https://app1.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/login > https://app1.spa-poc.test:8443/signin-oidc > https://app1.spa-poc.test:8443/]
+OK      C-2.5   app2: login and callback complete in the same browser, as a second OAuth client with its own session
+               [asked for a password: no; managed login seen: no; https://app2.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://app2.spa-poc.test:8443/signin-oidc > https://app2.spa-poc.test:8443/]
+FINDING C-2.6   app2's login asked for no password: the provider's session from app1's login made it silent (Q19)
+               [asked for a password: no]
+               -> none for the gateway: still two OAuth clients, two scheme pairs and two session records. C-2.12 and C-2.15 check that logout stays per app
+not-rep C-2.7   resource binding does not put app1's resource into the access token's aud (Q15)
+               [app1 sent resource at authorize: yes; app1 aud=https://orders.spa-poc.test, client_id=present, scope=openid profile https://orders.spa-poc.test/read, token_use=access, client_id is app1's client; app2 aud=(none), client_id=present, scope=https://reports.spa-poc.test/read openid profile, token_use=access, client_id is app2's client]
+               -> the plan's assumption holds: aud carries the resource
+OK      C-2.8   app1: a refresh through the token library (sentinel scheme, both scheme names, PostBody) is granted, rotates the refresh token, and the session keeps the new one
+               [200 ok; access token h:83c79066 -> h:73bd97d6; refresh token h:9214d712 (1,841 chars) -> h:c9ac935f (1,933 chars)]
+not-rep C-2.9   aud does not survive a refresh that sends no resource (Q14)
+               [aud at login: https://orders.spa-poc.test; after the library's refresh, which sends no resource: https://orders.spa-poc.test]
+               -> task 3.8 leaves resource off the refresh (T-B12)
+OK      C-2.10  app2: a refresh through the token library (sentinel scheme, both scheme names, PostBody) is granted, rotates the refresh token, and the session keeps the new one
+               [200 ok; access token h:ecc1e7fb -> h:fc87daae; refresh token h:b79c953b (1,690 chars) -> h:9156b7c4 (1,782 chars)]
+        waiting 243 s for app1's access token to come within a minute of expiry (Q20)
+OK      C-2.11  app1: a call with a token due for refresh refreshes without being forced, on the provider's own token lifetime (Q20)
+               [200 ok; the token expired at 01:15:31Z; access token h:73bd97d6 -> h:ea6e5cf6]
+OK      C-2.12  app1: logout revokes, removes app1's session record, and sends the browser to the provider's logout with app1's client, landing on / (R-C7)
+               [302; revocation through the library route: sent in the form body; the library does not return the answer; session removed: yes; provider logout https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/logout with app1's client: yes; then https://app1.spa-poc.test:8443/bff/logout > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/logout > https://app1.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/login]
+FINDING C-2.13  the refresh token logout revoked still refreshes
+               [a refresh with it afterwards: granted]
+               -> task 3.9 records the revocation's outcome. The token lives until it expires, and only the server ever held it; the session record that held it is gone
+FINDING C-2.14  after app1's logout the next login to app1 asks for a password: the provider's logout ended its session for every client in that browser (Q19)
+               [the logout landed on /, which challenged at once; asked for a password: yes]
+               -> none for the gateway: its logout is per app (C-2.15), the provider's is global. I-6 records it under the glossary's logical boundary
+OK      C-2.15  app2's session still answers /bff/session after app1's logout, and app2's refresh still works (Q19)
+               [/bff/session 200; refresh 200 ok, access token h:fc87daae -> h:b7f4a729]
+OK      C-2.16  app2: logout revokes, removes app2's session record, and sends the browser to the provider's logout with app2's client, landing on /
+               [302; revocation through the library route: sent in the form body; the library does not return the answer; session removed: yes; then https://app2.spa-poc.test:8443/bff/logout > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/logout > https://app2.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/login]
+
+Item 2 questions: raw calls through Duende.IdentityModel (browser R)
+FINDING C-2.17  Cognito's grace window is insufficient, outcome (i): a replay inside the window is refused, or it leaves the successor unusable (Q11)
+               [rotation granted, a new refresh token: yes; the replay at 2.0 s: granted, returning new tokens and a different refresh token; the successor afterwards: refused 400 invalid_grant]
+               -> Q11: insufficient. ADR-0005's reserve design reopens (gateway-owned locking over the library's refresh call), and I-6 records it
+not-rep C-2.18  Cognito's grace window is insufficient, outcome (ii): a replay after the window makes the successor unusable, which is token-family revocation (Q11)
+               [rotation granted; the replay at 12.0 s: refused 400 invalid_grant; the successor afterwards: granted]
+               -> a late replay is refused and the successor keeps working: the expected behaviour, not a finding
+not-rep C-2.19  revoking a rotated-out refresh token leaves its successor alive (Q12, T-B18)
+               [rotation granted; revoking the rotated-out token at https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/revoke: accepted (form body refused 401 Unauthorized, then Basic header 200); the successor afterwards: refused 400 invalid_grant]
+               -> revocation reaches the successor: recorded, and nothing changes
+not-rep C-2.20  a refresh token is longer than the token library's 4,096-character limit (Q13, T-B11)
+               [app1 refresh token 1,752 chars at login, 1,845 after 1 refresh, 1,845 after 5; access token 1,047 chars; ID token 1,217 chars; app2 refresh token 1,690 chars at login, 1,782 after 1 refresh, 1,782 after 5; access token 1,001 chars; ID token 1,217 chars]
+               -> every refresh token fits the library's limit
+FINDING C-2.21  only one client credential style works at the token or revocation endpoint (Q17, T-B4, T-B5)
+               [code exchange in the form body (the handler, every login): yes; in a Basic header: yes (ok); refresh in the form body (the library and raw): yes; in a Basic header: yes (granted); revocations through the profile route and Q12 accepted with: Basic header]
+               -> Q17: the style that works becomes the cognito profile's setting, for the code exchange, the refresh and the revocation alike
+
+Item 3: the callback URL with a port, and managed login for clients Terraform made
+OK      C-3.1   each OAuth client, as created, lists https://{host}/signin-oidc as a callback and https://{host}/ as a sign-out URL, with the port
+               [app1: callbacks https://app1.spa-poc.test:8443/signin-oidc, sign-out https://app1.spa-poc.test:8443/, rotation ENABLED, grace 10 s; app2: callbacks https://app2.spa-poc.test:8443/signin-oidc, sign-out https://app2.spa-poc.test:8443/, rotation ENABLED, grace 10 s (from DescribeUserPoolClient and DescribeManagedLoginBrandingByClient)]
+OK      C-3.2   every authorize call carried the callback with its port, and the provider sent the browser back to it, for both apps
+               [app1: redirect_uri https://app1.spa-poc.test:8443/signin-oidc; the last login in each of 2 browser(s) came back to it; app2: redirect_uri https://app2.spa-poc.test:8443/signin-oidc; the last login in each of 4 browser(s) came back to it]
+OK      C-3.3   the provider accepted each app's sign-out URL: both logouts landed on https://{host}/
+               [app1: yes; app2: yes (C-2.12, C-2.16)]
+OK      C-3.4   each OAuth client has the managed-login branding style Terraform created
+               [app1: style present, Cognito-provided values yes; app2: style present, Cognito-provided values yes]
+OK      C-3.5   managed login renders, asks for a password, and the login completes, for both apps
+               [app1: asked for a password: yes; managed login seen: yes; https://app1.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/login > https://app1.spa-poc.test:8443/signin-oidc > https://app1.spa-poc.test:8443/; app2 in a new browser as bob: asked for a password: yes; managed login seen: yes; https://app2.spa-poc.test:8443/ > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/oauth2/authorize > https://spa-platform-poc-146873694665.auth.us-east-2.amazoncognito.com/login > https://app2.spa-poc.test:8443/signin-oidc > https://app2.spa-poc.test:8443/]
+
+cleanup revoked 24 of 24 refresh tokens the run obtained; the harness created nothing in AWS (Q23)
+
+19 expectations held, 0 did not, 5 findings confirmed, 7 probes not reproduced, 0 skipped
+G0 item 2: passed: both OAuth clients completed login, callback, refresh and logout
+G0 item 3: passed: the provider accepted the callback and sign-out URLs with the port, and managed login worked for both clients Terraform made
+redaction: 136 credential values held as canaries; 0 line(s) withheld
