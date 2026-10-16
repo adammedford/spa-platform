@@ -80,14 +80,20 @@ tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
 Read it, do not take it from here. This file does not track progress, because a copy of the state
 goes stale and then misleads every session that loads it.
 
-- **Which gates have closed:** `git tag`. Each annotated tag names the gate and the CI run that
-  proves its exit test.
-- **What has landed:** `git log --oneline`, where each task's merge names its id.
-- **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read against those
-  tags.
-- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read against `git tag`.
-- **All three at once, per gateway capability:** the generated block in `docs/roadmap.md`, which
-  `tools/roadmap.py` derives from exactly those sources. Land a row, then run that script.
+**Before choosing work, run `git fetch origin --tags` successfully and read origin/main.** A local
+checkout can trail the trunk. If the fetch fails, report that current progress is unverified before
+using an older snapshot to choose work.
+
+- **Which gates have closed:** `git tag --merged origin/main`. Inspect each annotated gate tag's
+  message for its exit test and CI evidence; an unrelated local tag is not a trunk gate.
+- **What has landed:** `git log --oneline origin/main`, where each task's merge names its id.
+- **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read from
+  origin/main against those tags.
+- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read from origin/main against
+  those tags.
+- **All three at once, per gateway capability:** read `docs/roadmap.md` from origin/main with
+  `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; after
+  landing a row, run that script in the landing checkout.
 
 One rule does not depend on progress, so it is safe to state here: nothing in
 `src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because everything identity is

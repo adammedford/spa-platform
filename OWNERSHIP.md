@@ -6,8 +6,11 @@ The owners are the roles in the plan (`docs/plan/03-workstreams-and-tasks.md`). 
 names, not GitHub handles**: this repository has one author, so handle resolution would be theatre.
 `.github/path-ownership.py` reads the block below as text and nothing else consumes it.
 
-Check A-05 runs in `.githooks/pre-push` and fails a change that touches a path outside one owner's
-set. When it fires, look at what it names: either the change reached somewhere it did not mean to,
+Check A-05 runs in `.githooks/pre-push`. A linear branch must touch one owner's set across its
+whole diff. A history containing a merge must keep each ordinary commit and each merge's resolution
+edits within one owner's set; imported parent commits are audited separately, including reverted
+commits. Two-parent merges are supported; octopus merges fail with instructions to split them.
+When it fires, look at what it names: either the change reached somewhere it did not mean to,
 or it needs an integrator path and wants a change request under `contracts/changes/`. Anyone may add
 one of those, which is why the block exempts it.
 
