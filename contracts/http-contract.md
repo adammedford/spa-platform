@@ -100,5 +100,7 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 502 | `upstream_unavailable` | The upstream could not be reached |
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |
 
-The `code` says little on purpose. Which rule fired is in the log line and in
-`security.rejections`, under the rule ids in `contracts/request-gate.md`. Tests assert on both.
+The `code` says little on purpose. Which rule fired is in the log line, and in
+`security.rejections` for every rule but `gate.method`, under the rule ids in
+`contracts/request-gate.md`. Tests assert on the line for all of them and on the count for all but
+that one, which waits on `MethodAllowlist` writing its id.

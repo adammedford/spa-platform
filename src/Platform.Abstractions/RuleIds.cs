@@ -3,7 +3,8 @@ using System.Collections.Immutable;
 namespace Platform.Abstractions;
 
 /// <summary>
-/// The rule ids a refusal is logged and counted under. Source: contracts/request-gate.md -> Rule
+/// The rule ids a refusal is logged under, and counted under for every id but
+/// <see cref="GateMethod"/>. Source: contracts/request-gate.md -> Rule
 /// ids, which is the normative list; ADR-0015 put them here. Freezes at G1a with that contract.
 ///
 /// Four workstreams need the same strings and no two of them may disagree: workstream 2 refuses a
@@ -14,8 +15,10 @@ namespace Platform.Abstractions;
 /// in tests/Platform.Abstractions.Tests reads the contract's own table and fails if the two drift.
 ///
 /// A rule id reaches a log line and <c>security.rejections</c>, never a response body: the
-/// <c>code</c> in a problem response says less on purpose. See contracts/telemetry.md -> "How
-/// <c>rule</c> and <c>session_ref</c> reach the request line".
+/// <c>code</c> in a problem response says less on purpose. <see cref="GateMethod"/> is the one
+/// exception to the count, because <c>MethodAllowlist</c> logs it without writing it to
+/// <c>IRequestTelemetryFeature</c>. See contracts/telemetry.md -> "How <c>rule</c> and
+/// <c>session_ref</c> reach the request line".
 /// </summary>
 public static class RuleIds
 {

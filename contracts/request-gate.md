@@ -41,8 +41,8 @@ ASP.NET Core matches request cookie names without regard to case.
 
 ## Rule ids
 
-The `code` in a response says little on purpose. The rule id in the log line and in
-`security.rejections` says which rule fired.
+The `code` in a response says little on purpose. The rule id in the log line says which rule
+fired, and so does the tag on `security.rejections` for every rule but `gate.method`.
 
 This table is the normative list, and `Platform.Abstractions.RuleIds` holds the same strings as
 constants so that no owner keeps a copy of its own: A-03 stops one workstream reading another's,
