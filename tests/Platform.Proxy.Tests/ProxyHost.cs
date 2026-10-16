@@ -15,10 +15,6 @@ namespace Platform.Proxy.Tests;
 ///
 /// It listens on loopback and the test sets the <c>Host</c> header itself. Everything here routes by
 /// host, so a host a client cannot choose would prove nothing.
-///
-/// The composed gateway cannot show any of this yet: the host-resolution stub at stage 4 answers 404
-/// to every host until task 2.3, so nothing after it runs. Workstream 6 proves these behaviours again
-/// in the composed suites once it does.
 /// </summary>
 public sealed class ProxyHost : IAsyncDisposable
 {
@@ -40,7 +36,7 @@ public sealed class ProxyHost : IAsyncDisposable
     public const string DefaultToken = "token-for-the-session";
 
     /// <summary>
-    /// The token source the proxy asks, standing in for workstream 3's (task 3.8). Unlike the double's
+    /// The token source the proxy asks, standing in for workstream 3's. Unlike the double's
     /// own default, this host starts it on <see cref="DefaultToken"/>, so a test about routing gets a
     /// forward rather than the 401; a test about the 401 arranges it.
     /// </summary>
@@ -55,8 +51,8 @@ public sealed class ProxyHost : IAsyncDisposable
     /// <summary>
     /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
     /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
-    /// the host was started with <c>telemetry: true</c>, because stage 2 is the only thing that creates
-    /// that feature and this host is cut down to one stage.
+    /// the host was started with <c>telemetry: true</c>, because <c>UsePlatformTelemetry</c> is the only thing that
+    /// creates that feature and this host does not run it.
     /// </summary>
     public IReadOnlyList<string?> TelemetryRules
     {
@@ -76,9 +72,9 @@ public sealed class ProxyHost : IAsyncDisposable
         StartAsync(ct, new ProxyHostOptions { Telemetry = telemetry }, apps);
 
     /// <param name="telemetry">
-    /// true installs stage 2's stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
+    /// true installs <c>UsePlatformTelemetry</c>'s stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
     /// and records what each request left on it in <see cref="TelemetryRules"/>. Off in the overload
-    /// above, so every other test here runs stage 10 with no feature installed, which is what holds
+    /// above, so every other test here runs <c>MapPlatformProxy</c> with no feature installed, which is what holds
     /// the stage's write to being null-conditional.
     /// </param>
     public static async Task<ProxyHost> StartAsync(CancellationToken ct, ProxyHostOptions options, params AppDefinition[] apps)
@@ -104,7 +100,7 @@ public sealed class ProxyHost : IAsyncDisposable
         WebApplication web = builder.Build();
         List<SettableRequestTelemetryFeature> telemetryFeatures = [];
 
-        // Stage 2's stand-in, when a test asks for it: the feature stage 2 sets on the request before
+        // UsePlatformTelemetry's stand-in, when a test asks for it: the feature it sets on the request before
         // calling the rest of the pipeline and reads back once it returns
         // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
         // by default, so every other test here runs the stage with no feature installed, which is what
@@ -146,8 +142,7 @@ public sealed class ProxyHost : IAsyncDisposable
             web.UsePlatformSecurityHeaders();
         }
 
-        // As Program.cs does it: stage 7 is the framework's own UseRouting, and the Map entry points
-        // of stage 10 come after it.
+        // As Program.cs does it: the framework's own UseRouting, and the Map entry points after it.
         web.UseRouting();
         web.MapPlatformProxy();
 

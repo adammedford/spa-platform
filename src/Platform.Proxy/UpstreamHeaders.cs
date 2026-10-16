@@ -40,7 +40,10 @@ internal static class UpstreamHeaders
         // Strip first, then let the gateway set its own three. The order is the point: the
         // forwarders below run after this transform because they are added after it, and the
         // defaults YARP would otherwise append are switched off so nothing else, X-Forwarded-Prefix
-        // included, is added behind them.
+        // included, is added behind them. UseDefaultForwarders = false is YARP's switch for "have
+        // configured your own", and Set overwrites rather than appends:
+        // https://github.com/dotnet/yarp/blob/v2.3.0/src/ReverseProxy/Transforms/Builder/TransformBuilderContext.cs
+        // https://github.com/dotnet/yarp/blob/v2.3.0/src/ReverseProxy/Transforms/ForwardedTransformActions.cs
         context.AddRequestTransform(transform =>
         {
             StripAndAttach(transform);

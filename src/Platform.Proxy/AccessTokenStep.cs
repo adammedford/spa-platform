@@ -19,11 +19,11 @@ internal static partial class AccessTokenStep
 {
     internal static void Use(IApplicationBuilder proxy)
     {
-        // Asked once, at map time, without resolving anything. AddPlatformIdentity registers no token
-        // source until task 3.8, and the composed gateway forwards /api today (host resolution is
-        // real), so a missing source is the skeleton, not a fault: the call goes on with no
-        // Authorization at all, which the upstream refuses on its own (assumption A5). This is the same
-        // allowance RegistryProxyConfigProvider makes for a missing registry.
+        // Asked once, at map time, without resolving anything. A gateway composed on the identity stub
+        // registers no token source, and its /api still forwards, so a missing source is the skeleton,
+        // not a fault: the call goes on with no Authorization at all, which the upstream refuses on its
+        // own (assumption A5). This is the same allowance RegistryProxyConfigProvider makes for a
+        // missing registry, and the startup warning below names it.
         bool registered = proxy.ApplicationServices.GetService<IServiceProviderIsService>()
             ?.IsService(typeof(IAccessTokenSource)) == true;
 

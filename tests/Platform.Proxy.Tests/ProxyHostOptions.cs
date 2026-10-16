@@ -10,8 +10,8 @@ public sealed record ProxyHostOptions
     public bool Telemetry { get; init; }
 
     /// <summary>
-    /// Registers <see cref="ProxyHost.Tokens"/> as the <c>IAccessTokenSource</c>. Off is the
-    /// composed gateway before task 3.8, when <c>AddPlatformIdentity</c> registers none.
+    /// Registers <see cref="ProxyHost.Tokens"/> as the <c>IAccessTokenSource</c>. Off is a
+    /// gateway composed on the identity stub, whose <c>AddPlatformIdentity</c> registers none.
     /// </summary>
     public bool TokenSource { get; init; } = true;
 

@@ -99,7 +99,7 @@ public sealed class AccessTokenStepTests
     [Fact]
     public async Task With_no_token_source_registered_the_call_is_forwarded_with_no_authorization()
     {
-        // The composed gateway before task 3.8: AddPlatformIdentity registers no source. Nothing to
+        // A gateway composed on the identity stub: AddPlatformIdentity registers no source. Nothing to
         // attach, and the browser's own Authorization is still stripped, so the upstream gets none.
         EchoUpstream orders = new();
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
