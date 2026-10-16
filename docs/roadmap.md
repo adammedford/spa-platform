@@ -27,7 +27,7 @@ after landing a row; `--check` runs in `.githooks/pre-push` and in CI.
 | Stage | Gate | Plan rows landed | What the stage still owes |
 | --- | --- | --- | --- |
 | S1 It boots, and refuses a host it does not know | G1a, tagged `skeleton-v1` | 5 of 5 | nothing |
-| S2 The mechanism holds on the shipped parts | G0, not tagged | 4 of 6 | part-landed: `1.1`, `3.0` |
+| S2 The mechanism holds on the shipped parts | G0, tagged `g0-mechanism` | 5 of 6 | part-landed: `1.1` |
 | S3 The identity surface is frozen | G1b, not tagged | 0 of 1 | `I-6` |
 | S4 Feature complete, hermetically | G2, not tagged | 18 of 29 | `3.1`, `3.2`, `3.3`, `3.4`, `3.5`, `3.6`, `3.7`, `3.8`, `3.9`, `4.2`; part-landed: `6.2` |
 | S5 The same gateway on real infrastructure | G3, not tagged | 0 of 9 | `1.6b`, `1.7`, `1.9`, `6.5`, `6.9`; part-landed: `1.2`, `1.3`, `1.4`, `1.5` |

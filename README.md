@@ -27,9 +27,9 @@ top of every session misleads from the first token, which is why `.github/steeri
 in `AGENTS.md` and why this block is generated.
 
 <!-- BEGIN GENERATED summary -->
-**Closed gates:** G1a (`skeleton-v1`).
-**Where the gateway is:** S2 The mechanism holds on the shipped parts, which closes at gate G0.
-**Plan rows landed:** 27 of 62, with 8 part-landed. S2 still owes `1.1`, `3.0`.
+**Closed gates:** G1a (`skeleton-v1`), G0 (`g0-mechanism`).
+**Where the gateway is:** S3 The identity surface is frozen, which closes at gate G1b.
+**Plan rows landed:** 28 of 62, with 7 part-landed. S3 still owes `I-6`.
 <!-- END GENERATED summary -->
 
 `docs/roadmap.md` has the same figures per stage, and what each stage still owes. For the detail
