@@ -65,7 +65,7 @@ public sealed class BffLogoutTests
 
         Assert.Equal(401, session.Status);
         Assert.Null(session.Subject);
-        Assert.Equal(RuleIds.AuthSession, session.Rule);
+        Assert.Equal("auth.session", session.Rule);
         Assert.Equal(302, shell.Status);
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, shell.Location, StringComparison.Ordinal);
     }

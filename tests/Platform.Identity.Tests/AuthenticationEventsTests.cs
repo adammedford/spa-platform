@@ -153,7 +153,7 @@ public sealed class AuthenticationEventsTests
         Assert.All(refusals, refusal =>
         {
             Assert.Equal((first.Status, first.ContentType, first.Body, ""), (refusal.Status, refusal.ContentType, refusal.Body, refusal.Location));
-            Assert.Equal(RuleIds.AuthCallback, refusal.Rule);
+            Assert.Equal("auth.callback", refusal.Rule);
             Assert.DoesNotContain(Marker, refusal.Body, StringComparison.Ordinal);
             Assert.DoesNotContain(refusal.Cookies, c => c.Name.Value == CookieOptionsSetup.CookieName && !string.IsNullOrEmpty(c.Value.Value));
         });
