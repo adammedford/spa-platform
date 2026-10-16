@@ -126,14 +126,16 @@ Two more things the schemas deliberately do not decide:
 
 - **An empty `apps` array is a valid document.** Deployment refuses to start a gateway against an
   empty registry (task 1.7); that is a deployment rule, not a document rule.
-- **`timeoutSeconds` has no upper bound in the schema**, because the plan states none. It must be a
-  positive integer. What bounds it is the proxy, not the document format, so the rule is this: the
-  validator **must** refuse a value the proxy cannot apply, under `integer-out-of-range` above. The
-  rule belongs here; the number does not, and a proxy or runtime upgrade must move it in the
-  validator and in the test that pins it rather than in this file.
+- **`timeoutSeconds` has no upper bound in the currently frozen schema.** ADR-0019 supersedes
+  the earlier decision to keep the numeric limit only in the validator. At G2, before the
+  `g2-local-slice` tag, the schema will gain `maximum: 2147483`, the measured YARP 2.3.0 ceiling
+  (ADR-0015). Refusing values no build could apply as written stays within `schemaVersion: 1`;
+  later changes to valid document meaning require a new version. A proxy or runtime upgrade that
+  changes this ceiling must update the contract schema, validator and the test proving the proxy
+  applies the contracted value through the applicable freeze/gate process.
 
-  **That rule is not implemented yet.** The validator's present bound is the `TimeSpan` limit, which
-  is far above anything the proxy applies, so a value in between validates and is then silently not
-  applied. Change request `changes/2.1-registry-schemas-and-jsonschema-net.md` records the
-  measurement, dated and attributed to the versions it was taken on, and the follow-up that tightens
-  the bound and proves it by test.
+  **The schema and validator changes remain pending.** The validator's present bound is the
+  `TimeSpan` limit, so values between it and the proxy ceiling still validate without being applied
+  as written. ADR-0019 assigns the schema edit to the integrator at G2, then ticket 49 (task 2.1b)
+  replaces the validator's bound with the schema's. Change request
+  `changes/2.1-registry-schemas-and-jsonschema-net.md` retains the original measurement.

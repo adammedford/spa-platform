@@ -6,17 +6,17 @@
 **What to build:** Following a ticket citation lands on a spec rather than on nothing.
 `docs/agents/issue-tracker.md` says a document citing a ticket "is citing a file every other
 session and CI can open, which is the whole point of citing it", and nothing holds that: merged
-code once cited tickets 63 and 64 while `origin/main` stopped at 61. After this ticket a citation
-whose number resolves to no file fails before it is pushed.
+code once cited overnight tickets 63 and 64 while `origin/main` stopped at 61. After this ticket a
+citation whose number resolves to no file fails before it is pushed.
 
 **Resolution is directory-relative, and that is the design decision this ticket makes.** Numbering
 restarts per feature directory, and the tree shows both readings in use: a document inside
 `.scratch/<slug>/issues/` citing "ticket 06" means its own sibling, while `docs/adr/0018` citing
-"ticket 53" means the overnight tracker. A single global number-to-file map mis-resolves both.
-Decide and document which directory a citation resolves against from where it is written, and make
-the check follow that.
+"overnight ticket 53" means the overnight tracker. A single global number-to-file map mis-resolves
+both. Decide and document which directory a citation resolves against from where it is written,
+and make the check follow that.
 
-Note for whoever picks this up: tickets 63 and 64 exist now, so the dangling citation that
+Note for whoever picks this up: overnight tickets 63 and 64 exist now, so the dangling citation that
 motivated this rule is already gone and the allow-list may ship empty. That is fine -- the rule is
 for the next one.
 

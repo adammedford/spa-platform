@@ -258,6 +258,8 @@ endpoint (C-2.19). Following the ADR literally would mean redeeming the code out
 which is hand-written protocol code.
 Answer: yes (pre-accepted by Adam, 2026-10-15)
 
+**PR43 review correction, 2026-10-16:** this recommendation predates PR41. The supported token client now redeems Basic-style codes, with the handler's token/correlation validation and explicit protocol nonce validation preserved (`src/Platform.Identity/CodeExchange.cs`). ADR-0017's all-three-calls contract is implemented and remains the decision; Q28's hand-written-protocol premise is superseded.
+
 ---
 
 ## Ticket 61 — CR-6.x — Gateway.SecurityTests intermittently reads NotModified where it expects Swapped

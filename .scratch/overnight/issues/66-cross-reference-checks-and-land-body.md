@@ -5,6 +5,17 @@
 **Blocked by:** None
 **Status:** ready-for-agent
 
+## Snapshot and current scope
+
+The problem statement and counts below record the retrospective's pre-PR41/PR42 snapshot, not
+current trunk. PR41/PR42 landed the method allowlist telemetry write, its composed assertions,
+and the related contract corrections; tickets 62–65 are now tracked on trunk. Claims below that
+trunk stops at 61, that the 405 write is unpushed, or that fifteen exception sites still await that
+write are historical evidence. Their deletion obligation is satisfied by those landed changes.
+The proposed cross-reference checks, test companion and landing-script body option remain future
+work; this ticket does not claim them implemented. Ticket 67 is the separate G2 session-composition
+work, and the older duplicate 61 remains a numbering cleanup for this check's implementation.
+
 ## Problem Statement
 
 A document in this repository can assert something the repository contradicts, and nothing fails.

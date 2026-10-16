@@ -14,6 +14,35 @@ Session logs under `.scratch/<feature-slug>/log/` stay ignored: they are a trans
 - Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
+## Which directory a cited number resolves against
+
+A ticket number means nothing on its own: every feature directory numbers from `01`, so `06` names
+a file in four of them. Where a citation resolves is therefore read off **where it is written**.
+
+- **A document inside `.scratch/<feature-slug>/`** -- a spec, a map, a report, a questions file --
+  cites its own directory. `.scratch/g1a-and-landing-work/issues/05-...md` saying "ticket 06" means
+  `.scratch/g1a-and-landing-work/issues/06-...md`, its sibling.
+- **A document anywhere else** -- an ADR, a contract, a merge body, a comment in Terraform or C# --
+  cites `.scratch/overnight/issues/`, the plan-wide tracker. That is already what every such
+  citation in the tree means, and it is the only tracker a document outside `.scratch/` has reason
+  to cite.
+- **To cite across directories, name the directory**: write the slug immediately before the
+  citation, as `docs/adr/0018-...md` does with "overnight ticket 53". The name wins over both
+  defaults above, and it is the only way a document inside one feature directory can cite another.
+  Without it the number resolves to a sibling that may not exist, or worse, to the wrong file.
+
+`.github/steering.py` holds this, over every file git tracks, in the three shapes the tree writes:
+`ticket NN`, `tickets NN and NN` and `<slug> ticket NN`. A longer list enumerates the same way, by
+`and`, a comma or a slash, and a citation that wraps over a line break is read whole. A number that
+resolves to no file fails the push. A ticket named before it is filed goes on that script's
+`UNFILED` list with the reason, and the check fails once the ticket appears, so the list cannot
+outlive its entries.
+
+Two things it deliberately does not read. A dotted number is a plan task id, not a ticket:
+"workstream 3's tickets 3.3, 3.5 and 3.9" cites rows in
+`docs/plan/03-workstreams-and-tasks.md`. And a range -- "tickets 62-65", "tickets 01 to 08" -- is
+held to its first number only, because the numbers inside it were never written down.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
