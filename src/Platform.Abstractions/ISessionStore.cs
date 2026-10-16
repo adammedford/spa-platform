@@ -2,8 +2,7 @@ namespace Platform.Abstractions;
 
 /// <summary>
 /// One server-side session: the authentication ticket and what it is bound to. Source:
-/// docs/plan/02-contracts.md -> Interfaces. <b>Draft until G1b:</b> task I-6 folds the G0 findings
-/// into this record and tags <c>contracts-v1</c>.
+/// docs/plan/02-contracts.md -> Interfaces. Assigned to G1b (ADR-0017); the <c>contracts-v1</c> tag records the freeze.
 /// </summary>
 /// <param name="ClientId">
 /// The OAuth client the session was established with. A session is bound to the client as well as
@@ -13,7 +12,6 @@ namespace Platform.Abstractions;
 /// The serialized authentication ticket, as bytes. Never a live ticket object: the store would then
 /// hand two requests the same mutable instance.
 /// </param>
-[Freeze("G1b")]
 public sealed record SessionRecord(
     string AppId,
     string ClientId,

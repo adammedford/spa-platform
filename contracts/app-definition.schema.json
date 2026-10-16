@@ -3,7 +3,7 @@
   "$id": "https://spa-platform.internal/contracts/app-definition.schema.json",
   "title": "App definition",
   "description": "A registry entry without clientId, clientSecretRef and release. One file per app under fixtures/apps/. Terraform reads it to create the OAuth client; spactl app add completes it from the infrastructure outputs and applies the registry, so each app is described once. Source: docs/plan/02-contracts.md -> Registry document. Freezes at G1a, except the oauth section, which freezes at G1b. Every shared rule is a $ref into registry.schema.json, so the two cannot drift: a consumer must load both schemas into one registry.",
-  "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a", "exceptions": ["#/properties/oauth"] },
+  "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
   "required": ["appId", "host", "oauth", "session"],
@@ -11,11 +11,11 @@
     "appId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/appId" },
     "host": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/host" },
     "oauth": {
-      "title": "oauth (draft until G1b)",
+      "title": "oauth (G1b)",
       "x-freeze": {
         "gate": "G1b",
-        "status": "draft",
-        "note": "The oauth section of an entry is one of the identity parts that wait for G0. Task I-6 folds the G0 findings in and tags contracts-v1."
+        "status": "frozen-at-g1b",
+        "note": "The oauth section is an identity part assigned to G1b. Task I-6 records the G0 report in ADR-0017; the annotated contracts-v1 tag records the freeze."
       },
       "type": "object",
       "additionalProperties": false,

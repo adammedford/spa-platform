@@ -96,5 +96,5 @@ using an older snapshot to choose work.
   landing a row, run that script in the landing checkout.
 
 One rule does not depend on progress, so it is safe to state here: nothing in
-`src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because everything identity is
-draft until then. `contracts/README.md` -> "What is draft until G1b" lists what that covers.
+`src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because that tag records the identity
+freeze. `contracts/README.md` -> "What G1b froze" lists the affected parts and tag requirement.

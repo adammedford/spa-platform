@@ -1,7 +1,7 @@
 # Browser contract
 
 - **Freezes at:** G1a. The cookie table and the `/bff` endpoints describe identity behaviour, so
-  anything marked **draft** below waits for G1b (task I-6).
+  those parts freeze at G1b, recorded by the annotated `contracts-v1` tag (task I-6, ADR-0017).
 - **Consumed by:** workstreams 3, 4, 5 and 6
 - **Source:** `docs/plan/02-contracts.md` → Browser contract; ADR-0007, ADR-0008
 
@@ -12,22 +12,22 @@ implementation.
 
 | Request | Made as | Behaviour |
 | --- | --- | --- |
-| `GET /bff/session` | Fetch | 200 with `sub`, `name`, `email`, `expiresAt` and `csrfToken`. 401 when there is no session. Never contains a token. |
+| `GET /bff/session` | Fetch | 200 with `sub`, `name`, `email`, `expiresAt` and `csrfToken`; `name` and `email` may be null. `expiresAt` is `SessionRecord.ExpiresAt`, the session expiry, not the access-token expiry. 401 when there is no session. Never contains a token. |
 | `GET /bff/login?returnUrl=/path` | Navigation | Discards any existing session, then redirects to the provider. `returnUrl` must be a local path, or it becomes `/`. |
-| `POST /bff/logout` | Form navigation | Revokes the refresh token, removes the session, then redirects through the provider's logout back to `/`. |
+| `POST /bff/logout` | Form navigation | Attempts to revoke the session's refresh token, always removes the session even if revocation fails, then redirects through the provider's logout back to `/`. |
 | Any method on `/api/{name}/{rest}` | Fetch | Proxied to the app's upstream called `name`, with `/api/{name}` removed. 404 for a name the app does not list. |
 | `GET` or `HEAD` on anything else | Navigation or subresource | The asset at that path. For a path with no extension that accepts HTML, `index.html`. |
 
 An SPA cannot serve content under `/bff/`, `/api/`, `/signin-oidc`, `/signout-callback-oidc`,
 `/signout-oidc`, `/healthz` or `/readyz`.
 
-The three `/bff` endpoints are **draft until G1b**: their shapes come from the identity work, and
-`/bff/session`'s body is fixed only once the session record is.
+The three `/bff` endpoints and session record share the G1b freeze (ADR-0017). The annotated
+`contracts-v1` tag is the freeze record; identity implementation stays blocked until it exists.
 
 ## Cookies
 
-**Draft until G1b.** The cookie names and attributes are settled, but the session record behind
-`__Host-spa-session` is one of the identity parts G0 reports on.
+The cookie names and attributes belong to G1a; the session record behind `__Host-spa-session`
+belongs to G1b (ADR-0017).
 
 | Cookie | Attributes | Holds |
 | --- | --- | --- |

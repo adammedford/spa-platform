@@ -26,7 +26,11 @@ request's authority must equal a registry `host` exactly or it gets 404 before r
 
 **Logical boundary** — what an app gets: its host, OAuth client, scheme names, encryption purposes,
 session records, S3 prefix, API list and content security policy. Deliberately weaker than
-isolation: the process, memory, task role, key ring and registry are shared.
+isolation: the process, memory, task role, key ring and registry are shared. **It bounds the
+gateway's sessions, not the provider's.** One browser holds one session at the identity provider
+across every app, so a second app's login can complete with no password prompt, and signing out of
+one app ends the provider's session for all of them. The gateway's own logout stays per app: the
+other app's session still answers and still refreshes (ADR-0017, evidence C-2.6, C-2.14, C-2.15).
 
 ## The registry
 
@@ -135,7 +139,7 @@ properties, `A-` architecture reference rules. A test id in a task names a behav
 workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
-harness (G0 items 4 and 5). Listed in `docs/plan/07-evidence.md`. Separate from test ids.
+harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.
@@ -144,5 +148,5 @@ sandbox could not reach NuGet. 34 of 34 checks passed.
 source, then repeated on the shipped package with the overrides on. 32 of 32 expectations held.
 
 **Reserve design** — the gateway-owned locking over the library's refresh call, proven in the harness
-but **not adopted**. It reopens only if G0 item 2 finds Cognito's grace window insufficient, or at
-the PingFederate gate. See ADR-0005.
+and adopted for task 3.8 after the Cognito inside-window successor failure (C-2.17).
+The late-replay control C-2.18 is a separate observation. See ADR-0005 and ADR-0017.

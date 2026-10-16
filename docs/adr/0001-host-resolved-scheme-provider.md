@@ -1,6 +1,6 @@
 # ADR-0001: Resolve per-app schemes by host through a registry-backed scheme provider
 
-- **Status:** Accepted. Confirmed by Gate G0 item 1 on 11 October 2026; items 2 and 3 (Cognito) remain open.
+- **Status:** Accepted. Confirmed by Gate G0 item 1 on 11 October 2026 and the Cognito report (items 2 and 3); ADR-0017 records the bounded evidence and freeze decision.
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D1 (Doc revision 36)

@@ -154,10 +154,10 @@ starting it before G1b, and G1b cannot close until this reports.
 ### S3 The identity surface is frozen
 
 The records and interfaces the identity work builds on stop moving: the scheme names, the session
-record, `IAccessTokenSource`, `IIdpProfile`. They are marked draft until this closes —
-`[Freeze("G1b")]` in `src/Platform.Abstractions` says so in the code, and `contracts/README.md`
-lists what the mark covers. Freezing is the capability: four workstreams can then build against one
-shape.
+record, `IAccessTokenSource`, `IIdpProfile`. I-6 removes the `[Freeze("G1b")]` draft markers from
+`src/Platform.Abstractions` and marks the schema parts frozen. The annotated `contracts-v1` tag
+records closure; `contracts/README.md` lists the affected parts and the tag requirement. Freezing
+is the capability: four workstreams can then build against one shape.
 
 Proved by the tag. The gate's content is judgement — whether G0's findings are folded in correctly —
 so the evidence is the ADR that records them, not an assertion.

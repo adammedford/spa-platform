@@ -3,7 +3,7 @@ using Platform.Abstractions;
 namespace Platform.Abstractions.Tests;
 
 /// <summary>
-/// Draft until G1b: task I-6 folds the G0 findings into the scheme names. Until then these are the
+/// Assigned to G1b (ADR-0017); the contracts-v1 tag records the freeze. These are the
 /// names docs/plan/02-contracts.md fixes, and the expected values below are copied from it.
 ///
 /// The strings matter beyond naming. A cookie handler derives its data-protection purpose from its

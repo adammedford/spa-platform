@@ -3,7 +3,7 @@
   "$id": "https://spa-platform.internal/contracts/registry.schema.json",
   "title": "Registry document",
   "description": "The one JSON object at registry/registry.json. The gateway accepts or rejects it whole. Source: docs/plan/02-contracts.md -> Registry document, and ADR-0002. Freezes at G1a, except $defs/oauth, which freezes at G1b.",
-  "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a", "exceptions": ["#/$defs/oauth"] },
+  "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "revision", "apps"],
@@ -70,11 +70,11 @@
     },
 
     "oauth": {
-      "title": "oauth (draft until G1b)",
+      "title": "oauth (G1b)",
       "x-freeze": {
         "gate": "G1b",
-        "status": "draft",
-        "note": "The oauth section of an entry is one of the identity parts that wait for G0. Task I-6 folds the G0 findings in and tags contracts-v1. Until then this subschema may change without a change request."
+        "status": "frozen-at-g1b",
+        "note": "The oauth section is an identity part assigned to G1b. Task I-6 records the G0 report in ADR-0017; the annotated contracts-v1 tag records the freeze."
       },
       "type": "object",
       "additionalProperties": false,
