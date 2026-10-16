@@ -44,7 +44,7 @@ public sealed class HarnessRegistryRaceTests
     }
 
     [Fact]
-    public async Task A_rejected_update_a_background_poll_read_first_is_not_reported_swapped()
+    public async Task A_rejected_update_a_background_poll_read_first_still_reports_rejected()
     {
         ReadGate gate = new();
         await using GatewayHarness harness = await GatewayHarness.StartAsync(gate.Options(), Ct);
@@ -61,10 +61,11 @@ public sealed class HarnessRegistryRaceTests
         await tick;
         RefreshOutcome outcome = await update;
 
-        // The background poll rejected it and settled its ETag, so the update's poll saw it unchanged:
-        // the written document is not live, and the harness must not say it is.
+        // The background poll rejected it and settled its ETag, so the update's poll saw it unchanged and
+        // answered NotModified. The write was rejected, and the composed rows that publish a bad document
+        // assert exactly that (HarnessRegistryTests, PerAppHeadersTests, RegistryChangeTests, RegistryRejectionTests).
         Assert.Equal(1, harness.Registry.Current.Revision);
-        Assert.NotEqual(RefreshOutcome.Swapped, outcome);
+        Assert.Equal(RefreshOutcome.Rejected, outcome);
     }
 
     private static async Task<string> RegistryETagAsync(GatewayHarness harness)
