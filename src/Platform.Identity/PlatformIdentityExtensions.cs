@@ -1,3 +1,5 @@
+using Duende.AccessTokenManagement;
+using Duende.AccessTokenManagement.OpenIdConnect;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -90,7 +92,34 @@ public static class PlatformIdentityExtensions
         // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
         // no session settings.
         services.TryAddSingleton<ISessionStore>(MemorySessionStore.FromConfiguration);
+
+        // The token source of task 3.8, over the token library (ADR-0005). The library's options hook gets
+        // the sentinel as its default challenge scheme, so it binds to no app (T-B1, T-B2); the source
+        // names both schemes on every call and calls the library's endpoint in the credential style of
+        // the app's issuer (ADR-0017), one refresh at a time per session.
+        services.AddOpenIdConnectAccessTokenManagement(o => o.ChallengeScheme = Scheme.Parse(ProfileTokenEndpoints.SentinelScheme));
+        Type endpointType = ProfileTokenEndpoints.RegisteredEndpointType(services);
+        services.TryAddSingleton(sp => new ProfileTokenEndpoints(sp, endpointType));
+        services.TryAddSingleton<SessionGates>();
+        services.TryAddSingleton<AccessTokenSourceOptions>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<AccessTokenSource>();
         return builder;
+    }
+
+    /// <summary>
+    /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
+    ///
+    /// Separate from <see cref="AddPlatformIdentity"/> because a bound source makes the proxy's token step
+    /// answer every sessionless <c>/api</c> call 401 (contracts/http-contract.md -> Errors), and a gateway
+    /// whose <see cref="UsePlatformShellGate"/> and <see cref="MapPlatformBff"/> are empty has no way to
+    /// establish a session: nothing in it challenges. Without one, the proxy forwards with no
+    /// <c>Authorization</c>, which the upstream refuses on its own (assumption A5).
+    /// </summary>
+    internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IAccessTokenSource>(sp => sp.GetRequiredService<AccessTokenSource>());
+        return services;
     }
 
     /// <summary>

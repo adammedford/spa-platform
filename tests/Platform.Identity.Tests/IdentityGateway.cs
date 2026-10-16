@@ -38,6 +38,14 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// </summary>
     public const string LogoutPath = "/logout/probe";
 
+    /// <summary>
+    /// A path standing in for the proxy's token step (task 4.2): it asks <see cref="IAccessTokenSource"/>
+    /// for the session's token and answers 200 with the token as the body, or 401 with the outcome's
+    /// code. It hands the source the request's own cancellation token on purpose, so a test can prove the
+    /// source never lets a disconnecting browser cancel a refresh (T-B16).
+    /// </summary>
+    public const string TokenPath = "/token/probe";
+
     /// <summary>The fetch metadata a browser sends on a top-level navigation the user typed.</summary>
     public static readonly IReadOnlyDictionary<string, string> Navigation = new Dictionary<string, string>
     {
@@ -80,6 +88,20 @@ internal sealed class IdentityGateway : IAsyncDisposable
             {
                 await context.SignOutAsync(SchemeNames.Cookie(pinned.AppId));
                 await context.SignOutAsync(SchemeNames.Oidc(pinned.AppId), new AuthenticationProperties { RedirectUri = "/" });
+                return;
+            }
+
+            if (context.Request.Path == TokenPath)
+            {
+                AccessTokenResult result = await context.RequestServices.GetRequiredService<IAccessTokenSource>()
+                    .GetAsync(context, context.RequestAborted);
+                (context.Response.StatusCode, string body) = result switch
+                {
+                    AccessTokenResult.Token token => (200, token.Value),
+                    AccessTokenResult.SessionEnded => (401, "session_ended"),
+                    _ => (401, "unauthenticated"),
+                };
+                await context.Response.WriteAsync(body, CancellationToken.None);
                 return;
             }
 
@@ -179,6 +201,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         RecordingSessionStore sessions = new(new InMemorySessionStore());
         builder.Services.AddSingleton<ISessionStore>(sessions);
         builder.AddPlatformIdentity();
+        builder.Services.AddPlatformAccessTokenSource();
         services?.Invoke(builder.Services);
 
         return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);
@@ -230,7 +253,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         IReadOnlyDictionary<string, string>? cookies = null,
         string method = "GET",
         IReadOnlyDictionary<string, string>? headers = null,
-        RegistrySnapshot? pinnedTo = null)
+        RegistrySnapshot? pinnedTo = null,
+        CancellationTokenSource? browser = null)
     {
         RegistrySnapshot snapshot = pinnedTo ?? Snapshot;
         if (!snapshot.ByHost.ContainsKey(app.Host))
@@ -242,6 +266,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         HttpContext context = Pin(app, snapshot);
         context.RequestServices = scope.ServiceProvider;
         context.Request.Method = method;
+        // The browser going away, when a test cancels this source: what the server's RequestAborted is.
+        context.RequestAborted = browser?.Token ?? CancellationToken.None;
 
         int query = pathAndQuery.IndexOf('?', StringComparison.Ordinal);
         context.Request.Path = query < 0 ? pathAndQuery : pathAndQuery[..query];

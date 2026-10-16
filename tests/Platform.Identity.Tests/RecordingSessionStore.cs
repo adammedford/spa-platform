@@ -22,7 +22,23 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
         return key;
     }
 
-    public Task<SessionRecord?> GetAsync(string key, CancellationToken ct) => inner.GetAsync(key, ct);
+    /// <summary>
+    /// Runs inside every read, after the record has been read and before it is returned: what another
+    /// writer does between a reader's read and its use of what it read. The reader gets the record as it
+    /// was before the action ran.
+    /// </summary>
+    public Func<string, Task>? AfterRead { get; set; }
+
+    public async Task<SessionRecord?> GetAsync(string key, CancellationToken ct)
+    {
+        SessionRecord? record = await inner.GetAsync(key, ct);
+        if (AfterRead is { } action)
+        {
+            await action(key);
+        }
+
+        return record;
+    }
 
     public Task<bool> ReplaceAsync(string key, SessionRecord record, long expectedVersion, CancellationToken ct) =>
         inner.ReplaceAsync(key, record, expectedVersion, ct);
