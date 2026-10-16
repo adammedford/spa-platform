@@ -16,15 +16,21 @@ namespace Platform.Identity;
 /// (HandleSignInAsync: RenewAsync when a session key was read, StoreAsync when not).
 ///
 /// Only the cookie handler uses this manager. The OpenID Connect handler reads its correlation and
-/// nonce cookies from the request directly, so the callback still sees those.
+/// nonce cookies from the request directly, so the callback still sees those:
+/// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Core/src/RemoteAuthenticationHandler.cs
+/// (ValidateCorrelationId: <c>Request.Cookies[cookieName]</c>) and
+/// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectHandler.cs
+/// (ReadNonceCookie: <c>Request.Cookies.Keys</c>).
 /// </summary>
 internal sealed class CallbackBlindCookieManager(PathString callbackPath) : ICookieManager
 {
     private readonly ChunkingCookieManager inner = new();
 
     /// <summary>
-    /// Null on the callback path. <see cref="PathString"/> equality ignores case, as the OpenID Connect
-    /// handler's own match of its callback path does, so the two agree on what the callback is.
+    /// Null on the callback path. This is the same <see cref="PathString"/> comparison, which ignores
+    /// case, that the OpenID Connect handler uses to match its callback path
+    /// (RemoteAuthenticationHandler.ShouldHandleRequestAsync: <c>Options.CallbackPath == Request.Path</c>),
+    /// so the two agree on what the callback is.
     /// </summary>
     public string? GetRequestCookie(HttpContext context, string key) =>
         context.Request.Path == callbackPath ? null : inner.GetRequestCookie(context, key);
