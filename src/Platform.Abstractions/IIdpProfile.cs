@@ -11,14 +11,24 @@ public sealed record IssuerDefinition(string Authority, string Profile, Uri Brow
 
 /// <summary>
 /// What differs between identity providers, chosen per issuer and never per app (ADR-0011).
-/// <b>Draft until G1b:</b> G0 item 2 records what Cognito's discovery document advertises for
-/// logout, and task I-6 folds that in.
+/// Frozen at G1b: G0 item 2 recorded what Cognito's discovery document advertises for logout
+/// (<c>end_session_endpoint</c>, evidence C-2.2) and for revocation (<c>revocation_endpoint</c>,
+/// C-2.3), and task I-6 folded that in (ADR-0017). The revocation endpoint comes from discovery,
+/// so no member is needed for it.
 /// </summary>
 [Freeze("G1b")]
 public interface IIdpProfile
 {
     /// <summary>"standard" or "cognito". Selected by <c>Issuers:{name}:Profile</c>.</summary>
     string Name { get; }
+
+    /// <summary>
+    /// How this provider's client presents its secret, for the code exchange, the refresh and the
+    /// revocation alike. Cognito's revocation endpoint takes only
+    /// <see cref="ClientCredentialStyle.AuthorizationHeader"/> (C-2.21), so the cognito profile
+    /// states that one and every call uses it.
+    /// </summary>
+    ClientCredentialStyle ClientCredentialStyle { get; }
 
     /// <summary>The provider-specific part of the OIDC options for one app.</summary>
     void Configure(OpenIdConnectOptions options, AppDefinition app, IssuerDefinition issuer);

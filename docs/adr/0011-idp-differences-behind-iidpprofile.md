@@ -28,7 +28,9 @@ configuration (`Issuers:{name}:Profile`), never in a registry entry.
 - An entry cannot pick the wrong profile: it names an issuer, and the issuer determines the profile.
 - PingFederate becomes a profile, not a redesign.
 - `Issuers:{name}:BrowserOrigin` carries the origin the browser visits at the provider; it goes into `form-action` and is the base of Cognito's logout URL.
-- Gate G0 item 2 records what Cognito's discovery document advertises for logout, and whether it lists a revocation endpoint.
+- Gate G0 item 2 recorded both, on 2026-10-16 (ADR-0017). Discovery advertises `end_session_endpoint` (C-2.2), so the standard profile's RP-initiated logout would also work and the cognito profile stays as decided; and it advertises `revocation_endpoint` (C-2.3), so the library's revoke call finds the endpoint on its own and no profile member is needed for it.
+- **The profile gains a client credential style** (ADR-0017). Cognito's revocation endpoint refuses a form-body client secret with `401 Unauthorized` and accepts a Basic header, while the code exchange and the refresh accept either (C-2.21). The profile states one style and the code exchange, the refresh and the revocation all use it. Per call site it would be three places to get wrong, and one of them fails only at logout.
+- PingFederate inherits two profile questions rather than a redesign: which credential style its endpoints accept, and whether its grace window protects a replayed refresh token as Cognito's does not.
 
 ## Evidence
 

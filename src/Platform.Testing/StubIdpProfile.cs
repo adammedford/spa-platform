@@ -18,6 +18,13 @@ public sealed class StubIdpProfile(string name = "standard") : IIdpProfile
 
     public string Name { get; } = name;
 
+    /// <summary>
+    /// What the profile reports for its credential style. Settable, so a test can exercise the
+    /// Basic-header path Cognito's revocation endpoint requires (ADR-0017) without a real profile.
+    /// The default is the form body, which is what the standard profile uses.
+    /// </summary>
+    public ClientCredentialStyle ClientCredentialStyle { get; set; } = ClientCredentialStyle.PostBody;
+
     /// <summary>Every <see cref="Configure"/> call, in order.</summary>
     public IReadOnlyList<(AppDefinition App, IssuerDefinition Issuer)> Configured => configured;
 

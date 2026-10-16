@@ -26,7 +26,11 @@ request's authority must equal a registry `host` exactly or it gets 404 before r
 
 **Logical boundary** — what an app gets: its host, OAuth client, scheme names, encryption purposes,
 session records, S3 prefix, API list and content security policy. Deliberately weaker than
-isolation: the process, memory, task role, key ring and registry are shared.
+isolation: the process, memory, task role, key ring and registry are shared. **It bounds the
+gateway's sessions, not the provider's.** One browser holds one session at the identity provider
+across every app, so a second app's login can complete with no password prompt, and signing out of
+one app ends the provider's session for all of them. The gateway's own logout stays per app: the
+other app's session still answers and still refreshes (ADR-0017, evidence C-2.6, C-2.14, C-2.15).
 
 ## The registry
 

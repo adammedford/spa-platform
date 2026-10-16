@@ -67,7 +67,7 @@
             "enum": ["standard", "cognito"],
             "x-freeze": {
               "gate": "G1b",
-              "status": "draft",
+              "status": "frozen-at-g1b",
               "note": "The key is frozen at G1a. The permitted values are IIdpProfile.Name, which is one of the identity parts that wait for G0, so this enum may gain or lose a member at G1b."
             },
             "description": "Which IIdpProfile applies. Set here, never in an entry."

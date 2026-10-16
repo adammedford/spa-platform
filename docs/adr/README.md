@@ -28,7 +28,11 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0013](0013-platform-tag-and-bootstrap-exemption.md) | Name the platform tag `Platform = spa-platform`, and exempt the bootstrap root | — |
 | [0014](0014-teardown-role-in-bootstrap.md) | Create the teardown role in `infra/bootstrap`, and derive its name from the cell | — |
 | [0015](0015-shared-constants-across-a-workstream-boundary.md) | Keep a contract-fixed shared constant in `Platform.Abstractions`, and a dependency-measured one where it is measured | — |
+| [0016](0016-plan-policy-without-aws-credentials.md) | Assert plan policy with mock providers, and keep AWS credentials out of CI | — |
+| [0017](0017-g0-findings-fold-into-the-identity-contracts.md) | Fold Gate G0's Cognito findings in: adopt the reserve refresh design, and put the client credential style on the profile | — |
 
-Three decisions carry open gate work: ADR-0001 (G0 items 2 and 3, Cognito), ADR-0005 (the reserve
-refresh design reopens if G0 item 2 finds Cognito's grace window insufficient) and ADR-0011 (G0
-item 2 records Cognito's logout and revocation endpoints).
+Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
+ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's
+reserve refresh design is now **adopted** rather than held in reserve, and ADR-0011's profile gains
+a client credential style. No decision carries open gate work at G0 now; the next gate work is
+ADR-0011's PingFederate profile at G7.

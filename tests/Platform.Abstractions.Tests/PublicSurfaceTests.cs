@@ -26,6 +26,7 @@ public sealed class PublicSurfaceTests
         "AccessTokenResult+Unauthenticated",
         "ApiDefinition",
         "AppDefinition",
+        "ClientCredentialStyle",
         "FreezeAttribute",
         "IAccessTokenSource",
         "IAppFeature",
@@ -53,8 +54,13 @@ public sealed class PublicSurfaceTests
     /// entry, whose code form is OAuthDefinition. Task I-6 folds the G0 findings in, removes these
     /// markers and tags contracts-v1.
     /// </summary>
-    private static readonly string[] DraftUntilG1b =
+    /// <summary>
+    /// What Gate G1b froze, as opposed to what G1a froze. G1b closed on 2026-10-16 (ADR-0017),
+    /// so this is a record of which gate governs each part, not a list of what may still change.
+    /// </summary>
+    private static readonly string[] FrozenAtG1b =
     [
+        "ClientCredentialStyle",
         "IAccessTokenSource",
         "IIdpProfile",
         "OAuthDefinition",
@@ -86,7 +92,7 @@ public sealed class PublicSurfaceTests
                 .Order(),
         ];
 
-        Assert.Equal(DraftUntilG1b, marked);
+        Assert.Equal(FrozenAtG1b, marked);
     }
 
     [Fact]

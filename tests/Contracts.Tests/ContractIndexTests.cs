@@ -78,21 +78,22 @@ public sealed class ContractIndexTests
     }
 
     [Fact]
-    public void The_oauth_section_of_an_entry_is_marked_draft_until_G1b()
+    public void The_oauth_section_of_an_entry_is_marked_frozen_at_G1b()
     {
-        // Task I-2: "the identity parts are marked draft until G1b". Task I-6 folds in the G0
-        // findings and tags contracts-v1. Until then this marker has to be on the subschema.
-        AssertDraftUntilG1b(ContractFiles.SchemaSource(ContractFiles.RegistrySchema)["$defs"]!["oauth"]!);
-        AssertDraftUntilG1b(ContractFiles.SchemaSource(ContractFiles.AppDefinitionSchema)["properties"]!["oauth"]!);
+        // Task I-2 marked the identity parts draft until G1b. Task I-6 folded in the G0 findings
+        // (ADR-0017) and tagged contracts-v1 on 2026-10-16, so the marker now records which gate
+        // froze the subschema. It still has to be on it: that is what ties the schema to the code.
+        AssertFrozenAtG1b(ContractFiles.SchemaSource(ContractFiles.RegistrySchema)["$defs"]!["oauth"]!);
+        AssertFrozenAtG1b(ContractFiles.SchemaSource(ContractFiles.AppDefinitionSchema)["properties"]!["oauth"]!);
     }
 
     [Fact]
-    public void The_IIdpProfile_names_are_marked_draft_until_G1b()
+    public void The_IIdpProfile_names_are_marked_frozen_at_G1b()
     {
         JsonNode profile = ContractFiles.SchemaSource(ContractFiles.PlatformConfigSchema)
             ["properties"]!["Issuers"]!["additionalProperties"]!["properties"]!["Profile"]!;
 
-        AssertDraftUntilG1b(profile);
+        AssertFrozenAtG1b(profile);
     }
 
     [Fact]
@@ -135,11 +136,11 @@ public sealed class ContractIndexTests
         Assert.Equal(ContractFiles.Files.Order(), onDisk.Order());
     }
 
-    private static void AssertDraftUntilG1b(JsonNode subschema)
+    private static void AssertFrozenAtG1b(JsonNode subschema)
     {
         var freeze = subschema["x-freeze"]!.AsObject();
         Assert.Equal("G1b", freeze["gate"]!.GetValue<string>());
-        Assert.Equal("draft", freeze["status"]!.GetValue<string>());
+        Assert.Equal("frozen-at-g1b", freeze["status"]!.GetValue<string>());
     }
 
     private static string? FindDraft(JsonNode? node)

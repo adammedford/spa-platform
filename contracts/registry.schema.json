@@ -73,7 +73,7 @@
       "title": "oauth (draft until G1b)",
       "x-freeze": {
         "gate": "G1b",
-        "status": "draft",
+        "status": "frozen-at-g1b",
         "note": "The oauth section of an entry is one of the identity parts that wait for G0. Task I-6 folds the G0 findings in and tags contracts-v1. Until then this subschema may change without a change request."
       },
       "type": "object",
