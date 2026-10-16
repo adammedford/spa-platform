@@ -2,8 +2,9 @@
 # Runs before every push. Owner: integrator.
 #
 # It catches, locally, the things that are expensive to find later: a change that touches a path
-# outside its owner's set, a steering file that misleads every session that loads it, a build that
-# does not compile and a Terraform root that does not validate. The first three cost about a second.
+# outside its owner's set, a steering document that misleads every session that reads it, a build
+# that does not compile and a Terraform root that does not validate. The first three cost about a
+# second.
 # The build and Terraform run only when the push changes their half of the repository, so a docs
 # push or a branch delete does not pay for either.
 # The tests stay in CI, where they cost nothing to wait for.
@@ -86,10 +87,12 @@ else
   echo "pre-push: A-05 not checked: python3 is not on PATH." >&2
 fi
 
-# --- the steering files -----------------------------------------------------------------------
+# --- the documents a session steers by ---------------------------------------------------------
 #
-# AGENTS.md and CLAUDE.md are loaded into every session. A progress claim or a pointer at a file
-# that does not exist costs every later session, so catch it at the push that writes it.
+# AGENTS.md and CLAUDE.md are loaded into every session, and the contracts index is read by every
+# workstream before it builds. A progress claim, a pointer at a file that does not exist, or a
+# freeze cell the contract it indexes denies costs every later session, so catch it at the push
+# that writes it.
 if command -v python3 > /dev/null; then
   python3 -I .github/steering.py || fail "the steering check failed."
 else
@@ -139,7 +142,7 @@ fi
 # Warnings are errors, so this catches what a reviewer should never have to. Skipped when nothing
 # that compiles changed: the solution's projects live under src, tests, fixtures and tools/spactl,
 # and the build settings in the root files.
-ran="A-05, the steering files, the roadmap, the artifacts"
+ran="A-05, the steering documents, the roadmap, the artifacts"
 
 if touches '^(src|tests|fixtures|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^global\.json$'; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."

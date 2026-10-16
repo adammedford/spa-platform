@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Checks the two files every session loads: AGENTS.md and CLAUDE.md. Owner: integrator.
+"""Checks the documents that steer a session: a claim here misleads before any code is read.
 
-Two rules, both of which a prose paragraph has already failed to hold.
+Owner: integrator.
+
+Two of the files are loaded into every context window -- AGENTS.md and CLAUDE.md -- and the third
+is the one every workstream reads before it builds, the contracts index. Each rule below was a
+prose paragraph first, and each paragraph was broken by the session after the one that wrote it.
 
 **No progress.** AGENTS.md says of itself that it "does not track progress, because a copy of the
 state goes stale and then misleads every session that loads it". The skeleton import wrote three
@@ -12,14 +16,25 @@ for the rule is not the same as a check enforcing it.
 
 **No dangling pointer.** These files are mostly context pointers, and a pointer at something that
 does not exist costs a session the search before it finds nothing. `docs/gates/` was named twice
-while absent, and was later dropped rather than written. A path that is promised rather than broken goes in PLANNED below, which fails once
-the path appears, so the list cannot outlive its entries.
+while absent, and was later dropped rather than written. A path that is promised rather than broken
+goes in PLANNED below, which fails once the path appears, so the list cannot outlive its entries.
 
-Run: python3 -I .github/steering.py
+**No pointer that contradicts its target.** The same defect one step on: a claim about the
+repository that the repository denies. `contracts/README.md` carries a freeze gate per row and each
+contract carries its own freeze header, and the Pipeline row once landed naming a gate its target
+never froze at, contradicting `contracts/pipeline.md` two directories away. A cell may say more
+than the header -- `G1a; stage order changed at G1b` -- so the comparison is on the leading gate
+token, and a cell naming no gate at all -- `With the registry document` -- makes no claim of its
+own and is checked through the row it defers to. A row this rule cannot read fails as well, and
+the line it passes prints how many headers it compared: a rule that quietly compares nothing is
+the defect it was written to catch, one level up.
+
+Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import sys
@@ -61,6 +76,38 @@ PROGRESS = [
 # a file, not a path to it, and guessing where those live is how this check earns false positives.
 PATHLIKE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]*)+)`")
 
+# The contracts index, whose "Freezes at" column makes a claim about a file two directories away.
+INDEX = "contracts/README.md"
+CONTRACT_COLUMN = "Contract"
+FILE_COLUMN = "File"
+FREEZE_COLUMN = "Freezes at"
+
+# A table row, and the cells in it. Every cell this rule reads is found by its column's heading, so
+# a column moved or added changes nothing here and the file's other tables are not mistaken for
+# this one. A pipe inside a cell is escaped, and splitting on it would shift every cell after it.
+ROW = re.compile(r"^\s*\|(.*)\|\s*$")
+CELL_BOUNDARY = re.compile(r"(?<!\\)\|")
+DIVIDER = re.compile(r"^[\s:|-]+$")
+
+# A gate is G0, G1a, G2. The leading one in a cell is the freeze it claims; anything after it is
+# allowed to say more, as in `G1a; stage order changed at G1b`.
+GATE = re.compile(r"\bG\d[a-z]?\b")
+
+# The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON
+# schema carries a sentence inside its top-level description. Each is read down to the sentence
+# that states the freeze, because the bullet runs on into its rationale over several lines and a
+# message quoting half a clause is a message its reader has to open the file to finish. The
+# bullet's continuation lines are read with it, so a claim is found wherever the author's line
+# happened to run out; a gate that went unread would be a disagreement that went unreported.
+MD_FREEZE = re.compile(
+    r"^-\s+\*\*Freezes at:\*\*(?P<freeze>[^\n]*(?:\n[ \t]+[^\n]*)*)", re.MULTILINE
+)
+SCHEMA_FREEZE = re.compile(r"[Ff]reezes at\s+(?P<freeze>G\d[a-z]?[^.]*)\.")
+
+# The file column names each target as a markdown link, or as a backticked path when there is
+# nothing to link to, as `src/Gateway/Program.cs`.
+TARGET = re.compile(r"\]\(([^)]+)\)|`([A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+)`")
+
 
 def progress_claims(root: pathlib.Path) -> list[str]:
     found = []
@@ -96,11 +143,123 @@ def dangling(root: pathlib.Path) -> tuple[list[str], list[str]]:
     return missing, landed
 
 
+COLUMNS = (CONTRACT_COLUMN, FILE_COLUMN, FREEZE_COLUMN)
+
+
+def index_rows(text: str):
+    """The rows of the one table carrying all three columns, as (line number, headers, cells).
+
+    A row is recognised by its pipes, and which table it belongs to by the header row above it:
+    contracts/README.md holds two other tables, and neither names these columns. A row whose cells
+    do not line up with the headers is yielded too, because the caller reports it rather than
+    passing over it in silence.
+    """
+    headers = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = ROW.match(line)
+        if not match:
+            headers = None
+            continue
+        cells = [cell.strip() for cell in CELL_BOUNDARY.split(match.group(1))]
+        if headers is None:
+            if all(column in cells for column in COLUMNS):
+                headers = cells
+            continue
+        if DIVIDER.match(line):
+            continue
+        yield number, headers, cells
+
+
+def freeze_header(root: pathlib.Path, target: str) -> tuple[str, str] | None:
+    """Where the target is and what it says about its own freeze, or None when it says nothing.
+
+    A link in the index is relative to the index, and a backticked path is relative to the root,
+    so both are tried. A row may point at source code or at a schema's example, and neither
+    carries a header. Absence is not a disagreement: this rule compares two claims about a gate,
+    and where there is no header there is only the index's.
+    """
+    # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
+    # the file, not another file.
+    path = target.split("#", 1)[0]
+    for candidate in (root / INDEX).parent / path, root / path:
+        if not candidate.is_file():
+            continue
+        where = candidate.relative_to(root).as_posix()
+        if candidate.suffix == ".md":
+            found = MD_FREEZE.search(candidate.read_text())
+            if not found:
+                return None
+            # The bullet's first sentence is the freeze; what follows it is the reason, and in
+            # http-contract.md and request-gate.md it runs on past the end of the line.
+            bullet = " ".join(found.group("freeze").split())
+            sentence = bullet.split(". ")[0].strip().rstrip(".")
+            return where, f"Freezes at: {sentence}"
+        if candidate.suffix == ".json":
+            try:
+                document = json.loads(candidate.read_text())
+            except ValueError:
+                return None
+            description = document.get("description", "") if isinstance(document, dict) else ""
+            found = SCHEMA_FREEZE.search(description)
+            return (where, found.group(0)) if found else None
+    return None
+
+
+def freeze_disagreements(root: pathlib.Path) -> tuple[list[str], list[str], int]:
+    """The rows that contradict their target, the rows this rule cannot read, and how many
+    headers it read to find out.
+
+    The count is reported, so the line this check prints when it passes says how much it
+    compared. A sentence that would be printed whether or not the comparison happened is a
+    sentence no test can hold to anything. The unreadable rows are reported for the same reason:
+    a row passed over in silence is a freeze claim nothing compares.
+    """
+    index = root / INDEX
+    if not index.is_file():
+        return [], [], 0
+
+    found, unreadable, compared = [], [], 0
+    for number, headers, cells in index_rows(index.read_text()):
+        if len(cells) != len(headers):
+            unreadable.append(
+                f"{INDEX}:{number}: {len(cells)} cells in a {len(headers)}-column table: "
+                f"{' | '.join(cells)}"
+            )
+            continue
+        cells = dict(zip(headers, cells))
+        name = cells[CONTRACT_COLUMN].strip("`")
+        cell = cells[FREEZE_COLUMN]
+        claimed = GATE.search(cell)
+        if not claimed:
+            # A relational cell -- "With the registry document" -- names no gate, so there is
+            # nothing to disagree with. It defers to a row that this rule does check.
+            continue
+        for link, backticked in TARGET.findall(cells[FILE_COLUMN]):
+            read = freeze_header(root, link or backticked)
+            if read is None:
+                continue
+            where, header = read
+            stated = GATE.search(header)
+            if not stated:
+                continue
+            compared += 1
+            if stated.group(0) != claimed.group(0):
+                # Both sides in full, because the point of the message is that neither file has
+                # to be opened to see which of the two is wrong.
+                found.append(
+                    f"{INDEX}:{number}: row '{name}': the index cell '{cell}' names "
+                    f"{claimed.group(0)}, and {where}'s header '{header}' names "
+                    f"{stated.group(0)}"
+                )
+    return found, unreadable, compared
+
+
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parent.parent
 
     claims = progress_claims(root)
     missing, landed = dangling(root)
+    disagreements, unreadable, compared = freeze_disagreements(root)
 
     for line in claims:
         print(f"  {line}")
@@ -126,10 +285,32 @@ def main() -> int:
         print("STEERING FAILED: a PLANNED path has landed.")
         print("Remove it from PLANNED in this script, so the list never outlives its entries.")
 
-    if claims or missing or landed:
+    for line in disagreements:
+        print(f"  {line}")
+    if disagreements:
+        print()
+        print("STEERING FAILED: the contracts index and a contract's own freeze header disagree.")
+        print("One of the two is wrong, and a freeze cell is frozen state: decide which side the")
+        print("gate actually froze at, and correct that side through a change request under")
+        print("contracts/changes/ rather than editing the other to match.")
+
+    for line in unreadable:
+        print(f"  {line}")
+    if unreadable:
+        print()
+        print("STEERING FAILED: the contracts index has a row this rule cannot read.")
+        print("Its cells do not line up with the columns above it, so nothing compared its freeze")
+        print("claim against the contract it points at. Fix the row, or the headings it sits")
+        print("under; a pipe inside a cell is written \\|.")
+
+    if claims or missing or landed or disagreements or unreadable:
         return 1
 
-    print(f"steering: {', '.join(FILES)} claim no progress and every pointer resolves.")
+    summary = f"steering: {', '.join(FILES)} claim no progress and every pointer resolves."
+    if compared:
+        headers = "freeze header" if compared == 1 else "freeze headers"
+        summary += f" {INDEX} agrees with the {compared} {headers} it indexes."
+    print(summary)
     return 0
 
 
