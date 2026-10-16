@@ -75,6 +75,8 @@ locals {
 # the ARN is looked up, so a missing or mis-derived role is a plan error here rather than a bucket
 # nobody can empty, found at teardown. The ARN lands in a policy condition, where AWS validates
 # nothing, which is why it is never assembled from a string.
+# aws:PrincipalArn carries the role ARN for a role session, never the assumed-role session ARN:
+# https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-principalarn
 data "aws_iam_role" "teardown" {
   name = "spa-platform-${var.cell}-teardown"
 }

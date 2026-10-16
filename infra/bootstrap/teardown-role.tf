@@ -9,6 +9,8 @@
 # Break-glass, and narrow by separation of powers: it may delete a release and may write nothing,
 # so it cannot replace one. A conditional write succeeds over a delete marker, which is why no
 # principal may hold both. Never give it a write "to repair a prefix". P-04 never runs as it.
+# Conditional write over a delete marker: Amazon S3 User Guide, conditional requests,
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html
 #
 # The policies are built with jsonencode rather than aws_iam_policy_document so that
 # tests/root.tftest.hcl can read the statements a mock provider would otherwise make up.
@@ -27,6 +29,7 @@ locals {
     Version = "2012-10-17"
     Statement = concat(
       # Long-term keys alone cannot assume it: Bool, not BoolIfExists, so an absent MFA key fails.
+      # https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-multifactorauthpresent
       length(local.teardown_trusted_users) == 0 ? [] : [{
         Sid       = "NamedUsersWithMfa"
         Effect    = "Allow"
@@ -37,6 +40,7 @@ locals {
       # Federated sessions may carry no MFA key at all, so the condition above would lock them out
       # and cannot attest to their MFA anyway. Their identity provider enforces it; listing the
       # role here is the explicit allowlisting ADR-0014 item 5 asks for.
+      # Same IAM reference as above: the key can be absent for federated sessions.
       length(local.teardown_trusted_roles) == 0 ? [] : [{
         Sid       = "NamedFederatedRoles"
         Effect    = "Allow"
