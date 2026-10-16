@@ -55,7 +55,7 @@ assertion could fail, whether a comment is true, whether the diff matches the ro
 
 ## The bar for a finding
 
-`CODING_STANDARDS.md` → "A reviewer verifies before reporting" is the rule. Two habits carry it:
+`CODING_STANDARDS.md` → "A reviewer verifies before reporting" is the rule. Three habits carry it:
 
 - **Mutate, do not infer.** The claim "this test cannot fail" is cheap to settle: break the thing it
   guards in a throwaway worktree and see whether it goes red. Three of the nine pull requests
@@ -63,6 +63,13 @@ assertion could fail, whether a comment is true, whether the diff matches the ro
   the five that stated none, every one shipped an assertion that could not fail.
 - **Say which findings you checked.** A verified finding and a suspicion are both worth reporting
   and only one is worth acting on without looking, so mark which is which.
+- **Grep the noun, then check the scope.** A false claim in prose is rarely in one place. Search for
+  the noun it cannot paraphrase away — an identifier, a status code, a field name — and at each site
+  ask whether the claim's scope is the thing that actually has the property. One false sentence sat
+  in nine places across four files on 16 October 2026: grepping the sentence found a phrasing,
+  grepping `security.rejections` found all nine. Report them as one finding. No check decides the
+  scope question; `CODING_STANDARDS.md` → "A universal names its exceptions by the writer" is the
+  standard it holds the author to.
 
 Report a sub-agent's finding only after you have taken its severity for yourself. A finding handed
 up as "looks wrong" is sometimes right, sometimes the contract's own design: on 15 October two axes

@@ -87,6 +87,21 @@ the table, and a copy is wrong one reorder after it is written.
 The relation is still worth stating — "runs after host resolution, which pins the app" — and the
 name carries it. A reviewer reads a bare number as a copy to be replaced.
 
+## A universal names its exceptions by the writer
+
+A sentence stating a universal — every rejection reaches `security.rejections` — names each
+exception by the code that writes it, never by an identifier that write happens to carry. An
+identifier may have several writers and only some of them be excepted, so a qualifier scoped to the
+identifier excepts writes nobody meant to, and still reads as true to anyone who checks it against
+the one writer they had in mind.
+
+A false universal in the contracts cost four review rounds on 16 October 2026 for exactly that
+reason: each fix scoped the exception to the id the excepted write carried rather than to the stage
+that wrote it, and that id had a second writer the sentence never meant to cover. Whether a scope is
+the thing that actually has the property is a judgement about whether two files agree, which no
+check decides; the syntactic half of this family — a cell that disagrees with the file it indexes —
+belongs in a check instead.
+
 ## A reviewer verifies before reporting
 
 The two worst defects found in task 5.3 were found by running the thing: a listener logging query
