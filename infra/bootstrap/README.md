@@ -1,15 +1,18 @@
 # `infra/bootstrap` — Terraform state and the CI plan role
 
-Task 1.0. This root is applied **once**, with **local state**, and owns two things
-and nothing else:
+Task 1.0, and the teardown role from change request 1.5. This root is applied
+**once**, with **local state**, and owns three things and nothing else:
 
 1. The Terraform state bucket: private, versioned, TLS only, public access
    blocked, encryption on.
 2. The read-only role CI assumes to run plans.
+3. The teardown role, the one principal allowed to delete under `apps/` in the
+   platform bucket (ADR-0014, which amends the plan's "Never contains: Anything
+   else" boundary for this root).
 
 It keeps local state because it creates the bucket that holds remote state, so it
 cannot keep its state there. `.gitignore` keeps `*.tfstate*` out of the
-repository; keep the file on the workstation that applied it. These two resources
+repository; keep the file on the workstation that applied it. These resources
 outlive every teardown — `teardown.sh` destroys the three platform roots and then
 the state bucket goes last, by hand.
 
@@ -60,7 +63,9 @@ terraform output -json
 ```
 
 The apply fails, rather than creating a role nobody can assume, if neither
-`github_repository` nor `additional_trusted_principal_arns` is set.
+`github_repository` nor `additional_trusted_principal_arns` is set, or if
+`teardown_trusted_principal_arns` is empty. `terraform test` here runs against a
+mock provider and needs no credentials.
 
 ## Naming
 
@@ -70,6 +75,13 @@ Every resource name carries the cell name (ADR-0012):
 | --- | --- |
 | State bucket | `spa-platform-<cell>-tfstate-<account id>` |
 | CI plan role and its policy | `spa-platform-<cell>-ci-plan` |
+| Teardown role and its inline policy | `spa-platform-<cell>-teardown` |
+
+The cell is 3 to 22 lowercase letters, digits or hyphens with no hyphen at either
+end, `^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$`, the same expression the platform root and
+`modules/cell` use (change request 1.5). 3 is the frozen appId minimum the cell is
+published as; 22 keeps the load balancer's `spa-<cell>` within 32 characters.
+`tests/root.tftest.hcl` reads all three sources and fails if they drift.
 
 The account id is appended to the bucket name because S3 names are globally unique
 and a fixed name would collide between accounts. Set `state_bucket_name` to
@@ -80,7 +92,7 @@ override it.
 The platform tag that `teardown.sh` queries, and that test P-05 asserts returns
 nothing, is `Platform = spa-platform`. Resources in this root carry
 `Platform = spa-platform-bootstrap` instead, with `Cell`, `Component = bootstrap`,
-`ManagedBy` and `Root`. That is deliberate: the state bucket and the CI role
+`ManagedBy` and `Root`. That is deliberate: the state bucket and the two roles
 survive every teardown, so if they answered the platform query, P-05 could never
 pass. The value is set in one place, `local.tags` in `main.tf`.
 
@@ -118,6 +130,31 @@ order to plan it, so without the permission the apps root's plan fails on the
 client-secret parameters and the generated test-user passwords. The grant is
 scoped to `/spa-platform/<cell>/*`. Set it false and accept an incomplete plan if
 that trade is the wrong way round for the account.
+
+## The teardown role
+
+`spa-platform-<cell>-teardown` (ADR-0014). The platform bucket's policy denies
+`s3:DeleteObject` and `s3:DeleteObjectVersion` under `apps/` to every principal but
+this one, which is half of what makes a release prefix write-once (P-04). It lives
+here because it must outlive the teardown it permits.
+
+- **Permissions:** `s3:DeleteObject` and `s3:DeleteObjectVersion` on
+  `<platform bucket ARN>/apps/*`, and `s3:ListBucket` and `s3:ListBucketVersions` on
+  the bucket. The bucket ARN is one bucket's, `spa-platform-<cell>` by default or
+  `platform_bucket_name`, never a glob. **No write, ever**: a conditional write
+  succeeds over a delete marker, so a principal holding both could replace a
+  release in two steps.
+- **Trust:** `teardown_trusted_principal_arns`, its own required list. IAM users
+  assume the role only with MFA (`Bool`, so long-term keys alone fail). Role ARNs
+  are allowlisted federated human roles, in a separate statement, whose identity
+  provider enforces MFA. The input refuses the account root, STS session ARNs and
+  the CI plan role; the GitHub OIDC provider is never trusted.
+- **Who reads its ARN:** nobody, by design. The platform root looks the role up by
+  its derived name, and `teardown.sh` derives the same name, because this root's
+  state is local. `teardown_role_arn` is an output for humans.
+
+The role is break-glass: whoever can assume it can delete a published release.
+P-04 never runs as it.
 
 ## Verifying the lock — the task's "done when"
 

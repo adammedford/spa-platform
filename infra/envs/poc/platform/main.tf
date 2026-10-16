@@ -20,7 +20,7 @@ provider "aws" {
 locals {
   # contracts/resource-tags.md. Platform = spa-platform is the platform tag:
   # teardown.sh queries it and P-05 asserts the query returns nothing. The bootstrap
-  # root deliberately carries a different value, because its two resources outlive
+  # root deliberately carries a different value, because its three resources outlive
   # every teardown.
   tags = {
     Platform  = "spa-platform"
@@ -71,12 +71,25 @@ locals {
   }
 }
 
+# The teardown role infra/bootstrap creates (change request 1.5, ADR-0014). The name is derived and
+# the ARN is looked up, so a missing or mis-derived role is a plan error here rather than a bucket
+# nobody can empty, found at teardown. The ARN lands in a policy condition, where AWS validates
+# nothing, which is why it is never assembled from a string.
+data "aws_iam_role" "teardown" {
+  name = "spa-platform-${var.cell}-teardown"
+}
+
+locals {
+  # The role first, and anything additional after it: an extra principal cannot replace it.
+  teardown_principal_arns = concat([data.aws_iam_role.teardown.arn], var.additional_teardown_principal_arns)
+}
+
 module "cell" {
   source = "../../../modules/cell"
 
   cell                    = var.cell
   vpc_cidr                = var.vpc_cidr
-  teardown_principal_arns = var.teardown_principal_arns
+  teardown_principal_arns = local.teardown_principal_arns
   certificate_domain      = var.certificate_domain
   health_check_path       = var.health_check_path
 

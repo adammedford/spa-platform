@@ -1,4 +1,4 @@
-# Copy to terraform.tfvars and edit. Only teardown_principal_arns has no default.
+# Copy to terraform.tfvars and edit. gateway_image and issuers have no default.
 
 region   = "us-east-1"
 cell     = "poc"
@@ -10,6 +10,10 @@ certificate_domain = "spa-poc.test"
 # / on the sample image, /readyz once the gateway runs.
 health_check_path = "/"
 
-# Whoever runs tools/scripts/teardown.sh. Everyone else is denied deletes under
-# apps/, which is what makes a release prefix write-once.
-teardown_principal_arns = ["arn:aws:iam::111122223333:role/Admin"]
+# Deletes under apps/ are allowed to the teardown role infra/bootstrap creates,
+# spa-platform-<cell>-teardown, which this root looks up by name: nothing to set
+# here (change request 1.5, ADR-0014). Everyone else is denied, which is what
+# makes a release prefix write-once. Add a principal only if it must delete as
+# well; it is appended to the role, never instead of it. Role or user ARNs only,
+# never the assumed-role session ARN `aws sts get-caller-identity` prints.
+additional_teardown_principal_arns = []
