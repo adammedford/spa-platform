@@ -3,6 +3,8 @@
 - **Freezes at:** G1a
 - **Consumed by:** everyone
 - **Source:** `docs/plan/02-contracts.md` → Pipeline and entry points; `docs/plan/01-plan.md` → Request path
+- **Changed at:** G1b. ADR-0018 put `UsePlatformTelemetry` before `UsePlatformForwardedHeaders`, so
+  every rejection the application answers is logged and counted; change request 6.4 raised it.
 
 The order is security-relevant, so it is frozen with the contracts at G1a. `src/Gateway/Program.cs`
 calls these entry points, in this order, and nothing else. A workstream fills in the entry points
@@ -25,8 +27,8 @@ Called in this order, before the pipeline is built.
 
 | Stage | Entry point | Owner | What the stage does |
 | --- | --- | --- | --- |
-| 1 | `UsePlatformForwardedHeaders` | 4 | `X-Forwarded-Proto` and `X-Forwarded-For` are trusted from `ForwardedHeaders:TrustedNetworks` only. `X-Forwarded-Host` is never read. |
-| 2 | `UsePlatformTelemetry` | 6 | The request log line and the trace scope. It replaces the framework's default request log, which includes the query string. |
+| 1 | `UsePlatformTelemetry` | 6 | The request log line and the trace scope. It replaces the framework's default request log, which includes the query string. First, so that every rejection a later stage answers reaches the line and `security.rejections`. |
+| 2 | `UsePlatformForwardedHeaders` | 4 | `X-Forwarded-Proto` and `X-Forwarded-For` are trusted from `ForwardedHeaders:TrustedNetworks` only. `X-Forwarded-Host` is never read. The method allowlist runs here too: a method no path accepts (`TRACE`, `CONNECT`) gets 405 under `gate.method` before any later stage sees it. |
 | 3 | `UsePlatformHealth` | 2 | Answers `/healthz` and `/readyz` on any host |
 | 4 | `UsePlatformHostResolution` | 2 | The request authority must equal a registry `host` exactly. The app and the snapshot are pinned for the request as `IAppFeature`. Any other host gets 404 before routing runs. |
 | 5 | `UsePlatformSecurityHeaders` | 4 | The app's content security policy and the fixed header set, on every response |
@@ -36,11 +38,15 @@ Called in this order, before the pipeline is built.
 | 9 | `UsePlatformAntiforgery` | 4 | Unsafe methods on `/api` need a valid `X-CSRF-TOKEN`. The check runs after the request gate because it needs the user. |
 | 10 | `MapPlatformBff`, `MapPlatformProxy`, `MapPlatformAssets` | 3, 4, 2 | `/bff/*`; `/api/{name}/{rest}` through YARP; everything else from S3 |
 
-Three orderings carry a reason, and none of them is a preference.
+Four orderings carry a reason, and none of them is a preference.
 
-- **Forwarded headers come first** because everything after it reads the scheme and the client
-  address, and because the antiforgery cookie's `SecurePolicy = Always` has to be applied after
-  them: a `__Host-` cookie sent without `Secure` is discarded (ADR-0007).
+- **Telemetry comes first** so that every rejection the application answers, the method
+  allowlist's 405 included, is logged and counted under its rule id (`contracts/request-gate.md`).
+  It can come first because the request line carries no value forwarded headers settle: no scheme,
+  no client address, no host (`contracts/telemetry.md`, ADR-0018).
+- **Forwarded headers come before everything that reads the scheme or the client address**, and
+  before the antiforgery cookie's `SecurePolicy = Always` is applied: a `__Host-` cookie sent
+  without `Secure` is discarded (ADR-0007).
 - **Health answers before host resolution**, so the ALB health check and `spactl wait` need no
   registry entry and no known host.
 - **The request gate runs before authentication**, and the antiforgery check after it, because the

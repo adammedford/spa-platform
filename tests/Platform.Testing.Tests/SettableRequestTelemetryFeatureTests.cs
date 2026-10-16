@@ -4,14 +4,14 @@ using Platform.Testing;
 namespace Platform.Testing.Tests;
 
 /// <summary>
-/// The double every workstream whose stage can reject a request installs in place of stage 2.
+/// The double every workstream whose stage can reject a request installs in place of <c>UsePlatformTelemetry</c>.
 /// </summary>
 public sealed class SettableRequestTelemetryFeatureTests
 {
     [Fact]
     public void A_fresh_feature_carries_neither_field()
     {
-        // What stage 2 hands the pipeline: a request that was not rejected has no rule, and a
+        // What <c>UsePlatformTelemetry</c> hands the pipeline: a request that was not rejected has no rule, and a
         // request with no session has no reference.
         SettableRequestTelemetryFeature feature = new();
 

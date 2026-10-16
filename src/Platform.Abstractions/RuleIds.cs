@@ -8,7 +8,7 @@ namespace Platform.Abstractions;
 ///
 /// Four workstreams need the same strings and no two of them may disagree: workstream 2 refuses a
 /// host and a path, workstream 4 the gate, antiforgery and an unknown upstream, workstream 3 a
-/// login callback and a session after G1b, and workstream 6 counts them in stage 2 and asserts on
+/// login callback and a session after G1b, and workstream 6 counts them in <c>UsePlatformTelemetry</c> and asserts on
 /// them in the negative suite. A-03 stops a workstream project from reading another's constants, so
 /// before this type each owner kept a copy and the contract was agreed by hand. The matching test
 /// in tests/Platform.Abstractions.Tests reads the contract's own table and fails if the two drift.

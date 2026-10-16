@@ -1,16 +1,18 @@
 namespace Platform.Abstractions;
 
 /// <summary>
-/// Where a later stage leaves the two request-line fields only it can know, for stage 2 to read once
-/// the pipeline has returned. Stage 2 sets it on the request before calling the rest of the pipeline,
-/// and any stage after stage 2 writes it. contracts/telemetry.md -> "How `rule` and `session_ref`
-/// reach the request line" is the contract; contracts/pipeline.md has the stage order.
+/// Where a later stage leaves the two request-line fields only it can know, for
+/// <c>UsePlatformTelemetry</c> to read once the pipeline has returned. The telemetry stage sets it on
+/// the request before calling the rest of the pipeline, and every later stage writes it.
+/// contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line" is the contract;
+/// contracts/pipeline.md has the stage order.
 ///
-/// <para>One stage cannot use this at all: the method allowlist answers 405 in stage 1, before this
-/// feature exists. contracts/telemetry.md records that as a known gap.</para>
+/// <para>Every rejection the application answers can reach it, the method allowlist's 405 included,
+/// because the telemetry stage is the first stage (ADR-0018). Only what Kestrel refuses before any
+/// stage runs is outside it.</para>
 ///
 /// contracts/telemetry.md puts <c>rule</c> and <c>session_ref</c> on the one request log line, and
-/// counts <c>security.rejections</c> by the same rule id. Stage 2 writes that line, so it needs
+/// counts <c>security.rejections</c> by the same rule id. The telemetry stage writes that line, so it needs
 /// somewhere to read both from, and neither value is its to compute: the stage that rejected the
 /// request knows the rule, and only workstream 3 holds the session key. Change request
 /// contracts/changes/6.4-request-telemetry-feature.md asked for this; the integrator's decision there
@@ -18,7 +20,7 @@ namespace Platform.Abstractions;
 ///
 /// A stage writes it null-conditionally:
 /// <c>context.Features.Get&lt;IRequestTelemetryFeature&gt;()?.Rule = "gate.origin";</c>. A stage's own
-/// test project runs without stage 2, so a missing feature must cost nothing.
+/// test project runs without the telemetry stage, so a missing feature must cost nothing.
 /// Platform.Testing's settable implementation is what a component test installs instead.
 ///
 /// Source: change request 6.4, decided 14 October 2026. Freezes on landing: it carries fields the
@@ -48,7 +50,7 @@ public interface IRequestTelemetryFeature
     /// implementing this interface, this property hides the class of the same name, so write
     /// <c>Platform.Abstractions.SessionRef.Of(key)</c> there.
     ///
-    /// The session key itself is on this contract's never-logged list and never reaches stage 2.
+    /// The session key itself is on this contract's never-logged list and never reaches the telemetry stage.
     /// Workstream 3 writes this field, wherever it holds both the key and the request.
     /// </summary>
     string? SessionRef { get; set; }

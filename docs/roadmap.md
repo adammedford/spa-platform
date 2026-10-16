@@ -50,7 +50,7 @@ The brief these stages serve asks for a gateway that is feature complete, harden
 word needs a test, or it is a mood.
 
 **Feature complete** means every entry point in `contracts/pipeline.md` is filled by its owner and
-nothing is a stub: nine of the ten middleware stages, since stage 7 is the framework's own, plus
+nothing is a stub: nine of the ten middleware stages, since routing and authentication are the framework's own, plus
 six service registrations and three endpoint maps. The proof is the hermetic functional suite,
 F-01 to F-06 and F-08 to F-11, against the real composition. That is stage S4, gate G2. Feature
 complete says nothing about whether the features are right.
@@ -70,13 +70,14 @@ section below carries the rest, because the plan does not yet name it.
 ## The gateway's surface, and what fills it
 
 Feature complete is a per-stage question, so here is the ladder stage that fills each stage of the
-request path. The order is `contracts/pipeline.md`, which freezes at G1a and is security-relevant;
+request path. The order is `contracts/pipeline.md`, frozen at G1a and changed once at G1b
+(ADR-0018), and it is security-relevant;
 the owner column is that contract's, not this file's.
 
 | Request path | Entry point | Owner | Filled at |
 | --- | --- | --- | --- |
-| 1 Forwarded headers | `UsePlatformForwardedHeaders` | 4 | S4 |
-| 2 Telemetry | `UsePlatformTelemetry` | 6 | S4 |
+| 1 Telemetry | `UsePlatformTelemetry` | 6 | S4 |
+| 2 Forwarded headers and the method allowlist | `UsePlatformForwardedHeaders` | 4 | S4 |
 | 3 Health | `UsePlatformHealth` | 2 | S4 |
 | 4 Host resolution | `UsePlatformHostResolution` | 2 | S4 |
 | 5 Security headers and CSP | `UsePlatformSecurityHeaders` | 4 | S4 |

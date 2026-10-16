@@ -6,8 +6,13 @@
 - **Consumed by:** workstream 4 (`UsePlatformRequestGate`), and workstream 6's negative suite
 - **Source:** `docs/plan/02-contracts.md` → Request gate; ADR-0007
 
-The gate runs before authentication (stage 6 in `contracts/pipeline.md`). The CSRF token check runs
-after it, because that one needs the user. Each rejection is logged and counted under a rule id.
+The gate runs before authentication (`UsePlatformRequestGate` in `contracts/pipeline.md`). The CSRF
+token check runs after it, because that one needs the user. Each rejection is logged and counted
+under a rule id. A rejection is an answer the application gives: a response some stage ends the
+request with. Every one of them reaches the request line and `security.rejections`, because
+`UsePlatformTelemetry` is the first stage (ADR-0018). What Kestrel refuses before any stage runs,
+the 431 for oversized headers in `contracts/http-contract.md` → Errors, is the server's answer,
+carries no rule id, and is outside this sentence.
 
 ## Rules by path
 
