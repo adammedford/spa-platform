@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Lands a reviewed pull request: merge, regenerate the roadmap, push. Owner: integrator.
 #
-#     tools/land.sh <pr-number> [--subject "<merge subject>"]
+#     tools/land.sh <pr-number> [--subject "<merge subject>"] [--body-file <path>]
 #
 # Run it from a worktree sitting at the pull request's base with nothing uncommitted, because the
 # roadmap is derived from the tree the merge commit makes:
 #
 #     git worktree add --detach ../spa-land origin/main
+#
+# --subject is the merge subject a check reads. --body-file is a file holding the merge body, passed
+# through to `gh pr merge --body-file`. The body says what was verified and how, and it carries the
+# `Outstanding:` line and the `Outstanding test ids:` line when a row landed without being finished.
+# Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
+# A missing value or an unreadable path fails before the merge, because a bad argument found
+# afterwards leaves the merge done and the roadmap stale.
 #
 # Why this exists rather than `gh pr merge`. tools/roadmap.py derives how far the work has got from
 # the merge subjects, so the merge commit is the input to the derivation and docs/roadmap.md is its
@@ -27,10 +34,20 @@ die() { printf 'land: %s\n' "$*" >&2; exit 1; }
 
 pr=""
 subject=""
+body_file=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --subject) [ $# -ge 2 ] || die "--subject needs a value."; subject="$2"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Checked here rather than at the merge: a path that turns out to be unreadable after the merge
+    # leaves the merge done and the roadmap stale, which is what this script exists to prevent.
+    --body-file)
+      [ $# -ge 2 ] || die "--body-file needs a value."
+      [ -f "$2" ] || die "--body-file: $2 is not a file."
+      [ -r "$2" ] || die "--body-file: $2 is not readable."
+      body_file="$2"; shift 2 ;;
+    # The range is the header: line 2 to the last comment line above `set -euo pipefail`. Move a
+    # header line and this moves with it, or --help starts printing the code.
+    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1." ;;
     *) [ -z "$pr" ] || die "one pull request at a time."; pr="$1"; shift ;;
   esac
@@ -72,11 +89,16 @@ if [ -z "$subject" ]; then
 fi
 
 echo "--- merging #$pr"
+# An indexed array, which bash 3.2 has: --subject and --body-file are independent, so the four
+# combinations are built up rather than spelled out.
+merge_args=(--merge)
 if [ -n "$subject" ]; then
-  gh pr merge "$pr" --merge --subject "$subject"
-else
-  gh pr merge "$pr" --merge
+  merge_args=("${merge_args[@]}" --subject "$subject")
 fi
+if [ -n "$body_file" ]; then
+  merge_args=("${merge_args[@]}" --body-file "$body_file")
+fi
+gh pr merge "$pr" "${merge_args[@]}"
 
 echo "--- fetching the merge commit for $base"
 git fetch origin
