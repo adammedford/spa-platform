@@ -12,8 +12,6 @@
 # through to `gh pr merge --body-file`. The body says what was verified and how, and it carries the
 # `Outstanding:` line and the `Outstanding test ids:` line when a row landed without being finished.
 # Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
-# A missing value or an unreadable path fails before the merge, because a bad argument found
-# afterwards leaves the merge done and the roadmap stale.
 #
 # Why this exists rather than `gh pr merge`. tools/roadmap.py derives how far the work has got from
 # the merge subjects, so the merge commit is the input to the derivation and docs/roadmap.md is its
@@ -45,9 +43,9 @@ while [ $# -gt 0 ]; do
       [ -f "$2" ] || die "--body-file: $2 is not a file."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       body_file="$2"; shift 2 ;;
-    # The range is the header: line 2 to the last comment line above `set -euo pipefail`. Move a
-    # header line and this moves with it, or --help starts printing the code.
-    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Reads the header rather than naming the lines it sits on: a hard-coded range has to be edited
+    # again every time the header moves, and nothing here would catch it when it was not.
+    -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     -*) die "unknown option $1." ;;
     *) [ -z "$pr" ] || die "one pull request at a time."; pr="$1"; shift ;;
   esac
@@ -89,8 +87,6 @@ if [ -z "$subject" ]; then
 fi
 
 echo "--- merging #$pr"
-# An indexed array, which bash 3.2 has: --subject and --body-file are independent, so the four
-# combinations are built up rather than spelled out.
 merge_args=(--merge)
 if [ -n "$subject" ]; then
   merge_args=("${merge_args[@]}" --subject "$subject")
