@@ -6,6 +6,9 @@
     <ProjectReference Include="../../src/Platform.Identity/Platform.Identity.csproj" />
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
+    <!-- The test identity provider: the handler meets a real discovery document, signing keys and token
+         endpoint. Check A-01 keeps it out of the gateway, not out of a test project. -->
+    <ProjectReference Include="../../fixtures/TestIdp/TestIdp.csproj" />
   </ItemGroup>
 
 </Project>
