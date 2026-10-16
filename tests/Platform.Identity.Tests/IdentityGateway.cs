@@ -17,7 +17,7 @@ namespace Platform.Identity.Tests;
 /// the framework's <c>UseAuthentication</c> as the only middleware. <see cref="SettableAppFeature"/>
 /// stands in for host resolution, which runs before authentication and pins the app.
 ///
-/// The pipeline is stages 7 to 10 of contracts/pipeline.md as workstream 3 fills them: routing, the
+/// The pipeline follows contracts/pipeline.md: routing, the
 /// framework's authentication, <c>UsePlatformShellGate</c> and <c>MapPlatformBff</c>. A terminal
 /// handler stands in for what other workstreams build behind them: <c>/</c> answers 200 (an asset,
 /// task 2.4), an anonymous request to <see cref="ApiPath"/> gets 401 and an authenticated one 200 (the

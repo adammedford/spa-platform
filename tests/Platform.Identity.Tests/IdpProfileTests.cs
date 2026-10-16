@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Platform.Abstractions;
 using Platform.Testing;
@@ -45,6 +46,66 @@ public sealed class IdpProfileTests
 
         Assert.Equal(ClientCredentialStyle.PostBody, profiles["standard"].ClientCredentialStyle);
         Assert.Equal(ClientCredentialStyle.AuthorizationHeader, profiles["cognito"].ClientCredentialStyle);
+    }
+
+    [Theory]
+    [InlineData("standard", TestIdp.ClientAuth.Post)]
+    [InlineData("cognito", TestIdp.ClientAuth.Basic)]
+    public async Task The_code_exchange_uses_the_issuers_profile_credential_style(string profile, TestIdp.ClientAuth expected)
+    {
+        // ADR-0017: the profile governs code exchange as well as refresh and revocation. The
+        // provider observes the actual header/body and verifies the framework's PKCE verifier.
+        AppDefinition app = TestApps.Entry("app1", issuer: IdentityGateway.IssuerName);
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([app], issuerProfile: profile, stubProfile: false);
+
+        await gateway.LoginAsync(app);
+
+        TestIdp.TokenGrant grant = Assert.Single(gateway.Idp.Grants);
+        Assert.True(grant.Ok);
+        Assert.Equal(expected, grant.Auth);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_basic_code_exchange_keeps_handler_nonce_and_signature_validation(bool unknownSigningKey)
+    {
+        // Using HandleCodeRedemption must still leave token validation with the framework (N-05).
+        AppDefinition app = TestApps.Entry("app1", issuer: IdentityGateway.IssuerName);
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([app], issuerProfile: "cognito", stubProfile: false);
+        IdentityGateway.Authorized authorized = await gateway.AuthorizeAsync(app);
+        gateway.Idp.Faults.SignWithUnpublishedKey = unknownSigningKey;
+        IReadOnlyDictionary<string, string> cookies = unknownSigningKey ? authorized.LoginState
+            : authorized.LoginState.Where(pair => !pair.Key.StartsWith("__Host-spa-nonce.", StringComparison.Ordinal))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+        IdentityGateway.Answer callback = await gateway.SendAsync(app, authorized.Callback.PathAndQuery, cookies);
+
+        Assert.Equal(400, callback.Status);
+        Assert.Equal(RuleIds.AuthCallback, callback.Rule);
+        Assert.Empty(gateway.Sessions.Created);
+        Assert.Equal(TestIdp.ClientAuth.Basic, Assert.Single(gateway.Idp.Grants).Auth);
+    }
+
+    [Fact]
+    public async Task A_refused_basic_code_exchange_uses_the_constant_failure_page_and_creates_no_session()
+    {
+        // A failed library response must follow the same gateway failure path as the stock handler.
+        AppDefinition app = TestApps.Entry("app1", issuer: IdentityGateway.IssuerName);
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([app], issuerProfile: "cognito", stubProfile: false);
+        IdentityGateway.Authorized authorized = await gateway.AuthorizeAsync(app);
+        gateway.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(SchemeNames.Oidc(app.AppId)).ClientSecret = "wrong-client-secret";
+
+        IdentityGateway.Answer callback = await gateway.SendAsync(app, authorized.Callback.PathAndQuery, authorized.LoginState);
+
+        Assert.Equal(400, callback.Status);
+        Assert.Equal(AuthenticationEvents.FailurePage, callback.Body);
+        Assert.Equal(RuleIds.AuthCallback, callback.Rule);
+        Assert.Empty(gateway.Sessions.Created);
+        TestIdp.TokenGrant grant = Assert.Single(gateway.Idp.Grants);
+        Assert.False(grant.Ok);
+        Assert.Equal(TestIdp.ClientAuth.Basic, grant.Auth);
     }
 
     [Fact]
