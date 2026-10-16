@@ -4,12 +4,12 @@ namespace Platform.Security.Tests;
 
 /// <summary>
 /// Task 4.3a: every rule id this project's stages refuse under reaches
-/// <c>IRequestTelemetryFeature.Rule</c>, where stage 2 reads it for the one request log line and for
-/// <c>security.rejections</c> (<c>contracts/telemetry.md</c> -> "How <c>rule</c> and
+/// <c>IRequestTelemetryFeature.Rule</c>, where <c>UsePlatformTelemetry</c> reads it for the one request
+/// log line and for <c>security.rejections</c> (<c>contracts/telemetry.md</c> -> "How <c>rule</c> and
 /// <c>session_ref</c> reach the request line"). The ids are <c>contracts/request-gate.md</c> -> Rule
 /// ids.
 ///
-/// Stage 2 belongs to workstream 6; these component hosts install
+/// <c>UsePlatformTelemetry</c> belongs to workstream 6; these component hosts install
 /// <c>Platform.Testing</c>'s <see cref="Platform.Testing.SettableRequestTelemetryFeature"/> in its
 /// place, which is what a stage's own test project can do. Every other test in this project starts
 /// its host with no feature at all, so the stages' null-conditional writes are exercised both ways.
@@ -18,9 +18,10 @@ namespace Platform.Security.Tests;
 /// It also asserts the stage's own Warning line carries the same id: both come from one value in the
 /// stage, and a drift between them would show here.
 ///
-/// <para>Stage 1's method allowlist (<c>MethodAllowlist</c>) is deliberately absent. Its 405
-/// is answered before stage 2 creates the feature, so it can set nothing; that gap is recorded in
-/// <c>contracts/telemetry.md</c> and is not this task's to close.</para>
+/// <para>The method allowlist (<c>MethodAllowlist</c>, inside <c>UsePlatformForwardedHeaders</c>) is
+/// here too. <c>UsePlatformTelemetry</c> runs before it (ADR-0018), so its 405 sets <c>gate.method</c>
+/// like every other rejection, and the stand-in in <see cref="GateHost"/> sits in the same
+/// place.</para>
 /// </summary>
 public sealed class RuleIdTelemetryTests
 {
@@ -42,7 +43,7 @@ public sealed class RuleIdTelemetryTests
         Assert.Equal(0, host.Reached);
     }
 
-    // ---- Stage 6, the request gate: contracts/request-gate.md ----
+    // ---- UsePlatformRequestGate: contracts/request-gate.md ----
 
     [Fact]
     public async Task The_gate_sets_path_invalid()
@@ -113,14 +114,46 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_sets_gate_method()
     {
-        // The gate's own 405, at stage 6: the path takes a method it was not sent. Stage 1's 405 for a
-        // method no path takes is the gap above, and sets nothing.
+        // The request gate's own 405: the path takes a method it was not sent. The allowlist's 405 for
+        // a method no path takes is The_method_allowlist_sets_gate_method, under the same id.
         await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
 
         using HttpResponseMessage response = await host.SendAsync("POST", "/bff/session", Ct,
             FetchSite("same-origin"), Origin(GateHost.AppOrigin));
 
         AssertRule(host, response, HttpStatusCode.MethodNotAllowed, "gate.method");
+    }
+
+    // ---- UsePlatformForwardedHeaders: the method allowlist ----
+
+    [Theory]
+    [InlineData("TRACE")]
+    [InlineData("PROPFIND")]
+    public async Task The_method_allowlist_sets_gate_method(string method)
+    {
+        // A method no path accepts, refused by the allowlist inside UsePlatformForwardedHeaders before
+        // the request gate sees it. UsePlatformTelemetry runs first (ADR-0018), so the feature is
+        // there.
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+
+        string response = await host.RawAsync($"{method} /api/orders/items HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
+
+        Assert.StartsWith("HTTP/1.1 405 ", response);
+        Assert.Equal("gate.method", Assert.Single(host.TelemetryRules));
+        Assert.Single(host.LinesFor("gate.method"));
+        Assert.Equal(0, host.Reached);
+    }
+
+    [Fact]
+    public async Task The_method_allowlist_refuses_with_no_telemetry_feature_installed()
+    {
+        await using GateHost host = await GateHost.StartAsync(Ct);
+
+        string response = await host.RawAsync("TRACE /api/orders/items HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
+
+        Assert.StartsWith("HTTP/1.1 405 ", response);
+        Assert.Single(host.LinesFor("gate.method"));
+        Assert.Empty(host.TelemetryRules);
     }
 
     [Theory]
@@ -144,8 +177,9 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_refuses_with_no_telemetry_feature_installed()
     {
-        // The write is null-conditional: these component hosts omit stage 2, so the refusal must
-        // remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
+        // The write is null-conditional: these component hosts omit UsePlatformTelemetry, so the
+        // refusal must remain unchanged when no telemetry feature is installed
+        // (contracts/telemetry.md).
         await using GateHost host = await GateHost.StartAsync(Ct);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/api/orders/items", Ct, FetchSite("cross-site"));
@@ -155,7 +189,7 @@ public sealed class RuleIdTelemetryTests
         Assert.Empty(host.TelemetryRules);
     }
 
-    // ---- Stage 9, antiforgery ----
+    // ---- UsePlatformAntiforgery ----
 
     [Fact]
     public async Task Antiforgery_sets_csrf_token()

@@ -5,22 +5,24 @@ using Platform.Abstractions;
 namespace Platform.Security;
 
 /// <summary>
-/// The methods some path of the gateway accepts, checked in stage 1 so a method no path accepts never
-/// reaches a later stage. N-20: <c>TRACE</c> and <c>CONNECT</c> get 405. Kestrel passes both to the
-/// application, <c>CONNECT</c> included (the HTTP/1.1 authority form), so the check is the gateway's.
+/// The methods some path of the gateway accepts, checked in <c>UsePlatformForwardedHeaders</c> so a
+/// method no path accepts never reaches a later stage. N-20: <c>TRACE</c> and <c>CONNECT</c> get 405.
+/// Kestrel passes both to the application, <c>CONNECT</c> included (the HTTP/1.1 authority form), so
+/// the check is the gateway's.
 ///
 /// Which of these a given path accepts is the request gate's rule (<c>contracts/request-gate.md</c>,
-/// stage 6, task 4.3): <c>GET</c> and <c>HEAD</c> for an asset, one method for each <c>/bff</c>
-/// endpoint, any of these for <c>/api</c>. Both refusals share the rule id <c>gate.method</c> and the
-/// code <c>method_not_allowed</c>, as the contract's tables give them.
+/// <c>UsePlatformRequestGate</c>, task 4.3): <c>GET</c> and <c>HEAD</c> for an asset, one method for
+/// each <c>/bff</c> endpoint, any of these for <c>/api</c>. Both refusals share the rule id
+/// <c>gate.method</c> and the code <c>method_not_allowed</c>, as the contract's tables give them.
 /// </summary>
 internal static partial class MethodAllowlist
 {
     /// <summary>
-    /// <see cref="RuleIds"/> holds <c>contracts/request-gate.md</c>'s table, so this refusal and
-    /// stage 6's share one spelling (ADR-0015). Stage 1 answers before stage 2 creates
-    /// <c>IRequestTelemetryFeature</c>, so the id reaches the Warning line and nothing else;
-    /// <c>contracts/telemetry.md</c> records that.
+    /// <see cref="RuleIds"/> holds <c>contracts/request-gate.md</c>'s table, so this refusal and the
+    /// request gate's share one spelling (ADR-0015). <c>UsePlatformTelemetry</c> runs before
+    /// <c>UsePlatformForwardedHeaders</c> (ADR-0018), so this id reaches the request line and
+    /// <c>security.rejections</c> as well as the Warning line, like every other rejection's
+    /// (<c>contracts/telemetry.md</c>).
     /// </summary>
     private const string Rule = RuleIds.GateMethod;
 
@@ -52,6 +54,11 @@ internal static partial class MethodAllowlist
 
         // The rule id only: the method is the client's to choose, so it stays out of the log line.
         Refused(logger, Rule);
+
+        // The same constant on the request line UsePlatformTelemetry writes, and the field it counts
+        // security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach the
+        // request line"). Null conditional because this project's own hosts omit the telemetry stage.
+        context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
 
         // RFC 9110 section 15.5.6: a 405 carries Allow.
         context.Response.Headers.Allow = AllowHeader;

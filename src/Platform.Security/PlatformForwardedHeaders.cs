@@ -6,9 +6,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Platform.Security;
 
 /// <summary>
-/// Stage 1's forwarded-header options, from <c>ForwardedHeaders:TrustedNetworks</c> in
-/// <c>contracts/platform-config.schema.json</c>. Threat T6 and ADR-0010: the scheme and the client
-/// address are taken from the ALB subnets only, with a forward limit of one.
+/// <c>UsePlatformForwardedHeaders</c>'s forwarded-header options, from
+/// <c>ForwardedHeaders:TrustedNetworks</c> in <c>contracts/platform-config.schema.json</c>. Threat T6
+/// and ADR-0010: the scheme and the client address are taken from the ALB subnets only, with a forward
+/// limit of one.
 /// </summary>
 internal static class PlatformForwardedHeaders
 {
@@ -18,8 +19,8 @@ internal static class PlatformForwardedHeaders
         services.AddOptions<ForwardedHeadersOptions>()
             .Configure<IConfiguration>((options, configuration) =>
             {
-                // XForwardedHost is left out: stage 4 resolves the app from the request authority, and
-                // a header that moved it would let a client pick the app (contracts/pipeline.md).
+                // XForwardedHost is left out: host resolution finds the app from the request authority,
+                // and a header that moved it would let a client pick the app (contracts/pipeline.md).
                 options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
 
                 // The ALB appends the address it saw, so only the last entry in X-Forwarded-For is

@@ -9,9 +9,10 @@ using Platform.Abstractions;
 namespace Platform.Security;
 
 /// <summary>
-/// Stage 9 and the token pair behind it: task 4.4, ADR-0007, test N-06 and evidence rows R-E1 to R-E7
-/// (<c>docs/plan/07-evidence.md</c>). The framework's antiforgery does the cryptography; this file
-/// sets five of its options, binds the app into the token and decides which requests need one.
+/// <c>UsePlatformAntiforgery</c> and the token pair behind it: task 4.4, ADR-0007, test N-06 and
+/// evidence rows R-E1 to R-E7 (<c>docs/plan/07-evidence.md</c>). The framework's antiforgery does the
+/// cryptography; this file sets five of its options, binds the app into the token and decides which
+/// requests need one.
 /// </summary>
 internal static class PlatformAntiforgery
 {
@@ -28,11 +29,11 @@ internal static class PlatformAntiforgery
             options.Cookie.Name = CookieName;
             options.HeaderName = HeaderName;
 
-            // R-E5: the default policy, SameAsRequest, sends the cookie without Secure on a request that
-            // arrived as http, and a browser discards a __Host- cookie without Secure. Always also makes
-            // every IAntiforgery call throw on a request whose scheme is not https
-            // (DefaultAntiforgery.CheckSSLConfig), which is why stage 1 has to have applied
-            // X-Forwarded-Proto first (contracts/pipeline.md).
+            // R-E5: the default policy, SameAsRequest, sends the cookie without Secure on a request
+            // that arrived as http, and a browser discards a __Host- cookie without Secure. Always also
+            // makes every IAntiforgery call throw on a request whose scheme is not https
+            // (DefaultAntiforgery.CheckSSLConfig), which is why UsePlatformForwardedHeaders has to have
+            // applied X-Forwarded-Proto first (contracts/pipeline.md).
             // https://learn.microsoft.com/aspnet/core/security/anti-request-forgery#antiforgery-options
             options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
             options.Cookie.SameSite = SameSiteMode.Strict;
@@ -45,8 +46,9 @@ internal static class PlatformAntiforgery
             options.SuppressReadingTokenFromFormBody = true;
 
             // The framework adds X-Frame-Options: SAMEORIGIN to the response that issues a token. The
-            // contract's header set has no X-Frame-Options: framing is stage 5's frame-ancestors 'none',
-            // which is stricter (contracts/http-contract.md -> Response headers).
+            // contract's header set has no X-Frame-Options: framing is the security headers'
+            // frame-ancestors 'none', which is stricter (contracts/http-contract.md -> Response
+            // headers).
             options.SuppressXFrameOptionsHeader = true;
         });
 
@@ -57,14 +59,14 @@ internal static class PlatformAntiforgery
     }
 
     /// <summary>
-    /// The app the request was resolved to, read from <see cref="IAppFeature"/> (stage 4). A missing
-    /// feature is a misordered pipeline, and it throws rather than binding every token to the same
-    /// empty value, which would undo the binding.
+    /// The app the request was resolved to, read from <see cref="IAppFeature"/> (host resolution). A
+    /// missing feature is a misordered pipeline, and it throws rather than binding every token to the
+    /// same empty value, which would undo the binding.
     /// </summary>
     private static string AppIdOf(HttpContext context) =>
         context.Features.Get<IAppFeature>()?.App.AppId
             ?? throw new InvalidOperationException(
-                "Antiforgery (stage 9) runs after host resolution (stage 4), which sets IAppFeature.");
+                "UsePlatformAntiforgery runs after UsePlatformHostResolution, which sets IAppFeature.");
 
     /// <summary>Binds the app id into the request token, so one app's pair is refused on another.</summary>
     private sealed class AppBinding : IAntiforgeryAdditionalDataProvider
@@ -88,8 +90,9 @@ internal static class PlatformAntiforgery
             // Header only: with SuppressReadingTokenFromFormBody the token store never reads the form
             // (R-E6). The framework answers true for GET, HEAD, OPTIONS and TRACE itself, and turns a
             // missing or mismatched token into false rather than an exception; it throws only on a
-            // request that is not https, which is a misconfigured stage 1 and should be loud. TRACE
-            // never gets here: stage 1's method allowlist answers it 405 (N-20).
+            // request that is not https, which is a misconfigured UsePlatformForwardedHeaders and
+            // should be loud. TRACE never gets here: the method allowlist in
+            // UsePlatformForwardedHeaders answers it 405 (N-20).
             // https://github.com/dotnet/aspnetcore/blob/main/src/Antiforgery/src/Internal/DefaultAntiforgery.cs
             antiforgery.IsRequestValidAsync(context);
 
@@ -103,8 +106,9 @@ internal static class PlatformAntiforgery
 }
 
 /// <summary>
-/// Stage 9: an unsafe method on <c>/api</c> needs a valid <c>X-CSRF-TOKEN</c>, or it is refused with
-/// 403 <c>csrf_failed</c> under rule <c>csrf.token</c> (<c>contracts/request-gate.md</c>).
+/// <c>UsePlatformAntiforgery</c>: an unsafe method on <c>/api</c> needs a valid
+/// <c>X-CSRF-TOKEN</c>, or it is refused with 403 <c>csrf_failed</c> under rule <c>csrf.token</c>
+/// (<c>contracts/request-gate.md</c>).
 /// </summary>
 internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logger)
 {
@@ -131,9 +135,9 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
         {
             Refused(logger, Rule);
 
-            // Task 4.3a: the same constant on stage 2's request line, null-conditionally because this
-            // project's own tests run without stage 2 (contracts/telemetry.md -> "How `rule` and
-            // `session_ref` reach the request line").
+            // Task 4.3a: the same constant on UsePlatformTelemetry's request line, null-conditionally
+            // because this project's own tests run without UsePlatformTelemetry (contracts/telemetry.md
+            // -> "How `rule` and `session_ref` reach the request line").
             context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
 
             await Problems.WriteAsync(context, StatusCodes.Status403Forbidden, "csrf_failed");

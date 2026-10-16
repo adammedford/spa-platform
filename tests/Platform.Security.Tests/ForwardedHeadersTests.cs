@@ -38,7 +38,7 @@ public sealed class ForwardedHeadersTests
         string seen = await (await client.SendAsync(Forwarded(host.BaseAddress), Ct)).Content.ReadAsStringAsync(Ct);
 
         // The host is unchanged even from a trusted network: X-Forwarded-Host is never read, because
-        // stage 4 resolves the app from the authority (contracts/pipeline.md).
+        // host resolution finds the app from the authority (contracts/pipeline.md).
         Assert.Equal($"https|203.0.113.7|{host.BaseAddress.Authority}", seen);
     }
 
