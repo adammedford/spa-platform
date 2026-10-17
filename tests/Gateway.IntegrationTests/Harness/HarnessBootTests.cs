@@ -10,11 +10,12 @@ using TestIdp;
 namespace Gateway.IntegrationTests.Harness;
 
 /// <summary>
-/// Task 6.1, "Done when: a stub gateway boots in the harness". The gateway is the shipped composition,
-/// which requires a session, and no browser here signs in: every assertion is about a stage that runs
+/// Task 6.1, "Done when: a stub gateway boots in the harness". The gateway is the shipped composition
+/// with a session required, as ADR-0008 requires one (<see cref="GatewayHarnessOptions.SessionRequired"/>,
+/// the harness's default), and no browser here signs in: every assertion is about a stage that runs
 /// before the shell gate in contracts/pipeline.md, or about the harness's own parts. Where a request
 /// does reach the shell gate, the test reads the answer a navigation without a session gets there, the
-/// redirect to the provider (ADR-0008), and nothing beyond it.
+/// redirect to the provider, and nothing beyond it.
 /// </summary>
 public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture<HarnessBootTests.Cell>
 {

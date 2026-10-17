@@ -27,13 +27,28 @@ namespace Gateway.SecurityTests.Negative;
 /// </summary>
 public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTests.Cell>
 {
-    /// <summary>One harness for this class. Its client secrets are canaries by the harness's own design.</summary>
+    /// <summary>One harness for this class, and one session on it. Its client secrets are canaries by the harness's own design.</summary>
     public sealed class Cell : IAsyncLifetime
     {
         public GatewayHarness Harness { get; private set; } = null!;
 
-        public async ValueTask InitializeAsync() =>
-            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+        /// <summary>
+        /// The <c>Cookie</c> header of a browser signed in to app 1, which the requests that must be
+        /// served carry. The login runs here, before any test takes its count, so its own lines are never
+        /// among those a test reads as its requests'
+        /// (<see cref="CanaryTests.The_request_lines_of_those_requests_exist_and_carry_none_of_it"/>).
+        /// </summary>
+        public string Session { get; private set; } = null!;
+
+        public async ValueTask InitializeAsync()
+        {
+            CancellationToken ct = TestContext.Current.CancellationToken;
+            Harness = await Suite.StartAsync(ct: ct);
+
+            using TestBrowser browser = Harness.CreateBrowser();
+            await Harness.SignInAsync(browser, "app1", ct);
+            Session = SignedIn.CookieHeader(browser, Harness.App("app1"));
+        }
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -135,17 +150,15 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
     /// One request per kind of credential the row names, each sent where it would matter: the
     /// session cookie's value, a bearer token, the antiforgery header, and a code and state in a
     /// query string on the callback path and on an asset path. Some are refused and two are not, so
-    /// both the refusal lines and the ordinary request lines are swept. The two that are not carry a
-    /// signed-in browser's session, because an asset is served and an API call forwarded only in one
-    /// (ADR-0008), and every answer is asserted, so the stages each comment names are the ones the
-    /// credential went through.
+    /// both the refusal lines and the ordinary request lines are swept. The two that are not carry the
+    /// class's session (<see cref="Cell.Session"/>), because an asset is served and an API call
+    /// forwarded only in one (ADR-0008), and every answer is asserted, so the stages each comment names
+    /// are the ones the credential went through.
     /// </summary>
     private async Task SendCredentialsAsync()
     {
         HarnessApp app = Harness.App("app1");
-        using TestBrowser browser = Harness.CreateBrowser();
-        await Harness.SignInAsync(browser, app.AppId, Suite.Ct);
-        (string, string) session = ("Cookie", SignedIn.CookieHeader(browser, app));
+        (string, string) session = ("Cookie", cell.Session);
 
         (string Target, (string, string)[] Headers, int Status)[] requests =
         [

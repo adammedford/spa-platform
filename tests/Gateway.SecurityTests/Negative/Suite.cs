@@ -13,11 +13,15 @@ namespace Gateway.SecurityTests.Negative;
 /// refused before authentication runs (host resolution, the request gate, Kestrel itself) needs none.
 /// A row that sends an asset or API request without one asserts the refusal it gets: a navigation is
 /// sent to the provider, any other asset request gets 401 <c>unauthenticated</c> (under
-/// <c>auth.session</c> when it presented a session cookie that names no session), and an API call gets
-/// the same 401 from the proxy's token step (task 6.3c). Where a row has a sessionless half and a
-/// signed-in half (N-07, N-10, N-27), both are in the same class. N-25's browser clause and N-26 rest
-/// on the browser enforcing the <c>__Host-</c> prefix, which the test browser does not do (R-D3); the
-/// deployed suite holds them.</para>
+/// <c>auth.session</c> when it presented a session cookie that names no session), and an API call the
+/// proxy would forward gets the same 401 from the proxy's token step instead (task 6.3c). Two API
+/// answers come from elsewhere, each named by its writer: <c>UsePlatformAntiforgery</c> refuses an
+/// unsafe method 403 <c>csrf_failed</c>, since no anonymous token pair exists, and
+/// <c>MapPlatformProxy</c>'s catch-all answers a name the app does not list 404 <c>unknown_api</c>,
+/// with a session or without. Where a row has a sessionless half and a signed-in half (N-07, N-10,
+/// N-27), both are in the same class. N-25's browser clause and N-26 rest on the browser enforcing the
+/// <c>__Host-</c> prefix, which the test browser does not do (R-D3); the deployed suite holds
+/// them.</para>
 ///
 /// <para>Canary coverage spans this project's harnesses through <see cref="StartAsync"/> and the
 /// assembly's final <see cref="SuiteSweep"/>.</para>

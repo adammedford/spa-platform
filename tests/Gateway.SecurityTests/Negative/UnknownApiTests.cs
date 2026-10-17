@@ -121,8 +121,9 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
         Assert.Equal(HttpStatusCode.OK, onApp1.StatusCode);
         Assert.Equal(reachedFromApp1 + 1, harness.Echo.Requests.Count);
 
-        // Signed in to app 2 as well, so what refuses the call there is the missing route and not
-        // the missing session.
+        // Signed in to app 2 as well, so the refusal is the one a user signed in there meets: no route
+        // matches on app 2's host (ADR-0006), so MapPlatformProxy's catch-all answers and no token is
+        // asked for, as An_api_name_the_app_does_not_list_is_404_unknown_api shows with no session.
         await harness.SignInAsync(browser, "app2", Suite.Ct);
         int echoed = harness.Echo.Requests.Count;
         int before = await Observed.SettledCountAsync(harness, Suite.Ct);
