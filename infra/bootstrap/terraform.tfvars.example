@@ -3,8 +3,14 @@
 # Nothing here is secret: the file names a cell, a region, the principals allowed to
 # run plans and the humans allowed to assume the teardown role.
 
-cell   = "poc"
-region = "us-east-1"
+cell = "poc"
+
+# The project's selected Region: AWS_REGION in tools/aws-project.env. Every root
+# defaults to us-east-1, and the provider takes its Region from this variable
+# before the environment, so this line is what puts the state bucket and the
+# roles in the project's Region (change request 1.1). The README's recipe fills
+# it in from AWS_REGION when it makes the copy.
+region = "us-east-2"
 
 # The repository whose workflows run the plans, and the refs allowed to do it.
 github_repository     = "your-org/spa-platform"

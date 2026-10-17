@@ -34,8 +34,12 @@ output "state_keys" {
 
 output "backend_blocks" {
   description = <<-EOT
-    The backend block for each root, ready to paste into its backend.tf. The native
-    lock file (use_lockfile) replaces a DynamoDB table, so no table exists.
+    Each root's backend settings in full, for reference. A root's own block holds its
+    key, encrypt and use_lockfile; the bucket and the Region are given at init with
+    -backend-config and never written into the block, because the bucket's name
+    carries the account id and the Region is the project's, which
+    tools/aws-project.env names (change requests 1.5 and 1.1). The native lock file
+    (use_lockfile) replaces a DynamoDB table, so no table exists.
   EOT
   value = {
     for root, key in {
