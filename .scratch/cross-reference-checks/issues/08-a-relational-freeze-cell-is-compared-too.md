@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-agent
+**Status:** moved to #73
 
 **What to build:** Every contract the index lists has its own freeze header held against something.
 Ticket 02 passes a cell that names no gate, such as the App definition row's "With the registry
@@ -18,3 +18,7 @@ gate. A relational cell naming no row that exists is itself a failure.
       where the cell names a row that does not exist, in `.github/steering_tests.py`.
 - [ ] The Test doubles row ("With the interface each one stands in for") names no single row; decide
       whether it stays exempt, and say so in the rule's comment.
+
+## Comments
+
+- 2026-10-17: moved to #73 under ADR-0020; this file is the archive copy.

@@ -1,6 +1,6 @@
 # Read test JSON without the file provider, and drop the hidden-file skip
 
-Status: ready-for-agent
+Status: moved to #75
 Type: task
 Owners: workstream 2 (`tests/Platform.Registry.Tests`), workstream 6 (`tests/Gateway.*`)
 
@@ -33,3 +33,5 @@ that shape.
 - Each lands in its own PR, one owner per diff (A-05).
 
 ## Comments
+
+- 2026-10-17: moved to #75 under ADR-0020; this file is the archive copy.

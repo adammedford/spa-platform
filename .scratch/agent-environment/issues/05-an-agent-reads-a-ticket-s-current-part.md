@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-agent
+**Status:** wontfix
 
 **What to build:** A ticket stays the size of the work it describes. What the next implementer,
 reviewer or integrator needs stays in the ticket: the header, What to build, Acceptance, Decisions
@@ -31,3 +31,7 @@ made mostly of them stay large.
       links its history file.
 - [ ] A ticket and its history file together hold every line the ticket held before.
 - [ ] A grilling in the next overnight run lands in the history file.
+
+## Comments
+
+- 2026-10-17: superseded by ADR-0020, which moves tickets to GitHub Issues: the body is the spec and the comments are the record, which is the split this ticket asked for. Not filed as an issue.

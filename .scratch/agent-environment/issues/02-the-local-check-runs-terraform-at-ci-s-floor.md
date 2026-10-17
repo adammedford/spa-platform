@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** 01 (the local check script).
-**Status:** ready-for-agent
+**Status:** moved to #69
 
 **What to build:** A Terraform change checked on this machine is checked by the same Terraform as
 CI. CI pins 1.11.0, the repository's chosen floor, and every root requires at least it. S3 native
@@ -31,3 +31,7 @@ last box closes in CI rather than here.
 - [ ] With the floor installed, the local check's Terraform output names 1.11.0.
 - [ ] Without it, the local check's output names the version it used.
 - [ ] No lane in the next overnight run downloads a Terraform binary.
+
+## Comments
+
+- 2026-10-17: moved to #69 under ADR-0020; this file is the archive copy.

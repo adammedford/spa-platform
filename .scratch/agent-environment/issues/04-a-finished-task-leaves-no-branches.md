@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** 03 (the roadmap's JSON mode).
-**Status:** ready-for-agent
+**Status:** moved to #71
 
 **What to build:** `docs/agents/landing-work.md` says a task's claim branch is deleted when the task
 is done, and nothing deletes it. Once the merge that lands a row as done reaches `main`, that row's
@@ -34,3 +34,7 @@ was already on `main` in equivalent form.
 - [ ] After its pull request merges, an overnight branch is deleted only if its current tip's
       work is verified on `main` and it is not checked out in a worktree; otherwise it is listed
       and kept. A concurrent remote tip change also preserves the branch.
+
+## Comments
+
+- 2026-10-17: moved to #71 under ADR-0020; this file is the archive copy.

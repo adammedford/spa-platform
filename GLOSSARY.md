@@ -147,6 +147,13 @@ composition root, `docs/adr/`, `docs/plan/`, CI and package versions.
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
 
+**Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
+cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
+
+**Spec** — the statement of a feature's problem, solution and acceptance that its tickets are cut
+from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
+frozen export, and a spec is one feature's working statement.
+
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
 Phase 1 accepted. Phase 2 adds G6 to G8.
