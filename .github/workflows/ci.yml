@@ -1,6 +1,21 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Two jobs: the solution builds and every test project runs, and the Terraform roots validate.
+# Three jobs. The documents job runs on every pull request and costs about a minute: the documents a
+# session steers by, the roadmap, the checks' own tests, and -- first, so the other two can read the
+# answer -- which halves of the repository the change touches. The expensive jobs run when their
+# inputs changed: the solution builds and every test project runs for build inputs, and the Terraform
+# roots validate for infra/. The hook shares these path patterns through .github/touches.sh. CI's
+# decision step also runs both jobs for changes to its workflow, the classifier or tools/smoke.sh,
+# or when the base cannot be resolved.
+#
+# A job skipped that way still satisfies main's protection, which requires `Build and test` and
+# `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
+# skipped by an `on.paths` filter leaves the required check pending and the pull request stuck --
+# https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+# -- which is why the filter is an `if` on each job and not a `paths` on the workflow. Each `if`
+# says `!cancelled()` rather than the implied success(): if the documents job failed before it could
+# answer, both expensive jobs run, because a skipped check has to be earned by a diff that proves it
+# unnecessary.
 #
 # Check A-05 is deliberately not here. It lives in .githooks/pre-push, where it catches a session
 # that reached outside its brief at the moment it reached. A blocking CI check would need an
@@ -27,26 +42,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build and test
+  documents:
+    name: Documents
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The steering check asks GitHub which issue and pull request numbers exist, with this job's
+      # token. The repository is public, so a token with neither scope could read them today; they
+      # are granted so the check keeps working on the day that changes.
+      issues: read
+      pull-requests: read
+    outputs:
+      build: ${{ steps.touches.outputs.build }}
+      terraform: ${{ steps.touches.outputs.terraform }}
     steps:
       - uses: actions/checkout@v4
         with:
           # The whole history and every tag. The roadmap check below derives how far the work has
-          # got from the tags and the merge subjects, and the default depth-1 checkout has neither.
+          # got from the tags and the merge subjects, the diff below needs the base to be here, and
+          # the default depth-1 checkout has neither.
           fetch-depth: 0
 
-      - name: What a session steers by says what the repository says, and every cited ticket resolves to one file
-        # Before the build, because it costs a second and a stale AGENTS.md misleads every session
-        # from the top of its context window. Every rule it holds was prose first, and prose let
-        # a progress line sit directly under the paragraph forbidding it for two sessions running.
+      - name: Which halves of the repository this change touches
+        id: touches
+        # Against the base of the pull request, or the commit a push to main moved from, in the
+        # three-dot form the hook uses, so the diff is what the change adds and not what main did
+        # meanwhile. The two jobs below read the answer. Every job runs when there is no base to
+        # diff against -- a push whose `before` GitHub does not have -- and when the files that make
+        # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh, which only the
+        # build job exercises. A decision cannot vouch for a change to itself.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="origin/$BASE_REF" ;;
+            *) base="$BEFORE" ;;
+          esac
+          build=true
+          terraform=true
+          if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+            echo "::notice::no base to diff against ($base), so every job runs."
+          else
+            changed="$(git diff --name-only "$base"...HEAD)"
+            # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
+            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$' > /dev/null; then
+              echo "::notice::the workflow, the halves or the smoke test changed, so every job runs."
+            else
+              printf '%s\n' "$changed" | .github/touches.sh build || build=false
+              printf '%s\n' "$changed" | .github/touches.sh terraform || terraform=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "terraform=$terraform" >> "$GITHUB_OUTPUT"
+          echo "build=$build terraform=$terraform"
+
+      - name: CI path decisions include build inputs and survive large diffs
+        run: python3 -I .github/touches_tests.py
+
+      - name: What a session steers by says what the repository says, and every citation resolves
+        # Before anything else, because it costs a second and a stale AGENTS.md misleads every
+        # session from the top of its context window. Every rule it holds was prose first, and prose
+        # let a progress line sit directly under the paragraph forbidding it for two sessions running.
         # It covers the two steering files; the contracts index, whose freeze column makes a claim
         # about a file two directories away; the ticket citations in every tracked file, each of
-        # which claims that a number resolves to a spec somebody can open; and the tickets in each
-        # tracker directory, where two files sharing a number leave a citation of it ambiguous.
+        # which claims that a number resolves to a spec somebody can open; the tickets in each
+        # tracker directory, where two files sharing a number leave a citation of it ambiguous; and
+        # the issue citations in every tracked file, each of which claims a number GitHub has issued
+        # to an issue or pull request here, which the check asks GitHub about with the token below.
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
+        env:
+          # For `gh api`, which the check runs once to list the issue and pull request numbers.
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I .github/steering_tests.py
           python3 -I .github/steering.py
@@ -78,6 +148,16 @@ jobs:
         # that merged something -- is the rule that decides whether an integration branch can be
         # pushed through the hook at all rather than around it.
         run: python3 -I .github/path_ownership_tests.py
+
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    needs: documents
+    # Only when the .NET half changed; the header says why this is an `if` and why it says
+    # `!cancelled()`.
+    if: ${{ !cancelled() && needs.documents.outputs.build != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -116,6 +196,9 @@ jobs:
   terraform:
     name: Terraform
     runs-on: ubuntu-latest
+    needs: documents
+    # Only when infra/ changed; the header says why this is an `if` and why it says `!cancelled()`.
+    if: ${{ !cancelled() && needs.documents.outputs.terraform != 'false' }}
     steps:
       - uses: actions/checkout@v4
 

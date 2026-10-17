@@ -8,8 +8,14 @@ directory, and whatever a pointer in them is supposed to resolve to -- rather th
 against the live repository, which is green and so proves nothing about the red side. The freeze,
 citation and numbering rules each get one case against the repository as well, because their green
 side is the index, the contracts and the tracker as they actually stand. The module resolves its
-root from __file__, so patching that points it at the tree; PLANNED and UNFILED are module state,
-so a case that needs an entry sets one.
+root from __file__, so patching that points it at the tree; PLANNED, UNFILED and TRANSCRIPTS are
+module state, so a case that needs an entry sets one.
+
+No case reaches GitHub. The `#NNN` rule asks it which numbers exist, and that lookup is module
+state too: setUp replaces it with one that fails the case, so a tree carrying a `#NNN` has to say
+what GitHub would answer, through github() or offline() below. The rule's green side lives on GitHub
+and not in the tree, so its one case against the repository holds the scan -- how many citations the
+tree carries -- and leaves the resolution to the check itself, which CI runs with the job's token.
 
 The tree is a git repository, because the citation rule reads the files git tracks: a transcript
 under `.scratch/<slug>/log/` is ignored on purpose, and a rule that read it would fail a push over
@@ -41,10 +47,11 @@ spec = importlib.util.spec_from_file_location("steering", ROOT / ".github/steeri
 steering = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(steering)
 
-# The live exemption lists, kept because setUp empties the module's copies and the two cases that
-# run against the repository need the repository's own exemptions back.
+# The live exemption lists, kept because setUp empties the module's copies and the cases that run
+# against the repository need the repository's own exemptions back.
 LIVE_PLANNED = dict(steering.PLANNED)
 LIVE_UNFILED = dict(steering.UNFILED)
+LIVE_TRANSCRIPTS = dict(steering.TRANSCRIPTS)
 
 # A pair that passes: pointers that resolve, and no sentence carrying state.
 CLEAN_AGENTS = """# Agent guide
@@ -138,6 +145,21 @@ def unresolved(number: str, tracker: str) -> str:
     return f"cites {WORD} {number}, which resolves to no file under {issues_in(tracker)}/"
 
 
+# The `#NNN` citations are assembled for the same reason: a `#` written against a digit here would be
+# a citation this repository makes, of a number chosen to name nothing.
+HASH = "#"
+
+
+def issue(number: int) -> str:
+    """One `#NNN` citation, in the form GitHub links."""
+    return f"{HASH}{number}"
+
+
+def unissued(number: int) -> str:
+    """The failure line the `#NNN` rule prints."""
+    return f"cites {issue(number)}, which names no issue or pull request of this repository"
+
+
 # 91e2103's line as AGENTS.md carried it.
 GATE_SCORE = (
     "- **Gate G0 is open, with three of its five items passed.** The shipped handler, token "
@@ -159,6 +181,12 @@ class SteeringTests(unittest.TestCase):
         steering.PLANNED = {}
         self.addCleanup(setattr, steering, "UNFILED", steering.UNFILED)
         steering.UNFILED = {}
+        self.addCleanup(setattr, steering, "TRANSCRIPTS", steering.TRANSCRIPTS)
+        steering.TRANSCRIPTS = {}
+        # The `#NNN` rule's lookup, replaced so that no case reaches GitHub: a tree carrying a
+        # citation says what GitHub would answer, or the case fails on this stub.
+        self.addCleanup(setattr, steering, "issued_numbers", steering.issued_numbers)
+        steering.issued_numbers = self.no_lookup
 
         # The citation rule reads the files git tracks, so the tree has to be a repository for it
         # to see anything at all. No commit is needed: `git ls-files` reads the index, and
@@ -172,6 +200,18 @@ class SteeringTests(unittest.TestCase):
     def git(self, *arguments: str) -> None:
         subprocess.run(("git", *arguments), cwd=self.root, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def no_lookup(self, root: pathlib.Path) -> tuple[set[int], str]:
+        self.fail("the check asked GitHub for its numbers; a case whose tree cites a `#NNN` says "
+                  "what GitHub would answer with github() or offline()")
+
+    def github(self, *numbers: int) -> None:
+        """What GitHub would answer: these are the numbers it has issued to issues and pull requests."""
+        steering.issued_numbers = lambda root: (set(numbers), "")
+
+    def offline(self, why: str) -> None:
+        """What the lookup says when GitHub cannot be asked: no numbers, and the reason."""
+        steering.issued_numbers = lambda root: (set(), why)
 
     def reset(self) -> None:
         self.write("AGENTS.md", CLEAN_AGENTS)
@@ -486,6 +526,8 @@ class SteeringTests(unittest.TestCase):
         steering.__file__ = str(ROOT / ".github" / "steering.py")
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
+        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)
         counted = re.search(rf"{steering.INDEX} agrees with the (\d+) freeze headers?", out)
@@ -725,6 +767,8 @@ class SteeringTests(unittest.TestCase):
         steering.__file__ = str(ROOT / ".github" / "steering.py")
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
+        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)
         counted = re.search(r"(\d+) ticket citations? resolves? to a spec\.", out)
@@ -799,11 +843,200 @@ class SteeringTests(unittest.TestCase):
         steering.__file__ = str(ROOT / ".github" / "steering.py")
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
+        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)
         counted = re.search(r"(\d+) tickets? (?:each )?holds? a number no other ticket", out)
         self.assertIsNotNone(counted, out)
         self.assertGreaterEqual(int(counted.group(1)), 86, out)
+
+    # --- a cited #NNN names an issue or pull request ------------------------------------------
+
+    def test_a_hash_citation_of_a_number_github_has_issued_passes(self):
+        """The green side, and the count it prints, held for the reason the ticket count is."""
+        self.github(43)
+        self.cite_in("docs/adr/0021-a-decision.md", f"Decided on pull request {issue(43)}.")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("1 #NNN citation names an issue or pull request.", out)
+
+    def test_two_hash_citations_are_both_counted(self):
+        """The singular above and the plural here, so the count is a number and not a word."""
+        self.github(43, 44)
+        self.cite_in("docs/adr/0021-a-decision.md",
+                     f"Landed by {issue(43)} and reviewed in {issue(44)}.")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("2 #NNN citations name an issue or pull request.", out)
+
+    def test_every_hash_citation_shape_the_tree_writes_is_read(self):
+        """Bare, parenthesised, before a comma, after `PR`, starting a line and with four digits.
+
+        The shapes the ADRs, the archive and one test actually write, plus the longest number the
+        pattern reads, so widening or narrowing it shows up here before it shows up on a push.
+        """
+        self.github(43, 1234)
+        for shape in (
+            f"Fixed in {issue(43)} today.",
+            f"Fixed ({issue(43)}).",
+            f"Fixed in {issue(43)}, then released.",
+            f"PR {issue(43)}: the fix.",
+            f"{issue(43)} fixed it.",
+            f"Fixed in {issue(1234)}.",
+        ):
+            with self.subTest(shape=shape):
+                self.cite_in("docs/adr/0021-a-decision.md", shape)
+                code, out = self.check()
+                self.assertEqual(0, code, out)
+                self.assertIn("1 #NNN citation names an issue or pull request.", out)
+
+    def test_a_hash_citation_of_a_number_github_has_not_issued_fails(self):
+        """The red side: a number past the end of GitHub's sequence, named with file and line."""
+        self.github(43)
+        line = self.cite_in("docs/adr/0021-a-decision.md", f"Superseded by {issue(999)}.")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a cited #NNN names no issue or pull request.", out)
+        self.assertIn(f"docs/adr/0021-a-decision.md:{line}: {unissued(999)}", out)
+        self.assertIn("owner/repo#NNN", out)
+
+    def test_each_dangling_hash_citation_is_reported_on_its_own_line(self):
+        """Two numbers on one line are two failures, as the plural ticket shape's are."""
+        self.github(43)
+        line = self.cite_in("docs/adr/0021-a-decision.md",
+                            f"Blocked on {issue(998)} and {issue(999)}.")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn(f"docs/adr/0021-a-decision.md:{line}: {unissued(998)}", out)
+        self.assertIn(f"docs/adr/0021-a-decision.md:{line}: {unissued(999)}", out)
+
+    def test_a_hash_citation_is_reported_on_the_line_it_sits_on(self):
+        """cite_in() always writes line 3, so one case puts the citation somewhere else."""
+        self.github(43)
+        self.write("docs/adr/0021-a-decision.md",
+                   f"# A decision\n\nContext.\n\nFollows {issue(999)}.\n")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn(f"docs/adr/0021-a-decision.md:5: {unissued(999)}", out)
+
+    def test_what_is_not_a_hash_citation_is_not_read(self):
+        """A heading, an anchor, an entity, a colour, a counter's suffix and a word's own `#`.
+
+        Each is a `#` the tree writes for another reason, and each is left alone by the shape of
+        the pattern rather than by a list: a heading puts a space after its `#`, an anchor a letter
+        or a slash, an entity an `&` before it, a colour runs letters into its digits, `rt#1` is a
+        word's own suffix and a URL puts a slash before its fragment. The stub in setUp is what
+        proves none was read: a tree whose only `#` is one of these asks GitHub nothing.
+        """
+        for shape in (
+            "# 43 ways to write a heading",
+            "## 2026 in review",
+            "See docs/plan/01-plan.md#L43 and registry.schema.json#/$defs/oauth.",
+            "It&#39;s an entity.",
+            "The label is #0e8a16 green.",
+            "Token rt#1 was replaced by at#2.",
+            "A C# file holds #region, #if DEBUG and #nullable enable.",
+            "https://example.test/issues/#43",
+        ):
+            with self.subTest(shape=shape):
+                self.cite_in("docs/adr/0021-a-decision.md", shape)
+                code, out = self.check()
+                self.assertEqual(0, code, out)
+                self.assertNotIn("#NNN", out)
+
+    def test_a_run_of_five_digits_is_not_read(self):
+        """The AWS provider's issue, cited bare from two Terraform comments, has five digits.
+
+        Four digits at most, and a longer run is not read at all rather than read at its first
+        four, so nothing is mis-resolved. The stub proves the five digits never reached GitHub.
+        """
+        self.cite_in("infra/modules/cell/versions.tf",
+                     f"# bucket_namespace arrived in 6.37.0 (the provider's CHANGELOG, "
+                     f"{issue(46917)}).")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertNotIn("#NNN", out)
+
+    def test_github_is_not_asked_when_nothing_cites_an_issue(self):
+        """A tree with no `#NNN` owes GitHub no call; the stub in setUp would fail this case."""
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertNotIn("#NNN", out)
+
+    def test_github_is_asked_once_however_many_files_cite(self):
+        """One lookup per run. The hook runs this on every push, and a call per citing file would
+        make a tree of four hundred files four hundred calls."""
+        asked = []
+
+        def lookup(root):
+            asked.append(root)
+            return {43}, ""
+
+        steering.issued_numbers = lookup
+        self.cite_in("docs/adr/0021-a-decision.md", f"Decided in {issue(43)}.")
+        self.cite_in("contracts/pipeline.md", f"Frozen by {issue(43)}.")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertEqual([self.root], asked, out)
+        self.assertIn("2 #NNN citations name an issue or pull request.", out)
+
+    def test_hash_citations_are_reported_as_not_checked_when_github_cannot_be_asked(self):
+        """Offline, no gh, no token: one line says so, and nothing fails, as the pre-push hook does
+        for a missing tool. The number cited here names nothing, and the case is green anyway,
+        because nothing could say so; the summary leaves the issue clause out rather than claim it.
+        """
+        self.offline("gh is not on PATH")
+        self.cite_in("docs/adr/0021-a-decision.md", f"Superseded by {issue(999)}.")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("steering: 1 #NNN citation not checked: gh is not on PATH.", out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn("claim no progress and every pointer resolves.", out)
+        self.assertNotIn("names an issue or pull request", out)
+
+    def test_the_not_checked_line_counts_in_the_plural_too(self):
+        self.offline("gh: Bad credentials (HTTP 401)")
+        self.cite_in("docs/adr/0021-a-decision.md", f"Blocked on {issue(998)} and {issue(999)}.")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("steering: 2 #NNN citations not checked: gh: Bad credentials (HTTP 401).",
+                      out)
+
+    def test_a_transcript_is_not_read_for_hash_citations(self):
+        """Captured program output counts tokens with `#N`, and three spike runs are tracked.
+
+        The stub proves the file was not read: its `#` names numbers GitHub never issued, and the
+        case neither fails nor asks.
+        """
+        steering.TRANSCRIPTS = {"spikes/g0/a-spike/output.txt": "a token counter per check"}
+        self.write("spikes/g0/a-spike/output.txt",
+                   f"PASS  E1  one refresh grant  [token {issue(998)} -> {issue(999)}]\n")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertNotIn("#NNN", out)
+
+    def test_a_transcript_that_is_no_longer_tracked_fails(self):
+        """The list cannot outlive its entries, which is PLANNED's rule one level over."""
+        why = "a token counter per check"
+        steering.TRANSCRIPTS = {"spikes/g0/a-spike/output.txt": why}
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a TRANSCRIPTS path is not tracked.", out)
+        self.assertIn(f"'spikes/g0/a-spike/output.txt' is not tracked ({why})", out)
+        self.assertIn("Remove it from TRANSCRIPTS", out)
+
+    def test_the_live_tree_s_hash_citations_are_found(self):
+        """The one case against the real tree, on the scan alone: the resolution needs GitHub.
+
+        The ADRs, the archive and one test cite pull requests as `#NNN`, so the scan has a floor,
+        for the reason the other live counts have one: a scan that found nothing would also exit
+        0. The three transcripts are the live ones, and each has to be tracked still.
+        """
+        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        cited, untracked = steering.issue_citations(ROOT)
+        self.assertEqual([], untracked)
+        self.assertGreaterEqual(len(cited), 150, cited[:5])
 
 
 if __name__ == "__main__":
