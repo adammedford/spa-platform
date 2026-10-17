@@ -206,6 +206,8 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_security_group",
       "aws_vpc_security_group_ingress_rule",
       "aws_vpc_security_group_egress_rule",
+      # The VPC's own default group, adopted so that it holds no rule (tests/network.tftest.hcl)
+      "aws_default_security_group",
       # Task 1.3, alb.tf
       "aws_lb",
       "aws_lb_target_group",
@@ -227,6 +229,24 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_iam_role_policy",
     ])
     error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; plan row 1.9 polices the rest."
+  }
+
+  # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
+  # JSON-syntax file and calls no child module. Terraform loads *.tf.json beside *.tf
+  # (https://developer.hashicorp.com/terraform/language/files), and a module block brings in
+  # resources of any type with no resource line here. Either would carry a NAT gateway past the
+  # allowlist with every run green.
+  assert {
+    condition     = length(fileset(path.module, "*.tf.json")) == 0
+    error_message = "The cell module is written in .tf files only: a .tf.json file declares resources no source-reading assertion in this module sees."
+  }
+
+  assert {
+    condition = length(regexall(
+      "(?m)^module\\s+\"",
+      join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
+    )) == 0
+    error_message = "The cell module calls no child module: a module block adds resources this allowlist never reads, so the allowlist would stop being the module's whole resource set."
   }
 }
 
@@ -391,7 +411,7 @@ run "the_task_takes_a_public_address_in_this_cell_s_public_subnets" {
 
   assert {
     condition     = aws_ecs_service.gateway.network_configuration[0].security_groups == toset([aws_security_group.task.id])
-    error_message = "The task carries the task group of task 1.2 and nothing else: that group is what accepts the gateway's port from the load balancer alone (test P-06)."
+    error_message = "The task carries the task security group of task 1.2 and nothing else: that group is what accepts the gateway's port from the ALB security group alone (test P-06)."
   }
 }
 
