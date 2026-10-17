@@ -159,7 +159,8 @@
         "timeoutSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "The entry's upstream timeout. Exceeding it is 504 upstream_timeout. The plan states no upper bound."
+          "maximum": 2147483,
+          "description": "The entry's upstream timeout. Exceeding it is 504 upstream_timeout. The maximum is the measured YARP 2.3.0 ceiling, added at G2 under ADR-0015 and ADR-0019: larger values cannot be applied as written."
         }
       }
     },
