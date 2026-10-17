@@ -269,7 +269,6 @@ public sealed class RegistryValidatorTests
     [Theory]
     [InlineData("revision", "9223372036854775808", "/revision")]
     [InlineData("revision", "1e30", "/revision")]
-    [InlineData("timeoutSeconds", "922337203686", "/apps/0/apis/0/timeoutSeconds")]
     public void An_integer_the_model_cannot_hold_is_an_error_not_an_exception(string property, string spelling, string path)
     {
         RegistryValidation result = RegistryValidator.Validate(Respell(property, spelling), Examples.Policy(), null);
@@ -281,12 +280,22 @@ public sealed class RegistryValidatorTests
     }
 
     [Fact]
-    public void The_longest_timeout_a_TimeSpan_holds_is_accepted()
+    public void The_G2_schema_accepts_the_proxy_ceiling_and_rejects_larger_timeouts()
     {
-        RegistryValidation result = RegistryValidator.Validate(Respell("timeoutSeconds", "922337203685"), Examples.Policy(), null);
+        RegistryValidation atCeiling = RegistryValidator.Validate(Respell("timeoutSeconds", "2147483"), Examples.Policy(), null);
+        Assert.True(atCeiling.IsValid, string.Join('\n', atCeiling.Errors));
+        Assert.Equal(TimeSpan.FromSeconds(2147483), Assert.Single(Assert.Single(atCeiling.Apps).Apis).Timeout);
 
-        Assert.True(result.IsValid, string.Join('\n', result.Errors));
-        Assert.Equal(TimeSpan.FromSeconds(922337203685), Assert.Single(Assert.Single(result.Apps).Apis).Timeout);
+        // Task 2.1b will specialize this schema refusal as integer-out-of-range. For now prove
+        // the newly contracted maximum is enforced, including values the old TimeSpan guard held.
+        foreach (string spelling in new[] { "2147484", "922337203685", "922337203686" })
+        {
+            RegistryValidation above = RegistryValidator.Validate(Respell("timeoutSeconds", spelling), Examples.Policy(), null);
+            Assert.False(above.IsValid);
+            Assert.Empty(above.Apps);
+            RegistryIssue error = Assert.Single(above.Errors);
+            Assert.Equal((RegistryRules.Schema, "/apps/0/apis/0/timeoutSeconds"), (error.Rule, error.Path));
+        }
     }
 
     /// <summary>The contract example's text with one integer's spelling changed and nothing else.</summary>
