@@ -65,6 +65,6 @@ decided on the human's behalf.
 - `GLOSSARY.md` gains *Standing answer*, *Pre-accepted answer*, *Confirmed answer*, *Review record*,
   *Hand-over* and *Check*; `docs/agents/issue-tracker.md` carries the body-rewrite rule.
 - The 52 answers of 2026-10-17 were confirmed by comment on #67, #66 and #65 the day this was
-  decided; Q20 and Q21 of that night stay open.
+  decided. Those confirmations left Q20 and Q21 of that night open.
 - Nights run without a standing answer stop more often. That is the price of knowing which
   decisions were the human's; a launch that wants the throughput grants the answer and says so.

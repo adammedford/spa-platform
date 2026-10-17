@@ -178,8 +178,8 @@ every refusal with its reason.
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
 Phase 1 accepted. Phase 2 adds G6 to G8.
 
-**Check** — a mechanical guard the pre-push hook or CI runs on every push: ownership, steering, the
-roadmap, the build, Terraform's format and validate. A check holds a push to the rules; a gate is
+**Check** — a mechanical guard the pre-push hook or CI runs when applicable: ownership, steering,
+the roadmap, the build, Terraform's format and validate. A check holds a push to the rules; a gate is
 the ladder's checkpoint. Never "gate" for a check, including the one a workflow runs before it
 integrates a branch.
 
