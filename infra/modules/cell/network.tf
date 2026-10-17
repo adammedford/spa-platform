@@ -1,18 +1,32 @@
 # Task 1.2. The cell's network: a VPC, two public subnets in two zones, and the two
-# security groups that are the whole of this platform's network boundary.
+# security groups that are the whole of this platform's network boundary. The VPC's
+# own default group is adopted with no rule, so it is not a third way in.
 #
 # What is deliberately absent is as much of the design as what is here. There is no
 # NAT gateway, no bastion and no database: the task sends 443 out from a public
-# address, and test P-01 reads the plan and fails on any of the three.
+# address. The resource-type allowlist in tests/module.tftest.hcl fails on any of
+# the three (the static half of P-01), and tests/network.tftest.hcl fails on any
+# ingress rule beyond the two below.
 
 data "aws_availability_zones" "available" {
   state = "available"
+
+  # Availability Zones only. Without this the query also returns every Local or
+  # Wavelength Zone the account has opted into, and such a zone's name sorts ahead of
+  # every Availability Zone in its Region (us-east-1-bos-1a before us-east-1a), so
+  # opting into one would move both subnets, and the load balancer and the task with
+  # them. Every Availability Zone, and no other kind of zone, reports this value:
+  # https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AvailabilityZone.html
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
 }
 
 locals {
-  # Two zones, in the order the account reports them, so the pair is stable across
-  # applies. Two is what the load balancer requires and one more than the platform
-  # needs, since there is one task.
+  # The first two zones by name, which is the order the provider sorts them into, so
+  # the pair is stable across applies. Two is what the load balancer requires and one
+  # more than the platform needs, since there is one task.
   zones = slice(data.aws_availability_zones.available.names, 0, 2)
 
   # How many bits to add to the VPC's prefix to reach a /24. The variable's
@@ -81,7 +95,7 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "alb" {
   name        = "${local.name_prefix}-alb"
-  description = "The internal load balancer. Accepts 443 from the task group only."
+  description = "The internal load balancer. Accepts 443 from the task security group only."
   vpc_id      = aws_vpc.cell.id
 
   tags = { Name = "${local.name_prefix}-alb" }
@@ -96,12 +110,15 @@ resource "aws_security_group" "task" {
 }
 
 # The tunnel's path, and the only way in. A port forward through the task reaches
-# the load balancer from inside the task group, which is why 443 is open to that
-# group and to nothing else. There is no ingress rule from the internet anywhere in
-# this file.
+# the load balancer from inside the task security group, which is why 443 is open to
+# that group and to nothing else. There is no ingress rule from the internet anywhere
+# in this file.
+#
+# No description below carries an apostrophe: EC2 refuses one in a rule's description
+# at apply (tests/network.tftest.hcl cites the character sets).
 resource "aws_vpc_security_group_ingress_rule" "alb_https_from_task" {
   security_group_id            = aws_security_group.alb.id
-  description                  = "HTTPS from the task group, which is the Session Manager tunnel's path"
+  description                  = "HTTPS from the task security group, which is the path of the Session Manager tunnel"
   referenced_security_group_id = aws_security_group.task.id
   ip_protocol                  = "tcp"
   from_port                    = 443
@@ -110,7 +127,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https_from_task" {
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_task" {
   security_group_id            = aws_security_group.alb.id
-  description                  = "To the gateway's port on the task group"
+  description                  = "To the gateway port on the task security group"
   referenced_security_group_id = aws_security_group.task.id
   ip_protocol                  = "tcp"
   from_port                    = var.gateway_port
@@ -119,7 +136,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_task" {
 
 resource "aws_vpc_security_group_ingress_rule" "task_from_alb" {
   security_group_id            = aws_security_group.task.id
-  description                  = "The gateway's port, from the load balancer only (test P-06)"
+  description                  = "The gateway port, from the ALB security group only (test P-06)"
   referenced_security_group_id = aws_security_group.alb.id
   ip_protocol                  = "tcp"
   from_port                    = var.gateway_port
@@ -135,4 +152,31 @@ resource "aws_vpc_security_group_egress_rule" "task_https_out" {
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
+}
+
+# --- The group AWS creates -----------------------------------------------------------
+#
+# Every VPC comes with a default security group that admits all traffic from its own
+# members and sends anything anywhere, and AWS puts a resource created without a group
+# of its own into it:
+# https://docs.aws.amazon.com/vpc/latest/userguide/default-security-group.html
+# Nothing in the cell uses it, so emptying it costs nothing. It makes "no other ingress
+# rule" true of the account and not only of this file, and a resource added later
+# without a group starts with no access rather than with all of it.
+#
+# Terraform adopts this group rather than creating it, and removes all its rules when
+# it does. A destroy only drops it from state, and AWS deletes it with the VPC:
+# https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/default_security_group
+#
+# The two empty lists keep it empty afterwards. Both arguments are attributes-as-blocks,
+# and left unset Terraform retains and ignores whatever rules exist, so one added by
+# hand would never show in a plan:
+# https://developer.hashicorp.com/terraform/language/attr-as-blocks
+resource "aws_default_security_group" "cell" {
+  vpc_id = aws_vpc.cell.id
+
+  ingress = []
+  egress  = []
+
+  tags = { Name = "${local.name_prefix}-default" }
 }

@@ -206,7 +206,7 @@ run "the_module_builds_one_listener_and_one_target_group" {
 
   assert {
     condition     = aws_lb.cell.security_groups == toset([aws_security_group.alb.id])
-    error_message = "The load balancer must carry the load balancer group of task 1.2 and no other."
+    error_message = "The load balancer must carry the ALB security group of task 1.2 and no other."
   }
 
   assert {

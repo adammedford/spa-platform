@@ -8,14 +8,15 @@ name carries `var.cell`.
 
 | File | Task | Holds |
 | --- | --- | --- |
-| `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, and the two security groups |
+| `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
 | `storage.tf` | 1.5 | The platform bucket and its policy, and the two image repositories |
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
 | `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
 | `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
 
-`tests/module.tftest.hcl` checks it against a mock provider, with no credentials
-and no network beyond `terraform init`. The Terraform test step in CI discovers it.
+`tests/module.tftest.hcl` and `tests/network.tftest.hcl` check it against a mock
+provider, with no credentials and no network beyond `terraform init`. The Terraform
+test step in CI discovers both.
 
 ## Names and tags
 
@@ -31,14 +32,47 @@ The module sets no provider and so no tags. The calling root applies `Platform`,
 `Cell` and `ManagedBy` through `default_tags`, as `contracts/resource-tags.md`
 requires; resources here add only `Name`, which merges with those three.
 
-## The two things the network does not have
+## What the network does not have
 
 - **No NAT gateway.** The task sends 443 out from a public address. A NAT gateway
   costs more per month than everything else in the cell together.
 - **No ingress from the internet.** The load balancer is internal and accepts 443
-  from the task group alone, which is the Session Manager tunnel's path. Test P-01
-  reads the plan and fails on a NAT gateway, a bastion, a database or any other
-  ingress rule; P-06 shows a connection from outside to the task's port timing out.
+  from the task security group alone, which is the Session Manager tunnel's path,
+  and the task security group accepts the gateway's port from the ALB security group
+  alone. Those are two of the cell's four rules. `tests/network.tftest.hcl` fails on
+  a fifth rule, an inline rule, a third group, or an address range on any rule but
+  the task's 443 out, and the resource-type allowlist in `tests/module.tftest.hcl`
+  fails on a NAT gateway, an instance or a database. Both read the configuration
+  (ADR-0016). P-06's deployed half, a connection from outside to the task's port
+  timing out, runs against the applied cell at G3 (task 6.9).
+- **No rule in the default security group.** AWS creates one in every VPC, admitting
+  all traffic from its own members, and puts any resource created without a group of
+  its own into it. The module adopts it as `aws_default_security_group.cell` with both
+  rule lists empty: the first apply strips it, and a rule added by hand later shows
+  in the next plan.
+- **No Local Zone.** The two subnets go in the first two zones by name, and the zone
+  query asks only for zones that need no opt-in. A Local Zone's name sorts ahead of
+  every Availability Zone in its Region, so without that filter, opting into one
+  would move both subnets.
+- **No VPC endpoint, flow log or IPv6 range** in Phase 1 (ticket 03, question 7).
+  The task's 443 goes out through its public address, and the S3 gateway endpoint
+  belongs with Phase 2's private subnets.
+
+Every rule and group description keeps to the characters EC2 accepts, which exclude
+the apostrophe. EC2 refuses any other at apply, where no plan reaches.
+
+## One gap the shared subnets leave
+
+The task sits in the load balancer's two subnets, so its own address falls inside
+`ForwardedHeaders:TrustedNetworks`, which names those subnets. Whoever can open a
+Session Manager session on the task can forward a port to the task's own address on
+the gateway's port. That connection never leaves the task, so no security group sees
+it, and the gateway trusts the `X-Forwarded-For` and `X-Forwarded-Proto` it carries.
+A forward to 127.0.0.1 is not trusted, because the gateway clears the framework's
+loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Only operators
+hold that session, and they can already run commands in the task. Phase 1 accepts
+this (ticket 03, question 5); it closes when Phase 2 moves the task to private
+subnets (P2-4) and drops ECS Exec (P2-9), both in `docs/plan/06-phase-2-and-risks.md`.
 
 ## The load balancer
 
