@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues and specs are GitHub issues on this repository, worked through `gh`; `.scratch/<feature-slug>/issues/` is the read-only archive of tickets filed before ADR-0020. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

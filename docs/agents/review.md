@@ -37,7 +37,7 @@ contracts rows naming it, cited by path. In practice:
 | Source | Where |
 | --- | --- |
 | The row: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
-| The ticket, where one exists | `.scratch/<feature-slug>/issues/NN-<slug>.md`, and read its `## Comments` |
+| The ticket, where one exists | the issue the merge body cites: `gh issue view <n> --json body,comments`; a ticket filed before ADR-0020 is the archived file `.scratch/<feature-slug>/issues/NN-<slug>.md`, and read its `## Comments` |
 | The interfaces and the stage order | `contracts/`, `docs/plan/02-contracts.md` |
 | A test id the row names (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md` |
 | An evidence id (`S-`, `R-`, `T-`) | `docs/plan/07-evidence.md` |

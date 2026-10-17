@@ -32,6 +32,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0017](0017-g0-findings-fold-into-the-identity-contracts.md) | Fold Gate G0's Cognito findings in: adopt the reserve refresh design, and put the client credential style on the profile | — |
 | [0018](0018-telemetry-is-the-outermost-stage.md) | Put `UsePlatformTelemetry` first, so every rejection the application answers is logged and counted under its rule id; name stages, never number them, outside the pipeline table | — |
 | [0019](0019-registry-documents-a-build-accepts.md) | A build accepts the registry `schemaVersion` its schema names; refusing a value no build could apply is not a new version | — |
+| [0020](0020-tickets-live-in-github-issues.md) | Tickets and specs live in GitHub Issues, worked through `gh`; the contracts, ADRs, glossary and merge bodies stay in the repository, and the markdown tickets filed before it are a read-only archive | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's
