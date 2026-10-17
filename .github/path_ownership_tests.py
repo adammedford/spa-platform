@@ -300,6 +300,12 @@ def commands_started(trace: pathlib.Path) -> set[str]:
 class ThrowawayRepositoryTests(unittest.TestCase):
     """Repo runs no git housekeeping, so no git process outlives the call that started it.
 
+    The exception is a process a developer's own configuration starts, which the case does not look
+    for: with core.fsmonitor=true, commands start git fsmonitor--daemon in the background and leave
+    it running. Nothing in this repository or its CI workflow sets it.
+
+      https://git-scm.com/docs/git-fsmonitor--daemon
+
     Ticket 71. A commit or a merge ends by starting `git maintenance run --auto`, which detaches by
     default (maintenance.autoDetach). Git 2.54 made its default strategy geometric, and in a
     repository holding no packs that strategy's default threshold repacks once two loose objects
