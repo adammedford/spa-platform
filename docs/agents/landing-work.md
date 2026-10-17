@@ -54,10 +54,11 @@ roadmap — and a merge made through the GitHub API or the web UI is created on 
 hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
 commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
-The body says what was verified and how. If the row landed without being finished, add an
-`Outstanding:` line saying what it still owes, and an `Outstanding test ids:` line for any test id
-the row names that is not yet proven. The claim branch is deleted when the **task** is done, not
-when a pull request merges.
+The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
+rides in the merge commit rather than staying on the pull request. If the row landed without
+being finished, add an `Outstanding:` line saying what it still owes, and an
+`Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
+branch is deleted when the **task** is done, not when a pull request merges.
 
 A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
 request open. Merged is not done.

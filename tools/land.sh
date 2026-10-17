@@ -42,7 +42,9 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--body-file needs a value."
       [ -f "$2" ] || die "--body-file: $2 is not a file."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
-      body_file="$2"; shift 2 ;;
+      # Made absolute here, because the script changes to the repository root before the merge and
+      # a relative path checked from a subdirectory would then name a different file, or none.
+      body_file="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
     # Reads the header rather than naming the lines it sits on: a hard-coded range has to be edited
     # again every time the header moves, and nothing here would catch it when it was not.
     -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
