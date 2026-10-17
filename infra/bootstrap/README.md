@@ -77,13 +77,13 @@ runs as that role on a GitHub runner, where the profile does not exist.
 
 `tests/recipes.tftest.hcl` holds every README under `infra/` to these rules:
 plans written outside the repository; the project named before a workstation
-recipe reaches AWS, with a block that writes under `$RUNNER_TEMP` read as CI's;
-step 0 before the first apply; and the state's Region given at init.
+recipe reaches AWS, with a block that saves its plan under `$RUNNER_TEMP` read
+as CI's; step 0 before the first apply; and the state's Region given at init.
 
 `terraform.tfvars`, which git ignores, sets `region` to the project's selected
 Region, `AWS_REGION` in `tools/aws-project.env`. Every root defaults to
 `us-east-1`, and a parameter in the provider block outranks the environment
-(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#provider-configuration),
+(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#authentication-and-configuration),
 so this file, not the sourced `AWS_REGION`, decides where the bucket is made. The
 first block copies the example with the Region filled in, and leaves a copy that
 already exists alone, so check that one's `region`:

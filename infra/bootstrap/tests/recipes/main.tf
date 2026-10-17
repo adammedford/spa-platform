@@ -3,6 +3,13 @@
 # Reads the recipes out of README text, and the backend blocks out of Terraform source, so the test
 # can assert on them (change request 1.1). It holds no expected value of its own: each output lists
 # what breaks a rule, and the test says which of its inputs may appear there.
+#
+# It is a regression check on the text, not a shell interpreter, the stance change request 1.1's
+# decision takes for .github/plan-secrecy.py. It reads blocks fenced bash, sh, shell or zsh, joins a
+# line continued with a trailing backslash to the next, and knows -backend-config values quoted as
+# these recipes quote them. It does not see a recipe fenced any other way or written as an indented
+# code block, an S3 init given an unquoted -backend-config=bucket=..., or a region set after a
+# nested block inside backend "s3".
 
 terraform {
   required_version = ">= 1.11.0"
@@ -20,11 +27,13 @@ variable "backends" {
 }
 
 locals {
-  # Each fenced bash block and the prose before it. A block is one recipe: what an operator pastes
-  # into one shell.
+  # Each fenced shell block and the prose before it. A block is one recipe: what an operator pastes
+  # into one shell. Continued lines are joined first, so a command split before its subcommand is
+  # read as the one command the shell runs.
   segments = {
     for label, text in var.readmes : label => [
-      for m in regexall("(?s)(.*?)```bash\\n(.*?)```", text) : { prose = m[0], code = m[1] }
+      for m in regexall("(?s)(.*?)```(?:bash|sh|shell|zsh)\\n(.*?)```", text) :
+      { prose = m[0], code = replace(m[1], "\\\n", " ") }
     ]
   }
 
@@ -37,11 +46,12 @@ locals {
   offline = ["fmt", "validate", "test", "version"]
 
   # Whether each block reaches AWS from a workstation: an AWS CLI command, or a Terraform command
-  # that is not offline. A block writing under $RUNNER_TEMP is CI's, which runs as the CI role, and
-  # the project's profile does not exist on a runner, so no workstation rule applies to it.
+  # that is not offline. A block that saves its plan under $RUNNER_TEMP is CI's, which runs as the CI
+  # role, and the project's profile does not exist on a runner, so no workstation rule applies to
+  # it. Naming $RUNNER_TEMP anywhere else, in a comment say, exempts nothing.
   workstation = {
     for label, segments in local.segments : label => [
-      for s in segments : !strcontains(s.code, "$RUNNER_TEMP") && (
+      for s in segments : !can(regex("-out(?:=|\\s+)\"?\\$RUNNER_TEMP/", s.code)) && (
         length(regexall("(?:^|[\\s(|;&])aws\\s+[a-z0-9-]+\\s", s.code)) > 0
         || anytrue([
           for c in regexall(local.terraform_command, s.code) :

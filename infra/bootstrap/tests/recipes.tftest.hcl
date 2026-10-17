@@ -20,6 +20,12 @@ variables {
       "mutation: no step 0" = replace(file("../envs/poc/apps/README.md"), "Step 0", "First")
       # The state's Region written out at init instead of taken from the project.
       "mutation: an init with a Region of its own" = replace(file("../envs/poc/idp/README.md"), "region=$AWS_REGION", "region=us-east-1")
+      # The identity README's recipes fenced as sh rather than bash, with the project's line dropped.
+      "mutation: recipes fenced as sh" = replace(replace(file("../envs/poc/idp/README.md"), "```bash", "```sh"), "set -a; . tools/aws-project.env; set +a", "")
+      # The identity README's apply split after `terraform`, with the project's line dropped.
+      "mutation: a command split before its subcommand" = replace(file("../envs/poc/idp/README.md"), "set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project\nterraform -chdir=infra/envs/poc/idp apply", "terraform \\\n  -chdir=infra/envs/poc/idp apply")
+      # The identity README's apply naming $RUNNER_TEMP in a comment, with the project's line dropped.
+      "mutation: a workstation block naming $RUNNER_TEMP" = replace(file("../envs/poc/idp/README.md"), "set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project\nterraform -chdir=infra/envs/poc/idp apply", "# Not CI's, though it names $RUNNER_TEMP\nterraform -chdir=infra/envs/poc/idp apply")
     }
   )
 
@@ -94,6 +100,24 @@ run "every_recipe_that_reaches_aws_names_the_project_first" {
   assert {
     condition     = length(output.unnamed_projects["mutation: the project left unnamed"]) > 0
     error_message = "Mutation check: the identity README with the project's line removed must be reported, or the rule above proves nothing."
+  }
+
+  # Three forms the extraction must still read, each with the project's line dropped: a block fenced
+  # sh, a command continued before its subcommand, and a block that names $RUNNER_TEMP without
+  # saving a plan there. Each is a form an edit can take without meaning to leave the rules.
+  assert {
+    condition     = length(output.unnamed_projects["mutation: recipes fenced as sh"]) > 0
+    error_message = "Mutation check: the identity README fenced as sh, with the project's line removed, must be reported, or a recipe fenced sh escapes every rule here."
+  }
+
+  assert {
+    condition     = length(output.unnamed_projects["mutation: a command split before its subcommand"]) > 0
+    error_message = "Mutation check: the identity README's apply split after `terraform`, with the project's line removed, must be reported, or a continued command escapes the rule above."
+  }
+
+  assert {
+    condition     = length(output.unnamed_projects["mutation: a workstation block naming $RUNNER_TEMP"]) > 0
+    error_message = "Mutation check: a workstation apply that names $RUNNER_TEMP only in a comment must be reported: only a block that saves its plan there is CI's."
   }
 }
 

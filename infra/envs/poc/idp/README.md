@@ -46,17 +46,19 @@ state in the bucket that root creates, so it cannot be initialised before it.
 This root's `terraform.tfvars`, which git ignores, sets `region` to the project's selected Region,
 `AWS_REGION` in `tools/aws-project.env`. Every root defaults to `us-east-1`, and a parameter in the
 provider block outranks the environment
-(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#provider-configuration), so
-the file, not the sourced `AWS_REGION`, is what puts the pool in the project's Region. The recipe
-writes it when it is absent and leaves an existing one alone, so check that one's `region`.
+(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#authentication-and-configuration),
+so the file, not the sourced `AWS_REGION`, is what puts the pool in the project's Region. The
+recipe writes it when it is absent and leaves an existing one alone, so check that one's `region`.
 
 The backend block is partial. A backend block cannot refer to a variable, so the state bucket,
 whose name carries the account id, and the project's Region are both given at init.
 
 The plan goes to a private directory that `mktemp -d` makes outside the repository. Keep it there:
-a saved plan holds, in cleartext, every value its changes carry, here every generated test-user
-password, so one beside the configuration is one `git add -A` from a commit
-([`plan -out`](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename), change
+a saved plan holds, in cleartext, every value its changes carry and the whole state it was planned
+from ([`plan -out`](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename),
+[`prior_state`](https://developer.hashicorp.com/terraform/internals/json-format#plan-representation)).
+So once this root has been applied, every plan of it holds every generated test-user password, even
+a plan with no changes, and one beside the configuration is one `git add -A` from a commit (change
 request 1.1).
 
 ```bash
@@ -66,12 +68,14 @@ set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the w
 terraform -chdir=infra/envs/poc/idp init \
   -backend-config="bucket=$(terraform -chdir=infra/bootstrap output -raw state_bucket)" \
   -backend-config="region=$AWS_REGION"
-plan_dir=$(mktemp -d)   # outside the repository: this plan holds every test-user password
+plan_dir=$(mktemp -d)   # outside the repository: once the root is applied, every plan holds the passwords
 terraform -chdir=infra/envs/poc/idp plan -out="$plan_dir/idp.tfplan"
 ```
 
 Read the plan. Then, in the same shell, apply exactly that plan, which Terraform does without
-asking again, and delete it:
+asking again
+([saved plan mode](https://developer.hashicorp.com/terraform/cli/commands/apply#saved-plan-mode)),
+and delete it. If you decide not to apply it, run the last line all the same:
 
 ```bash
 set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
