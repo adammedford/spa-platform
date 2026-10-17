@@ -87,7 +87,8 @@ jobs:
             echo "::notice::no base to diff against ($base), so every job runs."
           else
             changed="$(git diff --name-only "$base"...HEAD)"
-            if printf '%s\n' "$changed" | grep -Eq '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$'; then
+            # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
+            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$' > /dev/null; then
               echo "::notice::the workflow, the halves or the smoke test changed, so every job runs."
             else
               printf '%s\n' "$changed" | .github/touches.sh build || build=false
@@ -97,6 +98,9 @@ jobs:
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "terraform=$terraform" >> "$GITHUB_OUTPUT"
           echo "build=$build terraform=$terraform"
+
+      - name: CI path decisions include build inputs and survive large diffs
+        run: python3 -I .github/touches_tests.py
 
       - name: What a session steers by says what the repository says, and every citation resolves
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every

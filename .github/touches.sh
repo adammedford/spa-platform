@@ -7,16 +7,16 @@
 # .githooks/pre-push skips the build and Terraform when a push touches neither half, and
 # .github/workflows/ci.yml skips the same two jobs for the same reason. Those were two copies of two
 # patterns, and a copy agrees with its source until one of them is edited; this is the one place both
-# read them from, so a push the hook built is a pull request CI builds, and a push the hook let
-# through without one is a pull request CI lets through too.
+# read them from. CI additionally runs both jobs when its workflow, this classifier or tools/smoke.sh
+# changes, or when it cannot resolve the base; those overrides belong to the workflow's decision step.
 #
 # Written for the bash 3.2 that ships with macOS, and for grep -E rather than -P, which BSD grep
 # does not have.
 
 case "${1:-}" in
-  # What compiles: the solution's projects live under src, tests, fixtures and tools/spactl, and the
-  # build settings in the root files, which the suffixes catch wherever they sit.
-  build) pattern='^(src|tests|fixtures|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^global\.json$' ;;
+  # Contracts are embedded by Platform.Registry and read by behavior tests; nuget.config controls
+  # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50).
+  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config)$' ;;
   # Every Terraform root and module is under infra/.
   terraform) pattern='^infra/' ;;
   *)
@@ -27,4 +27,6 @@ case "${1:-}" in
     ;;
 esac
 
-grep -Eq "$pattern"
+# Drain the complete input: grep -q would close the pipe at an early match and make printf fail
+# with SIGPIPE under both callers' pipefail, turning a large matching diff into a skip (PR #50).
+grep -E "$pattern" > /dev/null

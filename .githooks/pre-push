@@ -72,9 +72,9 @@ else
 fi
 
 # Whether this push touches a half. What counts as a half is .github/touches.sh's to say, and CI
-# reads the same file for the same decision, so the hook cannot build what CI skips or skip what CI
-# builds. With no base to diff against, assume it does: a skipped check has to be earned by a diff
-# that proves it unnecessary.
+# reads the same patterns. CI's decision step additionally runs both jobs for changes to the workflow,
+# the classifier or tools/smoke.sh. With no base to diff against, assume this push touches both halves:
+# a skipped check has to be earned by a diff that proves it unnecessary.
 touches() {
   [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
 }
