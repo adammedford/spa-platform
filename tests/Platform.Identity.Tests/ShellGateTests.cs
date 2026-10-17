@@ -107,10 +107,10 @@ public sealed class ShellGateTests
     [Fact]
     public async Task AddPlatformIdentity_alone_puts_the_gate_in_the_pipeline()
     {
-        // Program.cs calls AddPlatformIdentity and UsePlatformShellGate and nothing else of workstream 3's
-        // (contracts/pipeline.md), and this host calls the same two. It has no host resolution either, so
-        // no app is pinned and the gate has no scheme to ask. It refuses rather than pass the request on,
-        // which would serve the asset without a session.
+        // Program.cs registers workstream 3's services with AddPlatformIdentity alone (contracts/pipeline.md
+        // -> Service registration) and installs the gate with UsePlatformShellGate, and this host makes the
+        // same two calls. It has no host resolution, so no app is pinned and the gate has no scheme to ask.
+        // It refuses rather than pass the request on, which would serve the asset without a session.
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Services.AddLogging();
         builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(InMemoryRegistry.SnapshotOf(1, "\"r1\"", [App1])));
