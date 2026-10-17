@@ -4,9 +4,10 @@
 Owner: integrator.
 
 Two of the documents are loaded into every context window -- AGENTS.md and CLAUDE.md -- one is
-read by every workstream before it builds, the contracts index, and the last two widen the scope
-again: a ticket citation is a pointer, and any tracked file may carry one; and a citation is only
-as good as the number it names, which every tracker directory has to keep to one file. Each rule
+read by every workstream before it builds, the contracts index, and the last three widen the scope
+again: a ticket citation is a pointer, and any tracked file may carry one; a citation is only as
+good as the number it names, which every tracker directory has to keep to one file; and since
+ADR-0020 a ticket is a GitHub issue, so a `#NNN` names a number only GitHub can vouch for. Each rule
 below was a prose paragraph first, and each paragraph was broken by the session after the one that
 wrote it.
 
@@ -53,6 +54,20 @@ restarts in each and `06` in several of them is several tickets. What a session 
 number is taken is in docs/agents/issue-tracker.md; the rule cannot do the part that matters,
 which is reading each citation of the old number to see which ticket it meant, because after a
 rename every one of them still resolves. The line it passes prints how many tickets it read.
+
+**No `#NNN` that names nothing.** The citation rule once more, for the form a ticket takes since
+ADR-0020 moved tickets to GitHub Issues. `docs/agents/issue-tracker.md` says to cite an issue or a
+pull request as `#NNN`, that the two share one number sequence, and that this check fails a push
+over a `#NNN` that names neither. GitHub is what knows which numbers exist, so the rule asks it,
+once per run and through `gh`: GitHub's REST API "considers every pull request an issue", so one
+listing of the repository's issues answers for both forms. What the rule reads is deliberately
+narrow -- a `#` against one to four digits, ending at a word boundary and not following a word
+character, a slash, an ampersand or another `#` -- so a heading, an anchor, an entity, a label
+colour and a word's own suffix are not read; ISSUE_CITATION below says what each exclusion is for.
+What no shape tells from a citation, the token counters in three tracked spike transcripts, goes in
+TRANSCRIPTS below, on PLANNED's terms. With no network, no `gh` or no token the rule prints one
+line saying how many citations went unchecked and why, and fails nothing, as the pre-push hook does
+for a missing tool; the line it passes prints how many citations GitHub vouched for.
 
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py
 """
@@ -177,6 +192,50 @@ UNFILED: dict[tuple[str, str], str] = {}
 # The number a ticket file answers to: the two digits a citation of it is looked up by, as
 # dangling_tickets() globs `NN-*`. A file named any other way is not a ticket a number can reach.
 NUMBERED = re.compile(r"^(\d{2})-")
+
+# A citation of an issue or pull request, in the form GitHub links: `#` against the number, as
+# `(#NN)`, `#NN,` and `PR #NN` write it. Deliberately narrow, and each exclusion is a `#` the tree
+# writes for another reason. Not after a word character, so `rt#1` -- a token counter's suffix --
+# and `owner/repo#NN`, GitHub's form for another repository's number, are not read; not after `/`,
+# `&` or `#`, so a URL fragment, an HTML entity and a doubled `#` are not; and the digits end at a
+# word boundary, so `#0e8a16` -- a label colour, whose digits run into letters -- is not, though a
+# colour written in digits alone would be, and none is in the tree. A heading puts a space after
+# its `#` and `#region` puts a letter, so neither needs excluding. Four digits at most, and a longer
+# run is not read at all rather than read at its first four: this repository's numbers have two
+# digits, and the one longer run in the tree is the AWS provider's issue, cited bare from two
+# Terraform comments, which their owner can write `owner/repo#NNNNN`. Widen the four when this
+# repository's own numbers reach five digits.
+ISSUE_CITATION = re.compile(r"(?<![\w/&#])#(?P<number>\d{1,4})\b")
+
+# Where the numbers come from: one listing of the repository's issues. GitHub's REST API "considers
+# every pull request an issue, but not every issue is a pull request", so the pull requests are in
+# the listing and the two forms share one sequence; --paginate follows the pages and --jq keeps
+# one number per line. gh fills {owner}/{repo} from the remote of the directory it runs in, and
+# signs in from its keyring or from GH_TOKEN, which is what CI hands it.
+# https://docs.github.com/en/rest/issues/issues#list-repository-issues
+GH_ISSUES = (
+    "gh", "api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100",
+    "--jq", ".[].number",
+)
+
+# How long to wait for gh before saying so. The hook runs this check on every push, and a check that
+# hangs on a bad connection is a check pushed past with --no-verify the second time.
+GH_TIMEOUT = 60
+
+# Captured program output that git tracks as a spike's evidence -- docs/plan/07-evidence.md names
+# the runs -- and the one thing the `#NNN` rule does not read. `token #N -> #N` there counts tokens
+# and `[#N refresh_token ...]` counts grants, and no shape of the `#` tells either from a citation:
+# each is followed by a space and a word, or by a bracket, exactly as a citation is. The ticket rule
+# met the same problem in session transcripts and was saved by git ignoring them; these are tracked
+# on purpose, so they are named here, one file at a time and none in anticipation. PLANNED's rule
+# one level over: this check fails when a listed path is no longer tracked, so the list cannot
+# outlive its entries.
+TRANSCRIPTS = {
+    "spikes/g0/stand-in-spike/spike-output.txt": "the stand-in spike's run; `token #N -> #N`",
+    "spikes/g0/stand-in-spike/spike-results.json": "the same run as JSON, in its Detail strings",
+    "spikes/g0/token-and-proxy/output-token-and-proxy.txt":
+        "the token spike's run; `#N refresh_token` numbers the grants",
+}
 
 
 def progress_claims(root: pathlib.Path) -> list[str]:
@@ -345,6 +404,18 @@ def tracked_files(root: pathlib.Path) -> list[str]:
     return [name for name in found.stdout.split("\0") if name]
 
 
+def text_of(root: pathlib.Path, relative: str) -> str | None:
+    """A tracked file's text, or None for a file that is not text or cannot be read.
+
+    Shared by the two citation rules, which scan the same files for different shapes. Neither kind
+    of file is a document that cites anything, so neither is reported.
+    """
+    try:
+        return (root / relative).read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def trackers(root: pathlib.Path) -> set[str]:
     """The tracker directories a number can resolve in, which is what makes a word a tracker name.
 
@@ -390,9 +461,8 @@ def dangling_tickets(root: pathlib.Path) -> tuple[list[str], list[str], int]:
     missing, filed, resolved = [], [], 0
 
     for relative in tracked_files(root):
-        try:
-            text = (root / relative).read_text()
-        except (OSError, UnicodeDecodeError):
+        text = text_of(root, relative)
+        if text is None:
             continue
         own = citing_tracker(relative, available)
         # Over the whole text rather than line by line, because a citation wraps where its
@@ -455,6 +525,72 @@ def shared_numbers(root: pathlib.Path) -> tuple[list[str], int]:
     return shared, read
 
 
+def issue_citations(root: pathlib.Path) -> tuple[list[tuple[str, int, int]], list[str]]:
+    """Every `#NNN` in the tracked files, as (path, line, number), and the TRANSCRIPTS entries that
+    are no longer tracked.
+
+    The scan is apart from the resolution because the two have different witnesses: the scan reads
+    the tree and a test can hold it to a count, the resolution asks GitHub and a test must not. The
+    transcripts are skipped by path, the one exemption the pattern could not make for itself.
+    """
+    tracked = tracked_files(root)
+    cited = []
+    for relative in tracked:
+        if relative in TRANSCRIPTS:
+            continue
+        text = text_of(root, relative)
+        if text is None:
+            continue
+        for citation in ISSUE_CITATION.finditer(text):
+            line_number = text.count("\n", 0, citation.start()) + 1
+            cited.append((relative, line_number, int(citation.group("number"))))
+    untracked = [
+        f"'{path}' is not tracked ({why})" for path, why in TRANSCRIPTS.items() if path not in tracked
+    ]
+    return cited, untracked
+
+
+def issued_numbers(root: pathlib.Path) -> tuple[set[int], str]:
+    """The numbers GitHub has issued to this repository's issues and pull requests, or why they
+    could not be read.
+
+    Empty with a reason when gh is not on PATH, is not signed in, cannot reach GitHub or is refused
+    by it. The caller prints the reason and fails nothing: a rule that failed every offline push
+    would be a rule pushed past with --no-verify within the week, and the next push with a network
+    checks what this one could not. Empty with no reason is an answer too -- a repository with no
+    issues and no pull requests -- and every citation in it dangles, which is right. The tests
+    replace this function, so no test reaches GitHub.
+    """
+    try:
+        asked = subprocess.run(
+            GH_ISSUES, cwd=root, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT
+        )
+    except FileNotFoundError:
+        return set(), "gh is not on PATH"
+    except subprocess.TimeoutExpired:
+        return set(), f"gh did not answer within {GH_TIMEOUT} seconds"
+    if asked.returncode != 0:
+        # gh's first line of stderr says what went wrong -- `gh: Bad credentials (HTTP 401)`,
+        # `error connecting to api.github.com`, `To get started with GitHub CLI, please run: gh
+        # auth login` -- where the exit code alone would say nothing a reader could act on.
+        said = next((line.strip() for line in asked.stderr.splitlines() if line.strip()), "")
+        return set(), said or f"gh exited {asked.returncode} and said nothing"
+    try:
+        return {int(number) for number in asked.stdout.split()}, ""
+    except ValueError:
+        return set(), f"gh answered with something other than numbers: {asked.stdout[:60]!r}"
+
+
+def dangling_issues(cited: list[tuple[str, int, int]], issued: set[int]) -> list[str]:
+    """The `#NNN` citations that name no issue or pull request, in the order the tree holds them."""
+    return [
+        f"{relative}:{line_number}: cites #{number}, which names no issue or pull request of this "
+        f"repository"
+        for relative, line_number, number in cited
+        if number not in issued
+    ]
+
+
 def report(lines: list[str], headline: str, *advice: str) -> bool:
     """Print one rule's failures under its own headline, and say whether there were any.
 
@@ -482,6 +618,10 @@ def main() -> int:
     disagreements, unreadable, compared = freeze_disagreements(root)
     unresolved, filed, resolved = dangling_tickets(root)
     shared, numbered = shared_numbers(root)
+    cited, untracked = issue_citations(root)
+    # One lookup per run, and none when nothing cites: a tree with no `#NNN` owes GitHub no call.
+    issued, unchecked = issued_numbers(root) if cited else (set(), "")
+    unissued = [] if unchecked else dangling_issues(cited, issued)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -541,7 +681,26 @@ def main() -> int:
             "the number still resolves, to the other file, so no check finds one left behind.",
             "The procedure is in docs/agents/issue-tracker.md.",
         ),
+        report(
+            unissued,
+            "STEERING FAILED: a cited #NNN names no issue or pull request.",
+            "Issues and pull requests share one number sequence, and this run asked GitHub for",
+            "every number it has issued here. Fix the number, or write another repository's as",
+            "owner/repo#NNN, which this rule does not read. The form is in",
+            "docs/agents/issue-tracker.md.",
+        ),
+        report(
+            untracked,
+            "STEERING FAILED: a TRANSCRIPTS path is not tracked.",
+            "Remove it from TRANSCRIPTS in this script, so the list never outlives its entries.",
+        ),
     ]
+
+    if unchecked:
+        # Said whether or not the other rules passed, for the reason the counts are printed: a run
+        # that could not ask GitHub must not look like one that did.
+        citations = "citation" if len(cited) == 1 else "citations"
+        print(f"steering: {len(cited)} #NNN {citations} not checked: {unchecked}.")
 
     if any(failures):
         return 1
@@ -556,6 +715,9 @@ def main() -> int:
     if numbered:
         tickets = "ticket holds" if numbered == 1 else "tickets each hold"
         summary += f" {numbered} {tickets} a number no other ticket in its tracker shares."
+    if cited and not unchecked:
+        citations = "citation names" if len(cited) == 1 else "citations name"
+        summary += f" {len(cited)} #NNN {citations} an issue or pull request."
     print(summary)
     return 0
 
