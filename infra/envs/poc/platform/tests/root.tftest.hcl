@@ -516,23 +516,17 @@ run "an_additional_teardown_principal_refuses_an_assumed_role_session_arn" {
   expect_failures = [var.additional_teardown_principal_arns]
 }
 
-# Bootstrap grants the teardown role spa-platform-<cell> by default; this is the bucket that name has
-# to be.
-run "the_bucket_is_the_one_bootstrap_grants_the_teardown_role" {
+# Change request 1.5a: every consumer but infra/bootstrap reads this output rather than deriving the
+# bucket's name, so the root publishes the name at plan, and it is the one the contract examples
+# render for this file's placeholders. Bootstrap applies before the bucket exists and derives the
+# same default; infra/bootstrap's tests check that its teardown grant names the bucket modules/cell
+# creates.
+run "the_root_publishes_the_bucket_the_contract_examples_render" {
   command = plan
 
-  module {
-    source = "../../../modules/cell"
-  }
-
-  variables {
-    allowed_host_suffixes = [".spa-poc.test:8443"]
-    allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
-  }
-
   assert {
-    condition     = aws_s3_bucket.platform.bucket == "spa-platform-poc"
-    error_message = "The platform bucket must be spa-platform-<cell>, which infra/bootstrap's teardown policy names by default. Change both together."
+    condition     = output.bucket == jsondecode(file("../../../../contracts/infra-outputs.example.json")).bucket
+    error_message = "The root's bucket output is spa-platform-<cell>-<account id>-<region>-an, as contracts/infra-outputs.example.json renders it for cell poc in account 111122223333 and us-east-1."
   }
 }
 

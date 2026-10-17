@@ -9,7 +9,11 @@ variable "cell" {
   # The same rule as infra/bootstrap and the platform root, character for character (change
   # request 1.5, ADR-0014 item 7). 3 is the frozen appId minimum the cell is published as
   # (contracts/infra-outputs.schema.json -> cell); 22 keeps spa-<cell> within the load balancer's
-  # 32-character name limit. No edge hyphen, because the cell ends bucket and repository names.
+  # 32-character name limit. No edge hyphen (ADR-0014 item 7); a trailing one would also end
+  # spa-<cell>, the load balancer's and target group's name and the first segment of each
+  # repository's, and AWS refuses a hyphen at the end of either.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateLoadBalancer.html
+  # https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
     error_message = "The cell name is 3 to 22 lowercase letters, digits or hyphens, and does not start or end with a hyphen. It goes into bucket and repository names."
@@ -50,10 +54,18 @@ variable "gateway_port" {
 
 variable "bucket_name" {
   description = <<-EOT
-    The platform bucket's name. Empty means spa-platform-{cell}, which is what
-    contracts/infra-outputs.example.json and Registry:Bucket in platform
-    configuration both show. This is the platform's one private bucket; the
-    Terraform state bucket is a different one, created by infra/bootstrap.
+    The platform bucket's name. Empty means the convention,
+    spa-platform-{cell}-{account id}-{region}-an, from the account and Region the
+    root's provider points at: the name contracts/infra-outputs.example.json and
+    Registry:Bucket in platform configuration show (change request 1.5a).
+
+    The bucket is always created in S3's account regional namespace, so an override
+    keeps the -{account id}-{region}-an suffix and changes only what comes before it;
+    the plan fails on any other name. Every consumer reads the platform root's `bucket`
+    output rather than deriving the name (contracts/s3-layout.md), except
+    infra/bootstrap, which applies first: set its platform_bucket_name to the same
+    value. This is the platform's one private bucket; the Terraform state bucket is a
+    different one, created by infra/bootstrap.
   EOT
   type        = string
   default     = ""

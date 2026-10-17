@@ -8,10 +8,12 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
+data "aws_region" "current" {}
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
   partition  = data.aws_partition.current.partition
+  region     = data.aws_region.current.region
 
   # Every resource name carries the cell name (ADR-0012).
   name_prefix = "spa-platform-${var.cell}"
@@ -23,6 +25,19 @@ locals {
   )
 
   ci_role_name = "${local.name_prefix}-ci-plan"
+
+  # The platform bucket, which the CI plan role describes and the teardown role empties, both by
+  # this one ARN. By default it is modules/cell's own default,
+  # spa-platform-<cell>-<account id>-<region>-an in S3's account regional namespace (change request
+  # 1.5a), derived here from this root's account and Region: this root applies before the bucket
+  # exists, so it cannot read the platform root's `bucket` output the way every other consumer does.
+  # tests/root.tftest.hcl plans modules/cell and fails if the two defaults drift.
+  platform_bucket_name = (
+    var.platform_bucket_name != ""
+    ? var.platform_bucket_name
+    : "${local.name_prefix}-${local.account_id}-${local.region}-an"
+  )
+  platform_bucket_arn = "arn:${local.partition}:s3:::${local.platform_bucket_name}"
 
   # The platform tag that teardown queries is Platform = spa-platform (test P-05).
   # Bootstrap resources deliberately carry a different value: the state bucket and

@@ -25,8 +25,13 @@ output "task_security_group_id" {
 }
 
 output "bucket" {
-  description = "The platform bucket's name, as the infrastructure outputs contract's `bucket`."
-  value       = aws_s3_bucket.platform.id
+  description = <<-EOT
+    The platform bucket's name, as the infrastructure outputs contract's `bucket`. Every consumer
+    reads it rather than deriving the name (contracts/s3-layout.md), except infra/bootstrap, which
+    applies before the bucket exists and derives the same default. The configured name rather than
+    the id, which the provider sets to the same string only after an apply, so a plan shows it.
+  EOT
+  value       = aws_s3_bucket.platform.bucket
 }
 
 output "bucket_arn" {

@@ -35,6 +35,8 @@ allow_state_lock = false
 # prints, never the CI plan role.
 teardown_trusted_principal_arns = ["arn:aws:iam::111122223333:user/operator"]
 
-# The platform bucket the teardown role may empty. Empty means spa-platform-<cell>,
-# modules/cell's default; set it only together with that module's bucket_name.
+# The platform bucket the teardown role may empty and the CI plan role may describe.
+# Empty means modules/cell's default, spa-platform-<cell>-<account id>-<region>-an,
+# from the account and Region this root applies in; set it only together with that
+# module's bucket_name.
 platform_bucket_name = ""
