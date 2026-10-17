@@ -7,8 +7,9 @@ namespace Platform.Proxy.Tests;
 /// <summary>
 /// Task 4.2's first half: the token is acquired ahead of the forwarder, and a call with no token is
 /// answered 401 with a problem body and reaches no upstream (N-19, the <c>/api</c> clause;
-/// <c>/bff/session</c> is workstream 3's). The step is a pipeline step and not a YARP transform, so the
-/// 401 is an ordinary response (plan, workstream 4; finding T-C21).
+/// <c>/bff/session</c> is workstream 3's), or 503 when the provider could not be reached and the session
+/// stands. The step is a pipeline step and not a YARP transform, so the 401 is an ordinary response
+/// (plan, workstream 4; finding T-C21).
 /// </summary>
 public sealed class AccessTokenStepTests
 {
@@ -51,19 +52,52 @@ public sealed class AccessTokenStepTests
     }
 
     [Fact]
-    public async Task The_401_leaves_no_rule_id()
+    public async Task A_provider_that_cannot_be_reached_is_503_idp_unavailable_and_reaches_no_upstream()
     {
-        // contracts/telemetry.md: the 401 for a session that yields no token is not a rejection, so it
-        // leaves rule null. Fails if the step borrows auth.session, which is the shell gate's.
+        // contracts/http-contract.md -> Errors: the session is kept, so this is not one of the two 401s,
+        // which would send the browser to log in again over a session that still stands (change
+        // request 4.2).
+        EchoUpstream orders = new();
+        await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
+        await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, Orders(listener));
+        gateway.Tokens.Result = new AccessTokenResult.ProviderUnavailable();
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+
+        using HttpResponseMessage response = await client.SendAsync(
+            gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Null(response.Headers.Location);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("idp_unavailable", await Problem.CodeOf(response));
+        Assert.Empty(orders.Requests);
+    }
+
+    [Theory]
+    [InlineData(nameof(AccessTokenResult.Unauthenticated), HttpStatusCode.Unauthorized)]
+    [InlineData(nameof(AccessTokenResult.SessionEnded), HttpStatusCode.Unauthorized)]
+    [InlineData(nameof(AccessTokenResult.ProviderUnavailable), HttpStatusCode.ServiceUnavailable)]
+    public async Task A_call_the_token_step_answers_leaves_no_rule_id(string outcome, HttpStatusCode status)
+    {
+        // contracts/telemetry.md: the 401 for a live session that yields no token is not a rejection, so
+        // it leaves rule null, and change request 4.2's decision says the same of the 503. Unauthenticated
+        // does not say whether a cookie was presented, which is what auth.session turns on, so the step
+        // writes no rule for it either. Fails if the step writes any rule id, auth.session included.
         await using ProxyHost gateway = await ProxyHost.StartAsync(
             Ct, new ProxyHostOptions { Telemetry = true }, TestApps.Entry("app1", apis: [TestApps.Api("orders")]));
-        gateway.Tokens.Result = new AccessTokenResult.Unauthenticated();
+        gateway.Tokens.Result = outcome switch
+        {
+            nameof(AccessTokenResult.Unauthenticated) => new AccessTokenResult.Unauthenticated(),
+            nameof(AccessTokenResult.SessionEnded) => new AccessTokenResult.SessionEnded(),
+            nameof(AccessTokenResult.ProviderUnavailable) => new AccessTokenResult.ProviderUnavailable(),
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "not an outcome this test arranges"),
+        };
         using HttpClient client = new();
 
         using HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(status, response.StatusCode);
         Assert.Null(Assert.Single(gateway.TelemetryRules));
     }
 
@@ -97,22 +131,26 @@ public sealed class AccessTokenStepTests
     }
 
     [Fact]
-    public async Task With_no_token_source_registered_the_call_is_forwarded_with_no_authorization()
+    public async Task With_no_token_source_registered_the_call_is_401_unauthenticated_and_reaches_no_upstream()
     {
-        // A gateway composed on the identity stub: AddPlatformIdentity registers no source. Nothing to
-        // attach, and the browser's own Authorization is still stripped, so the upstream gets none.
+        // Fails closed (plan row 4.2: "answer 401 when there is none"). With no source to ask, no call
+        // has a token, and one that went on would go upstream bare. It is answered as a call with no
+        // session is, with no rule id, and the browser's own Authorization gets it no further.
         EchoUpstream orders = new();
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(
-            Ct, new ProxyHostOptions { TokenSource = false }, Orders(listener));
-        using HttpClient client = new();
+            Ct, new ProxyHostOptions { TokenSource = false, Telemetry = true }, Orders(listener));
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
         using HttpRequestMessage request = gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items");
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer from-the-browser");
 
         using HttpResponseMessage response = await client.SendAsync(request, Ct);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.False(Assert.Single(orders.Requests).Headers.ContainsKey("Authorization"));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Null(response.Headers.Location);
+        Assert.Equal("unauthenticated", await Problem.CodeOf(response));
+        Assert.Empty(orders.Requests);
+        Assert.Null(Assert.Single(gateway.TelemetryRules));
     }
 
     private static AppDefinition Orders(EchoUpstreamListener listener) =>
