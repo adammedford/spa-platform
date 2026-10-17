@@ -71,6 +71,9 @@ internal sealed partial class AccessTokenSource(
         AuthenticateResult authenticated = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
         if (!authenticated.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
         {
+            // Authentication distinguishes a dead cookie from no cookie. Record that distinction
+            // here; the proxy only receives Unauthenticated and cannot recover it (telemetry.md).
+            Bff.NoteDeadSession(context, authenticated);
             return new AccessTokenResult.Unauthenticated();
         }
 
