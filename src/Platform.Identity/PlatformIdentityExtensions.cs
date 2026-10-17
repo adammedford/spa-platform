@@ -22,8 +22,8 @@ namespace Platform.Identity;
 public static class PlatformIdentityExtensions
 {
     /// <summary>
-    /// The scheme provider, the OIDC and cookie options, the session store, the token source and the
-    /// profiles. Tasks 3.1 to 3.8.
+    /// The scheme provider, the OIDC and cookie options, the session store, the token source behind
+    /// <see cref="IAccessTokenSource"/>, logout's session end and the profiles. Tasks 3.1 to 3.9.
     ///
     /// Authentication services belong to this entry point rather than to <c>Program.cs</c>, which
     /// calls the six entry points in the service table and nothing else: the framework's own
@@ -106,42 +106,23 @@ public static class PlatformIdentityExtensions
         services.TryAddSingleton<CredentialStyles>();
         services.TryAddSingleton<AccessTokenSource>();
 
+        // The contract's interface, forwarded to that one instance. The proxy's token step asks it for
+        // every call the proxy would forward, and only a session yields a token, so such a call without
+        // one gets 401 (contracts/http-contract.md -> Errors).
+        services.TryAddSingleton<IAccessTokenSource>(sp => sp.GetRequiredService<AccessTokenSource>());
+
         // Logout's revocation and removal of task 3.9, under the same gates and in the same style.
         services.TryAddSingleton<SessionEnd>();
         return builder;
     }
 
     /// <summary>
-    /// Binds <see cref="IAccessTokenSource"/> to the token source registered above.
-    ///
-    /// This internal registration is an assembly seam for component hosts. The HTTP contract
-    /// requires the proxy to answer sessionless API requests with 401; the registered source supplies
-    /// that authentication outcome (contracts/http-contract.md).
-    /// </summary>
-    internal static IServiceCollection AddPlatformAccessTokenSource(this IServiceCollection services)
-    {
-        services.TryAddSingleton<IAccessTokenSource>(sp => sp.GetRequiredService<AccessTokenSource>());
-        return services;
-    }
-
-    /// <summary>
-    /// Installs <see cref="UsePlatformShellGate"/>'s internal binding when assembling a component host.
-    /// ADR-0008 requires a session before any asset; this registration supplies the gate implementing
-    /// that requirement.
-    /// </summary>
-    internal static IServiceCollection AddPlatformShellGate(this IServiceCollection services)
-    {
-        services.TryAddSingleton<ShellGate.Binding>();
-        return services;
-    }
-
-    /// <summary>
     /// A session before any asset (ADR-0008): an unauthenticated navigation is challenged, an
-    /// unauthenticated fetch gets 401. See <see cref="ShellGate"/>. Component hosts assemble this
-    /// middleware through the internal <see cref="AddPlatformShellGate"/> binding.
+    /// unauthenticated fetch gets 401. See <see cref="ShellGate"/>. Installed whatever the host
+    /// registered: a gate that a missing registration could switch off would fail open, and serve every
+    /// asset without a session in exactly the host that missed it.
     /// </summary>
-    public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) =>
-        app.ApplicationServices.GetService<ShellGate.Binding>() is null ? app : app.Use(ShellGate.InvokeAsync);
+    public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) => app.Use(ShellGate.InvokeAsync);
 
     /// <summary><c>/bff/session</c>, <c>/bff/login</c> and <c>/bff/logout</c>. Task 3.9; see <see cref="Bff"/>.</summary>
     public static IEndpointRouteBuilder MapPlatformBff(this IEndpointRouteBuilder endpoints)
