@@ -50,10 +50,18 @@ variable "gateway_port" {
 
 variable "bucket_name" {
   description = <<-EOT
-    The platform bucket's name. Empty means spa-platform-{cell}, which is what
-    contracts/infra-outputs.example.json and Registry:Bucket in platform
-    configuration both show. This is the platform's one private bucket; the
-    Terraform state bucket is a different one, created by infra/bootstrap.
+    The platform bucket's name. Empty means the convention,
+    spa-platform-{cell}-{account id}-{region}-an, from the account and Region the
+    root's provider points at: the name contracts/infra-outputs.example.json and
+    Registry:Bucket in platform configuration show (change request 1.5a).
+
+    The bucket is always created in S3's account regional namespace, so an override
+    keeps the -{account id}-{region}-an suffix and changes only what comes before it;
+    the plan fails on any other name. Every consumer reads the platform root's `bucket`
+    output rather than deriving the name (contracts/s3-layout.md), except
+    infra/bootstrap, which applies first: set its platform_bucket_name to the same
+    value. This is the platform's one private bucket; the Terraform state bucket is a
+    different one, created by infra/bootstrap.
   EOT
   type        = string
   default     = ""

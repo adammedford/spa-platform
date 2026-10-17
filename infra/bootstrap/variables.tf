@@ -162,9 +162,11 @@ variable "teardown_trusted_principal_arns" {
 
 variable "platform_bucket_name" {
   description = <<-EOT
-    The platform bucket the teardown role may empty. Leave empty for spa-platform-<cell>, the
-    default modules/cell gives the bucket. Set it to the same value as the cell module's
-    bucket_name if that is ever overridden: the grant names this one bucket's ARN, never a
+    The platform bucket the teardown role may empty and the CI plan role may describe. Leave
+    empty for spa-platform-<cell>-<account id>-<region>-an, the default modules/cell gives the
+    bucket, derived from this root's own account and Region because this root applies before the
+    bucket exists (change request 1.5a). Set it to the same value as the cell module's bucket_name
+    if that is ever overridden: both grants name this one bucket's ARN, never a
     spa-platform-<cell>-* glob (ADR-0014 item 6).
   EOT
   type        = string

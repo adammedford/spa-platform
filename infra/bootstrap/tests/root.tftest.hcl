@@ -19,6 +19,13 @@ mock_provider "aws" {
     }
   }
 
+  # The Region the platform bucket's default name carries (change request 1.5a).
+  mock_data "aws_region" {
+    defaults = {
+      region = "us-east-1"
+    }
+  }
+
   # The CI role's and the state bucket's policies are aws_iam_policy_document data sources, which a
   # mock provider would fill with a random string that the apply run's validation refuses.
   mock_data "aws_iam_policy_document" {
@@ -214,6 +221,10 @@ run "teardown_role_is_named_from_the_cell" {
   }
 }
 
+# By default the grant names spa-platform-<cell>-<account id>-<region>-an, modules/cell's default
+# (change request 1.5a), built from this root's own account and Region because bootstrap applies
+# before the bucket exists. The expected name is the one contracts/infra-outputs.example.json
+# renders for this file's placeholders: cell poc, account 111122223333, us-east-1.
 run "teardown_role_may_delete_and_list_the_platform_bucket_and_nothing_else" {
   command = plan
 
@@ -223,13 +234,13 @@ run "teardown_role_may_delete_and_list_the_platform_bucket_and_nothing_else" {
         Sid      = "DeleteReleases"
         Effect   = "Allow"
         Action   = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
-        Resource = "arn:aws:s3:::spa-platform-poc/apps/*"
+        Resource = "arn:aws:s3:::${jsondecode(file("../../contracts/infra-outputs.example.json")).bucket}/apps/*"
       },
       {
         Sid      = "ListPlatformBucket"
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:ListBucketVersions"]
-        Resource = "arn:aws:s3:::spa-platform-poc"
+        Resource = "arn:aws:s3:::${jsondecode(file("../../contracts/infra-outputs.example.json")).bucket}"
       },
     ]
     error_message = "The teardown role holds the delete under apps/ and the two lists on the platform bucket, on that bucket's ARN, and no write at all (ADR-0014 item 6)."
@@ -241,15 +252,130 @@ run "teardown_role_follows_a_platform_bucket_name_override" {
   command = plan
 
   variables {
-    platform_bucket_name = "spa-platform-poc-111122223333"
+    platform_bucket_name = "spa-platform-renamed-111122223333-us-east-1-an"
   }
 
   assert {
     condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.teardown.policy).Statement : s.Resource])) == toset([
-      "arn:aws:s3:::spa-platform-poc-111122223333/apps/*",
-      "arn:aws:s3:::spa-platform-poc-111122223333",
+      "arn:aws:s3:::spa-platform-renamed-111122223333-us-east-1-an/apps/*",
+      "arn:aws:s3:::spa-platform-renamed-111122223333-us-east-1-an",
     ])
     error_message = "The grant names the actual bucket, including an override, never a spa-platform-<cell>-* glob."
+  }
+}
+
+# The CI plan role reads the same one bucket's settings, by the same ARN: a spa-platform-<cell>*
+# glob would miss an override and match another cell's bucket, spa-platform-poc2-... for cell poc.
+run "the_ci_plan_role_describes_the_platform_bucket_and_no_other" {
+  command = plan
+
+  assert {
+    condition = one([
+      for s in data.aws_iam_policy_document.ci_plan.statement : s.resources if s.sid == "DescribePlatformBucket"
+    ]) == toset(["arn:aws:s3:::${jsondecode(file("../../contracts/infra-outputs.example.json")).bucket}"])
+    error_message = "The CI plan role describes the platform bucket by its ARN, the bucket the teardown grant names, and no other bucket."
+  }
+}
+
+run "the_ci_plan_role_follows_a_platform_bucket_name_override" {
+  command = plan
+
+  variables {
+    platform_bucket_name = "spa-platform-renamed-111122223333-us-east-1-an"
+  }
+
+  assert {
+    condition = one([
+      for s in data.aws_iam_policy_document.ci_plan.statement : s.resources if s.sid == "DescribePlatformBucket"
+    ]) == toset(["arn:aws:s3:::spa-platform-renamed-111122223333-us-east-1-an"])
+    error_message = "Under an override the CI plan role describes the overriding bucket, as the teardown grant does."
+  }
+}
+
+# --- The default agrees with modules/cell (change request 1.5a) ----------------------------------
+#
+# This root derives the platform bucket's default name; modules/cell creates the bucket under its
+# own copy of the same default. The two runs below plan both with one cell, account and Region,
+# none of them the placeholders the other runs use, so a part dropped or hardwired on either side
+# shows, and compare the module's `bucket` output, the name every other consumer reads, with this
+# root's grant.
+
+run "the_cell_module_plans_its_default_bucket" {
+  command = plan
+
+  module {
+    source = "../modules/cell"
+  }
+
+  variables {
+    cell                    = "cell-7"
+    vpc_cidr                = "10.20.0.0/16"
+    certificate_domain      = "spa-poc.test"
+    teardown_principal_arns = ["arn:aws:iam::444455556666:role/spa-platform-cell-7-teardown"]
+    gateway_image           = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    allowed_host_suffixes   = [".spa-poc.test:8443"]
+    allowed_upstreams       = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+
+    issuers = {
+      "cognito-poc" = {
+        authority      = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_EXAMPLE"
+        profile        = "cognito"
+        browser_origin = "https://spa-poc.auth.eu-west-1.amazoncognito.com"
+      }
+    }
+  }
+
+  override_data {
+    target          = data.aws_caller_identity.current
+    override_during = plan
+    values          = { account_id = "444455556666" }
+  }
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "eu-west-1" }
+  }
+
+  # Only the module reads these two, so they are mocked here rather than for every run in the file.
+  override_data {
+    target          = data.aws_availability_zones.available
+    override_during = plan
+    values          = { names = ["eu-west-1a", "eu-west-1b", "eu-west-1c"] }
+  }
+
+  override_data {
+    target          = data.aws_acm_certificate.wildcard
+    override_during = plan
+    values          = { arn = "arn:aws:acm:eu-west-1:444455556666:certificate/00000000-0000-0000-0000-000000000000" }
+  }
+}
+
+run "the_teardown_grant_names_the_bucket_the_cell_module_creates" {
+  command = plan
+
+  variables {
+    cell = "cell-7"
+  }
+
+  override_data {
+    target          = data.aws_caller_identity.current
+    override_during = plan
+    values          = { account_id = "444455556666" }
+  }
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "eu-west-1" }
+  }
+
+  assert {
+    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.teardown.policy).Statement : s.Resource])) == toset([
+      "arn:aws:s3:::${run.the_cell_module_plans_its_default_bucket.bucket}/apps/*",
+      "arn:aws:s3:::${run.the_cell_module_plans_its_default_bucket.bucket}",
+    ])
+    error_message = "With platform_bucket_name empty, the teardown grant names the bucket modules/cell creates by default for the same cell, account and Region (change request 1.5a)."
   }
 }
 

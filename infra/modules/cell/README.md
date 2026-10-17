@@ -23,14 +23,36 @@ test step in CI discovers both.
 Resources are named `spa-platform-{cell}` and its derivatives, matching
 `infra/bootstrap`'s `name_prefix`. The exceptions come from
 `contracts/infra-outputs.example.json`, which fixes them: the bucket is
-`spa-platform-{cell}`, the image repositories are `spa-{cell}/gateway` and
-`spa-{cell}/mock-api`, and the load balancer and its target group are `spa-{cell}`.
-The last is also forced: both names are capped at 32 characters, and
-`spa-platform-{cell}` reaches 35 at the cell name's maximum length.
+`spa-platform-{cell}-{account id}-{region}-an`, the image repositories are
+`spa-{cell}/gateway` and `spa-{cell}/mock-api`, and the load balancer and its target
+group are `spa-{cell}`. The last is also forced: both names are capped at 32
+characters, and `spa-platform-{cell}` reaches 35 at the cell name's maximum length.
 
 The module sets no provider and so no tags. The calling root applies `Platform`,
 `Cell` and `ManagedBy` through `default_tags`, as `contracts/resource-tags.md`
 requires; resources here add only `Name`, which merges with those three.
+
+## The bucket's name
+
+The bucket is created in S3's account regional namespace, which no other account can
+create a bucket in, so its name cannot be claimed between a teardown and the next
+deployment (change request 1.5a, `contracts/s3-layout.md`). The name carries the
+namespace's suffix, `-{account id}-{region}-an`, built from the account and Region
+the root's provider points at, and `bucket_namespace = "account-regional"` is what
+opts in: the suffix alone does not.
+
+- **`bucket_name` overrides the name, not the namespace.** Empty means the
+  convention. An override keeps this account's and Region's suffix, and the plan
+  fails on one that does not, rather than at apply after the rest of the cell exists.
+- **The plan fails, and never falls back to a global name,** when the name is longer
+  than S3's 63 characters (the suffix counts, so the limit follows the Region), or the
+  Region is one AWS does not offer the namespace in: Bahrain and the UAE.
+- **The provider floor is 6.37,** the release that added `bucket_namespace`; init
+  refuses an older one.
+- **Nothing derives the name but `infra/bootstrap`.** Every consumer reads the
+  platform root's `bucket` output, which is the configured name and so known at plan.
+  Bootstrap applies first and derives the same default for its teardown and CI plan
+  grants; its tests plan this module and fail if the two drift.
 
 ## What the network does not have
 
@@ -146,9 +168,12 @@ bucket.
 empty cannot be destroyed, and P-05 would then fail for ever. The platform root fills
 it with the teardown role `infra/bootstrap` creates, `spa-platform-<cell>-teardown`,
 looked up by that derived name, followed by any `additional_teardown_principal_arns`
-(change request 1.5, ADR-0014). Bootstrap grants that role the delete on
-`spa-platform-<cell>`, this module's default bucket name; override `bucket_name` only
+(change request 1.5, ADR-0014). Bootstrap grants that role the delete on this
+module's default bucket name, derived the same way; override `bucket_name` only
 together with bootstrap's `platform_bucket_name`.
+
+`tests/module.tftest.hcl` holds both statements as a plan would apply them, which is
+P-04's configuration half; P-04 itself needs the applied bucket.
 
 The permission and resource assertions run at plan time. One additional mock-only apply run checks
 that each grant and trust document is attached to its intended role. Mock resources exist only in

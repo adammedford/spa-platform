@@ -185,8 +185,9 @@ data "aws_iam_policy_document" "ci_plan" {
     resources = ["*"]
   }
 
-  # 5. The platform bucket and the image repositories' bucket-shaped settings.
-  #    Scoped by name to this cell.
+  # 5. The platform bucket's settings. Its ARN alone, the one the teardown role's grant names:
+  #    a spa-platform-<cell>* glob would miss a bucket_name override and match another cell's
+  #    bucket, spa-platform-poc2-... for cell poc (change request 1.5a, ADR-0012).
   statement {
     sid    = "DescribePlatformBucket"
     effect = "Allow"
@@ -212,7 +213,7 @@ data "aws_iam_policy_document" "ci_plan" {
       "s3:ListBucket",
     ]
 
-    resources = ["arn:${local.partition}:s3:::${local.name_prefix}*"]
+    resources = [local.platform_bucket_arn]
   }
 
   # 6. The identity provider: user pool, domain, resource servers, app clients and

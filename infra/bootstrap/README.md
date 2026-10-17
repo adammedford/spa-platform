@@ -189,10 +189,13 @@ here because it must outlive the teardown it permits.
 
 - **Permissions:** `s3:DeleteObject` and `s3:DeleteObjectVersion` on
   `<platform bucket ARN>/apps/*`, and `s3:ListBucket` and `s3:ListBucketVersions` on
-  the bucket. The bucket ARN is one bucket's, `spa-platform-<cell>` by default or
-  `platform_bucket_name`, never a glob. **No write, ever**: a conditional write
-  succeeds over a delete marker, so a principal holding both could replace a
-  release in two steps.
+  the bucket. The bucket ARN is one bucket's, never a glob: by default
+  `spa-platform-<cell>-<account id>-<region>-an`, `modules/cell`'s default in S3's
+  account regional namespace, derived from this root's own account and Region
+  because this root applies before the bucket exists (change request 1.5a), or
+  `platform_bucket_name`. `tests/root.tftest.hcl` plans `modules/cell` and fails if
+  the two defaults drift. **No write, ever**: a conditional write succeeds over a
+  delete marker, so a principal holding both could replace a release in two steps.
 - **Trust:** `teardown_trusted_principal_arns`, its own required list. IAM users
   assume the role only with MFA (`Bool`, so long-term keys alone fail). Role ARNs
   are allowlisted federated human roles, in a separate statement, whose identity

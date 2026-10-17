@@ -11,9 +11,16 @@
 #
 # Test P-04 proves both against the deployed bucket: "S3 refuses a second write to
 # an existing release key, and refuses the delete that would allow one."
+# tests/module.tftest.hcl holds both statements as a plan would apply them.
 
 locals {
-  bucket_name = var.bucket_name != "" ? var.bucket_name : local.name_prefix
+  # The suffix S3's account regional namespace requires: "<prefix>-<account id>-<region>-an", and it
+  # counts towards the 63-character name limit. Built from the account and Region data sources in
+  # iam.tf, so the name follows wherever the root's provider points (change request 1.5a).
+  # https://docs.aws.amazon.com/AmazonS3/latest/userguide/gpbucketnamespaces.html#account-regional-naming
+  bucket_namespace_suffix = "-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-an"
+
+  bucket_name = var.bucket_name != "" ? var.bucket_name : "${local.name_prefix}${local.bucket_namespace_suffix}"
 
   # Everything under apps/ is a release. The registry object is not: spactl writes it
   # conditional on the live version, which is If-Match and not If-None-Match, and
@@ -21,10 +28,46 @@ locals {
   release_objects_arn = "${aws_s3_bucket.platform.arn}/apps/*"
 }
 
+# In the account regional namespace, so no other account can create this name between a teardown
+# and the next deployment, which task 6.9 does on purpose (change request 1.5a, decision 1). The
+# argument is what opts in: a suffixed name alone does not, and the provider refuses one in the
+# global namespace at apply. bucket_namespace arrived in hashicorp/aws 6.37.0 (its CHANGELOG,
+# #46917), which is why versions.tf makes that release the floor.
+# https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/s3_bucket.html.markdown
 resource "aws_s3_bucket" "platform" {
-  bucket = local.bucket_name
+  bucket           = local.bucket_name
+  bucket_namespace = "account-regional"
 
   tags = { Name = local.bucket_name }
+
+  lifecycle {
+    # Checked here rather than as a narrower cell bound, because the suffix's length follows the
+    # Region: a 22-character cell fits in us-east-2 and not in a 14-character Region (change request
+    # 1.5a, decision 4). The provider's own length check would also stop the plan, but it names
+    # neither the suffix nor the fix.
+    precondition {
+      condition     = length(local.bucket_name) <= 63
+      error_message = "The platform bucket's name, ${local.bucket_name}, is ${length(local.bucket_name)} characters; S3 allows 63, and the account regional suffix counts towards them. Choose a shorter cell name or bucket_name."
+    }
+
+    # bucket_name overrides the name, never the namespace (change request 1.5a, decision 2), so an
+    # override carries this account's and Region's suffix. The provider checks only the suffix's
+    # shape, and only at apply; AWS refuses another account's suffix.
+    precondition {
+      condition     = endswith(local.bucket_name, local.bucket_namespace_suffix)
+      error_message = "bucket_name is ${local.bucket_name}, which is not in this account's regional namespace: the platform bucket's name ends ${local.bucket_namespace_suffix}. Leave bucket_name empty for ${local.name_prefix}${local.bucket_namespace_suffix}."
+    }
+
+    # AWS: "You can create buckets in your account regional namespace in all AWS Regions except
+    # Middle East (Bahrain) and Middle East (UAE)", checked 17 October 2026. Refused here rather
+    # than given a global name, which another account could claim after a teardown (change request
+    # 1.5a, decision 1). If AWS adds either Region, this list is what to shorten.
+    # https://docs.aws.amazon.com/AmazonS3/latest/userguide/gpbucketnamespaces.html#account-regional-gp-buckets
+    precondition {
+      condition     = !contains(["me-south-1", "me-central-1"], data.aws_region.current.region)
+      error_message = "${data.aws_region.current.region} does not offer S3's account regional namespace, which the platform bucket requires. Deploy the cell in another Region; the bucket never falls back to the global namespace."
+    }
+  }
 }
 
 # Versioning is part of the S3 contract and not an operational detail: "spactl
