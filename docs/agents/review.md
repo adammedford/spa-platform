@@ -48,10 +48,13 @@ claims you verified and how.
 
 ## CI has already run
 
-Every open pull request here carries a green `Build and test` and `Terraform`. The build, the full
-suite and `tools/smoke.sh` are therefore not findings waiting to be discovered, and re-running the
-solution costs minutes and buys nothing. Spend the effort on what CI cannot see: whether an
-assertion could fail, whether a comment is true, whether the diff matches the row.
+Every open pull request here carries a green `Documents`, and a green `Build and test` and
+`Terraform` when its diff touched the half each one checks; a pull request that touched neither
+shows both as skipped, which `main`'s protection reads as passing, and `.github/touches.sh` says
+what touching means. Where they ran, the build, the full suite and `tools/smoke.sh` are not
+findings waiting to be discovered, and re-running the solution costs minutes and buys nothing.
+Spend the effort on what CI cannot see: whether an assertion could fail, whether a comment is true,
+whether the diff matches the row.
 
 ## The bar for a finding
 
