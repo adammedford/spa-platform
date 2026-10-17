@@ -29,7 +29,7 @@ after landing a row; `--check` runs in `.githooks/pre-push` and in CI.
 | S1 It boots, and refuses a host it does not know | G1a, tagged `skeleton-v1` | 5 of 5 | nothing |
 | S2 The mechanism holds on the shipped parts | G0, tagged `g0-mechanism` | 5 of 6 | part-landed: `1.1` |
 | S3 The identity surface is frozen | G1b, tagged `contracts-v1` | 1 of 1 | nothing |
-| S4 Feature complete, hermetically | G2, not tagged | 29 of 29 | nothing |
+| S4 Feature complete, hermetically | G2, tagged `g2-local-slice` | 29 of 29 | nothing |
 | S5 The same gateway on real infrastructure | G3, not tagged | 1 of 9 | `1.6b`, `1.7`, `1.9`, `6.9`; part-landed: `1.3`, `1.4`, `1.5`, `6.5` |
 | S6 Hardened: every attempt is refused | G4, not tagged | 0 of 1 | part-landed: `6.3` |
 | S7 Operable, and accepted for Phase 1 | G5, not tagged | 0 of 1 | `6.7` |
