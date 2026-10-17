@@ -1,48 +1,37 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 
 namespace Platform.Proxy;
 
 /// <summary>
 /// Task 4.2: the session's access token, acquired ahead of the forwarder. A call with no token is
-/// answered 401 with a problem body and nothing is forwarded; a call with one carries it on as an
-/// <see cref="AcquiredToken"/> for <see cref="UpstreamHeaders"/> to attach.
+/// answered with a problem body, 401 or 503 by the outcome, and nothing is forwarded; a call with one
+/// carries it on as an <see cref="AcquiredToken"/> for <see cref="UpstreamHeaders"/> to attach.
 ///
 /// A step in YARP's proxy pipeline rather than a request transform: both meet the contract (G0 item 5,
 /// finding T-C21), and the step makes the 401 an ordinary response, which is the plan's reason for it
 /// (docs/plan/03-workstreams-and-tasks.md -> workstream 4).
 /// </summary>
-internal static partial class AccessTokenStep
+internal static class AccessTokenStep
 {
     internal static void Use(IApplicationBuilder proxy)
     {
-        // Asked once, at map time, without resolving anything. A gateway composed on the identity stub
-        // registers no token source, and its /api still forwards, so a missing source is the skeleton,
-        // not a fault: the call goes on with no Authorization at all, which the upstream refuses on its
-        // own (assumption A5). This is the same allowance RegistryProxyConfigProvider makes for a
-        // missing registry, and the startup warning below names it.
-        bool registered = proxy.ApplicationServices.GetService<IServiceProviderIsService>()
-            ?.IsService(typeof(IAccessTokenSource)) == true;
-
-        if (!registered)
-        {
-            NoTokenSource(proxy.ApplicationServices.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(typeof(AccessTokenStep).FullName!));
-            return;
-        }
-
         proxy.Use(async (context, next) =>
         {
-            // Resolved per request, so a scoped registration is honoured rather than captured.
-            IAccessTokenSource source = context.RequestServices.GetRequiredService<IAccessTokenSource>();
+            // Resolved per request, so a scoped registration is honoured rather than captured. A host
+            // that registers no source fails closed: with nothing to ask, no call has a token, so each
+            // is answered as a call with no session is rather than forwarded bare (plan row 4.2,
+            // "answer 401 when there is none").
+            IAccessTokenSource? source = context.RequestServices.GetService<IAccessTokenSource>();
 
             // Never the request's cancellation token: a browser that disconnects mid-refresh would
             // strand the rotated refresh token (findings T-B15, T-B16). Task 3.8 holds the same rule
             // inside the source; passing None here means the proxy cannot break it from outside.
-            AccessTokenResult result = await source.GetAsync(context, CancellationToken.None);
+            AccessTokenResult result = source is null
+                ? new AccessTokenResult.Unauthenticated()
+                : await source.GetAsync(context, CancellationToken.None);
 
             switch (result)
             {
@@ -63,6 +52,13 @@ internal static partial class AccessTokenStep
                     await Problems.WriteAsync(context, StatusCodes.Status401Unauthorized, "unauthenticated");
                     break;
 
+                // The provider could not be reached and the session is kept, so not a 401, which the
+                // browser reads as "log in again" (assumption A3). Not a rejection either, so no rule id
+                // (change request 4.2 -> Decision).
+                case AccessTokenResult.ProviderUnavailable:
+                    await Problems.WriteAsync(context, StatusCodes.Status503ServiceUnavailable, "idp_unavailable");
+                    break;
+
                 // An outcome the frozen contract does not name. Never forwarded: with no token to attach
                 // the call would go on bare, and that is a decision, not a default. A 500.
                 default:
@@ -71,10 +67,6 @@ internal static partial class AccessTokenStep
             }
         });
     }
-
-    [LoggerMessage(Level = LogLevel.Warning,
-        Message = "No IAccessTokenSource is registered, so API calls are forwarded with no access token.")]
-    private static partial void NoTokenSource(ILogger logger);
 }
 
 /// <summary>

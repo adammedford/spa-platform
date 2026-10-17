@@ -23,8 +23,8 @@ internal static class UpstreamFailure
 {
     internal static void Use(IApplicationBuilder proxy) => proxy.Use(async (context, next) =>
     {
-        // Task 4.2 puts the token step ahead of this one: it short-circuits with 401 before anything
-        // is forwarded, so it belongs outside the failure check rather than inside it.
+        // Task 4.2 puts the token step ahead of this one: it short-circuits with 401 or 503 before
+        // anything is forwarded, so it belongs outside the failure check rather than inside it.
         await next(context);
 
         if (context.Response.HasStarted || context.GetForwarderErrorFeature() is null)
