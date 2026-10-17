@@ -31,8 +31,9 @@ one-character fix went into the workflow the same morning; this ticket removes t
   workflow is a local file, ignored by git, so the session that lands this ticket makes the edit in
   Adam's checkout.
 
-Not called a gate: GLOSSARY.md reserves Gate for G1a to G5. Overnight ticket 69 is building a test
-harness for the repository's shell scripts; this script's cases belong there once it lands.
+Not called a gate: GLOSSARY.md reserves Gate for the platform's named checkpoint ladder.
+Overnight ticket 69 tracks the shell-test harness decision and implementation; its tool choice is
+still pending, and this script's cases belong there once it lands.
 
 - [ ] The hook's output is unchanged for a docs-only push, a .NET change and a change under `infra/`.
 - [ ] The full mode ends green on `main`, called from a zsh login shell and from bash 3.2.

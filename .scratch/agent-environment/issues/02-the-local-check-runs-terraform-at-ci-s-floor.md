@@ -5,8 +5,9 @@
 **Status:** ready-for-agent
 
 **What to build:** A Terraform change checked on this machine is checked by the same Terraform as
-CI. CI pins 1.11.0, the floor: that release gave the S3 backend its native lock file, and every
-root requires at least it. This Mac runs 1.16.5, so the local check validates and tests with a newer
+CI. CI pins 1.11.0, the repository's chosen floor, and every root requires at least it. S3 native
+state locking first shipped in [Terraform 1.10.0](https://github.com/hashicorp/terraform/blob/v1.10.0/CHANGELOG.md);
+1.11.0 remains this repository's minimum. This Mac runs 1.16.5, so the local check validates and tests with a newer
 release than CI does, and anything 1.11 refuses that a later release accepts would pass here and
 fail in CI.
 
