@@ -5,12 +5,15 @@ Owner: integrator. Run: python3 -I .github/path_ownership_tests.py
 
 Each case builds a throwaway repository, because the rules are about shapes of history -- a lane
 branch, two lanes merged, a commit that crosses owners -- and a shape is cheaper to build than to
-find. The module resolves its root from __file__ and runs git there, so both are patched.
+find. The module resolves its root from __file__ and runs git there, so both are patched. Each
+repository has git's automatic housekeeping off, which ThrowawayRepositoryTests explains and holds.
 """
 
 import contextlib
 import importlib.util
 import io
+import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -40,6 +43,11 @@ class Repo:
     def __init__(self, path: pathlib.Path):
         self.path = path
         self.git("init", "-q", "-b", "main")
+        # No housekeeping: every commit and merge would otherwise start a detached
+        # `git maintenance run --auto` that can still be writing into .git while the case's
+        # cleanup removes it. ThrowawayRepositoryTests has the detail. The switch they read:
+        # https://git-scm.com/docs/git-config#Documentation/git-config.txt-maintenanceauto
+        self.git("config", "maintenance.auto", "false")
         self.git("config", "user.email", "test@example.test")
         self.git("config", "user.name", "Test")
         self.write("OWNERSHIP.md", OWNERSHIP_BLOCK)
@@ -273,6 +281,62 @@ class RuleTests(unittest.TestCase):
         code, out = self.check("task/with-request")
         self.assertEqual(0, code, out)
         self.assertIn("all owned by ws1-infra", out)
+
+
+def commands_started(trace: pathlib.Path) -> set[str]:
+    """The git commands a GIT_TRACE2_EVENT file saw start, by name.
+
+    Every git process writes one cmd_name event as it starts, a detached one included:
+    https://git-scm.com/docs/api-trace2#_event_format
+    """
+    names = set()
+    for line in trace.read_text(encoding="utf-8").splitlines():
+        event = json.loads(line)
+        if event.get("event") == "cmd_name":
+            names.add(event["name"])
+    return names
+
+
+class ThrowawayRepositoryTests(unittest.TestCase):
+    """Repo runs no git housekeeping, so no git process outlives the call that started it.
+
+    Ticket 71. A commit or a merge ends by starting `git maintenance run --auto`, which detaches by
+    default (maintenance.autoDetach). Git 2.54 made its default strategy geometric, and in a
+    repository holding no packs that strategy's default threshold repacks once two loose objects
+    share the objects/17 shard, the sample its estimate reads. Commit ids depend on the clock, so
+    any commit can be the one. The repack writes into .git after the call the case waited for has
+    returned, and when that overlaps TemporaryDirectory.cleanup, the cleanup fails with "Directory
+    not empty: '.git'" after every assertion has passed. That is how CI saw it, on git 2.55.0.
+
+      https://github.com/git/git/blob/v2.54.0/Documentation/RelNotes/2.54.0.adoc
+      https://github.com/git/git/blob/v2.55.0/Documentation/config/maintenance.adoc
+      https://github.com/git/git/blob/v2.55.0/builtin/gc.c (geometric_repack_auto_condition)
+
+    The case reads git's trace rather than racing the cleanup, a race it would win nearly every
+    time. Every git process writes a cmd_name event as it starts, a detached one included, so the
+    trace names everything the calls started. The commit and the merge are what start housekeeping,
+    and the trace must show both, or its silence about housekeeping proves nothing.
+    """
+
+    def test_a_commit_or_a_merge_starts_no_housekeeping(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        trace = pathlib.Path(scratch.name) / "trace.json"
+        path = pathlib.Path(scratch.name) / "repository"
+        path.mkdir()
+
+        with mock.patch.dict(os.environ, {"GIT_TRACE2_EVENT": str(trace)}):
+            repo = Repo(path)
+            repo.branch("lane")
+            repo.commit("hosting", "src/Platform.Hosting/A.cs")
+            repo.checkout("main")
+            repo.merge("lane", "merge the lane")
+
+        started = commands_started(trace)
+        self.assertIn("commit", started)
+        self.assertIn("merge", started)
+        self.assertNotIn("maintenance", started)
+        self.assertNotIn("gc", started)
 
 
 if __name__ == "__main__":
