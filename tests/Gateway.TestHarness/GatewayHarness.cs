@@ -478,13 +478,11 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     /// <summary>
-    /// Switches on the shell gate and the <see cref="IAccessTokenSource"/> binding, which workstream 3
-    /// registers outside <c>AddPlatformIdentity</c> (tasks 3.8 and 3.9) so that a suite making sessionless
-    /// requests is not gated. Each is an internal method of <c>Platform.Identity</c>, named in that project's own comments
-    /// as the line that moves into <c>AddPlatformIdentity</c>; the harness calls it by name so the gateway
-    /// runs the real gate and the real source, with nothing standing in for either. Both only add what is
-    /// missing, so once <c>AddPlatformIdentity</c> registers them this changes nothing, and a method that
-    /// is no longer there has been folded in.
+    /// Switches on the shell gate and the <see cref="IAccessTokenSource"/> binding by calling workstream
+    /// 3's two internal registrations, <c>AddPlatformAccessTokenSource</c> and <c>AddPlatformShellGate</c>
+    /// (tasks 3.8 and 3.9), by name, so the gateway runs the real gate and the real source, with nothing
+    /// standing in for either. Both only add what is missing, so where <c>AddPlatformIdentity</c>
+    /// registers them already this changes nothing, and a method that is no longer there is skipped.
     /// </summary>
     public static void RequireSession(IServiceCollection services)
     {

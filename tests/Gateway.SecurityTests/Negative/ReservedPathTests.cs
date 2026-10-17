@@ -10,7 +10,7 @@ namespace Gateway.SecurityTests.Negative;
 ///
 /// <para>The class fixture's requests prove the 404 for both methods with no session.
 /// <see cref="With_a_live_session_both_methods_are_404_and_the_session_survives"/> sends both from a
-/// signed-in browser on a cell that requires a session, and reads the session afterwards. Threat T18
+/// signed-in browser on a cell of its own, and reads the session afterwards. Threat T18
 /// motivates both clauses: provider-shaped remote-signout requests must not end a browser's session
 /// (docs/plan/04-tests.md, N-27).</para>
 ///
@@ -53,8 +53,9 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
 
         // A page first, so the POST is a navigation the page started and carries the Origin and
         // Sec-Fetch-Site a browser would send. The reserved row answers before either is judged,
-        // which is the point: a provider-shaped POST gets no further than a GET does.
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        // which is the point: a provider-shaped POST gets no further than a GET does. The page is
+        // /healthz rather than the shell, whose navigation would sign the browser in.
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         BrowserResponse response = await browser.SubmitFormAsync("/signout-oidc", ct: Suite.Ct);
@@ -65,7 +66,7 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
     [Fact]
     public async Task With_a_live_session_both_methods_are_404_and_the_session_survives()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);

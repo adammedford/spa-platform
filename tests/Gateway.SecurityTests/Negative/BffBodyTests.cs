@@ -24,7 +24,7 @@ public sealed partial class BffBodyTests
     [Fact]
     public async Task N23_no_bff_response_body_carries_a_token_or_a_token_shaped_string()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         // An expired first access token, so the session read after it refreshes and the rotated

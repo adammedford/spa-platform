@@ -20,7 +20,7 @@ public sealed class OnboardingTests
     [Fact]
     public async Task F07_app3_is_served_and_logs_in_with_its_own_client_with_no_restart_and_the_api_refuses_it_until_admitted()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser one = harness.CreateBrowser();
         using TestBrowser two = harness.CreateBrowser();
         using TestBrowser three = harness.CreateBrowser();

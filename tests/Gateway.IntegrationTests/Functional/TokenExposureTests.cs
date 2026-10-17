@@ -27,7 +27,7 @@ public sealed partial class TokenExposureTests
     [Fact]
     public async Task F05_after_login_and_api_calls_the_browser_holds_two_cookies_and_no_token()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         HarnessApp app = harness.App("app1");
 

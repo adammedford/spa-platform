@@ -11,10 +11,11 @@ namespace Gateway.IntegrationTests.Harness;
 
 /// <summary>
 /// Task 6.1, "Done when: a stub gateway boots in the harness". The gateway is the shipped composition
-/// with workstream 3's stages still stubs, so every assertion here is about a stage that is already
-/// real and runs before the shell gate (every stage before the shell gate in contracts/pipeline.md), or about the harness's
-/// own parts. Nothing here depends on what an unauthenticated request gets once task 3.9 fills the
-/// shell gate in.
+/// with a session required, as ADR-0008 requires one (<see cref="GatewayHarnessOptions.SessionRequired"/>,
+/// the harness's default), and no browser here signs in: every assertion is about a stage that runs
+/// before the shell gate in contracts/pipeline.md, or about the harness's own parts. Where a request
+/// does reach the shell gate, the test reads the answer a navigation without a session gets there, the
+/// redirect to the provider, and nothing beyond it.
 /// </summary>
 public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture<HarnessBootTests.Cell>
 {
@@ -97,6 +98,11 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         // UsePlatformSecurityHeaders writes the app's content security policy on every response for a
         // resolved host, so its presence says host resolution resolved the app, whatever the stages after it answer.
         Assert.Contains("frame-ancestors 'none'", known.Header("Content-Security-Policy"));
+
+        // What answers it here is the shell gate: the browser has no session, so it is sent to the provider.
+        Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
+        Assert.StartsWith(Harness.Idp.AuthorizeEndpoint + "?", known.Header("Location"), StringComparison.Ordinal);
+
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, wrongPort.StatusCode);
     }
@@ -115,7 +121,10 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
     public async Task The_request_gate_reads_the_fetch_metadata_the_browser_computes()
     {
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app2").Url("/"), new RequestOptions { Redirect = RedirectMode.Manual }, Ct);
+
+        // A page on app 2 with no login: /healthz answers on any host and sets nothing, where a
+        // navigation to the shell would be sent to the provider.
+        await browser.NavigateAsync(Harness.App("app2").Url("/healthz"), ct: Ct);
 
         // From app 2's page, app 1's API is same-site: the value a sibling SPA produces, which the gate
         // refuses before authentication runs (contracts/request-gate.md).
@@ -156,7 +165,11 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
     {
         using TestBrowser browser = Harness.CreateBrowser();
         await browser.NavigateAsync(Harness.App("app2").Url("/healthz"), ct: Ct);
-        await browser.NavigateAsync(Harness.App("app2").Url("/"), new RequestOptions { Redirect = RedirectMode.Manual }, Ct);
+
+        // A navigation with no session, which the shell gate sends to the provider; its request line is
+        // still app 2's.
+        BrowserResponse challenged = await browser.NavigateAsync(Harness.App("app2").Url("/"), new RequestOptions { Redirect = RedirectMode.Manual }, Ct);
+        Assert.Equal(HttpStatusCode.Redirect, challenged.StatusCode);
 
         // UsePlatformTelemetry logs after the downstream response returns (contracts/telemetry.md), so the
         // client receiving the body does not prove the request line has been captured yet.

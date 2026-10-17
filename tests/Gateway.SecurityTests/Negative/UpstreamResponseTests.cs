@@ -18,11 +18,11 @@ namespace Gateway.SecurityTests.Negative;
 /// composed gateway is the only place that can be read, because workstream 4's own project has no
 /// proxy endpoint and no upstream to be overwritten.</para>
 ///
-/// <para><b>The <c>Set-Cookie</c> clause</b> is held on a cell that requires a session, by a signed-in
-/// browser, because that is the call an upstream can answer in production: the proxy's token step
-/// refuses a sessionless call before it is forwarded. The proxy strips the header on every status
-/// (task 4.2, T-C7); the browser's jar is read as well as the response, because the row's words are
-/// "the browser receives no cookie".</para>
+/// <para><b>Every call here carries a session</b>, because that is the only call an upstream can
+/// answer: the proxy's token step refuses a sessionless one before it is forwarded. The
+/// <c>Set-Cookie</c> clause is held by the browser that signed in. The proxy strips the header on
+/// every status (task 4.2, T-C7); the browser's jar is read as well as the response, because the
+/// row's words are "the browser receives no cookie".</para>
 /// </summary>
 public sealed class UpstreamResponseTests
 {
@@ -40,10 +40,10 @@ public sealed class UpstreamResponseTests
         await using GatewayHarness harness = await StartWith(upstream);
         using TestBrowser browser = harness.CreateBrowser();
 
-        // The app's own policy, read from the app's own shell: "the gateway's CSP" is whatever this
-        // app is served, so it is taken from a response the upstream had nothing to do with rather
-        // than rebuilt here.
-        BrowserResponse shell = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Suite.Ct);
+        // The app's own policy, read from the shell the login lands on: "the gateway's CSP" is
+        // whatever this app is served, so it is taken from a response the upstream had nothing to do
+        // with rather than rebuilt here.
+        BrowserResponse shell = await harness.SignInAsync(browser, "app1", Suite.Ct);
         string gatewayPolicy = Assert.IsType<string>(shell.Header("Content-Security-Policy"));
 
         BrowserResponse proxied = await browser.GetAsync($"/api/{ApiName}/thing", ct: Suite.Ct);
@@ -82,7 +82,7 @@ public sealed class UpstreamResponseTests
         await using HostileUpstream upstream = HostileUpstream.Start();
         upstream.Status = status;
 
-        await using GatewayHarness harness = await StartWith(upstream, sessionRequired: true);
+        await using GatewayHarness harness = await StartWith(upstream);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
@@ -126,14 +126,13 @@ public sealed class UpstreamResponseTests
     /// operator's would be — the validator refuses an upstream the policy does not name, so a
     /// mistake in either half shows up as a rejected document rather than as a passing test.</para>
     /// </summary>
-    private static async Task<GatewayHarness> StartWith(HostileUpstream upstream, bool sessionRequired = false)
+    private static async Task<GatewayHarness> StartWith(HostileUpstream upstream)
     {
         // The harness lists one allowed upstream per distinct API origin it set up. With no echo API
         // there are two, at indices 0 and 1, so this adds a third rather than overwriting one.
         GatewayHarnessOptions options = new()
         {
             EchoApi = null,
-            SessionRequired = sessionRequired,
             Configuration = new Dictionary<string, string?>
             {
                 ["Policy:AllowedUpstreams:2"] = upstream.Address.GetLeftPart(UriPartial.Authority),

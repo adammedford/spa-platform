@@ -16,14 +16,12 @@ public sealed class RegistryChangeTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static readonly GatewayHarnessOptions Options = new() { SessionRequired = true };
-
     [Theory]
     [InlineData("{ \"schemaVersion\": 1, \"revision\": 2, \"apps\": [")]
     [InlineData("{ \"schemaVersion\": 1, \"revision\": 2, \"apps\": [ { \"appId\": \"app1\" } ] }")]
     public async Task F09_a_bad_registry_document_is_ignored_and_the_live_one_keeps_serving(string bad)
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Ct);
 
@@ -45,7 +43,7 @@ public sealed class RegistryChangeTests
     [Fact]
     public async Task F09_a_rotated_secret_is_used_for_the_next_login_and_the_next_refresh()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser signedIn = harness.CreateBrowser();
         using TestBrowser newcomer = harness.CreateBrowser();
         HarnessApp app = harness.App("app1");
@@ -86,7 +84,7 @@ public sealed class RegistryChangeTests
     [Fact]
     public async Task F09_control_without_the_registry_revision_the_old_secret_is_refused()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         // The provider rotates and the registry does not follow: the gateway still sends the old secret,
@@ -101,7 +99,7 @@ public sealed class RegistryChangeTests
     [Fact]
     public async Task F09_a_removed_host_returns_404_and_its_sessions_are_gone()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         HarnessApp app2 = harness.App("app2");
 

@@ -10,9 +10,9 @@ using Platform.Abstractions;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// What the session-bearing rows of plan row 6.3 share: a cell that requires a session, the session
-/// cookie read and written as the gateway's own cookie handler reads and writes it, and a login
-/// stopped at the callback so a test can replay, alter or redirect it.
+/// What the session-bearing rows of plan row 6.3 share: the session cookie read and written as the
+/// gateway's own cookie handler reads and writes it, a page to stand on without a session, and a
+/// login stopped at the callback so a test can replay, alter or redirect it.
 ///
 /// <para><b>Why the test reads the cookie with the gateway's own format.</b> N-02 and N-21 are about
 /// what happens <i>after</i> decryption succeeds: "the store is bound to app and client", and
@@ -34,10 +34,6 @@ internal static class SignedIn
 
     /// <summary>The antiforgery cookie's name, from the same table.</summary>
     public static string CsrfCookieName { get; } = Contract.PlatformCookie("-csrf");
-
-    /// <summary>A cell with a session required, as the shipped gateway requires one, enrolled in the canary sweep.</summary>
-    public static Task<GatewayHarness> StartAsync(GatewayHarnessOptions? options = null) =>
-        Suite.StartAsync((options ?? new GatewayHarnessOptions()) with { SessionRequired = true }, Suite.Ct);
 
     /// <summary>
     /// Puts the browser on a page of the app without starting a login: <c>/healthz</c> answers on any
