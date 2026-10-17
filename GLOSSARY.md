@@ -154,9 +154,34 @@ cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
 frozen export, and a spec is one feature's working statement.
 
+**Standing answer** — a launch-time instruction that a night's lanes and grills take each
+recommendation as decided instead of stopping for the human. Given per run, and recorded in that
+run's `Overnight <date>` issue. Not "approval".
+
+**Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
+the night. Provisional until confirmed; nothing is committed, rewritten or filed on it alone. Not
+"accepted".
+
+**Confirmed answer** — an answer the human wrote, or a pre-accepted answer the human confirmed on
+the run's `Overnight <date>` issue. The only answer a session applies to a document, a ticket body
+or a new ticket.
+
+**Review record** — one fixed line in a pull request comment naming the full head sha a review
+covered and its verdict, `merge` or `hold`; the latest line naming the current head decides.
+Written only by a session that wrote none of the commits it covers. Its exact form is #67's to fix.
+
+**Hand-over** — the morning's closing statement, on the `Overnight <date>` issue and the console:
+what the human runs next (the landing command, the issues to close, the worktrees to remove) and
+every refusal with its reason.
+
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
 Phase 1 accepted. Phase 2 adds G6 to G8.
+
+**Check** — a mechanical guard the pre-push hook or CI runs when applicable: ownership, steering,
+the roadmap, the build, Terraform's format and validate. A check holds a push to the rules; a gate is
+the ladder's checkpoint. Never "gate" for a check, including the one a workflow runs before it
+integrates a branch.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
 provider, an in-memory object store, the real mock API and an echo upstream.
