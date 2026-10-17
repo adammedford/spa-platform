@@ -67,6 +67,16 @@ override_data {
   }
 }
 
+# The bucket policy's document, whose two release statements P-04's configuration half reads. The
+# wiring run checks the bucket policy selects it.
+override_data {
+  target          = data.aws_iam_policy_document.platform_bucket
+  override_during = plan
+  values = {
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"platformbucket\",\"Effect\":\"Deny\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"*\"}]}"
+  }
+}
+
 # The three account facts the task role's ARNs are built from. `override_during = plan` is what
 # makes them known during a plan rather than only after an apply, so the permission runs can
 # assert the complete account-scoped ARN at plan time.
@@ -281,8 +291,9 @@ run "the_bucket_defaults_to_the_name_both_contract_examples_render" {
     error_message = "The bucket is created in the account regional namespace, set explicitly with bucket_namespace."
   }
 
-  # Every consumer reads this output rather than deriving the name (contracts/s3-layout.md), so it
-  # is the configured name, which a plan already knows, not the id the provider sets after an apply.
+  # Every consumer but infra/bootstrap, which applies first and derives the same default, reads this
+  # output rather than deriving the name (contracts/s3-layout.md), so it is the configured name,
+  # which a plan already knows, not the id the provider sets after an apply.
   assert {
     condition     = output.bucket == jsondecode(file("../../../contracts/infra-outputs.example.json")).bucket
     error_message = "The module's bucket output is the contract's bucket, and is known at plan."
@@ -386,10 +397,11 @@ run "the_uae_is_refused_at_plan_rather_than_given_a_global_name" {
 
 # P-04's configuration half: "S3 refuses a second write to an existing release key, and refuses the
 # delete that would allow one." P-04 itself runs against the applied bucket at G3, because only S3
-# can show the policy is enforced; this shows the policy a plan would apply says so. Each statement
-# is rendered on one line so the expected text reads as the rule. The release prefix is the one
-# contracts/s3-layout.md lays apps' paths out under; the condition keys are AWS's, cited in
-# storage.tf.
+# can show the policy is enforced; this shows the policy a plan would apply says so, together with
+# the wiring run at the end of this file, which checks that this document is the bucket's policy.
+# Each statement is rendered on one line so the expected text reads as the rule. The release prefix
+# is the one contracts/s3-layout.md lays apps' paths out under; the condition keys are AWS's, cited
+# in storage.tf.
 run "a_release_key_is_written_once_and_deleted_only_by_the_teardown_principals" {
   command = plan
 
@@ -429,9 +441,10 @@ run "a_release_key_is_written_once_and_deleted_only_by_the_teardown_principals" 
   }
 }
 
-# bucket_name overrides the name and not the namespace (change request 1.5a, decision 2), so an
-# override keeps this account's and Region's suffix. The provider would refuse one without it only
-# at apply, after every other resource in the cell had been created.
+# bucket_name overrides the name and not the namespace: change request 1.5a fixes the namespace
+# (decision 1) and keeps the override (decision 2), so an override keeps this account's and Region's
+# suffix. The provider would refuse one without it only at apply, and Terraform would still create
+# everything in the cell that does not depend on the bucket.
 run "a_bucket_name_override_is_created_in_the_namespace_and_every_grant_names_its_arn" {
   command = plan
 
@@ -1495,6 +1508,13 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
       && aws_iam_role.task_execution.assume_role_policy == data.aws_iam_policy_document.ecs_tasks_trust.json
     )
     error_message = "Both grants and both trust attachments must select their checked policy document."
+  }
+
+  # P-04's configuration half reads this document's statements; this checks that it is the policy
+  # the bucket is given.
+  assert {
+    condition     = aws_s3_bucket_policy.platform.policy == data.aws_iam_policy_document.platform_bucket.json
+    error_message = "The platform bucket's policy must select its checked policy document, the one P-04's configuration half reads."
   }
 
 }

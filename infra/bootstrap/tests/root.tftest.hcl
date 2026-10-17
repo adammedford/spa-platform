@@ -266,6 +266,13 @@ run "teardown_role_follows_a_platform_bucket_name_override" {
 
 # The CI plan role reads the same one bucket's settings, by the same ARN: a spa-platform-<cell>*
 # glob would miss an override and match another cell's bucket, spa-platform-poc2-... for cell poc.
+#
+# These two read the statements of the policy document, not the policy the role is given. A plan
+# reads that document only at apply, because it names the state bucket, which the plan has yet to
+# create; and a mock apply of the policy creates the state bucket too, whose prevent_destroy fails
+# this file's cleanup on Terraform 1.11, CI's version (1.16 tolerates it). So that
+# aws_iam_policy.ci_plan carries this document is the known limit here: wired to another document,
+# this file stays green.
 run "the_ci_plan_role_describes_the_platform_bucket_and_no_other" {
   command = plan
 

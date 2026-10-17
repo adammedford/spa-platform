@@ -50,9 +50,10 @@ resource "aws_s3_bucket" "platform" {
       error_message = "The platform bucket's name, ${local.bucket_name}, is ${length(local.bucket_name)} characters; S3 allows 63, and the account regional suffix counts towards them. Choose a shorter cell name or bucket_name."
     }
 
-    # bucket_name overrides the name, never the namespace (change request 1.5a, decision 2), so an
-    # override carries this account's and Region's suffix. The provider checks only the suffix's
-    # shape, and only at apply; AWS refuses another account's suffix.
+    # bucket_name overrides the name, never the namespace: change request 1.5a fixes the namespace
+    # (decision 1) and keeps the override (decision 2), so an override carries this account's and
+    # Region's suffix. The provider checks only the suffix's shape, and only at apply; AWS refuses
+    # another account's suffix.
     precondition {
       condition     = endswith(local.bucket_name, local.bucket_namespace_suffix)
       error_message = "bucket_name is ${local.bucket_name}, which is not in this account's regional namespace: the platform bucket's name ends ${local.bucket_namespace_suffix}. Leave bucket_name empty for ${local.name_prefix}${local.bucket_namespace_suffix}."

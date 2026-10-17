@@ -43,7 +43,8 @@ opts in: the suffix alone does not.
 
 - **`bucket_name` overrides the name, not the namespace.** Empty means the
   convention. An override keeps this account's and Region's suffix, and the plan
-  fails on one that does not, rather than at apply after the rest of the cell exists.
+  fails on one that does not. Otherwise the provider would refuse it only at apply,
+  and Terraform would still create everything that does not depend on the bucket.
 - **The plan fails, and never falls back to a global name,** when the name is longer
   than S3's 63 characters (the suffix counts, so the limit follows the Region), or the
   Region is one AWS does not offer the namespace in: Bahrain and the UAE.

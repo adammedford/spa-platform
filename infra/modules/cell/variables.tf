@@ -9,7 +9,11 @@ variable "cell" {
   # The same rule as infra/bootstrap and the platform root, character for character (change
   # request 1.5, ADR-0014 item 7). 3 is the frozen appId minimum the cell is published as
   # (contracts/infra-outputs.schema.json -> cell); 22 keeps spa-<cell> within the load balancer's
-  # 32-character name limit. No edge hyphen, because the cell ends bucket and repository names.
+  # 32-character name limit. No edge hyphen (ADR-0014 item 7); a trailing one would also end
+  # spa-<cell>, the load balancer's and target group's name and the first segment of each
+  # repository's, and AWS refuses a hyphen at the end of either.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateLoadBalancer.html
+  # https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
     error_message = "The cell name is 3 to 22 lowercase letters, digits or hyphens, and does not start or end with a hyphen. It goes into bucket and repository names."

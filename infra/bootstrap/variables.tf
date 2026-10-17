@@ -12,7 +12,8 @@ variable "cell" {
   # (contracts/infra-outputs.schema.json -> cell, which references registry.schema.json -> appId).
   # The upper bound of 22 is the longest name every resource name still fits: the load balancer is
   # spa-<cell>, within its 32-character limit, and the platform root's test pins it. No edge
-  # hyphen, because the cell ends bucket and role names.
+  # hyphen (ADR-0014 item 7); a trailing one would also end spa-<cell> in modules/cell, which AWS
+  # refuses in a load balancer's, target group's or repository's name (cited there).
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
     error_message = "cell must be 3 to 22 lowercase letters, digits or hyphens, and must not start or end with a hyphen."

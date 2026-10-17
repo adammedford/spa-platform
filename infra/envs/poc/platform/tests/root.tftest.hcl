@@ -516,10 +516,11 @@ run "an_additional_teardown_principal_refuses_an_assumed_role_session_arn" {
   expect_failures = [var.additional_teardown_principal_arns]
 }
 
-# Change request 1.5a: every consumer reads this output rather than deriving the bucket's name, so
-# the root publishes the name at plan, and it is the one the contract examples render for this
-# file's placeholders. That bootstrap's teardown grant names the same bucket is infra/bootstrap's
-# test.
+# Change request 1.5a: every consumer but infra/bootstrap reads this output rather than deriving the
+# bucket's name, so the root publishes the name at plan, and it is the one the contract examples
+# render for this file's placeholders. Bootstrap applies before the bucket exists and derives the
+# same default; infra/bootstrap's tests check that its teardown grant names the bucket modules/cell
+# creates.
 run "the_root_publishes_the_bucket_the_contract_examples_render" {
   command = plan
 

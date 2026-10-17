@@ -17,7 +17,8 @@ variable "cell" {
   # 1.5, ADR-0014 item 7), checked here so a bad name fails at this root's own input. 3 is the
   # frozen appId minimum the cell is published as (contracts/infra-outputs.schema.json -> cell); 22
   # keeps spa-<cell> within the load balancer's 32-character name limit (tests/root.tftest.hcl). No
-  # edge hyphen, because the cell ends bucket and role names.
+  # edge hyphen (ADR-0014 item 7); a trailing one would also end spa-<cell> in modules/cell, which
+  # AWS refuses in a load balancer's, target group's or repository's name (cited there).
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", var.cell))
     error_message = "cell must be 3 to 22 lowercase letters, digits or hyphens, and must not start or end with a hyphen."
