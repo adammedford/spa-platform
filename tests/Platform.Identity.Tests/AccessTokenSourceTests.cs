@@ -214,16 +214,18 @@ public sealed class AccessTokenSourceTests
     [InlineData(500)]
     public async Task A_provider_failure_other_than_a_refusal_fails_the_call_and_keeps_the_session(int status)
     {
-        // T-A9: an outage is not a refusal. The call fails, the session stays, and the next call refreshes.
+        // T-A9: an outage is not a refusal. The call fails with ProviderUnavailable, which the proxy
+        // answers 503 idp_unavailable (change request 4.2); the session stays, record and cookie alike,
+        // and the next call refreshes.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, SessionRecord atLogin) = await gateway.Sessions.SingleAsync();
         gateway.Idp.Faults.RefreshOutageStatus = status;
 
-        IdentityProviderUnavailableException failed = await Assert.ThrowsAsync<IdentityProviderUnavailableException>(
-            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar));
+        IdentityGateway.Answer failed = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
-        Assert.Equal(App1.AppId, failed.AppId);
+        Assert.Equal((503, "idp_unavailable"), (failed.Status, failed.Body));
+        Assert.Empty(failed.Cookies);
         Assert.Equal(atLogin, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
 
         gateway.Idp.Faults.RefreshOutageStatus = null;
@@ -235,17 +237,17 @@ public sealed class AccessTokenSourceTests
     [Fact]
     public async Task Calls_queued_behind_a_failed_refresh_share_its_failure_instead_of_asking_again()
     {
-        // T-D6: fifty calls on a due token at a provider that answers 503 after 200 ms ask it once.
+        // T-D6: fifty calls on a due token at a provider that answers 503 after 200 ms ask it once, and
+        // every one of them answers ProviderUnavailable with the session kept.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         gateway.Idp.Faults.RefreshOutageStatus = 503;
         gateway.Idp.Faults.TokenDelay = TimeSpan.FromMilliseconds(200);
 
-        Task<IdentityGateway.Answer>[] calls = [.. Enumerable.Range(0, 50)
-            .Select(_ => Task.Run(() => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar), TestContext.Current.CancellationToken))];
-        await Task.WhenAll(calls.Select(c => c.ContinueWith(_ => { }, TaskScheduler.Default)));
+        IdentityGateway.Answer[] answers = await Task.WhenAll(Enumerable.Range(0, 50)
+            .Select(_ => Task.Run(() => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar), TestContext.Current.CancellationToken)));
 
-        Assert.All(calls, c => Assert.IsType<IdentityProviderUnavailableException>(c.Exception?.InnerException));
+        Assert.All(answers, a => Assert.Equal((503, "idp_unavailable"), (a.Status, a.Body)));
         Assert.Single(gateway.Idp.RefreshGrants);
         Assert.Single(gateway.Sessions.Created);
         Assert.NotNull((await gateway.Sessions.SingleAsync()).Record);
@@ -312,6 +314,38 @@ public sealed class AccessTokenSourceTests
     }
 
     [Fact]
+    public async Task A_refresh_that_loses_the_race_to_a_record_with_no_access_token_fails_the_call_and_keeps_that_record()
+    {
+        // T-D2's other branch: the versioned winner holds no access token, and this call's own token was
+        // never persisted, so the call has no token it may hand back. It fails with ProviderUnavailable,
+        // the winner stays as it was written, and the source's warning names the session by reference.
+        CapturingLoggerProvider logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        SessionRecord? winner = null;
+        int reads = 0;
+        gateway.Sessions.AfterRead = async _ =>
+        {
+            if (++reads == 2)
+            {
+                gateway.Sessions.AfterRead = null;
+                winner = await RemoveTokenElsewhereAsync(gateway, key, "access_token");
+            }
+        };
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal((503, "idp_unavailable"), (answer.Status, answer.Body));
+        Assert.True(Assert.Single(gateway.Idp.RefreshGrants).Ok);
+        Assert.Equal(winner, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
+        string warning = Assert.Single(SourceLines(logs), line => line.Contains("no access token", StringComparison.Ordinal));
+        Assert.Contains(SessionRef.Of(key), warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(key, warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_browser_that_disconnects_mid_refresh_does_not_strand_the_rotated_token()
     {
         // T-B16, at a provider with no grace window: the browser goes 100 ms into a refresh the provider
@@ -357,22 +391,29 @@ public sealed class AccessTokenSourceTests
     [Fact]
     public async Task A_refresh_past_its_deadline_fails_the_call_keeps_the_session_and_is_retried_inside_the_grace_window()
     {
-        // T-D9: the refresh has a deadline of its own. The provider carried the refresh out but answered
-        // late, so the retry presents the rotated-out token, which the 10-second grace window honours.
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], services: Deadline(TimeSpan.FromMilliseconds(300)));
+        // T-D9: the refresh has a deadline of its own. The call that gives up fails with
+        // ProviderUnavailable and keeps the session, and its warning names the deadline. The provider
+        // carried the refresh out but answered late, so the retry presents the rotated-out token, which
+        // the 10-second grace window honours.
+        CapturingLoggerProvider logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], services: services =>
+        {
+            Deadline(TimeSpan.FromMilliseconds(300))(services);
+            services.AddSingleton<ILoggerProvider>(logs);
+        });
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, SessionRecord atLogin) = await gateway.Sessions.SingleAsync();
         gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.FromSeconds(1);
 
-        IdentityProviderUnavailableException late = await Assert.ThrowsAsync<IdentityProviderUnavailableException>(
-            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar));
+        IdentityGateway.Answer late = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        Assert.Equal((503, "idp_unavailable"), (late.Status, late.Body));
         Assert.Equal(atLogin, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
 
         gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.Zero;
         IdentityGateway.Answer retried = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
         Assert.Equal(200, retried.Status);
-        Assert.Equal("deadline_exceeded", late.Error);
+        Assert.Contains(SourceLines(logs), line => line.Contains("(deadline_exceeded)", StringComparison.Ordinal));
         Assert.Collection(gateway.Idp.RefreshGrants,
             g => Assert.Equal("ok", g.Outcome),
             g => Assert.True(g is { Ok: true, ReplayedInsideGrace: true }));
@@ -389,10 +430,11 @@ public sealed class AccessTokenSourceTests
         gateway.Idp.Faults.RefreshRotationGrace = TimeSpan.Zero;
         gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.FromSeconds(1);
 
-        await Assert.ThrowsAsync<IdentityProviderUnavailableException>(() => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar));
+        IdentityGateway.Answer gaveUp = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
         gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.Zero;
         IdentityGateway.Answer retried = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
+        Assert.Equal((503, "idp_unavailable"), (gaveUp.Status, gaveUp.Body));
         Assert.Equal((401, "session_ended"), (retried.Status, retried.Body));
         Assert.Collection(gateway.Idp.RefreshGrants,
             g => Assert.Equal("ok", g.Outcome),
@@ -424,9 +466,11 @@ public sealed class AccessTokenSourceTests
     }
 
     [Fact]
-    public async Task Provider_error_text_never_reaches_the_failure_or_identity_log()
+    public async Task Provider_error_text_never_reaches_the_answer_or_the_identity_log()
     {
-        // N-16: an OAuth error field is provider-controlled, even when it contains a credential.
+        // N-16: an OAuth error field is provider-controlled, even when it contains a credential. The
+        // answer is the bare outcome, and the source's warning carries a fixed category in its place:
+        // refresh_failed, for text it does not know.
         CapturingLoggerProvider logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
             [App1], services => services.AddSingleton<ILoggerProvider>(logs));
@@ -436,13 +480,12 @@ public sealed class AccessTokenSourceTests
         gateway.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
             .Get(SchemeNames.Oidc(App1.AppId)).Backchannel = backchannel;
 
-        IdentityProviderUnavailableException failure = await Assert.ThrowsAsync<IdentityProviderUnavailableException>(
-            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar));
+        IdentityGateway.Answer failure = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
-        Assert.DoesNotContain(canary, failure.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(canary, failure.Error, StringComparison.Ordinal);
-        Assert.All(logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName),
-            line => Assert.DoesNotContain(canary, line.Message, StringComparison.Ordinal));
+        Assert.Equal((503, "idp_unavailable"), (failure.Status, failure.Body));
+        string warning = Assert.Single(SourceLines(logs));
+        Assert.Contains("(refresh_failed)", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, warning, StringComparison.Ordinal);
     }
 
     private sealed class ErrorAnswer(string error) : HttpMessageHandler
@@ -456,6 +499,10 @@ public sealed class AccessTokenSourceTests
 
     private static Action<IServiceCollection> Deadline(TimeSpan deadline) =>
         services => services.AddSingleton(new AccessTokenSourceOptions { ProviderDeadline = deadline });
+
+    /// <summary>The lines the token source itself wrote, oldest first.</summary>
+    private static string[] SourceLines(CapturingLoggerProvider logs) =>
+        [.. logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName).Select(line => line.Message)];
 
     /// <summary>
     /// Refreshes the session at the provider and writes the result into its record, as another gateway
@@ -483,6 +530,21 @@ public sealed class AccessTokenSourceTests
         ticket.Properties.UpdateTokenValue("refresh_token", body.RootElement.GetProperty("refresh_token").GetString()!);
         Assert.True(await gateway.Sessions.ReplaceAsync(
             key, record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) }, record.Version, ct));
+    }
+
+    /// <summary>
+    /// Rewrites the session's record one version on without the named token, as another writer sharing
+    /// the session store might, and returns what it wrote.
+    /// </summary>
+    private static async Task<SessionRecord> RemoveTokenElsewhereAsync(IdentityGateway gateway, string key, string name)
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        SessionRecord record = Assert.IsType<SessionRecord>(await gateway.Sessions.GetAsync(key, ct));
+        AuthenticationTicket ticket = Assert.IsType<AuthenticationTicket>(TicketSerializer.Default.Deserialize(record.Ticket.ToArray()));
+        ticket.Properties.StoreTokens(ticket.Properties.GetTokens().Where(t => t.Name != name).ToList());
+        SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
+        Assert.True(await gateway.Sessions.ReplaceAsync(key, next, record.Version, ct));
+        return next;
     }
 
     /// <summary>
