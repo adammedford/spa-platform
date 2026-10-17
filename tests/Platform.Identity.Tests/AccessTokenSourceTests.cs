@@ -195,18 +195,14 @@ public sealed class AccessTokenSourceTests
         // can never yield a token again, so it ends rather than being kept to fail every call.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
-        CancellationToken ct = TestContext.Current.CancellationToken;
-        (string key, SessionRecord record) = await gateway.Sessions.SingleAsync();
-        AuthenticationTicket ticket = Assert.IsType<AuthenticationTicket>(TicketSerializer.Default.Deserialize(record.Ticket.ToArray()));
-        ticket.Properties.StoreTokens(ticket.Properties.GetTokens().Where(t => t.Name != "refresh_token").ToList());
-        Assert.True(await gateway.Sessions.ReplaceAsync(
-            key, record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) }, record.Version, ct));
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        await RemoveTokenElsewhereAsync(gateway, key, "refresh_token");
 
         IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
         Assert.Equal((401, "session_ended"), (answer.Status, answer.Body));
         Assert.Empty(gateway.Idp.RefreshGrants);
-        Assert.Null(await gateway.Sessions.GetAsync(key, ct));
+        Assert.Null(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
     }
 
     [Theory]
