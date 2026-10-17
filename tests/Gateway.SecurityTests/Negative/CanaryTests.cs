@@ -119,7 +119,7 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
         // The real credentials of the session rows: a login and an API call through the real token
         // source, then the provider's own record of what it issued. Swept by value at the end of the
         // run with every other canary, and searched for here over this visit's own lines.
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
         Assert.Equal(System.Net.HttpStatusCode.OK, (await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct)).StatusCode);
@@ -134,16 +134,24 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
     /// <summary>
     /// One request per kind of credential the row names, each sent where it would matter: the
     /// session cookie's value, a bearer token, the antiforgery header, and a code and state in a
-    /// query string on the callback path and on an asset path. Two of them are refused and two are
-    /// not, so both the refusal lines and the ordinary request lines are swept.
+    /// query string on the callback path and on an asset path. Some are refused and two are not, so
+    /// both the refusal lines and the ordinary request lines are swept. The two that are not carry a
+    /// signed-in browser's session, because an asset is served and an API call forwarded only in one
+    /// (ADR-0008), and every answer is asserted, so the stages each comment names are the ones the
+    /// credential went through.
     /// </summary>
     private async Task SendCredentialsAsync()
     {
-        string host = Harness.App("app1").Host;
-        (string Target, (string, string)[] Headers)[] requests =
+        HarnessApp app = Harness.App("app1");
+        using TestBrowser browser = Harness.CreateBrowser();
+        await Harness.SignInAsync(browser, app.AppId, Suite.Ct);
+        (string, string) session = ("Cookie", SignedIn.CookieHeader(browser, app));
+
+        (string Target, (string, string)[] Headers, int Status)[] requests =
         [
-            // The session cookie, under the platform's own name, on an asset request.
-            ("/index.html", [("Cookie", $"__Host-spa-session={Canaries.Cookie}")]),
+            // The session cookie, under the platform's own name, on an asset request. It names no
+            // session, so the cookie handler reads it and the shell gate refuses it under auth.session.
+            ("/index.html", [("Cookie", $"{SignedIn.SessionCookieName}={Canaries.Cookie}")], 401),
 
             // A bearer token and the antiforgery header on an API call that is refused, so the
             // refusal's own Warning line is swept as well as the request line.
@@ -152,7 +160,7 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
                 ("Sec-Fetch-Site", FetchMetadata.CrossSite),
                 ("Authorization", $"Bearer {Canaries.Token}"),
                 ("X-CSRF-TOKEN", Canaries.Csrf),
-            ]),
+            ], 403),
 
             // The same two on an API call that is not refused, which reaches an upstream.
             ("/api/echo/thing",
@@ -160,26 +168,30 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
                 ("Sec-Fetch-Site", FetchMetadata.SameOrigin),
                 ("Authorization", $"Bearer {Canaries.Token}"),
                 ("X-CSRF-TOKEN", Canaries.Csrf),
-            ]),
+                session,
+            ], 200),
 
-            // A code and a state in a query string, on the callback path the contract names.
-            ($"/signin-oidc?code={Canaries.Code}&state={Canaries.State}", []),
+            // A code and a state in a query string, on the callback path the contract names. No login
+            // is in flight, so the callback is refused with the failure page.
+            ($"/signin-oidc?code={Canaries.Code}&state={Canaries.State}", [], 400),
 
             // And on an asset path, where the framework's own request log would have carried them.
-            ($"/index.html?code={Canaries.Code}&state={Canaries.State}", []),
+            ($"/index.html?code={Canaries.Code}&state={Canaries.State}", [session], 200),
 
-            // On a host the registry does not name, which is refused before an app is resolved.
-            ($"/?code={Canaries.Code}&state={Canaries.State}", []),
+            // And on the app's root with no session, which the shell gate refuses.
+            ($"/?code={Canaries.Code}&state={Canaries.State}", [], 401),
         ];
 
-        foreach ((string target, (string, string)[] headers) in requests)
+        foreach ((string target, (string, string)[] headers, int status) in requests)
         {
-            await RawHttp.SendAsync(Harness.GatewayAddress, "GET", target, host, headers, Suite.Ct);
+            RawResponse response = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", target, app.Host, headers, Suite.Ct);
+            Assert.Equal(status, response.StatusCode);
         }
 
         // The last one again on an unknown host, so a line with no app_id is swept too.
-        await RawHttp.SendAsync(
+        RawResponse unknown = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", $"/?code={Canaries.Code}&state={Canaries.State}",
             "nobody.spa-poc.test:8443", ct: Suite.Ct);
+        Assert.Equal(404, unknown.StatusCode);
     }
 }

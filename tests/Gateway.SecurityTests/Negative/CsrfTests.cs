@@ -23,7 +23,7 @@ public sealed class CsrfTests
     [Fact]
     public async Task N06_an_unsafe_call_with_no_token_is_403_csrf_failed()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
         await SignedIn.CsrfTokenAsync(browser);
@@ -35,7 +35,7 @@ public sealed class CsrfTests
     [Fact]
     public async Task N06_an_unsafe_call_with_another_users_token_is_403_csrf_failed()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
 
         using TestBrowser other = harness.CreateBrowser();
         harness.Idp.DefaultSubject = "bob";
@@ -55,7 +55,7 @@ public sealed class CsrfTests
     [Fact]
     public async Task N06_an_unsafe_call_with_another_apps_token_and_cookie_pair_is_403_csrf_failed()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app1 = harness.App("app1"), app2 = harness.App("app2");
 
         // The same user, signed in to both apps in one browser: a pair that is valid on app 2 for the
@@ -77,7 +77,7 @@ public sealed class CsrfTests
     [Fact]
     public async Task N06_an_unsafe_call_with_a_token_from_before_the_last_logout_is_403_csrf_failed()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
         string before = await SignedIn.CsrfTokenAsync(browser);

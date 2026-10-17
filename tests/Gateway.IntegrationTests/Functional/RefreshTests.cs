@@ -18,15 +18,13 @@ public sealed class RefreshTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static readonly GatewayHarnessOptions Options = new() { SessionRequired = true };
-
     /// <summary>A token the gateway still has to refresh (it refreshes inside a minute of expiry) and the mock API accepts.</summary>
     private static readonly TimeSpan DueButValid = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task F03_a_call_after_expiry_succeeds_after_one_refresh_and_the_stored_refresh_token_changes()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         HarnessApp app = harness.App("app1");
 
@@ -67,7 +65,7 @@ public sealed class RefreshTests
     [Fact]
     public async Task F03_control_the_call_carries_the_refreshed_token_not_the_expired_one()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         harness.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(-10);
@@ -84,7 +82,7 @@ public sealed class RefreshTests
     [Fact]
     public async Task F10_fifty_parallel_calls_on_an_expired_token_all_succeed_on_one_refresh_and_the_session_survives()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         // The 10-second grace window task 1.8 gives Cognito, stated rather than left to the default.

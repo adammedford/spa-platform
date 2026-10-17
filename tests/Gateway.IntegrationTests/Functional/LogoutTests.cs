@@ -21,7 +21,7 @@ public sealed class LogoutTests
     [Fact]
     public async Task F04_logout_ends_the_session_clears_the_antiforgery_cookie_revokes_and_the_next_navigation_is_the_providers_login()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         HarnessApp app = harness.App("app1");
 

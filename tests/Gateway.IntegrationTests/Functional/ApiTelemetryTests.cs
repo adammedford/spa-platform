@@ -54,7 +54,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         public async ValueTask InitializeAsync()
         {
             CancellationToken ct = TestContext.Current.CancellationToken;
-            Harness = await GatewayHarness.StartAsync(Telemetry.Options(new GatewayHarnessOptions { SessionRequired = true }), ct);
+            Harness = await GatewayHarness.StartAsync(Telemetry.Options(), ct);
 
             using TestBrowser browser = Harness.CreateBrowser();
             await Harness.SignInAsync(browser, "app1", ct);

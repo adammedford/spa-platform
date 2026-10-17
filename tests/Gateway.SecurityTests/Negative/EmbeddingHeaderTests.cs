@@ -9,9 +9,10 @@ namespace Gateway.SecurityTests.Negative;
 /// shell, an asset, a <c>/bff</c> response and an API error -> <c>frame-ancestors 'none'</c>,
 /// <c>nosniff</c> and <c>Cross-Origin-Resource-Policy</c> on all four." (docs/plan/04-tests.md.)
 ///
-/// <para>The class fixture covers shells, assets and API errors, plus gateway refusals and an upstream
-/// 500. The fourth shape, a successful <c>/bff</c> response, needs a session, so
-/// <see cref="A_signed_in_bff_answer_carries_them"/> reads it on a cell that requires one.</para>
+/// <para>The class fixture covers shells, assets and API errors, plus gateway refusals, the two
+/// answers a browser without a session gets, and an upstream 500. The fourth shape, a successful
+/// <c>/bff</c> response, is read by <see cref="A_signed_in_bff_answer_carries_them"/> on a cell of its
+/// own.</para>
 ///
 /// <para><b>Why that holds by construction, and why it is still worth asserting.</b> UsePlatformSecurityHeaders applies
 /// the headers from <c>Response.OnStarting</c> rather than writing them as it runs, so they are
@@ -48,19 +49,19 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
     {
         using TestBrowser browser = Harness.CreateBrowser();
 
-        // The shell.
-        BrowserResponse shell = await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
+        // The shell, as the login lands on it: an asset is served only in a session (ADR-0008).
+        BrowserResponse shell = await Harness.SignInAsync(browser, "app1", Suite.Ct);
 
         // An asset, which is a different endpoint path through the same stage.
         BrowserResponse asset = await browser.GetAsync(AssetPath, ct: Suite.Ct);
         Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
 
-        // An API error, answered by the upstream rather than by the gateway: the mock API refuses an
-        // unauthenticated caller with 401 invalid_token, and YARP copies its status and body back.
-        BrowserResponse apiError = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, apiError.StatusCode);
-        Assert.Contains("invalid_token", apiError.Body, StringComparison.Ordinal);
+        // An API error, answered by the upstream rather than by the gateway: the mock API's /admin
+        // needs a scope no app is granted, so it refuses the session's token with 403
+        // insufficient_scope, and YARP copies its status and body back.
+        BrowserResponse apiError = await browser.GetAsync("/api/orders/admin", ct: Suite.Ct);
+        Assert.Equal(HttpStatusCode.Forbidden, apiError.StatusCode);
+        Assert.Contains("insufficient_scope", apiError.Body, StringComparison.Ordinal);
 
         // The gateway's own 404, for an asset the release does not hold.
         BrowserResponse missing = await browser.GetAsync("/nothing-here.js", ct: Suite.Ct);
@@ -71,7 +72,22 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
             "/api/echo/thing", RequestOptions.With(("Sec-Fetch-Site", FetchMetadata.CrossSite)), Suite.Ct);
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
 
-        foreach (BrowserResponse response in (BrowserResponse[])[shell, asset, apiError, missing, refused])
+        // And the two answers a browser without a session gets, each written by a different stage:
+        // the shell gate's 401 for an asset it fetches, from the OpenID Connect handler's challenge
+        // event, and the proxy's token step's 401 for an API call.
+        using TestBrowser sessionless = Harness.CreateBrowser();
+        await SignedIn.OnPageOfAsync(sessionless, Harness.App("app1"));
+        BrowserResponse unauthenticatedAsset = await sessionless.GetAsync(AssetPath, ct: Suite.Ct);
+        BrowserResponse unauthenticatedApi = await sessionless.GetAsync("/api/echo/thing", ct: Suite.Ct);
+        Contract.ErrorRow noSession = Contract.Error("No session");
+        foreach (BrowserResponse unauthenticated in (BrowserResponse[])[unauthenticatedAsset, unauthenticatedApi])
+        {
+            Assert.Equal((HttpStatusCode)noSession.Status, unauthenticated.StatusCode);
+            Assert.Contains($"\"code\":\"{noSession.Code}\"", unauthenticated.Body, StringComparison.Ordinal);
+        }
+
+        foreach (BrowserResponse response in (BrowserResponse[])
+            [shell, asset, apiError, missing, refused, unauthenticatedAsset, unauthenticatedApi])
         {
             AssertEmbeddingHeaders(response);
         }
@@ -103,7 +119,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         harness.Echo.Respond = _ => new EchoResponse(HttpStatusCode.InternalServerError, "upstream failed");
 
         using TestBrowser browser = harness.CreateBrowser();
-        await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Suite.Ct);
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
 
         BrowserResponse failed = await browser.GetAsync("/api/echo/thing", ct: Suite.Ct);
 
@@ -131,7 +147,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
     [Fact]
     public async Task A_signed_in_bff_answer_carries_them()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
         BrowserResponse shell = await harness.SignInAsync(browser, "app1", Suite.Ct);
 

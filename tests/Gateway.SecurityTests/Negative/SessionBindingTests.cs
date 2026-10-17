@@ -31,7 +31,7 @@ public sealed class SessionBindingTests
     [Fact]
     public async Task N01_app1s_session_cookie_is_401_on_app2s_api_and_a_fresh_challenge_on_navigation()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app1 = harness.App("app1"), app2 = harness.App("app2");
         using TestBrowser victim = harness.CreateBrowser();
         await harness.SignInAsync(victim, "app1", Suite.Ct);
@@ -70,7 +70,7 @@ public sealed class SessionBindingTests
     [Fact]
     public async Task N02_an_app2_cookie_forged_to_name_app1s_session_key_is_401_and_app1s_session_is_untouched()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app1 = harness.App("app1"), app2 = harness.App("app2");
         using TestBrowser victim = harness.CreateBrowser();
         await harness.SignInAsync(victim, "app1", Suite.Ct);
@@ -108,7 +108,7 @@ public sealed class SessionBindingTests
     [Fact]
     public async Task N21_a_cookie_whose_session_was_removed_decrypts_and_is_401()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
@@ -133,7 +133,7 @@ public sealed class SessionBindingTests
     [Fact]
     public async Task N22_a_session_is_401_after_its_app_was_removed_and_added_back()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
         Assert.Equal(HttpStatusCode.OK, (await SignedIn.SessionAsync(browser)).StatusCode);
@@ -160,7 +160,7 @@ public sealed class SessionBindingTests
     [Fact]
     public async Task N22_a_session_is_401_after_its_apps_client_was_replaced()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);

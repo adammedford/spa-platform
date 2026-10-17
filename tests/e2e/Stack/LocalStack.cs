@@ -6,7 +6,8 @@ namespace Gateway.E2ETests.Stack;
 
 /// <summary>
 /// The stack a browser test runs against, locally: the hermetic cell (task 6.1) with a session
-/// required, as the shipped gateway requires one, behind a <see cref="TlsLoadBalancer"/>, and a
+/// required, as ADR-0008 requires one (<see cref="GatewayHarnessOptions.SessionRequired"/>, the
+/// harness's default), behind a <see cref="TlsLoadBalancer"/>, and a
 /// Chromium whose resolver sends every app host to that listener, as the tunnel and the hosts file do
 /// in the deployed tier (docs/plan/05-infrastructure-and-cost.md). One per test: each starts with an
 /// empty provider log, an empty session store and a browser that has seen nothing.
@@ -37,7 +38,7 @@ public sealed class LocalStack : IAsyncDisposable
     public static async Task<LocalStack> StartAsync(GatewayHarnessOptions? options = null)
     {
         CancellationToken ct = TestContext.Current.CancellationToken;
-        GatewayHarness harness = await GatewayHarness.StartAsync((options ?? new GatewayHarnessOptions()) with { SessionRequired = true }, ct);
+        GatewayHarness harness = await GatewayHarness.StartAsync(options, ct);
         TlsLoadBalancer? balancer = null;
         try
         {

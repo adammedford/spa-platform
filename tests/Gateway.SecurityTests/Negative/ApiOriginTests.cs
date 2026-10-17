@@ -11,9 +11,10 @@ namespace Gateway.SecurityTests.Negative;
 /// preflight." (docs/plan/04-tests.md.)
 ///
 /// <para>The class fixture's requests prove the request gate's refusals on API and BFF paths, before
-/// authentication (contracts/pipeline.md), with no session.
+/// authentication (contracts/pipeline.md), with no session: each browser is put on the app's page
+/// through <c>/healthz</c>, because a navigation to the shell would sign it in.
 /// <see cref="A_signed_in_browser_is_refused_the_same_way_and_its_successful_answers_grant_no_cross_origin_read"/>
-/// repeats them for a browser holding a live session on a cell that requires one, and reads the
+/// repeats them for a browser holding a live session, on a cell of its own, and reads the
 /// successful <c>/bff/session</c> and <c>/api</c> answers for the row's "on any response".</para>
 ///
 /// <para><b>The two refusals are told apart.</b> Both answer 403 <c>origin_rejected</c>, because the
@@ -65,7 +66,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     public async Task A_refused_fetch_site_is_403_origin_rejected_under_gate_fetch_site(string path, string? site)
     {
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         BrowserResponse response = await browser.GetAsync(
@@ -99,7 +100,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
         // domain, so a page on one is same-site with the other and SameSite cookies would travel.
         // The header a real sibling page produces is asserted, not supplied.
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app2"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         BrowserResponse response = await browser.FetchAsync(
@@ -113,7 +114,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     public async Task A_foreign_origin_on_an_otherwise_same_origin_fetch_is_403_under_gate_origin()
     {
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         // Sec-Fetch-Site is left as the browser computes it (same-origin), so the only thing wrong
@@ -129,7 +130,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     public async Task The_app_origin_is_the_apps_own_host_and_not_a_sibling()
     {
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         // A sibling's origin is a foreign origin, although it is same-site and the registry names it.
@@ -144,9 +145,12 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     {
         // The control. Without it every row above would pass against a gate that refused every
         // /api request, or every request carrying an Origin at all
-        // (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        // (CODING_STANDARDS.md -> "An assertion must be able to fail"). The gate admits it; what
+        // answers is the proxy's token step, because the call carries no session: 401
+        // unauthenticated under no rule id, where each refusal above is a 403 under the gate's rule
+        // (contracts/http-contract.md -> Errors).
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         BrowserResponse response = await browser.GetAsync(
@@ -154,7 +158,9 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
             RequestOptions.With(("Origin", Harness.App("app1").Origin.GetLeftPart(UriPartial.Authority))),
             Suite.Ct);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Contract.ErrorRow noSession = Contract.Error("No session");
+        Assert.Equal((HttpStatusCode)noSession.Status, response.StatusCode);
+        Assert.Contains($"\"code\":\"{noSession.Code}\"", response.Body, StringComparison.Ordinal);
         Assert.Null(await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }
 
@@ -165,7 +171,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
         // gate rather than stopping at the allowlist; the gate then refuses it like any other cross-site
         // request, and nothing in the answer makes the browser's check pass.
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         BrowserResponse response = await browser.FetchAsync(
@@ -187,15 +193,19 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     public async Task No_response_this_class_received_carries_an_access_control_header()
     {
         // The row's second sentence is about every response, not about the preflight alone, so it is
-        // asserted over every exchange one browser made: refusals, the control's 200 from an
-        // upstream, and the navigations in between.
+        // asserted over every exchange one browser made: the page, the gate's refusals, and the 401s
+        // that an admitted API call and an asset fetch get with no session. The successful answers
+        // are the signed-in row's, below.
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
-        await browser.GetAsync(ApiPath, ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
+        BrowserResponse admitted = await browser.GetAsync(ApiPath, ct: Suite.Ct);
         await browser.GetAsync(ApiPath, RequestOptions.With(("Sec-Fetch-Site", FetchMetadata.CrossSite)), Suite.Ct);
         await browser.FetchAsync(HttpMethod.Options, ApiPath, content: null, ct: Suite.Ct);
-        await browser.GetAsync("/does-not-exist.js", ct: Suite.Ct);
+        BrowserResponse asset = await browser.GetAsync("/does-not-exist.js", ct: Suite.Ct);
 
+        // The two that pass the gate are refused for want of a session, so the sweep covers the shapes it names.
+        Assert.Equal(HttpStatusCode.Unauthorized, admitted.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, asset.StatusCode);
         Assert.NotEmpty(browser.Exchanges);
         foreach (BrowserResponse exchange in browser.Exchanges)
         {
@@ -206,7 +216,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
     [Fact]
     public async Task A_signed_in_browser_is_refused_the_same_way_and_its_successful_answers_grant_no_cross_origin_read()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
