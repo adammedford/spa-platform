@@ -122,6 +122,9 @@ internal abstract record RefreshOutcome
     /// <summary>The provider refused the refresh token and the session was removed.</summary>
     public sealed record Ended : RefreshOutcome;
 
-    /// <summary>The provider failed other than with <c>invalid_grant</c>; the session stands.</summary>
-    public sealed record Unavailable(string Error) : RefreshOutcome;
+    /// <summary>
+    /// The provider failed other than with <c>invalid_grant</c>; the session stands, and a waiter fails
+    /// with <see cref="Platform.Abstractions.AccessTokenResult.ProviderUnavailable"/> too (T-D6).
+    /// </summary>
+    public sealed record Unavailable : RefreshOutcome;
 }

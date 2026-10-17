@@ -26,7 +26,8 @@ namespace Platform.Identity;
 /// <item>Only <c>invalid_grant</c> is a refusal. The library reports a refusal, an outage and an
 /// unreachable provider the same way, as a failed result (T-A8, T-A9, T-A15). A refusal ends the
 /// session; anything else leaves it and fails the call with
-/// <see cref="IdentityProviderUnavailableException"/>.</item>
+/// <see cref="AccessTokenResult.ProviderUnavailable"/>, which the proxy answers 503
+/// <c>idp_unavailable</c> (contracts/http-contract.md -> Errors, change request 4.2).</item>
 /// <item>Before a refusal ends the session, the record is read again, and if it now holds a different
 /// refresh token, another writer refreshed in between and its access token is used (T-B8).</item>
 /// <item>The request's cancellation token reaches nothing here. A browser that disconnects mid-refresh
@@ -70,6 +71,9 @@ internal sealed partial class AccessTokenSource(
         AuthenticateResult authenticated = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
         if (!authenticated.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
         {
+            // Authentication distinguishes a dead cookie from no cookie. Record that distinction
+            // here; the proxy only receives Unauthenticated and cannot recover it (telemetry.md).
+            Bff.NoteDeadSession(context, authenticated);
             return new AccessTokenResult.Unauthenticated();
         }
 
@@ -77,8 +81,8 @@ internal sealed partial class AccessTokenSource(
 
         switch (lease.WhileWaiting)
         {
-            case RefreshOutcome.Unavailable unavailable:
-                throw new IdentityProviderUnavailableException(app.AppId, unavailable.Error);
+            case RefreshOutcome.Unavailable:
+                return new AccessTokenResult.ProviderUnavailable();
             case RefreshOutcome.Ended:
                 return new AccessTokenResult.SessionEnded();
         }
@@ -114,9 +118,9 @@ internal sealed partial class AccessTokenSource(
 
         if (error != "invalid_grant")
         {
-            lease.Finish(new RefreshOutcome.Unavailable(error!));
+            lease.Finish(new RefreshOutcome.Unavailable());
             RefreshFailed(logger, app.AppId, SessionRef.Of(key), error!);
-            throw new IdentityProviderUnavailableException(app.AppId, error!);
+            return new AccessTokenResult.ProviderUnavailable();
         }
 
         // Refused. Another writer may have refreshed the session in between, so it rotated the refresh
@@ -139,7 +143,7 @@ internal sealed partial class AccessTokenSource(
 
     /// <summary>
     /// The library's refresh call, with the app's two schemes and the issuer's credential style, under
-    /// a deadline tied to no request. Returns the new tokens, or the library's error string.
+    /// a deadline tied to no request. Returns the new tokens, or the failure as a fixed category.
     /// </summary>
     private async Task<(UserToken? Token, string? Error)> RefreshAsync(AppDefinition app, string refreshToken)
     {
@@ -157,7 +161,7 @@ internal sealed partial class AccessTokenSource(
 
             return result.Succeeded
                 ? (result.Token, null)
-                : (null, IdentityProviderUnavailableException.SafeError(result.FailedResult.Error));
+                : (null, SafeError(result.FailedResult.Error));
         }
         catch (OperationCanceledException)
         {
@@ -207,9 +211,16 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
-        return Deserialize(winner).Properties.GetTokenValue(AccessTokenName) is { Length: > 0 } current
-            ? new AccessTokenResult.Token(current)
-            : throw new IdentityProviderUnavailableException(app.AppId, "refresh_failed");
+        if (Deserialize(winner).Properties.GetTokenValue(AccessTokenName) is { Length: > 0 } current)
+        {
+            return new AccessTokenResult.Token(current);
+        }
+
+        // The winner is a live session with no token to hand back. ProviderUnavailable is the one outcome
+        // that keeps a session without a token (change request 4.2), and the next call, finding no access
+        // token, tries a refresh with the winner's refresh token.
+        LostToRecordWithoutToken(logger, app.AppId, SessionRef.Of(key));
+        return new AccessTokenResult.ProviderUnavailable();
     }
 
     /// <summary>
@@ -233,6 +244,20 @@ internal sealed partial class AccessTokenSource(
         && string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal)
             ? record
             : null;
+
+    /// <summary>
+    /// The provider's error as a fixed category. An OAuth error value is provider-controlled text that can
+    /// carry a credential, so only known categories reach the warning (contracts/telemetry.md, N-16),
+    /// <c>invalid_grant</c> among them because it alone ends a session (ADR-0005). Unknown text becomes
+    /// <c>refresh_failed</c>.
+    /// </summary>
+    private static string SafeError(string? error) => error switch
+    {
+        "invalid_grant" or "invalid_client" or "invalid_request" or "invalid_scope"
+            or "unauthorized_client" or "unsupported_grant_type" or "server_error"
+            or "temporarily_unavailable" or "deadline_exceeded" or "unreachable" => error,
+        _ => "refresh_failed",
+    };
 
     private static AuthenticationTicket Deserialize(SessionRecord record) =>
         TicketSerializer.Default.Deserialize(record.Ticket.ToArray())
@@ -258,6 +283,10 @@ internal sealed partial class AccessTokenSource(
     [LoggerMessage(Level = LogLevel.Information,
         Message = "The identity provider refused the refresh token for app {AppId}, so session {SessionRef} has ended.")]
     private static partial void Ended(ILogger logger, string appId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "Another writer replaced the session for app {AppId}, session {SessionRef} during the refresh and left no access token in it. The session is kept.")]
+    private static partial void LostToRecordWithoutToken(ILogger logger, string appId, string sessionRef);
 }
 
 /// <summary>Settings for <see cref="AccessTokenSource"/>.</summary>

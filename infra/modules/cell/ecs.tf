@@ -281,8 +281,8 @@ resource "aws_ecs_service" "gateway" {
     security_groups = [aws_security_group.task.id]
 
     # The cell has no NAT gateway, so this public address is the task's only route out, to Cognito,
-    # S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task group accepts
-    # the gateway's port from the load balancer alone, which test P-06 shows.
+    # S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security group
+    # accepts the gateway's port from the ALB security group alone (test P-06).
     assign_public_ip = true
   }
 

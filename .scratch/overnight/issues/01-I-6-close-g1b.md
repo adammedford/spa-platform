@@ -2,7 +2,7 @@
 **Task:** I-6
 **Owner:** integrator
 **Blocked by:** 3.0, 47
-**Status:** ready-for-human
+**Status:** resolved
 
 **What to build:** Close G1b: fold the G0 findings into the identity contracts, record them as the first decision record, and tag the freeze. Needs G1a (tagged `skeleton-v1`) and G0. Contracts it edits: the draft parts listed in `contracts/README.md` -> "What is draft until G1b" (`registry.schema.json#/$defs/oauth`, `app-definition.schema.json#/properties/oauth`, the `Profile` enum in `platform-config.schema.json`, the `/bff` endpoints and session record in `contracts/http-contract.md`, and the identity interfaces in `src/Platform.Abstractions`). Gate: G1b in `docs/plan/01-plan.md`. Done when: tag `contracts-v1` exists.
 
@@ -369,3 +369,7 @@ ADR candidates (all three criteria checked):
   characters). Swapping the token library for an in-house class over Duende.IdentityModel meets all
   three criteria, but ADR-0014 can carry it. A separate ADR only if Adam prefers one decision per
   file.
+
+## Comments
+
+**Overnight collect, 2026-10-17:** Status was `ready-for-human`, now `resolved`. Task I-6 landed in `ad5e041` ("Merge task I-6: decide the stage order (ADR-0018) and close the freeze"), and the annotated `contracts-v1` tag that closes G1b is reachable from tonight's base `eb65be8`.

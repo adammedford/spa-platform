@@ -32,7 +32,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         public GatewayHarness Harness { get; private set; } = null!;
 
         public async ValueTask InitializeAsync() =>
-            Harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, TestContext.Current.CancellationToken);
+            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }
@@ -126,7 +126,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         // does not. The input the clause above cannot supply: no app fixture names an out-of-set
         // directive, and fixtures/ is workstream 5's, so the entry arrives the way an operator's
         // would -- by publishing one (CODING_STANDARDS.md -> "An assertion must be able to fail").
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse before = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);

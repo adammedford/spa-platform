@@ -28,23 +28,45 @@ namespace Gateway.SecurityTests.Negative;
 /// the request gate refuses first, so the refusals below carry <see cref="RuleIds.PathInvalid"/> from there;
 /// the endpoint's own copy of the check is what makes the claim hold if the order ever changed. Both
 /// raise the same rule id, which is exactly why <c>RuleIds</c> exists (ADR-0015).</para>
+///
+/// <para><b>Every request here carries a session.</b> An asset is served only in a session
+/// (ADR-0008), so a traversal that got past both checks would be a signed-in user's, and that is the
+/// request these rows send: each carries the cookies of a browser signed in to the app it names. The
+/// controls are served for the same reason, and a traversal differs from its control in the path
+/// alone.</para>
 /// </summary>
 public sealed class AssetPathTests : IAsyncLifetime
 {
     private readonly ObjectStoreRecorder recorder = new();
     private GatewayHarness harness = null!;
+    private TestBrowser browser = null!;
 
     /// <summary>
     /// One harness per <b>test</b> here, not per class, which is the one place in this suite that
     /// differs. Not a class fixture, because the recorder and the harness have to be built together
     /// and a fixture would have to hand both back; <see cref="IAsyncLifetime"/> on the class is
     /// re-run for every test, so each gets a fresh pair — which also keeps the keys recorded for one
-    /// row out of another's, and is why "this request read nothing" can be read off a count.
+    /// row out of another's, and is why "this request read nothing" can be read off a count. Each
+    /// test's browser signs in to both apps before the test runs; the shells those logins land on are
+    /// the first request reads the recorder holds, and every count below is taken after them.
     /// </summary>
-    public async ValueTask InitializeAsync() =>
+    public async ValueTask InitializeAsync()
+    {
         harness = await Suite.StartAsync(recorder.Options(), TestContext.Current.CancellationToken);
+        browser = await harness.CreateSignedInBrowserAsync(TestContext.Current.CancellationToken);
+    }
 
-    public async ValueTask DisposeAsync() => await harness.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        browser.Dispose();
+        await harness.DisposeAsync();
+    }
+
+    /// <summary>One <c>GET</c> on an app's host over the socket, the target exactly as written, with the browser's cookies for that app.</summary>
+    private Task<RawResponse> Get(string target, string appId = "app1") =>
+        RawHttp.SendAsync(
+            harness.GatewayAddress, "GET", target, harness.App(appId).Host,
+            [("Cookie", SignedIn.CookieHeader(browser, harness.App(appId)))], Suite.Ct);
 
     /// <summary>
     /// The shapes the row names, each sent exactly as written: plain and encoded dot segments, a dot
@@ -76,8 +98,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         int readsBefore = recorder.RequestReads.Count;
         int lines = await Observed.SettledCountAsync(harness, Suite.Ct);
 
-        RawResponse response = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", target, harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Get(target);
 
         // The row allows 400 or 404; the gate's normalisation rule gives the 400 and the contract's
         // code for it, both read from the Errors table rather than written down.
@@ -101,8 +122,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         int readsBefore = recorder.RequestReads.Count;
         int lines = await Observed.SettledCountAsync(harness, Suite.Ct);
 
-        RawResponse response = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/index%00.html", harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Get("/index%00.html");
 
         Assert.Equal(400, response.StatusCode);
         Assert.Empty(recorder.RequestsSince(readsBefore));
@@ -120,14 +140,12 @@ public sealed class AssetPathTests : IAsyncLifetime
         await harness.RefreshRegistryAsync(Suite.Ct);
         Assert.Contains(GatewayHarness.RegistryKey, recorder.Reads.Skip(allReadsBefore));
 
-        RawResponse rejected = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/assets%2f..%2findex.html", harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse rejected = await Get("/assets%2f..%2findex.html");
         Assert.Equal(Contract.Error("The path failed normalisation").Status, rejected.StatusCode);
         Assert.Empty(recorder.RequestsSince(requestReadsBefore));
 
         // Positive control: request reads still reach the observer; ignoring all reads is not a fix.
-        RawResponse served = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/index.html", harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse served = await Get("/index.html");
         Assert.Equal(200, served.StatusCode);
         Assert.Equal(ReleasePrefix("app1") + "index.html", Assert.Single(recorder.RequestsSince(requestReadsBefore)));
     }
@@ -140,8 +158,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         // (CODING_STANDARDS.md -> "An assertion must be able to fail").
         int readsBefore = recorder.RequestReads.Count;
 
-        RawResponse response = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/index.html", harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Get("/index.html");
 
         Assert.Equal(200, response.StatusCode);
         string key = Assert.Single(recorder.RequestsSince(readsBefore));
@@ -156,8 +173,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         // "refused" from "looked for and not found".
         int readsBefore = recorder.RequestReads.Count;
 
-        RawResponse response = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/assets/not-shipped.js", harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Get("/assets/not-shipped.js");
 
         Assert.Equal(404, response.StatusCode);
         string key = Assert.Single(recorder.RequestsSince(readsBefore));
@@ -171,16 +187,19 @@ public sealed class AssetPathTests : IAsyncLifetime
         // shape, a legitimate asset, a missing one, and a sibling app's shell.
         foreach (string target in TraversalTargets)
         {
-            await RawHttp.SendAsync(harness.GatewayAddress, "GET", target, harness.App("app1").Host, ct: Suite.Ct);
+            await Get(target);
         }
 
-        await RawHttp.SendAsync(harness.GatewayAddress, "GET", "/index.html", harness.App("app1").Host, ct: Suite.Ct);
-        await RawHttp.SendAsync(harness.GatewayAddress, "GET", "/index.html", harness.App("app2").Host, ct: Suite.Ct);
-        await RawHttp.SendAsync(harness.GatewayAddress, "GET", "/missing.js", harness.App("app1").Host, ct: Suite.Ct);
+        int servedBefore = recorder.RequestReads.Count;
+        Assert.Equal(200, (await Get("/index.html")).StatusCode);
+        Assert.Equal(200, (await Get("/index.html", "app2")).StatusCode);
+        Assert.Equal(404, (await Get("/missing.js")).StatusCode);
 
         string[] allowed = [ReleasePrefix("app1"), ReleasePrefix("app2")];
 
-        Assert.NotEmpty(recorder.RequestReads);
+        // The legitimate requests did read, so the loop below covers reads this row made and not only
+        // the logins' (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        Assert.NotEmpty(recorder.RequestsSince(servedBefore));
         foreach (string key in recorder.RequestReads)
         {
             Assert.Contains(allowed, prefix => key.StartsWith(prefix, StringComparison.Ordinal));

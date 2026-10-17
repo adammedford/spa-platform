@@ -24,6 +24,12 @@ namespace Gateway.SecurityTests.Negative;
 /// <para><b>Why the raw socket.</b> The <c>Cookie</c> header's bytes are the input: two names equal
 /// but for case, and one name twice. A client with a cookie jar normalises both away.</para>
 ///
+/// <para><b>No request here carries a session</b>, so one the gate admits goes on to the shell gate,
+/// which answers an asset request without a session 401 (ADR-0008). That is what the controls read:
+/// the gate's 400 under <see cref="RuleIds.GateCookieName"/> against the shell gate's 401, which
+/// carries <see cref="RuleIds.AuthSession"/> only when a session cookie was presented and named no
+/// session.</para>
+///
 /// <para>These requests isolate the HTTP contract named above. Session establishment and
 /// preservation require separate acceptance evidence; a successful response here proves only the
 /// asserted routing, policy or telemetry behaviour.</para>
@@ -93,21 +99,23 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
 
         RawResponse response = await Send(name + "=whatever");
 
-        Assert.NotEqual(400, response.StatusCode);
-        Assert.NotEqual(RuleIds.GateCookieName, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
+        // Past the gate, to the shell gate. Only the session cookie's name is read as a session, and
+        // "whatever" decrypts to none, so that one is refused under auth.session; the others name no
+        // session at all.
+        await AssertRefusedForNoSessionAsync(
+            response, before, name == SignedIn.SessionCookieName ? RuleIds.AuthSession : null);
     }
 
     [Fact]
-    public async Task An_unrelated_cookie_name_is_not_refused_however_it_is_cased()
+    public async Task An_unrelated_cookie_name_is_not_what_this_rule_refuses_however_it_is_cased()
     {
-        // A cookie that is not the platform's, in mixed case, passes: the rule is about names that
-        // imitate a platform cookie, not about letter case in general.
+        // A cookie that is not the platform's, in mixed case, passes the gate: the rule is about names
+        // that imitate a platform cookie, not about letter case in general.
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
         RawResponse response = await Send("Some-App-Cookie=whatever; ANOTHER=two");
 
-        Assert.NotEqual(400, response.StatusCode);
-        Assert.Null(await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
+        await AssertRefusedForNoSessionAsync(response, before, rule: null);
     }
 
     /// <summary>One request to the app's root carrying exactly this <c>Cookie</c> header.</summary>
@@ -125,6 +133,15 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
         string prefix = Contract.PlatformCookiePrefix;
         Assert.StartsWith(prefix, name, StringComparison.Ordinal);
         return prefix.ToUpperInvariant() + name[prefix.Length..];
+    }
+
+    /// <summary>The shell gate's answer to a request the gate admitted with no session: 401 <c>unauthenticated</c>, under <paramref name="rule"/>.</summary>
+    private async Task AssertRefusedForNoSessionAsync(RawResponse response, int before, string? rule)
+    {
+        Contract.ErrorRow expected = Contract.Error("No session");
+        Assert.Equal(expected.Status, response.StatusCode);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }
 
     private async Task AssertRefusedAsync(RawResponse response, int before)

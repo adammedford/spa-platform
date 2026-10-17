@@ -67,6 +67,16 @@ override_data {
   }
 }
 
+# The bucket policy's document, whose two release statements P-04's configuration half reads. The
+# wiring run checks the bucket policy selects it.
+override_data {
+  target          = data.aws_iam_policy_document.platform_bucket
+  override_during = plan
+  values = {
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"platformbucket\",\"Effect\":\"Deny\",\"Action\":\"sts:AssumeRole\",\"Resource\":\"*\"}]}"
+  }
+}
+
 # The three account facts the task role's ARNs are built from. `override_during = plan` is what
 # makes them known during a plan rather than only after an apply, so the permission runs can
 # assert the complete account-scoped ARN at plan time.
@@ -91,10 +101,13 @@ override_data {
 # The bucket's ARN, which the task role's two prefixes are built from. Overridden rather than
 # asserted around: the point of the assertions below is the prefix, and a generated ARN would make
 # them unreadable.
+#
+# It is deliberately not the ARN the bucket's name would give, so a grant assembled from the name
+# rather than read from the bucket fails those assertions (ADR-0014: the actual bucket ARN).
 override_resource {
   target          = aws_s3_bucket.platform
   override_during = plan
-  values          = { arn = "arn:aws:s3:::spa-platform-poc" }
+  values          = { arn = "arn:aws:s3:::the-arn-aws-returns" }
 }
 
 override_resource {
@@ -206,6 +219,8 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_security_group",
       "aws_vpc_security_group_ingress_rule",
       "aws_vpc_security_group_egress_rule",
+      # The VPC's own default group, adopted so that it holds no rule (tests/network.tftest.hcl)
+      "aws_default_security_group",
       # Task 1.3, alb.tf
       "aws_lb",
       "aws_lb_target_group",
@@ -228,6 +243,251 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
     ])
     error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; plan row 1.9 polices the rest."
   }
+
+  # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
+  # JSON-syntax file and calls no child module. Terraform loads *.tf.json beside *.tf
+  # (https://developer.hashicorp.com/terraform/language/files), and a module block brings in
+  # resources of any type with no resource line here. Either would carry a NAT gateway past the
+  # allowlist with every run green.
+  assert {
+    condition     = length(fileset(path.module, "*.tf.json")) == 0
+    error_message = "The cell module is written in .tf files only: a .tf.json file declares resources no source-reading assertion in this module sees."
+  }
+
+  assert {
+    condition = length(regexall(
+      "(?m)^module\\s+\"",
+      join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
+    )) == 0
+    error_message = "The cell module calls no child module: a module block adds resources this allowlist never reads, so the allowlist would stop being the module's whole resource set."
+  }
+}
+
+# --- The bucket's name and namespace (change request 1.5a) -------------------------------------
+#
+# The default is spa-platform-<cell>-<account id>-<region>-an, in S3's account regional namespace,
+# which no other account can create a bucket in (contracts/s3-layout.md). Expected names are read
+# from the two contract examples, which render the bucket for this file's placeholders: cell poc,
+# account 111122223333 and us-east-1, the values the overrides above give the account and Region.
+
+run "the_bucket_defaults_to_the_name_both_contract_examples_render" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for rendered in [
+        jsondecode(file("../../../contracts/infra-outputs.example.json")).bucket,
+        jsondecode(file("../../../contracts/platform-config.example.json")).Registry.Bucket,
+        jsondecode(file("../../../contracts/platform-config.example.json")).Assets.Bucket,
+      ] : aws_s3_bucket.platform.bucket == rendered
+    ])
+    error_message = "With bucket_name empty, the bucket is spa-platform-<cell>-<account id>-<region>-an: the name contracts/infra-outputs.example.json and contracts/platform-config.example.json render for cell poc in account 111122223333 and us-east-1."
+  }
+
+  # The suffix alone does not opt in: the provider sends the namespace only when the argument is
+  # set, and refuses a suffixed name in the global namespace (change request 1.5a, decision 1).
+  assert {
+    condition     = aws_s3_bucket.platform.bucket_namespace == "account-regional"
+    error_message = "The bucket is created in the account regional namespace, set explicitly with bucket_namespace."
+  }
+
+  # Every consumer but infra/bootstrap, which applies first and derives the same default, reads this
+  # output rather than deriving the name (contracts/s3-layout.md), so it is the configured name,
+  # which a plan already knows, not the id the provider sets after an apply.
+  assert {
+    condition     = output.bucket == jsondecode(file("../../../contracts/infra-outputs.example.json")).bucket
+    error_message = "The module's bucket output is the contract's bucket, and is known at plan."
+  }
+}
+
+# The placeholders above are the contract examples', so the run before this one cannot tell a
+# derived part from one written into the module. Every part differs here.
+run "the_default_name_follows_the_cell_account_and_region" {
+  command = plan
+
+  variables {
+    cell = "cell-7"
+  }
+
+  override_data {
+    target          = data.aws_caller_identity.current
+    override_during = plan
+    values          = { account_id = "444455556666" }
+  }
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "eu-west-1" }
+  }
+
+  assert {
+    condition     = aws_s3_bucket.platform.bucket == "spa-platform-cell-7-444455556666-eu-west-1-an"
+    error_message = "The default name is built from the cell, the account and the Region the provider points at."
+  }
+}
+
+# Change request 1.5a, decision 4: the 63-character limit is a precondition at plan, not a narrower
+# cell bound, because the suffix's length follows the Region. These two sit either side of it in
+# ca-central-1, a 12-character Region: a 21-character cell makes a 63-character name, a 22-character
+# cell a 64-character one. The suffix counts towards the limit:
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/gpbucketnamespaces.html#namespace-restrictions
+run "a_63_character_bucket_name_is_accepted" {
+  command = plan
+
+  variables {
+    cell = "abcdefghijklmnopqrstu"
+  }
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "ca-central-1" }
+  }
+
+  assert {
+    condition     = aws_s3_bucket.platform.bucket == "spa-platform-abcdefghijklmnopqrstu-111122223333-ca-central-1-an"
+    error_message = "A 21-character cell in ca-central-1 makes a 63-character name, which S3 allows."
+  }
+}
+
+run "a_64_character_bucket_name_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    cell = "abcdefghijklmnopqrstuv"
+  }
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "ca-central-1" }
+  }
+
+  expect_failures = [aws_s3_bucket.platform]
+}
+
+# "You can create buckets in your account regional namespace in all AWS Regions except Middle East
+# (Bahrain) and Middle East (UAE)." Change request 1.5a makes either a deployment prerequisite to
+# resolve, never a fall back to a name another account could claim, so both stop the plan.
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/gpbucketnamespaces.html#account-regional-gp-buckets
+run "bahrain_is_refused_at_plan_rather_than_given_a_global_name" {
+  command = plan
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "me-south-1" }
+  }
+
+  expect_failures = [aws_s3_bucket.platform]
+}
+
+run "the_uae_is_refused_at_plan_rather_than_given_a_global_name" {
+  command = plan
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "me-central-1" }
+  }
+
+  expect_failures = [aws_s3_bucket.platform]
+}
+
+# P-04's configuration half: "S3 refuses a second write to an existing release key, and refuses the
+# delete that would allow one." P-04 itself runs against the applied bucket at G3, because only S3
+# can show the policy is enforced; this shows the policy a plan would apply says so, together with
+# the wiring run at the end of this file, which checks that this document is the bucket's policy.
+# Each statement is rendered on one line so the expected text reads as the rule. The release prefix
+# is the one contracts/s3-layout.md lays apps' paths out under; the condition keys are AWS's, cited
+# in storage.tf.
+run "a_release_key_is_written_once_and_deleted_only_by_the_teardown_principals" {
+  command = plan
+
+  variables {
+    teardown_principal_arns = [
+      "arn:aws:iam::111122223333:role/spa-platform-poc-teardown",
+      "arn:aws:iam::111122223333:role/Operator",
+    ]
+  }
+
+  # The second write: a single-part PutObject under apps/ with no If-None-Match, from anyone.
+  assert {
+    condition = one([
+      for s in data.aws_iam_policy_document.platform_bucket.statement :
+      "${s.effect} ${join(",", sort(s.actions))} on ${join(",", sort(s.resources))} to ${join(";", sort([for p in s.principals : "${p.type}:${join(",", sort(p.identifiers))}"]))} when ${join(" & ", sort([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]))}"
+      if s.sid == "DenyReleaseWriteWithoutIfNoneMatch"
+      ]) == join("", [
+      "Deny s3:PutObject on ${aws_s3_bucket.platform.arn}/",
+      one(distinct([for m in regexall("(?m)^([a-z]+)/\\{appId\\}", file("../../../contracts/s3-layout.md")) : m[0]])),
+      "/* to *:* when Bool s3:ObjectCreationOperation true & Null s3:if-none-match true",
+    ])
+    error_message = "Every principal is denied a write under apps/ that carries no If-None-Match, so a release key is written once (contracts/s3-layout.md, P-04)."
+  }
+
+  # The delete that would allow one: denied under apps/ to every principal but the whole list.
+  assert {
+    condition = one([
+      for s in data.aws_iam_policy_document.platform_bucket.statement :
+      "${s.effect} ${join(",", sort(s.actions))} on ${join(",", sort(s.resources))} to ${join(";", sort([for p in s.principals : "${p.type}:${join(",", sort(p.identifiers))}"]))} when ${join(" & ", sort([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]))}"
+      if s.sid == "DenyReleaseDeleteExceptTeardown"
+      ]) == join("", [
+      "Deny s3:DeleteObject,s3:DeleteObjectVersion on ${aws_s3_bucket.platform.arn}/",
+      one(distinct([for m in regexall("(?m)^([a-z]+)/\\{appId\\}", file("../../../contracts/s3-layout.md")) : m[0]])),
+      "/* to *:* when ArnNotLike aws:PrincipalArn arn:aws:iam::111122223333:role/spa-platform-poc-teardown,arn:aws:iam::111122223333:role/Operator",
+    ])
+    error_message = "Every principal but the teardown principals is denied a delete under apps/, so a delete cannot clear the way for a second write (contracts/s3-layout.md, ADR-0014, P-04)."
+  }
+}
+
+# bucket_name overrides the name and not the namespace: change request 1.5a fixes the namespace
+# (decision 1) and keeps the override (decision 2), so an override keeps this account's and Region's
+# suffix. The provider would refuse one without it only at apply, and Terraform would still create
+# everything in the cell that does not depend on the bucket.
+run "a_bucket_name_override_is_created_in_the_namespace_and_every_grant_names_its_arn" {
+  command = plan
+
+  variables {
+    bucket_name = "spa-platform-renamed-111122223333-us-east-1-an"
+  }
+
+  # The file's override gives the bucket an ARN that is not its name's, so a grant assembled from
+  # the override's name rather than read from the bucket fails the second assertion.
+  assert {
+    condition     = aws_s3_bucket.platform.bucket == "spa-platform-renamed-111122223333-us-east-1-an" && aws_s3_bucket.platform.bucket_namespace == "account-regional"
+    error_message = "A bucket_name override is the bucket's name, and the bucket stays in the account regional namespace."
+  }
+
+  assert {
+    condition = alltrue([
+      for resource in flatten(concat(
+        [for s in data.aws_iam_policy_document.platform_bucket.statement : tolist(s.resources)],
+        [for s in data.aws_iam_policy_document.task.statement : tolist(s.resources) if s.sid == "ReadRegistryAndReleases"],
+      )) : resource == "arn:aws:s3:::the-arn-aws-returns" || startswith(resource, "arn:aws:s3:::the-arn-aws-returns/")
+    ])
+    error_message = "Every grant and deny that names the bucket, in its policy and in the task role, names the ARN AWS returns for it, under an override as by default (ADR-0014)."
+  }
+}
+
+run "a_bucket_name_override_in_the_global_namespace_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    bucket_name = "spa-platform-poc"
+  }
+
+  expect_failures = [aws_s3_bucket.platform]
+}
+
+run "a_bucket_name_override_with_another_account_s_suffix_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    bucket_name = "spa-platform-poc-444455556666-us-east-1-an"
+  }
+
+  expect_failures = [aws_s3_bucket.platform]
 }
 
 # --- The task's shape ------------------------------------------------------------------------
@@ -391,7 +651,7 @@ run "the_task_takes_a_public_address_in_this_cell_s_public_subnets" {
 
   assert {
     condition     = aws_ecs_service.gateway.network_configuration[0].security_groups == toset([aws_security_group.task.id])
-    error_message = "The task carries the task group of task 1.2 and nothing else: that group is what accepts the gateway's port from the load balancer alone (test P-06)."
+    error_message = "The task carries the task security group of task 1.2 and nothing else: that group is what accepts the gateway's port from the ALB security group alone (test P-06)."
   }
 }
 
@@ -508,7 +768,7 @@ run "the_registry_and_cell_settings_come_from_the_module_s_own_bucket_and_variab
 
   variables {
     cell                  = "other"
-    bucket_name           = "spa-platform-somewhere-else"
+    bucket_name           = "spa-platform-somewhere-else-111122223333-us-east-1-an"
     registry_key          = "registry/other.json"
     registry_poll_seconds = 7
   }
@@ -537,7 +797,7 @@ run "the_registry_and_cell_settings_come_from_the_module_s_own_bucket_and_variab
         for e in one([
           for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
         ]).environment : e if e.name == "Assets__Bucket"
-      ]).value == "spa-platform-somewhere-else"
+      ]).value == "spa-platform-somewhere-else-111122223333-us-east-1-an"
     )
     error_message = "Releases and the registry live in the one bucket this module creates (contracts/s3-layout.md)."
   }
@@ -1191,7 +1451,7 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
   override_resource {
     target          = aws_s3_bucket.platform
     override_during = apply
-    values          = { arn = "arn:aws:s3:::spa-platform-poc" }
+    values          = { arn = "arn:aws:s3:::the-arn-aws-returns" }
   }
   override_resource {
     target          = aws_lb_target_group.gateway
@@ -1248,6 +1508,13 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
       && aws_iam_role.task_execution.assume_role_policy == data.aws_iam_policy_document.ecs_tasks_trust.json
     )
     error_message = "Both grants and both trust attachments must select their checked policy document."
+  }
+
+  # P-04's configuration half reads this document's statements; this checks that it is the policy
+  # the bucket is given.
+  assert {
+    condition     = aws_s3_bucket_policy.platform.policy == data.aws_iam_policy_document.platform_bucket.json
+    error_message = "The platform bucket's policy must select its checked policy document, the one P-04's configuration half reads."
   }
 
 }

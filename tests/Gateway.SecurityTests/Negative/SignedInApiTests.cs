@@ -28,7 +28,7 @@ public sealed class SignedInApiTests
     [Fact]
     public async Task N11_the_upstream_sees_the_sessions_token_and_the_gateways_forwarding_headers_and_nothing_the_caller_planted()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);
@@ -78,7 +78,7 @@ public sealed class SignedInApiTests
     [Fact]
     public async Task N17_each_apps_token_is_refused_by_the_api_it_was_not_issued_for()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         // Through the second upstream each app lists, read from the fixture rather than named here.
@@ -115,7 +115,7 @@ public sealed class SignedInApiTests
     [Fact]
     public async Task N19_an_unauthenticated_api_call_and_session_read_are_401_problems_and_never_redirects()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await SignedIn.OnPageOfAsync(browser, app);

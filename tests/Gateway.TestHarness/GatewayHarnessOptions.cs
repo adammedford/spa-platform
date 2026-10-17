@@ -45,16 +45,6 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public TimeProvider? Clock { get; init; }
 
-    /// <summary>
-    /// Whether a session is required, as the shipped gateway will require one: the shell gate challenges an
-    /// asset request without a session, and the proxy's token step takes the session's access token, so a
-    /// sessionless <c>/api</c> call gets 401. True switches on the two registrations workstream 3 keeps
-    /// out of <c>AddPlatformIdentity</c> until the composed suites sign in (<see cref="GatewayHarness.RequireSession"/>).
-    /// False leaves the gateway as <c>Program.cs</c> composes it, for a suite that calls <c>/api</c> or
-    /// requests an asset without a session.
-    /// </summary>
-    public bool SessionRequired { get; init; }
-
     /// <summary>More gateway configuration, applied over the harness's own. A null value removes nothing: it sets an empty value.</summary>
     public IReadOnlyDictionary<string, string?> Configuration { get; init; } = new Dictionary<string, string?>();
 

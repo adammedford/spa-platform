@@ -1,6 +1,10 @@
 # Copy to terraform.tfvars and edit. gateway_image and issuers have no default.
 
-region   = "us-east-1"
+# The project's selected Region: AWS_REGION in tools/aws-project.env. Every
+# root defaults to us-east-1, and the provider takes its Region from this
+# variable before the environment, so this line is what puts the cell in the
+# project's Region (change request 1.1).
+region   = "us-east-2"
 cell     = "poc"
 vpc_cidr = "10.20.0.0/16"
 

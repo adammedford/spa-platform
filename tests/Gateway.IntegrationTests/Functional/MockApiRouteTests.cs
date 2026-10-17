@@ -34,7 +34,7 @@ public sealed class MockApiRouteTests
             candidate => candidate.EndsWith("/read", StringComparison.Ordinal) && candidate.Contains(api, StringComparison.Ordinal));
         string? audience = oauth["resource"]?.GetValue<string>();
 
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, appId, Ct);
 
@@ -54,7 +54,7 @@ public sealed class MockApiRouteTests
     [MemberData(nameof(OwnListener))]
     public async Task F08_admin_returns_403_for_want_of_scope(string appId, string api)
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, appId, Ct);
 
@@ -70,7 +70,7 @@ public sealed class MockApiRouteTests
     [Fact]
     public async Task F08_each_app_calls_with_its_own_token_so_the_other_apps_listener_refuses_it()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Ct);
 

@@ -35,6 +35,11 @@ public sealed class HarnessRegistryTests
         Assert.Equal(HttpStatusCode.NotFound, removed.StatusCode);
         Assert.Null(removed.Header("Content-Security-Policy"));
         Assert.NotNull(kept.Header("Content-Security-Policy"));
+
+        // Still resolving, so its own stages answer it: the shell gate, which sends this browser, with
+        // no session, to the provider (ADR-0008).
+        Assert.Equal(HttpStatusCode.Redirect, kept.StatusCode);
+        Assert.StartsWith(harness.Idp.AuthorizeEndpoint + "?", kept.Header("Location"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -45,14 +50,21 @@ public sealed class HarnessRegistryTests
         IServiceProvider before = harness.Services;
 
         (HarnessApp app3, RefreshOutcome outcome) = await harness.OnboardAsync("app3", Ct);
-        BrowserResponse served = await browser.NavigateAsync(app3.Url("/"), NoRedirect, Ct);
+        BrowserResponse challenged = await browser.NavigateAsync(app3.Url("/"), NoRedirect, Ct);
 
         Assert.Equal(RefreshOutcome.Swapped, outcome);
         Assert.Same(before, harness.Services);
         Assert.Equal(FixtureFiles.AppDefinition("app3")["host"]!.GetValue<string>(), app3.Host);
         Assert.Contains(app3.ClientId, harness.Idp.Clients.Keys);
         Assert.Equal(app3.ClientId, harness.Registry.Current.ByAppId["app3"].OAuth.ClientId);
-        Assert.NotNull(served.Header("Content-Security-Policy"));
+        Assert.NotNull(challenged.Header("Content-Security-Policy"));
+
+        // Resolved with its own client: the browser has no session, so the shell gate sends it to the
+        // provider, for app 3's client.
+        Assert.Equal(HttpStatusCode.Redirect, challenged.StatusCode);
+        Uri authorize = new(challenged.Header("Location")!);
+        Assert.Equal(harness.Idp.AuthorizeEndpoint, authorize.GetLeftPart(UriPartial.Path));
+        Assert.Equal(app3.ClientId, Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(authorize.Query)["client_id"].ToString());
 
         // Admission is the API owner's, so the harness leaves it to the test (F-07).
         Assert.False(harness.MockApi.AdmissionOf("reports").IsAdmitted(app3.ClientId));

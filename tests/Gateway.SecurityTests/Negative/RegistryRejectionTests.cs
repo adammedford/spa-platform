@@ -17,9 +17,10 @@ namespace Gateway.SecurityTests.Negative;
 ///
 /// <para><b>Read from outside.</b> The revision comes from <c>/readyz</c>, which
 /// <c>contracts/pipeline.md</c> defines as "200 with <c>{"revision": N}</c> once a snapshot is
-/// live" and which <c>spactl wait</c> reads; the policies come from the responses two browsers
-/// receive. The poll's own outcome is asserted as well, because a document that was never read
-/// would leave every other assertion true.</para>
+/// live" and which <c>spactl wait</c> reads; the policies come from each app's shell as a browser
+/// signed in to both apps receives it, since a shell is served only in a session (ADR-0008). The
+/// poll's own outcome is asserted as well, because a document that was never read would leave every
+/// other assertion true.</para>
 ///
 /// <para><b>Its own harness per row.</b> Each row publishes a registry, so none of them can share
 /// one: a rejected document still advances the ETag the source will not read again.</para>
@@ -66,12 +67,13 @@ public sealed class RegistryRejectionTests
     public async Task A_document_that_is_not_json_at_all_rejects_and_leaves_the_snapshot_serving()
     {
         await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
-        Before before = await ReadAsync(harness);
+        using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Suite.Ct);
+        Before before = await ReadAsync(harness, browser);
 
         RefreshOutcome outcome = await harness.PublishRegistryTextAsync("{ this is not a registry", Suite.Ct);
 
         Assert.Equal(RefreshOutcome.Rejected, outcome);
-        await AssertUnchangedAsync(harness, before);
+        await AssertUnchangedAsync(harness, browser, before);
     }
 
     [Fact]
@@ -82,13 +84,14 @@ public sealed class RegistryRejectionTests
         // the bucket (CODING_STANDARDS.md -> "An assertion must be able to fail"). This is the same
         // benign change those documents carried, published on its own.
         await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
-        Before before = await ReadAsync(harness);
+        using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Suite.Ct);
+        Before before = await ReadAsync(harness, browser);
 
         RefreshOutcome outcome = await harness.UpdateRegistryAsync(document => Benign(document), Suite.Ct);
 
         Assert.Equal(RefreshOutcome.Swapped, outcome);
         Assert.Equal(before.Revision + 1, await RevisionAsync(harness));
-        Assert.Contains(BenignAddition, await PolicyAsync(harness, "app1"), StringComparison.Ordinal);
+        Assert.Contains(BenignAddition, await PolicyAsync(harness, browser, "app1"), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -98,7 +101,8 @@ public sealed class RegistryRejectionTests
     private static async Task AssertRejectedWholeAsync(Action<JsonObject, GatewayHarness> spoil)
     {
         await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
-        Before before = await ReadAsync(harness);
+        using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Suite.Ct);
+        Before before = await ReadAsync(harness, browser);
 
         RefreshOutcome outcome = await harness.UpdateRegistryAsync(
             document =>
@@ -109,7 +113,7 @@ public sealed class RegistryRejectionTests
             Suite.Ct);
 
         Assert.Equal(RefreshOutcome.Rejected, outcome);
-        await AssertUnchangedAsync(harness, before);
+        await AssertUnchangedAsync(harness, browser, before);
     }
 
     /// <summary>
@@ -122,21 +126,21 @@ public sealed class RegistryRejectionTests
     private static JsonObject Entry(JsonObject document, string appId) =>
         document["apps"]!.AsArray().Single(app => app!["appId"]!.GetValue<string>() == appId)!.AsObject();
 
-    private static async Task<Before> ReadAsync(GatewayHarness harness) => new(
+    private static async Task<Before> ReadAsync(GatewayHarness harness, TestBrowser browser) => new(
         await RevisionAsync(harness),
-        await PolicyAsync(harness, "app1"),
-        await PolicyAsync(harness, "app2"));
+        await PolicyAsync(harness, browser, "app1"),
+        await PolicyAsync(harness, browser, "app2"));
 
-    private static async Task AssertUnchangedAsync(GatewayHarness harness, Before before)
+    private static async Task AssertUnchangedAsync(GatewayHarness harness, TestBrowser browser, Before before)
     {
         // The live revision, as spactl wait reads it.
         Assert.Equal(before.Revision, await RevisionAsync(harness));
 
         // And both apps still serving, with the policies they had: the benign change is absent, so
         // the document was taken whole or not at all.
-        string app1 = await PolicyAsync(harness, "app1");
+        string app1 = await PolicyAsync(harness, browser, "app1");
         Assert.Equal(before.App1Policy, app1);
-        Assert.Equal(before.App2Policy, await PolicyAsync(harness, "app2"));
+        Assert.Equal(before.App2Policy, await PolicyAsync(harness, browser, "app2"));
         Assert.DoesNotContain(BenignAddition, app1, StringComparison.Ordinal);
     }
 
@@ -150,11 +154,15 @@ public sealed class RegistryRejectionTests
         return JsonNode.Parse(RawBody.Text(response))!["revision"]!.GetValue<long>();
     }
 
-    /// <summary>The policy one app is serving, which is the entry as the gateway has it.</summary>
-    private static async Task<string> PolicyAsync(GatewayHarness harness, string appId)
+    /// <summary>
+    /// The policy one app is serving, which is the entry as the gateway has it: read off the app's
+    /// shell, requested with the cookies <paramref name="browser"/> holds for that app.
+    /// </summary>
+    private static async Task<string> PolicyAsync(GatewayHarness harness, TestBrowser browser, string appId)
     {
+        HarnessApp app = harness.App(appId);
         RawResponse response = await RawHttp.SendAsync(
-            harness.GatewayAddress, "GET", "/", harness.App(appId).Host, ct: Suite.Ct);
+            harness.GatewayAddress, "GET", "/", app.Host, [("Cookie", SignedIn.CookieHeader(browser, app))], Suite.Ct);
 
         Assert.Equal(200, response.StatusCode);
         return Assert.Single(response.Values("Content-Security-Policy"));

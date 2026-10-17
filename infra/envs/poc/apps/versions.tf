@@ -15,11 +15,18 @@ terraform {
     }
   }
 
-  # Partial configuration, as in the identity root: the bucket name carries the account id.
-  #   terraform init -backend-config="bucket=$(terraform -chdir=../../../bootstrap output -raw state_bucket)"
+  # Partial configuration, as in the identity root: the bucket's name carries the account id, and
+  # the Region is the project's selected Region, AWS_REGION in tools/aws-project.env. A backend
+  # block cannot refer to a variable, so both are given at init (change request 1.1).
+  # https://developer.hashicorp.com/terraform/language/backend#partial-configuration
+  # https://developer.hashicorp.com/terraform/language/backend/s3 (region: required, and read from
+  # AWS_REGION when no -backend-config gives it)
+  # From the repository root, after sourcing tools/aws-project.env:
+  #   terraform -chdir=infra/envs/poc/apps init \
+  #     -backend-config="bucket=$(terraform -chdir=infra/bootstrap output -raw state_bucket)" \
+  #     -backend-config="region=$AWS_REGION"
   backend "s3" {
     key          = "poc/apps/terraform.tfstate"
-    region       = "us-east-1"
     encrypt      = true
     use_lockfile = true
   }

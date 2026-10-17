@@ -13,12 +13,10 @@ public sealed class SignInTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static readonly GatewayHarnessOptions Options = new() { SessionRequired = true };
-
     [Fact]
     public async Task F01_signed_in_on_two_hosts_one_gateway_serves_two_different_shells()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Ct);
         await harness.SignInAsync(browser, "app2", Ct);
@@ -45,7 +43,7 @@ public sealed class SignInTests
     [Fact]
     public async Task F01_control_without_a_session_the_shell_is_not_served()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         BrowserResponse challenged = await browser.NavigateAsync(
@@ -61,7 +59,7 @@ public sealed class SignInTests
     [Fact]
     public async Task F02_each_app_logs_in_with_its_own_client_and_returns_to_its_own_callback()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         foreach (string appId in (string[])["app1", "app2"])
@@ -91,7 +89,7 @@ public sealed class SignInTests
     [Fact]
     public async Task F02_a_session_on_one_app_is_not_a_session_on_the_other()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(Options, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
 
         await harness.SignInAsync(browser, "app1", Ct);

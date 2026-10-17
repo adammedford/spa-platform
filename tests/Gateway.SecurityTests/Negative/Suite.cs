@@ -7,11 +7,21 @@ namespace Gateway.SecurityTests.Negative;
 /// Each test observes a client response, rendered logs, the session store or an upstream's record
 /// rather than invoking middleware directly (docs/plan/04-tests.md).
 ///
-/// <para>Two kinds of cell. The sessionless rows (task 6.3a) run on the gateway as <c>Program.cs</c>
-/// composes it. Every row that needs a session runs on a cell that requires one
-/// (<see cref="SignedIn.StartAsync"/>), with a browser signed in through the test provider, and a
-/// row whose sessionless half landed first (N-07, N-10, N-12, N-24, N-27) has its session half beside
-/// it in the same class. N-25's browser clause and N-26 rest on the browser enforcing the
+/// <para>One kind of cell, which requires a session before it serves an asset or forwards an API
+/// call, as ADR-0008 decides. The composition that ships does that, not the harness:
+/// <c>AddPlatformIdentity</c> binds the token source and <c>UsePlatformShellGate</c> is always in
+/// the pipeline. A row that needs a session signs a browser in through the test provider. A row
+/// whose request is refused before authentication runs (host resolution, the request gate, Kestrel
+/// itself) needs none.
+/// A row that sends an asset or API request without one asserts the refusal it gets: a navigation is
+/// sent to the provider, any other asset request gets 401 <c>unauthenticated</c> (under
+/// <c>auth.session</c> when it presented a session cookie that names no session), and an API call the
+/// proxy would forward gets the same 401 from the proxy's token step instead (task 6.3c). Two API
+/// answers come from elsewhere, each named by its writer: <c>UsePlatformAntiforgery</c> refuses an
+/// unsafe method 403 <c>csrf_failed</c>, since no anonymous token pair exists, and
+/// <c>MapPlatformProxy</c>'s catch-all answers a name the app does not list 404 <c>unknown_api</c>,
+/// with a session or without. Where a row has a sessionless half and a signed-in half (N-07, N-10,
+/// N-27), both are in the same class. N-25's browser clause and N-26 rest on the browser enforcing the
 /// <c>__Host-</c> prefix, which the test browser does not do (R-D3); the deployed suite holds
 /// them.</para>
 ///

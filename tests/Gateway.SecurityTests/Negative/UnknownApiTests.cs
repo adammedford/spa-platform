@@ -11,9 +11,11 @@ namespace Gateway.SecurityTests.Negative;
 /// prefix -> 404 <c>unknown_api</c> for the unlisted name, 400 or 404 for the escape paths. No
 /// upstream logs the request." (docs/plan/04-tests.md.)
 ///
-/// <para>The class fixture's requests carry no session.
-/// <see cref="A_signed_in_caller_meets_the_same_refusals_and_no_upstream_sees_the_request"/> repeats
-/// both refusals for a caller with a live session, on a cell that requires one, so a session is not
+/// <para>The class fixture's refusals carry no session. Its control,
+/// <see cref="A_listed_api_name_does_reach_its_upstream"/>, signs in, because only a call with a
+/// session is forwarded at all: the proxy's token step refuses one without before an upstream is
+/// reached. <see cref="A_signed_in_caller_meets_the_same_refusals_and_no_upstream_sees_the_request"/>
+/// repeats both refusals for a caller with a live session, on a cell of its own, so a session is not
 /// what stands between an attacker and an unlisted upstream.</para>
 ///
 /// <para><b>Why the unlisted name cannot reach an upstream.</b> ADR-0006: YARP's routes are
@@ -66,7 +68,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
     public async Task An_api_name_the_app_does_not_list_is_404_unknown_api()
     {
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await SignedIn.OnPageOfAsync(browser, Harness.App("app1"));
 
         int upstreams = Harness.Echo.Requests.Count;
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
@@ -111,15 +113,18 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
 
         using TestBrowser browser = harness.CreateBrowser();
 
-        // Still listed on app 1, and reachable there: the name itself is not what was taken away,
-        // and the upstream behind it is the same one app 2 can no longer reach.
-        await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Suite.Ct);
+        // Still listed on app 1, and reachable there with a session: the name itself is not what was
+        // taken away, and the upstream behind it is the same one app 2 can no longer reach.
+        await harness.SignInAsync(browser, "app1", Suite.Ct);
         int reachedFromApp1 = harness.Echo.Requests.Count;
         BrowserResponse onApp1 = await browser.GetAsync($"/api/{name}/thing", ct: Suite.Ct);
         Assert.Equal(HttpStatusCode.OK, onApp1.StatusCode);
         Assert.Equal(reachedFromApp1 + 1, harness.Echo.Requests.Count);
 
-        await browser.NavigateAsync(harness.App("app2").Url("/"), ct: Suite.Ct);
+        // Signed in to app 2 as well, so the refusal is the one a user signed in there meets: no route
+        // matches on app 2's host (ADR-0006), so MapPlatformProxy's catch-all answers and no token is
+        // asked for, as An_api_name_the_app_does_not_list_is_404_unknown_api shows with no session.
+        await harness.SignInAsync(browser, "app2", Suite.Ct);
         int echoed = harness.Echo.Requests.Count;
         int before = await Observed.SettledCountAsync(harness, Suite.Ct);
 
@@ -187,7 +192,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
         // gateway that could reach no upstream at all would also satisfy
         // (CODING_STANDARDS.md -> "An assertion must be able to fail").
         using TestBrowser browser = Harness.CreateBrowser();
-        await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Suite.Ct);
+        await Harness.SignInAsync(browser, "app1", Suite.Ct);
 
         int upstreams = Harness.Echo.Requests.Count;
         BrowserResponse response = await browser.GetAsync("/api/echo/thing", ct: Suite.Ct);
@@ -202,7 +207,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
     [Fact]
     public async Task A_signed_in_caller_meets_the_same_refusals_and_no_upstream_sees_the_request()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         await harness.SignInAsync(browser, "app1", Suite.Ct);

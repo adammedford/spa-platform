@@ -29,9 +29,6 @@ internal static class ShellGate
         "/bff", "/api", "/signin-oidc", "/signout-callback-oidc", "/signout-oidc", "/healthz", "/readyz",
     ];
 
-    /// <summary>Registered by <c>AddPlatformShellGate</c>: the gate is in the pipeline.</summary>
-    internal sealed class Binding;
-
     public static async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         if (!Gated(context.Request))

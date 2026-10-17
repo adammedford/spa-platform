@@ -37,7 +37,7 @@ public sealed class ReleaseSwitchTests
     [Fact]
     public async Task Publishing_a_registry_document_switches_the_live_release_and_switching_back_restores_it()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
 
         string first = harness.Options.Release;
@@ -66,7 +66,7 @@ public sealed class ReleaseSwitchTests
     [Fact]
     public async Task The_switch_changes_content_with_no_restart_and_no_new_service_provider()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
         IConfiguration configuration = harness.Services.GetRequiredService<IConfiguration>();
 
@@ -95,7 +95,7 @@ public sealed class ReleaseSwitchTests
     [Fact]
     public async Task A_switch_leaves_the_other_app_untouched()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
 
         BrowserResponse neighbourBefore = await browser.NavigateAsync(harness.App("app2").Url("/"), ct: Ct);
@@ -117,7 +117,7 @@ public sealed class ReleaseSwitchTests
     [Fact]
     public async Task The_live_registry_revision_is_observable_after_a_switch()
     {
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = await harness.CreateSignedInBrowserAsync(Ct);
         await harness.PublishReleaseAsync("app1", SecondRelease, NextRelease("app1", SecondRelease), Ct);
 

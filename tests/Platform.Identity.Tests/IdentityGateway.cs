@@ -13,9 +13,11 @@ using TestIdp;
 namespace Platform.Identity.Tests;
 
 /// <summary>
-/// The services <c>AddPlatformIdentity</c> registers, in front of the test identity provider, with
-/// the framework's <c>UseAuthentication</c> as the only middleware. <see cref="SettableAppFeature"/>
-/// stands in for host resolution, which runs before authentication and pins the app.
+/// The services <c>AddPlatformIdentity</c> registers, in front of the test identity provider. Like
+/// <c>Program.cs</c>, it registers nothing else of workstream 3's, so the shell gate and the token
+/// source a test meets here are the ones the shipping gateway runs.
+/// <see cref="SettableAppFeature"/> stands in for host resolution, which runs before authentication
+/// and pins the app.
 ///
 /// The pipeline follows contracts/pipeline.md: routing, the
 /// framework's authentication, <c>UsePlatformShellGate</c> and <c>MapPlatformBff</c>. A terminal
@@ -39,9 +41,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     /// <summary>
     /// A path standing in for the proxy's token step (task 4.2): it asks <see cref="IAccessTokenSource"/>
-    /// for the session's token and answers 200 with the token as the body, or 401 with the outcome's
-    /// code. It hands the source the request's own cancellation token on purpose, so a test can prove the
-    /// source never lets a disconnecting browser cancel a refresh (T-B16).
+    /// for the session's token and answers 200 with the token as the body, or the outcome's status with
+    /// its code from contracts/http-contract.md -> Errors as the body: 401 <c>unauthenticated</c>, 401
+    /// <c>session_ended</c> or 503 <c>idp_unavailable</c>. An outcome it does not know throws, as the
+    /// proxy's step refuses one, so no test reads an unknown outcome as a known one. It hands the source
+    /// the request's own cancellation token on purpose, so a test can prove the source never lets a
+    /// disconnecting browser cancel a refresh (T-B16).
     /// </summary>
     public const string TokenPath = "/api/token-probe";
 
@@ -93,8 +98,10 @@ internal sealed class IdentityGateway : IAsyncDisposable
                 (context.Response.StatusCode, string body) = result switch
                 {
                     AccessTokenResult.Token token => (200, token.Value),
+                    AccessTokenResult.Unauthenticated => (401, "unauthenticated"),
                     AccessTokenResult.SessionEnded => (401, "session_ended"),
-                    _ => (401, "unauthenticated"),
+                    AccessTokenResult.ProviderUnavailable => (503, "idp_unavailable"),
+                    _ => throw new InvalidOperationException($"The probe knows no outcome {result.GetType().Name}."),
                 };
                 await context.Response.WriteAsync(body, CancellationToken.None);
                 return;
@@ -196,8 +203,6 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<FakeCsrfTokens>();
         builder.Services.AddSingleton<ICsrfTokens>(sp => sp.GetRequiredService<FakeCsrfTokens>());
         builder.AddPlatformIdentity();
-        builder.Services.AddPlatformAccessTokenSource();
-        builder.Services.AddPlatformShellGate();
         services?.Invoke(builder.Services);
 
         return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);

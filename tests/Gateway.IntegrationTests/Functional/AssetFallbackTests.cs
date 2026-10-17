@@ -28,7 +28,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
         public GatewayHarness Harness { get; private set; } = null!;
 
         public async ValueTask InitializeAsync() =>
-            Harness = await GatewayHarness.StartAsync(new GatewayHarnessOptions { SessionRequired = true }, TestContext.Current.CancellationToken);
+            Harness = await GatewayHarness.StartAsync(ct: TestContext.Current.CancellationToken);
 
         public async ValueTask DisposeAsync() => await Harness.DisposeAsync();
     }

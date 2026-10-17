@@ -44,8 +44,8 @@ public static class PlatformProxyExtensions
     {
         endpoints.MapReverseProxy(proxy =>
         {
-            // The token first, so a 401 is answered before anything is forwarded and the failure
-            // check below never sees it.
+            // The token first, so a 401 or 503 is answered before anything is forwarded and the
+            // failure check below never sees it.
             AccessTokenStep.Use(proxy);
             UpstreamFailure.Use(proxy);
         });

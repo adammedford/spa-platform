@@ -19,7 +19,7 @@ public sealed class ConcurrentApiCallsTests
     public async Task Two_concurrent_calls_carry_two_trace_ids()
     {
         CapturedTelemetry telemetry = new();
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(telemetry.Options(new GatewayHarnessOptions { SessionRequired = true }), Ct);
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(telemetry.Options(), Ct);
 
         using TestBrowser one = harness.CreateBrowser();
         using TestBrowser two = harness.CreateBrowser();

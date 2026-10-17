@@ -18,10 +18,6 @@
 locals {
   teardown_role_name = "${local.name_prefix}-teardown"
 
-  # The default is modules/cell's: spa-platform-<cell>.
-  platform_bucket_name = var.platform_bucket_name != "" ? var.platform_bucket_name : local.name_prefix
-  platform_bucket_arn  = "arn:${local.partition}:s3:::${local.platform_bucket_name}"
-
   teardown_trusted_users = [for arn in var.teardown_trusted_principal_arns : arn if can(regex(":user/", arn))]
   teardown_trusted_roles = [for arn in var.teardown_trusted_principal_arns : arn if can(regex(":role/", arn))]
 

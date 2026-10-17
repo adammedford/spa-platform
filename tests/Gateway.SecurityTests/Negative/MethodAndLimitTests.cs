@@ -30,10 +30,15 @@ namespace Gateway.SecurityTests.Negative;
 /// <para><b>Why the raw socket.</b> No client library will send a <c>TRACE</c> or an HTTP/1.1
 /// authority-form <c>CONNECT</c> to an origin server, and none will serialize a 40 KB header rather
 /// than refusing it locally.</para>
+///
+/// <para><b>Every request here carries a session.</b> The class signs one browser in and sends its
+/// cookies on each raw request, so the controls are served, as an asset is only served in a session
+/// (ADR-0008), and each refusal differs from its control in the method or the header under test and
+/// in nothing else.</para>
 /// </summary>
 public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassFixture<MethodAndLimitTests.Cell>
 {
-    /// <summary>One harness for this class: these rows change nothing about it.</summary>
+    /// <summary>One harness for this class, and one signed-in browser: these rows change nothing about either.</summary>
     public sealed class Cell : IAsyncLifetime
     {
         public GatewayHarness Harness { get; private set; } = null!;
@@ -41,10 +46,18 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         /// <summary>The gateway's counters, which the request line alone cannot show were kept.</summary>
         public CountedMetrics Counts { get; private set; } = null!;
 
+        /// <summary>The <c>Cookie</c> header of a browser signed in to app 1.</summary>
+        public string Session { get; private set; } = null!;
+
         public async ValueTask InitializeAsync()
         {
-            Harness = await Suite.StartAsync(ct: TestContext.Current.CancellationToken);
+            CancellationToken ct = TestContext.Current.CancellationToken;
+            Harness = await Suite.StartAsync(ct: ct);
             Counts = CountedMetrics.Watch(Harness);
+
+            using TestBrowser browser = Harness.CreateBrowser();
+            await Harness.SignInAsync(browser, "app1", ct);
+            Session = SignedIn.CookieHeader(browser, Harness.App("app1"));
         }
 
         public async ValueTask DisposeAsync()
@@ -57,6 +70,12 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
     private GatewayHarness Harness => cell.Harness;
 
     private CountedMetrics Counts => cell.Counts;
+
+    /// <summary>One request to app 1's host over the socket, carrying the class's session and any further headers.</summary>
+    private Task<RawResponse> Send(string method, string target, params (string Name, string Value)[] headers) =>
+        RawHttp.SendAsync(
+            Harness.GatewayAddress, method, target, Harness.App("app1").Host,
+            [("Cookie", cell.Session), .. headers], Suite.Ct);
 
     /// <summary>
     /// The methods no path of the gateway accepts, which the row names. <c>CONNECT</c> carries the
@@ -83,8 +102,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         long rejected = Rejections();
         long answered = Answered405s();
 
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, method, target, Harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Send(method, target);
 
         Contract.ErrorRow expected = Contract.Error("The path does not accept the method");
         Assert.Equal(expected.Status, response.StatusCode);
@@ -133,8 +151,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
     {
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, method, "/index.html", Harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Send(method, "/index.html");
 
         Contract.ErrorRow expected = Contract.Error("The path does not accept the method");
         Assert.Equal(expected.Status, response.StatusCode);
@@ -155,8 +172,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         // requests (CODING_STANDARDS.md -> "An assertion must be able to fail").
         int before = await Observed.SettledCountAsync(Harness, Suite.Ct);
 
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, "GET", "/index.html", Harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Send("GET", "/index.html");
 
         Assert.Equal(200, response.StatusCode);
         Assert.Null(await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
@@ -165,8 +181,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
     [Fact]
     public async Task A_head_on_an_asset_path_is_accepted_and_carries_no_body()
     {
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, "HEAD", "/index.html", Harness.App("app1").Host, ct: Suite.Ct);
+        RawResponse response = await Send("HEAD", "/index.html");
 
         Assert.Equal(200, response.StatusCode);
         Assert.Empty(response.Body);
@@ -184,9 +199,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         // reads a 200 and fails, which is the right way round.
         string oversized = new('x', 40 * 1024);
 
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, "GET", "/", Harness.App("app1").Host,
-            [("X-Too-Large", oversized)], Suite.Ct);
+        RawResponse response = await Send("GET", "/", ("X-Too-Large", oversized));
 
         Assert.Equal(431, response.StatusCode);
         Assert.Empty(response.Body);
@@ -204,9 +217,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
     {
         // The control: the 431 above is the limit being enforced, not the gateway refusing any
         // request that carries an unusual header.
-        RawResponse response = await RawHttp.SendAsync(
-            Harness.GatewayAddress, "GET", "/", Harness.App("app1").Host,
-            [("X-Small", new string('x', 512))], Suite.Ct);
+        RawResponse response = await Send("GET", "/", ("X-Small", new string('x', 512)));
 
         Assert.Equal(200, response.StatusCode);
     }

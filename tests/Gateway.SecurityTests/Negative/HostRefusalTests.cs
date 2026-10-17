@@ -92,13 +92,18 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
         // (fixtures/apps/app2.json), read from the fixture rather than written down here.
         string app2Addition = FixtureFiles.AppDefinition("app2")["csp"]!["img-src"]!.AsArray().Single()!.GetValue<string>();
 
-        RawResponse served = await RawHttp.SendAsync(
+        RawResponse answered = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "/", KnownHost,
             [("X-Forwarded-Host", Harness.App("app2").Host)], Suite.Ct);
 
-        Assert.Equal(200, served.StatusCode);
+        // An app answered, not host resolution: the request carries no session, so the app's shell
+        // gate refuses the fetch with 401 (ADR-0008), and UsePlatformSecurityHeaders puts the policy of
+        // the app host resolution pinned on that answer as on any other.
+        Contract.ErrorRow noSession = Contract.Error("No session");
+        Assert.Equal(noSession.Status, answered.StatusCode);
+        Assert.Contains($"\"code\":\"{noSession.Code}\"", RawBody.Text(answered), StringComparison.Ordinal);
 
-        string policy = Assert.Single(served.Values("Content-Security-Policy"));
+        string policy = Assert.Single(answered.Values("Content-Security-Policy"));
         Assert.DoesNotContain(app2Addition, policy, StringComparison.Ordinal);
         Assert.Contains("img-src 'self';", policy, StringComparison.Ordinal);
     }

@@ -32,7 +32,7 @@ public sealed class LoginTests
     [Fact]
     public async Task N03_app1s_callback_replayed_on_app2_with_its_login_cookies_is_rejected_and_creates_no_session()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app1 = harness.App("app1"), app2 = harness.App("app2");
         using TestBrowser browser = harness.CreateBrowser();
         Uri callback = await SignedIn.UpToCallbackAsync(harness, browser, app1);
@@ -57,7 +57,7 @@ public sealed class LoginTests
     [Fact]
     public async Task N04_a_code_issued_to_client1_injected_into_app2s_own_login_is_refused_by_the_provider()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app1 = harness.App("app1"), app2 = harness.App("app2");
 
         // The attacker's code, issued to app 1's client and never redeemed.
@@ -85,7 +85,7 @@ public sealed class LoginTests
     [MemberData(nameof(Tamperings))]
     public async Task N05_a_callback_without_its_correlation_or_nonce_cookie_or_with_tampered_state_is_rejected(string tampering)
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
         Uri callback = await SignedIn.UpToCallbackAsync(harness, browser, app);
@@ -121,7 +121,7 @@ public sealed class LoginTests
     [MemberData(nameof(ForeignReturnUrls))]
     public async Task N15_a_return_url_that_leaves_the_app_lands_on_the_root(string returnUrl)
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
 
@@ -137,7 +137,7 @@ public sealed class LoginTests
     [Fact]
     public async Task N15_control_a_local_return_url_is_kept()
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
         using TestBrowser browser = harness.CreateBrowser();
 
@@ -159,7 +159,7 @@ public sealed class LoginTests
     [MemberData(nameof(PlantedWhen))]
     public async Task N18_a_planted_session_cookie_never_carries_the_identity_of_the_login_that_follows(string when)
     {
-        await using GatewayHarness harness = await SignedIn.StartAsync();
+        await using GatewayHarness harness = await Suite.StartAsync(ct: Suite.Ct);
         HarnessApp app = harness.App("app1");
 
         // The attacker's own session, under the attacker's identity.
