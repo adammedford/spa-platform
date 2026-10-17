@@ -160,11 +160,11 @@ the earlier step 1 would have had someone write a test that is green before and 
 The arithmetic is also corrected: 0.43 is the chance across eight runs, 0.9 per run.
 
 Note for triage: another session has an unlanded ticket on the same race, task id 6.1a, also
-numbered 61, reaching the same mechanism independently and marked ready-for-agent. These should be
-merged into one before either is worked, and the number collision resolved by whoever lands
+numbered 61 (renumbered 68 since), reaching the same mechanism independently and marked
+ready-for-agent. These should be merged into one before either is worked, and the number collision resolved by whoever lands
 second. 62 to 65 are taken, so 66 is the next free number. Given that twin is `ready-for-agent` with a prescribed fix, it is probably the better
 starting point and this one is the evidence trail.
 
-**Resolved 2026-10-16 (Q29):** closed by task 6.1a (`61-6.1a-harness-update-registry-race.md`),
+**Resolved 2026-10-16 (Q29):** closed by task 6.1a (`68-6.1a-harness-update-registry-race.md`),
 which reproduced this failure and fixed it in the harness, and whose review fixed the matching
 `Rejected` case in six more asserts.

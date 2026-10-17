@@ -125,7 +125,7 @@ PR of their own.
   `integrator/tracker-2026-10-16`).
 - `git status --porcelain` is **not empty**:
   - 20 tickets the run updated, all under `.scratch/overnight/issues/`: 03, 06, 18–27, 36, 37, 39,
-    56, 61-6.1a, 62, 63 and 64.
+    56, 68-6.1a (61-6.1a when this ran), 62, 63 and 64.
   - The new, untracked ticket `65-CR-1.5a-bucket-name-and-object-lock.md`.
   - This report.
   - `questions.md`.

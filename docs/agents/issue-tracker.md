@@ -14,6 +14,61 @@ Session logs under `.scratch/<feature-slug>/log/` stay ignored: they are a trans
 - Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
+## Which directory a cited number resolves against
+
+A ticket number means nothing on its own: every feature directory numbers from `01`, so `06` names
+a file in several of them. Where a citation resolves is therefore read off **where it is written**.
+
+- **A document inside `.scratch/<feature-slug>/`** -- a spec, a map, a report, a questions file --
+  cites its own directory. `.scratch/g1a-and-landing-work/issues/05-...md` saying "ticket 06" means
+  `.scratch/g1a-and-landing-work/issues/06-...md`, its sibling.
+- **A document anywhere else** -- an ADR, a contract, a merge body, a comment in Terraform or C# --
+  cites `.scratch/overnight/issues/`, the plan-wide tracker. That is already what every such
+  citation in the tree means, and it is the only tracker a document outside `.scratch/` has reason
+  to cite.
+- **To cite across directories, name the directory**: write the slug immediately before the
+  citation, as `docs/adr/0018-...md` does with "overnight ticket 53". The name wins over both
+  defaults above, and it is the only way a document inside one feature directory can cite another.
+  Without it the number resolves to a sibling that may not exist, or worse, to the wrong file.
+
+`.github/steering.py` holds this, over every file git tracks, in the three shapes the tree writes:
+`ticket NN`, `tickets NN and NN` and `<slug> ticket NN`. A longer list enumerates the same way, by
+`and`, a comma or a slash, and a citation that wraps over a line break is read whole. A number that
+resolves to no file fails the push. A ticket named before it is filed goes on that script's
+`UNFILED` list with the reason, and the check fails once the ticket appears, so the list cannot
+outlive its entries.
+
+Two things it deliberately does not read. A dotted number is a plan task id, not a ticket:
+"workstream 3's tickets 3.3, 3.5 and 3.9" cites rows in
+`docs/plan/03-workstreams-and-tasks.md`. And a range -- "tickets 62-65", "tickets 01 to 08" -- is
+held to its first number only, because the numbers inside it were never written down.
+
+## When the number you want is already claimed
+
+Two sessions that cannot see each other's unlanded work will both pick the next free number, and
+both will be right on their own branch. `.github/steering.py` fails the push once two files in one
+`.scratch/<feature-slug>/issues/` share a leading number, naming the directory and both files.
+The same number in two different feature directories is not a collision: numbering restarts per
+directory by design.
+
+- **Before filing**, fetch and take the next number after the highest on `origin/main` in that
+  directory, not only the highest in your checkout.
+- **When the check fails**, the ticket that reached `origin/main` second renumbers, and in practice
+  that is yours, since you are the one pushing. The ticket already on trunk keeps its number because
+  commit messages and merge bodies cite it by that number, and history cannot be edited.
+- **Renumber in one commit**: `git mv` the file to the next free number in its directory, change
+  the number in its `# NN:` heading, and move every citation that meant it -- `ticket NN`, a wrapped
+  `ticket` / `NN` over a line break, and the `NN-<slug>` file name. Add a line under its
+  `## Comments` saying which number it had, so a commit message that still says the old number can
+  be traced.
+- **Read every citation of the old number in context and decide which ticket it meant.** After the
+  rename the old number still resolves, to the ticket that kept it, so a citation left behind does
+  not dangle: it lands on the wrong spec, and the citation check passes it. Nothing mechanical
+  catches that, which is why this step is a reading and not a grep-and-replace.
+
+Overnight ticket 68 is the worked example: task 6.1a's ticket was filed as 61 beside the security
+suite's flake ticket, and was renumbered when this check landed.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
