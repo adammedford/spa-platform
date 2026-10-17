@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-agent
+**Status:** moved to #72
 
 **What to build:** A merge body produced on the fly can be handed to `tools/land.sh` the way `gh`
 itself would take it. Ticket 05 validates `--body-file` with `[ -f ]`, so a body passed by process
@@ -21,3 +21,7 @@ path is already absolute, but the descriptor is the caller's, so confirm it is s
       unreadable file are still refused before the merge.
 - [ ] `--body-file -` is refused with a message saying why.
 - [ ] Verified under the bash 3.2 macOS ships, by running the script's own parse loop.
+
+## Comments
+
+- 2026-10-17: moved to #72 under ADR-0020; this file is the archive copy.

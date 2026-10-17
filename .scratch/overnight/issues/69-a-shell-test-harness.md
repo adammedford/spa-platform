@@ -3,7 +3,7 @@
 **Task:** none (raised by overnight ticket 66, "Out of Scope")
 **Owner:** integrator
 **Blocked by:** None
-**Status:** ready-for-human
+**Status:** moved to #66
 
 ## Problem
 
@@ -779,3 +779,7 @@ None. Each decision fails at least one of the three criteria, most often "hard t
   case exists.
 - **The scope split and the sequencing (questions 2, 6 and 15).** Ticket hygiene, reversible by
   filing.
+
+## Comments
+
+- 2026-10-17: moved to #66 under ADR-0020; this file is the archive copy.

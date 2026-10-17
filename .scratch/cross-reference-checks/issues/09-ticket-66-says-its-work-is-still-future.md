@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-human
+**Status:** moved to #74
 
 **What to build:** Overnight ticket 66's "Snapshot and current scope" paragraph stops making a
 false claim about the tree. It says "The proposed cross-reference checks, test companion and
@@ -19,3 +19,7 @@ number". It is a record of what was true when it was written, and may be left as
 
 - [ ] Decide whether overnight ticket 66 is resolved or stays open as the parent of 69 and 70.
 - [ ] Its current-scope paragraph states what has landed, citing the merge commits.
+
+## Comments
+
+- 2026-10-17: moved to #74 under ADR-0020; this file is the archive copy.

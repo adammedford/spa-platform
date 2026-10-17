@@ -3,7 +3,7 @@
 **Task:** none (raised by overnight ticket 66, "Out of Scope")
 **Owner:** integrator
 **Blocked by:** None
-**Status:** ready-for-human
+**Status:** moved to #67
 
 ## Problem
 
@@ -699,3 +699,7 @@ detail.
 - **No second ADR.** Q5, Q13, Q14, Q15 and Q16 are procedure, cheap to reverse and unsurprising once
   ADR-0020 exists, so they belong in `landing-work.md` and `review.md`. The glossary amendments are
   vocabulary, not decisions.
+
+## Comments
+
+- 2026-10-17: moved to #67 under ADR-0020; this file is the archive copy.

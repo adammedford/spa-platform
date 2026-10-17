@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-agent
+**Status:** moved to #70
 
 **What to build:** A program that needs to know how far the work has got asks the script that
 already derives it. `tools/roadmap.py` reads the tags, the merge subjects and the plan's task tables
@@ -24,3 +24,7 @@ finished rows back out for work.
       by a case in the script's tests.
 - [ ] The rows landed by #9, `fb4899a` and `a00b131` read as landed.
 - [ ] The overnight collect step reads landed rows from the JSON mode.
+
+## Comments
+
+- 2026-10-17: moved to #70 under ADR-0020; this file is the archive copy.

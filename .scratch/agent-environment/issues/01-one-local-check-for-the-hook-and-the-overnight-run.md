@@ -2,7 +2,7 @@
 
 **Owner:** integrator
 **Blocked by:** None (can start immediately).
-**Status:** ready-for-agent
+**Status:** moved to #68
 
 **What to build:** The checks a branch must pass on this machine live in one script, and everything
 that checks a branch runs that script as written: the pre-push hook, a person before a push, and
@@ -40,3 +40,7 @@ still pending, and this script's cases belong there once it lands.
 - [ ] A deliberately broken copy of a tracked shell script fails CI's parse step.
 - [ ] The overnight workflow's build-and-test step calls the script, and the next run's lane logs
       show it ran unedited.
+
+## Comments
+
+- 2026-10-17: moved to #68 under ADR-0020; this file is the archive copy.

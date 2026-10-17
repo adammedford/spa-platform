@@ -3,7 +3,7 @@
 **Task:** none (retrospective, 2026-10-16)
 **Owner:** integrator
 **Blocked by:** None
-**Status:** ready-for-human
+**Status:** moved to #65
 
 ## Snapshot and current scope
 
@@ -717,3 +717,5 @@ Three terms were considered and not proposed:
 - **Q8** is vocabulary, reversible in one edit.
 - **Q5** leaves its decision to the new ticket. If that ticket keeps the import in every session
   and exempts it from the steering check, that deliberate deviation may earn an ADR then.
+
+- 2026-10-17: moved to #65 under ADR-0020; this file is the archive copy.
