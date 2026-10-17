@@ -57,6 +57,13 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
 - **The body is the current spec; the comments are the record.** Grilling records, routing, status
   notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
   to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
+- **A body is rewritten only to carry confirmed decisions.** An answer is confirmed when the human
+  wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
+  answer alone rewrites nothing. A ticket's body is rewritten by the morning run or by the session
+  implementing it; a spec's body only by the session that grilled it. Whoever rewrites names every
+  question number applied, preserves the previous body verbatim in a comment headed with the date,
+  and ticks or unticks an acceptance box only for work done or undone. The overnight grill
+  comments; it never rewrites. A `Confirm` comment is the human's act: no agent session writes one.
 - **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
   cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
   `#NNN` that names neither.
