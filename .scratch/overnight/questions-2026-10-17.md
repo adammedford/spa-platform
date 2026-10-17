@@ -3,7 +3,7 @@
 **55 questions, Q1..Q55, grouped by ticket, the ones that unblock the most work first.**
 
 - **52 come from the three tickets grilled tonight** (70, 69 and 66), from their `## Questions for Adam` sections. Each carries the line its ticket records, `Answer: yes, pre-accepted by Adam, 2026-10-15`, which is your standing answer for this run. The morning session applies them as written unless you override one.
-- **Three are open and need an answer.** Q55 comes from the `## Comments` of ticket 27, where tonight's 4.2 review left it. Q20 and Q21 are in no ticket section: this report raises them because two pre-accepted answers contradict each other (Q20), and because a decided change request reads as a loop (Q21). Each says so on its Answer line.
+- **Two are open and need an answer.** Q55 was resolved during PR #47 review by reusing the existing dead-session recorder in the token source; its answer is recorded below. Q20 and Q21 are in no ticket section: this report raises them because two pre-accepted answers contradict each other (Q20), and because a decided change request reads as a loop (Q21). Each says so on its Answer line.
 - **Every other `## Comments` section** holds status, prep or filing notes, and no question. The one Comments line in ticket 66 asks what its own question 9 (Q51 here) answers, so it is not asked twice.
 - **Numbering.** Each question names the ticket's own number. Where a recommendation points at another question, this file's number follows as "Qn here". "Option (b)" means the option with that letter in the ticket's grilling record.
 - **No grill tonight was carried from an earlier night.** The closing section lists the tickets whose questions were asked and answered on earlier nights.
@@ -327,7 +327,7 @@ From the ticket's `## Comments`, written by tonight's 4.2 reviewer for the integ
 - **(d) The contract exempts `/api`.** `contracts/telemetry.md` and `IRequestTelemetryFeature.Rule` exempt `/api`. No code changes, but `security.rejections` stops counting dead cookies on API calls.
 
 Recommended: (a), as a workstream 3 ticket. Pair it with a composed test that sends the same dead cookie to an asset and to `/api`, the pair this review ran. The rule and its only writer then stay in one place.
-Answer: open.
+Answer: (a), resolved during PR #47 review on 2026-10-17. `AccessTokenSource` calls the existing `Bff.NoteDeadSession` recorder when authentication fails. Composed regressions distinguish removed and malformed cookies (`auth.session`) from no cookie (no rejection rule). The fresh independent review treated the existing telemetry contract as binding; no contract exemption was introduced.
 
 ---
 
