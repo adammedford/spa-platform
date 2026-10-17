@@ -15,9 +15,12 @@ terraform {
 
   # Partially configured: a backend block takes no variables, and the state bucket's
   # name carries the account id, which is not known until infra/bootstrap is applied.
-  # Fill the rest in from the bootstrap root's `backend_blocks` output, either by
-  # pasting it here or with `terraform init -backend-config=backend.hcl`.
-  # backend.hcl.example beside this file is that file's shape.
+  # Give the bucket and the Region at init, with
+  # `terraform init -backend-config=backend.hcl` filled in from the bootstrap root's
+  # `backend_blocks` output; backend.hcl.example beside this file is that file's
+  # shape. Never paste them here: the bucket's name carries the account id, and the
+  # Region is the project's, which tools/aws-project.env names (change requests 1.5
+  # and 1.1).
   backend "s3" {
     key          = "poc/platform/terraform.tfstate"
     encrypt      = true

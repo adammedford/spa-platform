@@ -5,4 +5,9 @@
 # versions.tf carries it. These two are the values that cannot be, because the
 # bucket's name is not known until infra/bootstrap has been applied.
 bucket = "spa-platform-poc-tfstate-111122223333"
-region = "us-east-1"
+
+# The state bucket's Region, which is the project's selected Region: AWS_REGION
+# in tools/aws-project.env. A backend block cannot read a variable, so it is given
+# here or with -backend-config="region=$AWS_REGION", never in versions.tf (change
+# request 1.1).
+region = "us-east-2"

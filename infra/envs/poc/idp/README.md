@@ -13,6 +13,10 @@ Task 1.1. One user pool per cell, and what hangs off it:
 **No app clients.** Those belong to the apps root (task 1.8), so onboarding an app never plans a
 change here (`docs/plan/05-infrastructure-and-cost.md` -> Terraform boundaries).
 
+Every block in this README runs from the repository root, and each one that reaches AWS begins
+by sourcing `tools/aws-project.env`, which names the project's profile and its selected Region.
+Without it the shell builds in whichever project its default profile points at.
+
 ## Tags
 
 `Platform = spa-platform`, `Cell = <cell>`, `ManagedBy = terraform`, through the provider's
@@ -29,29 +33,62 @@ and TLS only. They are never in an output: `test_users` names each parameter, ne
 Read one when a test needs it, and never into a file:
 
 ```bash
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
 aws ssm get-parameter --with-decryption --name /spa-platform/poc/test-users/alice \
   --query Parameter.Value --output text
 ```
 
 ## Applying it
 
-The backend block is partial, because the bucket name carries the account id:
+**Step 0 is `infra/bootstrap`** (`infra/bootstrap/README.md` -> Applying it): this root keeps its
+state in the bucket that root creates, so it cannot be initialised before it.
+
+This root's `terraform.tfvars`, which git ignores, sets `region` to the project's selected Region,
+`AWS_REGION` in `tools/aws-project.env`. Every root defaults to `us-east-1`, and a parameter in the
+provider block outranks the environment
+(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#provider-configuration), so
+the file, not the sourced `AWS_REGION`, is what puts the pool in the project's Region. The recipe
+writes it when it is absent and leaves an existing one alone, so check that one's `region`.
+
+The backend block is partial. A backend block cannot refer to a variable, so the state bucket,
+whose name carries the account id, and the project's Region are both given at init.
+
+The plan goes to a private directory that `mktemp -d` makes outside the repository. Keep it there:
+a saved plan holds, in cleartext, every value its changes carry, here every generated test-user
+password, so one beside the configuration is one `git add -A` from a commit
+([`plan -out`](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename), change
+request 1.1).
 
 ```bash
-cd infra/envs/poc/idp
-terraform init -backend-config="bucket=$(terraform -chdir=../../../bootstrap output -raw state_bucket)"
-terraform plan -out=idp.tfplan
-terraform apply idp.tfplan
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+[ -e infra/envs/poc/idp/terraform.tfvars ] ||
+  echo "region = \"$AWS_REGION\"" > infra/envs/poc/idp/terraform.tfvars
+terraform -chdir=infra/envs/poc/idp init \
+  -backend-config="bucket=$(terraform -chdir=infra/bootstrap output -raw state_bucket)" \
+  -backend-config="region=$AWS_REGION"
+plan_dir=$(mktemp -d)   # outside the repository: this plan holds every test-user password
+terraform -chdir=infra/envs/poc/idp plan -out="$plan_dir/idp.tfplan"
+```
+
+Read the plan. Then, in the same shell, apply exactly that plan, which Terraform does without
+asking again, and delete it:
+
+```bash
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+terraform -chdir=infra/envs/poc/idp apply "$plan_dir/idp.tfplan"
+rm -rf "$plan_dir"
 ```
 
 ## Done when: the issuer's discovery document loads
 
 ```bash
-curl -fsS "$(terraform output -raw issuer)/.well-known/openid-configuration" | jq '{issuer, authorization_endpoint, token_endpoint}'
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+issuer=$(terraform -chdir=infra/envs/poc/idp output -raw issuer)
+curl -fsS "$issuer/.well-known/openid-configuration" | jq '{issuer, authorization_endpoint, token_endpoint}'
 ```
 
-`issuer` in the document must equal `terraform output -raw issuer`, and `authorization_endpoint`
-must be on `https://$(terraform output -raw cognito_domain)`.
+`issuer` in the document must equal `$issuer`, and `authorization_endpoint` must be on `https://`
+plus `terraform -chdir=infra/envs/poc/idp output -raw cognito_domain`.
 
 This is also the first root on the S3 backend, so it is where task 1.0's lock check runs; see
 `infra/bootstrap/README.md` -> Verifying the lock.
@@ -68,7 +105,8 @@ This is also the first root on the S3 backend, so it is where task 1.0's lock ch
 
 ## Tests
 
-Plans against a mock AWS provider, so they need no credentials:
+Plans against a mock AWS provider, so they need no credentials and reach no project, which is why
+they do not source `tools/aws-project.env`:
 
 ```bash
 terraform -chdir=infra/modules/idp-cognito init -backend=false && terraform -chdir=infra/modules/idp-cognito test
@@ -76,4 +114,5 @@ terraform -chdir=infra/envs/poc/idp init -backend=false && terraform -chdir=infr
 ```
 
 The root's tests read `fixtures/cognito/pool.json` and `contracts/resource-tags.md` rather than
-repeating them. CI's Terraform job runs `fmt` and `validate` only, not `terraform test`.
+repeating them. CI's Terraform job runs them, with every other directory under `infra/` that has
+tests, after `fmt` and `validate`.

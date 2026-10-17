@@ -15,6 +15,10 @@ exactly three resources:
 Nothing else. Onboarding an app is copying its definition into `fixtures/apps/`; the plan then
 shows those three resources only (P-02). The identity and platform roots plan nothing.
 
+Every block in this README runs from the repository root, and each one that reaches AWS begins
+by sourcing `tools/aws-project.env`, which names the project's profile and its selected Region.
+Without it the shell builds in whichever project its default profile points at.
+
 ## Tags
 
 `Platform = spa-platform`, `Cell = <cell>`, `ManagedBy = terraform` through `default_tags`
@@ -32,21 +36,55 @@ removes them and the teardown query stays a proof.
 
 ## Applying it
 
-After the identity root (its domain must already be on managed login version 2):
+**Step 0 is `infra/bootstrap`** (`infra/bootstrap/README.md` -> Applying it), which creates the
+state bucket, and the identity root comes after it (`infra/envs/poc/idp/README.md` -> Applying it):
+this root reads the user pool from the identity root's state, and that pool's domain must already be
+on managed login version 2.
+
+This root's `terraform.tfvars`, which git ignores, sets `region` to the project's selected Region,
+`AWS_REGION` in `tools/aws-project.env`. Every root defaults to `us-east-1`, and a parameter in the
+provider block outranks the environment
+(https://registry.terraform.io/providers/hashicorp/aws/latest/docs#provider-configuration), so
+the file, not the sourced `AWS_REGION`, is what puts the clients and parameters in the project's
+Region. The recipe writes it when it is absent and leaves an existing one alone, so check that
+one's `region`.
+
+The backend block is partial, as in the identity root: the state bucket and the project's Region
+are both given at init.
+
+The plan goes to a private directory that `mktemp -d` makes outside the repository. Keep it there:
+a saved plan holds, in cleartext, every value its changes carry, here every OAuth client secret, so
+one beside the configuration is one `git add -A` from a commit
+([`plan -out`](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename), change
+request 1.1).
 
 ```bash
-cd infra/envs/poc/apps
-terraform init -backend-config="bucket=$(terraform -chdir=../../../bootstrap output -raw state_bucket)"
-terraform plan -out=apps.tfplan
-terraform apply apps.tfplan
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+[ -e infra/envs/poc/apps/terraform.tfvars ] ||
+  echo "region = \"$AWS_REGION\"" > infra/envs/poc/apps/terraform.tfvars
+terraform -chdir=infra/envs/poc/apps init \
+  -backend-config="bucket=$(terraform -chdir=infra/bootstrap output -raw state_bucket)" \
+  -backend-config="region=$AWS_REGION"
+plan_dir=$(mktemp -d)   # outside the repository: this plan holds every OAuth client secret
+terraform -chdir=infra/envs/poc/apps plan -out="$plan_dir/apps.tfplan"
+```
+
+Read the plan. Then, in the same shell, apply exactly that plan, which Terraform does without
+asking again, and delete it:
+
+```bash
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+terraform -chdir=infra/envs/poc/apps apply "$plan_dir/apps.tfplan"
+rm -rf "$plan_dir"
 ```
 
 ## Done when: apps 1 and 2 exist and a manual code-flow login works
 
 ```bash
-POOL=$(terraform -chdir=../idp output -raw user_pool_id)
-DOMAIN=$(terraform -chdir=../idp output -raw cognito_domain)
-CLIENT=$(terraform output -json clients | jq -r .app1.clientId)
+set -a; . tools/aws-project.env; set +a   # AWS_PROFILE and the Region, or the wrong project
+POOL=$(terraform -chdir=infra/envs/poc/idp output -raw user_pool_id)
+DOMAIN=$(terraform -chdir=infra/envs/poc/idp output -raw cognito_domain)
+CLIENT=$(terraform -chdir=infra/envs/poc/apps output -json clients | jq -r .app1.clientId)
 aws cognito-idp describe-user-pool-client --user-pool-id "$POOL" --client-id "$CLIENT" \
   --query 'UserPoolClient.{flows:AllowedOAuthFlows,callbacks:CallbackURLs,rotation:RefreshTokenRotation}'
 # Open in a browser, sign in as a test user, and check the redirect carries ?code=:
@@ -65,11 +103,12 @@ code, which is the proof. Do not paste it anywhere: it is a credential until it 
 ## Tests
 
 Plans against a mock AWS provider and an overridden identity-root state, so they need no
-credentials:
+credentials and reach no project, which is why they do not source `tools/aws-project.env`:
 
 ```bash
 terraform -chdir=infra/envs/poc/apps init -backend=false && terraform -chdir=infra/envs/poc/apps test
 ```
 
 They read the definitions, `fixtures/onboarding/app3.json` (P-02), `fixtures/cognito/pool.json`
-and the contracts rather than repeating them. CI's Terraform job runs `fmt` and `validate` only.
+and the contracts rather than repeating them. CI's Terraform job runs them, with every other
+directory under `infra/` that has tests, after `fmt` and `validate`.
