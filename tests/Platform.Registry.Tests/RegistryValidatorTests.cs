@@ -286,8 +286,8 @@ public sealed class RegistryValidatorTests
         Assert.True(atCeiling.IsValid, string.Join('\n', atCeiling.Errors));
         Assert.Equal(TimeSpan.FromSeconds(2147483), Assert.Single(Assert.Single(atCeiling.Apps).Apis).Timeout);
 
-        // Task 2.1b will specialize this schema refusal as integer-out-of-range. For now prove
-        // the newly contracted maximum is enforced, including values the old TimeSpan guard held.
+        // Schema validation runs before model conversion, so it rejects even integers a TimeSpan
+        // could hold. ADR-0019 makes applicability to the proxy the contract's bound.
         foreach (string spelling in new[] { "2147484", "922337203685", "922337203686" })
         {
             RegistryValidation above = RegistryValidator.Validate(Respell("timeoutSeconds", spelling), Examples.Policy(), null);
