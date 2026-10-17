@@ -88,13 +88,19 @@ variables {
 # only address the ones it already knows the names of, so a fifth rule would pass every assertion
 # that names the four. This is the technique module.tftest.hcl's resource-type allowlist uses, and
 # that allowlist is what keeps a rule from arriving as aws_security_group_rule instead.
+#
+# Every pattern in this file takes a resource's name as whatever sits between its quotes. Terraform
+# accepts capitals and hyphens in a name as well as lower case, digits and underscores
+# (https://developer.hashicorp.com/terraform/language/syntax/configuration#identifiers), and a
+# pattern of lower case and underscores alone would miss a rule named "open-8080", with every run
+# here passing beside it.
 run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names" {
   command = plan
 
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_vpc_security_group_ingress_rule\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_vpc_security_group_ingress_rule\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb_https_from_task", "task_from_alb"])
@@ -104,7 +110,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_vpc_security_group_egress_rule\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_vpc_security_group_egress_rule\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb_to_task", "task_https_out"])
@@ -114,7 +120,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_security_group\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_security_group\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb", "task"])
@@ -128,7 +134,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
   assert {
     condition = alltrue([
       for block in regexall(
-        "(?ms)^resource \"aws_security_group\" \"[a-z0-9_]+\" \\{.*?^\\}",
+        "(?ms)^resource \"aws_security_group\" \"[^\"]+\" \\{.*?^\\}",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : length(regexall("(?m)^\\s*(dynamic\\s+\")?(ingress|egress)\"?\\s*[={]", block)) == 0
     ])
@@ -253,7 +259,8 @@ run "the_two_public_subnets_sit_in_two_zones_that_need_no_opt_in" {
 # --- The group AWS creates ---------------------------------------------------------------------
 
 # Every VPC comes with a default security group that admits all traffic from its own members and
-# sends anything anywhere, and AWS puts any resource created without a group of its own into it:
+# sends anything anywhere, and AWS puts some resources created without a group of their own into it,
+# an EC2 instance for one:
 # https://docs.aws.amazon.com/vpc/latest/userguide/default-security-group.html
 # So "no other ingress rule" is true of the account only once that group is empty as well.
 run "the_vpc_s_default_security_group_is_adopted_and_holds_no_rule" {
@@ -264,7 +271,7 @@ run "the_vpc_s_default_security_group_is_adopted_and_holds_no_rule" {
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_default_security_group\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_default_security_group\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["cell"])

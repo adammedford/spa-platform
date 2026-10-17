@@ -46,10 +46,10 @@ requires; resources here add only `Name`, which merges with those three.
   (ADR-0016). P-06's deployed half, a connection from outside to the task's port
   timing out, runs against the applied cell at G3 (task 6.9).
 - **No rule in the default security group.** AWS creates one in every VPC, admitting
-  all traffic from its own members, and puts any resource created without a group of
-  its own into it. The module adopts it as `aws_default_security_group.cell` with both
-  rule lists empty: the first apply strips it, and a rule added by hand later shows
-  in the next plan.
+  all traffic from its own members, and puts some resources created without a group of
+  their own into it, an EC2 instance for one. The module adopts it as
+  `aws_default_security_group.cell` with both rule lists empty: the first apply
+  strips it, and a rule added by hand later shows in the next plan.
 - **No Local Zone.** The two subnets go in the first two zones by name, and the zone
   query asks only for zones that need no opt-in. A Local Zone's name sorts ahead of
   every Availability Zone in its Region, so without that filter, opting into one

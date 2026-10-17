@@ -24,9 +24,10 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  # The first two zones by name, which is the order the provider sorts them into, so
-  # the pair is stable across applies. Two is what the load balancer requires and one
-  # more than the platform needs, since there is one task.
+  # The first two zones by name, which is the order the provider sorts them into
+  # (https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/ec2/ec2_availability_zones_data_source.go),
+  # so the pair is stable across applies. Two is what the load balancer requires and
+  # one more than the platform needs, since there is one task.
   zones = slice(data.aws_availability_zones.available.names, 0, 2)
 
   # How many bits to add to the VPC's prefix to reach a /24. The variable's
@@ -157,8 +158,8 @@ resource "aws_vpc_security_group_egress_rule" "task_https_out" {
 # --- The group AWS creates -----------------------------------------------------------
 #
 # Every VPC comes with a default security group that admits all traffic from its own
-# members and sends anything anywhere, and AWS puts a resource created without a group
-# of its own into it:
+# members and sends anything anywhere, and AWS puts some resources created without a
+# group of their own into it, an EC2 instance for one:
 # https://docs.aws.amazon.com/vpc/latest/userguide/default-security-group.html
 # Nothing in the cell uses it, so emptying it costs nothing. It makes "no other ingress
 # rule" true of the account and not only of this file, and a resource added later
