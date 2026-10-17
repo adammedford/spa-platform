@@ -438,11 +438,12 @@ public sealed class AccessTokenSourceTests
     }
 
     [Fact]
-    public void AddPlatformIdentity_builds_the_token_source_outside_a_request_and_leaves_the_interface_unbound()
+    public void AddPlatformIdentity_builds_the_token_source_outside_a_request_and_binds_the_interface_to_it()
     {
         // The library's endpoint is built once per credential style from its own registration, outside
-        // any request: with the sentinel the options hook needs none (T-A3). The interface binding is
-        // AddPlatformAccessTokenSource's, so a composed gateway forwards sessionless /api calls as before.
+        // any request: with the sentinel the options hook needs none (T-A3). The interface is bound by the
+        // entry point Program.cs calls and by nothing else, so the proxy's token step asks this source for
+        // every call the proxy would forward (contracts/http-contract.md -> Errors: 401 with no session).
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Services.AddLogging();
         builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(InMemoryRegistry.SnapshotOf(1, "\"r1\"", [App1])));
@@ -451,14 +452,7 @@ public sealed class AccessTokenSourceTests
         builder.AddPlatformIdentity();
         using IHost host = builder.Build();
 
-        Assert.NotNull(host.Services.GetRequiredService<AccessTokenSource>());
-        Assert.Null(host.Services.GetService<IAccessTokenSource>());
-
-        builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-        builder.Services.AddLogging();
-        builder.AddPlatformIdentity();
-        builder.Services.AddPlatformAccessTokenSource();
-        Assert.Contains(builder.Services, d => d.ServiceType == typeof(IAccessTokenSource));
+        Assert.Same(host.Services.GetRequiredService<AccessTokenSource>(), host.Services.GetService<IAccessTokenSource>());
     }
 
     [Fact]

@@ -13,9 +13,11 @@ using TestIdp;
 namespace Platform.Identity.Tests;
 
 /// <summary>
-/// The services <c>AddPlatformIdentity</c> registers, in front of the test identity provider, with
-/// the framework's <c>UseAuthentication</c> as the only middleware. <see cref="SettableAppFeature"/>
-/// stands in for host resolution, which runs before authentication and pins the app.
+/// The services <c>AddPlatformIdentity</c> registers, in front of the test identity provider. Like
+/// <c>Program.cs</c>, it registers nothing else of workstream 3's, so the shell gate and the token
+/// source a test meets here are the ones the shipping gateway runs.
+/// <see cref="SettableAppFeature"/> stands in for host resolution, which runs before authentication
+/// and pins the app.
 ///
 /// The pipeline follows contracts/pipeline.md: routing, the
 /// framework's authentication, <c>UsePlatformShellGate</c> and <c>MapPlatformBff</c>. A terminal
@@ -201,8 +203,6 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<FakeCsrfTokens>();
         builder.Services.AddSingleton<ICsrfTokens>(sp => sp.GetRequiredService<FakeCsrfTokens>());
         builder.AddPlatformIdentity();
-        builder.Services.AddPlatformAccessTokenSource();
-        builder.Services.AddPlatformShellGate();
         services?.Invoke(builder.Services);
 
         return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);

@@ -105,11 +105,12 @@ public sealed class ShellGateTests
     }
 
     [Fact]
-    public async Task AddPlatformIdentity_alone_leaves_the_gate_out_of_the_pipeline()
+    public async Task AddPlatformIdentity_alone_puts_the_gate_in_the_pipeline()
     {
-        // Deferred like the token source's binding, because the composed suites still request assets
-        // without a session (PlatformIdentityExtensions.AddPlatformShellGate). Every other test in this
-        // class runs with AddPlatformShellGate called, as IdentityGateway calls it.
+        // Program.cs registers workstream 3's services with AddPlatformIdentity alone (contracts/pipeline.md
+        // -> Service registration) and installs the gate with UsePlatformShellGate, and this host makes the
+        // same two calls. It has no host resolution, so no app is pinned and the gate has no scheme to ask.
+        // It refuses rather than pass the request on, which would serve the asset without a session.
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Services.AddLogging();
         builder.Services.AddSingleton<IRegistry>(new InMemoryRegistry(InMemoryRegistry.SnapshotOf(1, "\"r1\"", [App1])));
@@ -117,19 +118,22 @@ public sealed class ShellGateTests
         builder.AddPlatformIdentity();
         using IHost host = builder.Build();
 
+        bool served = false;
         ApplicationBuilder app = new(host.Services);
         app.UsePlatformShellGate();
         app.Run(context =>
         {
-            context.Response.StatusCode = 200;
+            served = true;
             return Task.CompletedTask;
         });
         DefaultHttpContext context = new() { RequestServices = host.Services };
         context.Request.Method = "GET";
         context.Request.Path = "/assets/app.js";
-        await app.Build()(context);
 
-        Assert.Equal(200, context.Response.StatusCode);
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => app.Build()(context));
+
+        Assert.Contains("UsePlatformHostResolution", refused.Message, StringComparison.Ordinal);
+        Assert.False(served);
     }
 
     [Fact]
