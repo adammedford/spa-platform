@@ -79,9 +79,10 @@ public sealed class AccessTokenStepTests
     [InlineData(nameof(AccessTokenResult.ProviderUnavailable), HttpStatusCode.ServiceUnavailable)]
     public async Task A_call_the_token_step_answers_leaves_no_rule_id(string outcome, HttpStatusCode status)
     {
-        // contracts/telemetry.md: the 401 for a session that yields no token is not a rejection, so it
-        // leaves rule null, and change request 4.2's decision says the same of the 503. Fails if the step
-        // borrows auth.session, which is the shell gate's.
+        // contracts/telemetry.md: the 401 for a live session that yields no token is not a rejection, so
+        // it leaves rule null, and change request 4.2's decision says the same of the 503. Unauthenticated
+        // does not say whether a cookie was presented, which is what auth.session turns on, so the step
+        // writes no rule for it either. Fails if the step writes any rule id, auth.session included.
         await using ProxyHost gateway = await ProxyHost.StartAsync(
             Ct, new ProxyHostOptions { Telemetry = true }, TestApps.Entry("app1", apis: [TestApps.Api("orders")]));
         gateway.Tokens.Result = outcome switch

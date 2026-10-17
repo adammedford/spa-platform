@@ -11,7 +11,8 @@ public sealed record ProxyHostOptions
 
     /// <summary>
     /// Registers <see cref="ProxyHost.Tokens"/> as the <c>IAccessTokenSource</c>. Off is a host that
-    /// registers no source at all, which the token step fails closed on: 401 to every call.
+    /// registers no source at all, which the token step fails closed on: 401 to every call a route
+    /// would forward. A name the app does not list still gets <c>UnknownApi</c>'s 404.
     /// </summary>
     public bool TokenSource { get; init; } = true;
 
