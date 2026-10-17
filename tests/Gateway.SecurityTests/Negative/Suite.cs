@@ -8,9 +8,11 @@ namespace Gateway.SecurityTests.Negative;
 /// rather than invoking middleware directly (docs/plan/04-tests.md).
 ///
 /// <para>One kind of cell, which requires a session before it serves an asset or forwards an API
-/// call, as ADR-0008 decides (<see cref="GatewayHarnessOptions.SessionRequired"/>).
-/// A row that needs a session signs a browser in through the test provider. A row whose request is
-/// refused before authentication runs (host resolution, the request gate, Kestrel itself) needs none.
+/// call, as ADR-0008 decides. The composition that ships does that, not the harness:
+/// <c>AddPlatformIdentity</c> binds the token source and <c>UsePlatformShellGate</c> is always in
+/// the pipeline. A row that needs a session signs a browser in through the test provider. A row
+/// whose request is refused before authentication runs (host resolution, the request gate, Kestrel
+/// itself) needs none.
 /// A row that sends an asset or API request without one asserts the refusal it gets: a navigation is
 /// sent to the provider, any other asset request gets 401 <c>unauthenticated</c> (under
 /// <c>auth.session</c> when it presented a session cookie that names no session), and an API call the

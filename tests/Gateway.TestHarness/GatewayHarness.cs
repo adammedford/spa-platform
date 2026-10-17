@@ -36,6 +36,13 @@ namespace Gateway.TestHarness;
 /// <see cref="GatewayAddress"/> for a request no browser sends. The registry is changed while the
 /// gateway runs with <see cref="UpdateRegistryAsync"/>, which writes the object and then polls once, so
 /// a test never waits out the poll interval.
+///
+/// <para>The gateway requires a session before it serves an asset or forwards an API call, as ADR-0008
+/// decides, because the composition that ships does: <c>AddPlatformIdentity</c> binds the token source
+/// the proxy's token step asks, and <c>UsePlatformShellGate</c> is always in the pipeline. The harness
+/// adds nothing to either and has no switch to serve without a session, so a test signs a browser in
+/// with <see cref="SignInAsync"/>, and a row about a request without a session asserts the refusal that
+/// request gets (task 6.3c).</para>
 /// </summary>
 public sealed class GatewayHarness : IAsyncDisposable
 {
@@ -197,11 +204,6 @@ public sealed class GatewayHarness : IAsyncDisposable
                 provider.GetServices<ConsoleFormatter>().FirstOrDefault(formatter =>
                     formatter.Name == provider.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ConsoleLoggerOptions>>()?.CurrentValue.FormatterName)));
 
-            if (options.SessionRequired)
-            {
-                RequireSession(services);
-            }
-
             options.ConfigureServices?.Invoke(services);
         });
 
@@ -231,11 +233,6 @@ public sealed class GatewayHarness : IAsyncDisposable
             harness.document = first;
 
             factory.StartServer();
-
-            if (options.SessionRequired && harness.Services.GetService<IAccessTokenSource>() is null)
-            {
-                throw new InvalidOperationException("SessionRequired is set and the gateway has no IAccessTokenSource.");
-            }
 
             // The poller's first read may still be in flight. One more poll waits for it (the source
             // runs one poll at a time) and settles the outcome either way.
@@ -475,23 +472,6 @@ public sealed class GatewayHarness : IAsyncDisposable
 
         apps[appId] = app;
         return app;
-    }
-
-    /// <summary>
-    /// Switches on the shell gate and the <see cref="IAccessTokenSource"/> binding by calling workstream
-    /// 3's two internal registrations, <c>AddPlatformAccessTokenSource</c> and <c>AddPlatformShellGate</c>
-    /// (tasks 3.8 and 3.9), by name, so the gateway runs the real gate and the real source, with nothing
-    /// standing in for either. Both only add what is missing, so where <c>AddPlatformIdentity</c>
-    /// registers them already this changes nothing, and a method that is no longer there is skipped.
-    /// </summary>
-    public static void RequireSession(IServiceCollection services)
-    {
-        foreach (string name in (string[])["AddPlatformAccessTokenSource", "AddPlatformShellGate"])
-        {
-            typeof(Platform.Identity.PlatformIdentityExtensions)
-                .GetMethod(name, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
-                ?.Invoke(null, [services]);
-        }
     }
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>

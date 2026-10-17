@@ -5,12 +5,12 @@ using Platform.Testing;
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
-/// The stack a browser test runs against, locally: the hermetic cell (task 6.1) with a session
-/// required, as ADR-0008 requires one (<see cref="GatewayHarnessOptions.SessionRequired"/>, the
-/// harness's default), behind a <see cref="TlsLoadBalancer"/>, and a
-/// Chromium whose resolver sends every app host to that listener, as the tunnel and the hosts file do
-/// in the deployed tier (docs/plan/05-infrastructure-and-cost.md). One per test: each starts with an
-/// empty provider log, an empty session store and a browser that has seen nothing.
+/// The stack a browser test runs against, locally: the hermetic cell (task 6.1), which requires a
+/// session as ADR-0008 decides because the composition that ships does, behind a
+/// <see cref="TlsLoadBalancer"/>, and a Chromium whose resolver sends every app host to that
+/// listener, as the tunnel and the hosts file do in the deployed tier
+/// (docs/plan/05-infrastructure-and-cost.md). One per test: each starts with an empty provider log,
+/// an empty session store and a browser that has seen nothing.
 /// </summary>
 public sealed class LocalStack : IAsyncDisposable
 {

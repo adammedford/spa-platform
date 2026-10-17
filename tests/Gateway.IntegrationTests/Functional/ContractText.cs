@@ -11,9 +11,9 @@ namespace Gateway.IntegrationTests.Functional;
 /// contract changed.
 ///
 /// Only the two contracts these rows are held to are parsed: <c>contracts/http-contract.md</c> for the
-/// response headers and the baseline content security policy, and <c>contracts/telemetry.md</c> for the
-/// request line's fields. Each parse fails loudly if the shape it reads is no longer there, because a
-/// silent empty list would make every assertion built on it vacuous.
+/// response headers, the baseline content security policy and the Errors table, and
+/// <c>contracts/telemetry.md</c> for the request line's fields. Each parse fails loudly if the shape it
+/// reads is no longer there, because a silent empty list would make every assertion built on it vacuous.
 /// </summary>
 internal static partial class ContractText
 {
@@ -61,9 +61,31 @@ internal static partial class ContractText
             .Select(directory => Path.GetFileName(directory))
             .Where(name => name.StartsWith("Platform.", StringComparison.Ordinal))];
 
+    /// <summary>The rows of the Errors table in <c>contracts/http-contract.md</c>.</summary>
+    public static ImmutableArray<ErrorRow> Errors { get; } = ReadErrors();
+
     /// <summary>The baseline with the issuer origin the gateway was configured with spliced in.</summary>
     public static string BaselineCsp(string issuerBrowserOrigin) =>
         BaselineCspTemplate.Replace(IssuerOriginPlaceholder, issuerBrowserOrigin, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The one Errors row whose "When" column contains <paramref name="whenContains"/>, so a test names the
+    /// case the contract names and takes the status and the code from the table. It throws when no row or
+    /// more than one matches, because either would leave the assertion reading another case than the one
+    /// it meant.
+    /// </summary>
+    public static ErrorRow Error(string whenContains)
+    {
+        ErrorRow[] matched = [.. Errors.Where(row => row.When.Contains(whenContains, StringComparison.OrdinalIgnoreCase))];
+        return matched.Length == 1
+            ? matched[0]
+            : throw new InvalidOperationException(
+                $"contracts/http-contract.md -> Errors has {matched.Length} rows whose 'When' contains "
+                + $"'{whenContains}'. The tests in this folder read the status and the code from that table.");
+    }
+
+    /// <summary>One row of the Errors table: the status, the problem body's <c>code</c>, and the case its "When" column names.</summary>
+    public sealed record ErrorRow(int Status, string Code, string When);
 
     /// <summary>One policy as its directives, keyed by directive name, in the order they were sent.</summary>
     public static ImmutableArray<KeyValuePair<string, string>> Directives(string policy) =>
@@ -113,6 +135,28 @@ internal static partial class ContractText
                 "contracts/http-contract.md -> Response headers listed no header of the form `Name: value`.");
     }
 
+    private static ImmutableArray<ErrorRow> ReadErrors()
+    {
+        string contract = Read("http-contract.md");
+        int start = contract.IndexOf("## Errors", StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException(
+                "contracts/http-contract.md has no '## Errors' section. The tests in this folder read it from there.");
+        }
+
+        ImmutableArray<ErrorRow> rows =
+            [.. ErrorTableRow().Matches(contract[start..])
+                .Select(row => new ErrorRow(
+                    int.Parse(row.Groups["status"].Value, System.Globalization.CultureInfo.InvariantCulture),
+                    row.Groups["code"].Value,
+                    row.Groups["when"].Value.Trim()))];
+
+        return rows.Length > 0
+            ? rows
+            : throw new InvalidOperationException("contracts/http-contract.md -> Errors listed no rows.");
+    }
+
     private static ImmutableArray<string> ReadLogFields() => ReadTableNames("Log fields");
 
     /// <summary>
@@ -143,4 +187,7 @@ internal static partial class ContractText
 
     [GeneratedRegex(@"`(?<name>[^`]+)`")]
     private static partial Regex BackquotedName();
+
+    [GeneratedRegex(@"^\| (?<status>\d{3}) \| `(?<code>[a-z_]+)` \| (?<when>[^|]+)\|", RegexOptions.Multiline)]
+    private static partial Regex ErrorTableRow();
 }

@@ -45,19 +45,6 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public TimeProvider? Clock { get; init; }
 
-    /// <summary>
-    /// Whether a session is required, as ADR-0008 requires one before any asset: the shell gate challenges
-    /// an asset request without a session, and the proxy's token step takes the session's access token, so
-    /// a sessionless call the proxy would forward gets 401 instead (contracts/http-contract.md -> Errors).
-    /// True, the default, calls <see cref="GatewayHarness.RequireSession"/>. False leaves the gateway
-    /// exactly as <c>Program.cs</c> composes it.
-    ///
-    /// <para>No composed suite sets it false, so every row runs with the session ADR-0008 requires: a row
-    /// about a request without a session asserts the refusal that request gets rather than switching the
-    /// gate off (task 6.3c).</para>
-    /// </summary>
-    public bool SessionRequired { get; init; } = true;
-
     /// <summary>More gateway configuration, applied over the harness's own. A null value removes nothing: it sets an empty value.</summary>
     public IReadOnlyDictionary<string, string?> Configuration { get; init; } = new Dictionary<string, string?>();
 
