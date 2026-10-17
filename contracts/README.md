@@ -118,7 +118,7 @@ recorded here only.
 | More than one upstream origin on an entry | A warning, and a schema has no notion of one. Task 2.1 keeps errors and warnings apart. | Task 2.1 |
 | The `release` prefix exists in S3 | Needs I/O, and only `spactl` does it; the gateway does not | Task 2.6 |
 | A port above 65535 | The pattern bounds the port's shape, not its value | Task 2.1 |
-| A schema-valid integer the platform cannot hold or apply | Draft 2020-12 reads `30`, `30.0` and `3e1` all as integers, and bounds neither `revision` nor `apis[].timeoutSeconds` above. The limits are the runtime's, not the document format's: a `revision` beyond Int64, and a `timeoutSeconds` the proxy cannot apply exactly. Reported as `integer-out-of-range`. | Task 2.1 |
+| A schema-valid integer the platform cannot hold or apply | Draft 2020-12 reads `30`, `30.0` and `3e1` all as integers. `revision` has no schema maximum; G2 bounds `apis[].timeoutSeconds` to 2147483. The limits are the runtime's, not the document format's: a `revision` beyond Int64, and a `timeoutSeconds` the proxy cannot apply exactly. Reported as `integer-out-of-range`. | Task 2.1 |
 | The per-entry fingerprint, and eviction when it changes | Not validation at all: a hash of the entry's canonical JSON | Task 2.1 |
 | A content security policy source that embeds a wildcard, such as `https://*.example` | The plan rejects the source `*`, which the schema rejects, and says nothing about wildcards inside a host | Task 2.1, if the platform wants it. A change request would be the way to add it. |
 
@@ -126,16 +126,16 @@ Two more things the schemas deliberately do not decide:
 
 - **An empty `apps` array is a valid document.** Deployment refuses to start a gateway against an
   empty registry (task 1.7); that is a deployment rule, not a document rule.
-- **`timeoutSeconds` has no upper bound in the currently frozen schema.** ADR-0019 supersedes
-  the earlier decision to keep the numeric limit only in the validator. At G2, before the
-  `g2-local-slice` tag, the schema will gain `maximum: 2147483`, the measured YARP 2.3.0 ceiling
-  (ADR-0015). Refusing values no build could apply as written stays within `schemaVersion: 1`;
-  later changes to valid document meaning require a new version. A proxy or runtime upgrade that
-  changes this ceiling must update the contract schema, validator and the test proving the proxy
-  applies the contracted value through the applicable freeze/gate process.
+- **G2 bounds `timeoutSeconds` to 2,147,483 seconds.** ADR-0019 supersedes the earlier
+  decision to keep the numeric limit only in the validator. The schema now carries the measured
+  YARP 2.3.0 ceiling (ADR-0015). Refusing values no build could apply as written stays within
+  `schemaVersion: 1`; later changes to valid document meaning require a new version. A proxy or
+  runtime upgrade that changes this ceiling must update the contract schema, validator and the
+  test proving the proxy applies the contracted value through the applicable freeze/gate process.
 
-  **The schema and validator changes remain pending.** The validator's present bound is the
-  `TimeSpan` limit, so values between it and the proxy ceiling still validate without being applied
-  as written. ADR-0019 assigns the schema edit to the integrator at G2, then ticket 49 (task 2.1b)
-  replaces the validator's bound with the schema's. Change request
-  `changes/2.1-registry-schemas-and-jsonschema-net.md` retains the original measurement.
+  **Task 2.1b remains pending.** The shared schema already rejects values above the ceiling,
+  including through the app-definition schema's reference. The validator still carries its older
+  `TimeSpan` model bound; ticket 49 removes it and reports the schema maximum under the existing
+  `integer-out-of-range` issue id. Until then oversized timeouts are schema errors. The proxy's
+  ceiling test must also assert that it applies the contracted maximum (ADR-0015 decision 3).
+  Change request `changes/2.1-registry-schemas-and-jsonschema-net.md` retains the original measurement.

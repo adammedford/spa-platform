@@ -217,6 +217,16 @@ public sealed class RegistryRuleTests
     }
 
     [Fact]
+    public void Api_timeoutSeconds_stops_at_the_G2_proxy_ceiling()
+    {
+        // ADR-0019 keeps schemaVersion 1: values above this never applied as written.
+        Schemas.AcceptsRegistry(Documents.RegistryApi(a => a["timeoutSeconds"] = 2_147_483), "the proxy ceiling");
+        Schemas.RejectsRegistry(Documents.RegistryApi(a => a["timeoutSeconds"] = 2_147_484), "one second above the proxy ceiling");
+        Schemas.AcceptsAppDefinition(Documents.AppDefinition(d => d["apis"]![0]!["timeoutSeconds"] = 2_147_483), "the proxy ceiling");
+        Schemas.RejectsAppDefinition(Documents.AppDefinition(d => d["apis"]![0]!["timeoutSeconds"] = 2_147_484), "one second above the proxy ceiling");
+    }
+
+    [Fact]
     public void An_entry_may_list_no_apis_and_several()
     {
         Schemas.AcceptsRegistry(Documents.RegistryEntry(e => e.Remove("apis")), "an app with no upstream");
