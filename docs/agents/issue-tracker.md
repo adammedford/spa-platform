@@ -1,89 +1,84 @@
-# Issue tracker: Local Markdown
+# Issue tracker: GitHub
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
-
-The tracker is **tracked**, not scratch. A merge body, an ADR or a contract that cites a ticket by
-path is citing a file every other session and CI can open, which is the whole point of citing it.
-Session logs under `.scratch/<feature-slug>/log/` stay ignored: they are a transcript, not a spec.
+Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
 ## Conventions
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`, never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
+- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
+- **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
+- **Comment on an issue**: `gh issue comment <number> --body "..."`
+- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
+- **Close**: `gh issue close <number> --comment "..."`
 
-## Which directory a cited number resolves against
+Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
-A ticket number means nothing on its own: every feature directory numbers from `01`, so `06` names
-a file in several of them. Where a citation resolves is therefore read off **where it is written**.
+## Pull requests as a triage surface
 
-- **A document inside `.scratch/<feature-slug>/`** -- a spec, a map, a report, a questions file --
-  cites its own directory. `.scratch/g1a-and-landing-work/issues/05-...md` saying "ticket 06" means
-  `.scratch/g1a-and-landing-work/issues/06-...md`, its sibling.
-- **A document anywhere else** -- an ADR, a contract, a merge body, a comment in Terraform or C# --
-  cites `.scratch/overnight/issues/`, the plan-wide tracker. That is already what every such
-  citation in the tree means, and it is the only tracker a document outside `.scratch/` has reason
-  to cite.
-- **To cite across directories, name the directory**: write the slug immediately before the
-  citation, as `docs/adr/0018-...md` does with "overnight ticket 53". The name wins over both
-  defaults above, and it is the only way a document inside one feature directory can cite another.
-  Without it the number resolves to a sibling that may not exist, or worse, to the wrong file.
+**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
 
-`.github/steering.py` holds this, over every file git tracks, in the three shapes the tree writes:
-`ticket NN`, `tickets NN and NN` and `<slug> ticket NN`. A longer list enumerates the same way, by
-`and`, a comma or a slash, and a citation that wraps over a line break is read whole. A number that
-resolves to no file fails the push. A ticket named before it is filed goes on that script's
-`UNFILED` list with the reason, and the check fails once the ticket appears, so the list cannot
-outlive its entries.
+When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
 
-Two things it deliberately does not read. A dotted number is a plan task id, not a ticket:
-"workstream 3's tickets 3.3, 3.5 and 3.9" cites rows in
-`docs/plan/03-workstreams-and-tasks.md`. And a range -- "tickets 62-65", "tickets 01 to 08" -- is
-held to its first number only, because the numbers inside it were never written down.
+- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
+- **List external PRs for triage**: `gh api --paginate 'repos/{owner}/{repo}/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
+- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
-## When the number you want is already claimed
-
-Two sessions that cannot see each other's unlanded work will both pick the next free number, and
-both will be right on their own branch. `.github/steering.py` fails the push once two files in one
-`.scratch/<feature-slug>/issues/` share a leading number, naming the directory and both files.
-The same number in two different feature directories is not a collision: numbering restarts per
-directory by design.
-
-- **Before filing**, fetch and take the next number after the highest on `origin/main` in that
-  directory, not only the highest in your checkout.
-- **When the check fails**, the ticket that reached `origin/main` second renumbers, and in practice
-  that is yours, since you are the one pushing. The ticket already on trunk keeps its number because
-  commit messages and merge bodies cite it by that number, and history cannot be edited.
-- **Renumber in one commit**: `git mv` the file to the next free number in its directory, change
-  the number in its `# NN:` heading, and move every citation that meant it -- `ticket NN`, a wrapped
-  `ticket` / `NN` over a line break, and the `NN-<slug>` file name. Add a line under its
-  `## Comments` saying which number it had, so a commit message that still says the old number can
-  be traced.
-- **Read every citation of the old number in context and decide which ticket it meant.** After the
-  rename the old number still resolves, to the ticket that kept it, so a citation left behind does
-  not dangle: it lands on the wrong spec, and the citation check passes it. Nothing mechanical
-  catches that, which is why this step is a reading and not a grep-and-replace.
-
-Overnight ticket 68 is the worked example: task 6.1a's ticket was filed as 61 beside the security
-suite's flake ticket, and was renumbered when this check landed.
+GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Create a GitHub issue.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+Read it as in **Read an issue** above.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
+Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
-- **Map**: `.scratch/<effort>/map.md` (the Notes / Decisions-so-far / Fog body).
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
+- **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
+- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
+- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
+- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+## This repository's additions
+
+ADR-0020 records the decision and its reasons. What it adds to the page above:
+
+- **A feature is a spec issue with its tickets as sub-issues.** `/to-spec` publishes the spec;
+  `/to-tickets` files each ticket with `--parent <spec>`. A blocker is a blocked-by relationship:
+  `gh issue create --blocked-by <n>` or `gh issue edit <child> --add-blocked-by <n>` (`gh` 2.94+ has
+  the flags; the API route under **Blocking** works on any version). A ticket is open to an agent
+  when it carries `ready-for-agent`, every blocker is closed, and nobody is assigned.
+- **The body is the current spec; the comments are the record.** Grilling records, routing, status
+  notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
+  to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
+- **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
+  cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
+  `#NNN` that names neither.
+- **Decisions outlive issues.** A decision a later session builds on goes into a contract, an ADR or
+  `GLOSSARY.md`, and the merge body cites the issue it came from. Nothing that must survive the
+  feature lives only in an issue.
+- **The overnight run reports as an issue** titled `Overnight <date>`: the report, then the
+  questions as numbered items. Answers are comments on it.
+
+## The archive: tickets filed before ADR-0020
+
+`.scratch/<feature-slug>/issues/<NN>-<slug>.md` holds every ticket filed before the switch, and is
+read-only: no new file is added there, and a ticket that was open when the switch landed carries
+`**Status:** moved to #NNN` and continues on GitHub. `.scratch/<feature-slug>/log/` stays ignored.
+Resolved tickets keep their `## Answer` and `## Review`, and a merge body, ADR or contract that cites
+one still resolves by the rules below, which `.github/steering.py` holds over every tracked file.
+
+A `ticket NN` citation is read off **where it is written**:
+
+- A document inside `.scratch/<feature-slug>/` cites its own directory.
+- A document anywhere else cites `.scratch/overnight/issues/`, the plan-wide tracker of that time.
+- To cite across directories, name the slug immediately before the citation, as `docs/adr/0018-...md`
+  does with "overnight ticket 53".
+
+A dotted number ("task 3.8") is a plan row in `docs/plan/03-workstreams-and-tasks.md`, not a ticket.
