@@ -1,7 +1,8 @@
 # CI. Owner: integrator, written at task I-5.
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
-# session steers by, the roadmap, the checks' own tests, tools/land.sh's test companion, and --
+# session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh and of
+# the review record reader it runs, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate for infra/. The hook shares these path patterns
@@ -152,13 +153,23 @@ jobs:
         # pushed through the hook at all rather than around it.
         run: python3 -I .github/path_ownership_tests.py
 
-      - name: tools/land.sh refuses before it merges, and hands gh the body its caller named
+      - name: The review record reader clears only the head a record names
+        # tools/land.sh merges only a head whose latest review record says merge, and this is the
+        # code that decides it (#67). Its companion feeds it GitHub's shapes of comments and reviews
+        # built to trip each rule -- a hold, an earlier head, an abbreviated or malformed line, a sha
+        # in passing, a review's own commit_id, a line from outside the repository -- because a
+        # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
+        # case of each.
+        run: python3 -I tools/review_record_tests.py
+
+      - name: tools/land.sh refuses before it merges, merges only a reviewed head, and hands gh the body its caller named
         # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
         # in one directory and read it from another (2c9962f), which a copy of its parse loop had
-        # verified. The companion runs the real script against real git in throwaway repositories
-        # and a gh double, so no case reaches GitHub or gets past the merge. Here it runs under the
-        # runner's bash 5, which the script's shebang can also pick; the bash 3.2 job runs it at
-        # the other end of that range. The tool choice is D-3 in docs/dependencies.md.
+        # verified. The companion runs the real script against real git in throwaway repositories,
+        # the real review record reader and a gh double, so no case reaches GitHub or gets past the
+        # merge. Here it runs under the runner's bash 5, which the script's shebang can also pick;
+        # the bash 3.2 job runs it at the other end of that range. The tool choice is D-3 in
+        # docs/dependencies.md.
         run: python3 -I tools/land_tests.py
 
   land-bash-3-2:

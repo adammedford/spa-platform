@@ -28,12 +28,15 @@ carry a real gh. `GIT_DIR` or `CDPATH` inherited would change what git or `cd` d
 **Real git; a double for gh and for python3.** Every git call land.sh makes before its merge works
 offline, so each case builds a bare `origin` and a clone of it in its throwaway directory and lets
 the refusals meet git itself. gh is the one call that leaves the machine, so each case's bin holds a
-strict gh double: it answers the two `pr view` shapes land.sh uses and `pr merge`, records every
-call's arguments, copies the body file's bytes at the merge call, and fails the merge, so no case
-gets past it. Any other call is recorded and exits 97, which turns a new gh call in land.sh into a
-red case instead of an empty answer. land.sh runs python3 only after the merge, to derive the
-roadmap, so the python3 double fails if it runs at all. The bytes are what expose a wrong path: a
-body path checked in one directory and read in another reaches gh as other bytes or none.
+strict gh double: it answers the three `pr view` shapes land.sh uses, the two `api` listings of the
+pull request's comments and reviews (from the case's own fixtures), and `pr merge`; it records every
+call's arguments and fails the merge, so no case gets past it. Any other call is recorded and exits
+97, which turns a new gh call in land.sh into a red case instead of an empty answer. land.sh runs
+python3 twice. Before its merge it runs tools/review_record.py beside it, and the double hands that
+call to the real interpreter, so every case reads its records with the real reader (#67). After the
+merge it derives the roadmap, so the double fails any other call. The merge body is an argument, so
+its bytes are in the record of the merge call, and they are what expose a wrong path: a body path
+checked in one directory and read in another reaches gh as other bytes or none.
 
 **No detached housekeeping.** Each repository, clone and bare origin is made with `gc.auto=0` and
 `maintenance.auto=false`. The cases fetch and commit, which is when git may start `gc --auto` or
@@ -53,6 +56,7 @@ Run: python3 -I tools/land_tests.py
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -65,6 +69,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "land.sh"
+READER = ROOT / "tools" / "review_record.py"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
@@ -75,7 +80,34 @@ TOOLS = ("git", "dirname", "basename", "awk")
 PR = "5"
 VIEW_STATE = ["pr", "view", PR, "--json", "state", "--jq", ".state"]
 VIEW_BASE = ["pr", "view", PR, "--json", "baseRefName", "--jq", ".baseRefName"]
-MERGE = ["pr", "merge", PR, "--merge"]
+VIEW_HEAD = ["pr", "view", PR, "--json", "headRefOid", "--jq", ".headRefOid"]
+LIST_COMMENTS = ["api", "repos/{owner}/{repo}/issues/" + PR + "/comments", "--paginate", "--slurp"]
+LIST_REVIEWS = ["api", "repos/{owner}/{repo}/pulls/" + PR + "/reviews", "--paginate", "--slurp"]
+# What land.sh asks gh before any refusal that reads the review records, in order.
+READS_RECORDS = [VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS, LIST_REVIEWS]
+
+# The pull request's head as the double reports it, an earlier head a review once read, the base a
+# record names, and a head the pull request moves to while land.sh runs.
+HEAD = "1a954628a960aaef81d7b2d4521929579f3541e6"
+EARLIER = "f12e996adf405952c9666956e73952681bc053d8"
+BASE_SHA = "1405df66cbe219b0bf6355bc3d60361a8376b6b4"
+MOVED = "d0941e68da8f38151ff86a61fc59f7c5cf9fcaa2"
+MERGE = ["pr", "merge", PR, "--merge", "--match-head-commit", HEAD]
+RECORD_URL = f"https://github.com/adammedford/spa-platform/pull/{PR}#issuecomment-501"
+REVIEWED = f"Reviewed: {HEAD} {RECORD_URL}"
+
+
+def record_comment(head: str, verdict: str, url: str = RECORD_URL, association: str = "OWNER",
+                   login: str = "adammedford") -> dict:
+    """A pull request comment carrying a review record, in the shape GitHub's REST API lists it:
+    https://docs.github.com/en/rest/issues/comments#list-issue-comments. The line is written out
+    here rather than read from the reader, which is the thing under test."""
+    return {"html_url": url, "body": f"## Standards\n\nPASS.\n\nReviewed {head} against {BASE_SHA}: {verdict}\n",
+            "created_at": "2026-10-18T01:00:00Z", "user": {"login": login},
+            "author_association": association}
+
+
+CLEARS = [record_comment(HEAD, "merge")]
 
 # Every standard error a case saw, for the closing completeness case.
 OBSERVED: list[str] = []
@@ -84,16 +116,21 @@ GH_DOUBLE = """#!/bin/bash
 # A double for gh, written by tools/land_tests.py for one case. It answers only the calls
 # tools/land.sh makes up to its merge, in the shapes gh's manual gives them:
 #
-#   gh pr view <number> --json <fields> --jq <expression>   https://cli.github.com/manual/gh_pr_view
-#   gh pr merge <number> --merge [--subject <text>] [--body-file <file>]
-#                                                           https://cli.github.com/manual/gh_pr_merge
+#   gh pr view <number> --json <field> --jq <expression>     https://cli.github.com/manual/gh_pr_view
+#   gh api <endpoint> --paginate --slurp                     https://cli.github.com/manual/gh_api
+#   gh pr merge <number> --merge --match-head-commit <sha> [--subject <text>] --body <text>
+#                                                            https://cli.github.com/manual/gh_pr_merge
 #
 # gh exits 1 when a command fails: https://cli.github.com/manual/gh_help_exit-codes
 log={log}
 pr={pr}
 state={state}
 base={base}
+heads={heads}
+comments={comments}
+reviews={reviews}
 view_fails={view_fails}
+api_fails={api_fails}
 
 n=0
 while [ -e "$log/call-$n" ]; do n=$((n + 1)); done
@@ -105,36 +142,60 @@ unexpected() {{
   exit 97
 }}
 
-[ "$#" -ge 3 ] && [ "$1" = pr ] && [ "$3" = "$pr" ] || unexpected
-case "$2" in
-  view)
-    [ "$#" -eq 7 ] && [ "$4" = --json ] && [ "$6" = --jq ] || unexpected
-    if [ -n "$view_fails" ]; then printf '%s\\n' "$view_fails" >&2; exit 1; fi
-    case "$5 $7" in
-      "state .state") printf '%s\\n' "$state" ;;
-      "baseRefName .baseRefName") printf '%s\\n' "$base" ;;
+case "$1" in
+  pr)
+    [ "$#" -ge 3 ] && [ "$3" = "$pr" ] || unexpected
+    case "$2" in
+      view)
+        [ "$#" -eq 7 ] && [ "$4" = --json ] && [ "$6" = --jq ] || unexpected
+        if [ -n "$view_fails" ]; then printf '%s\\n' "$view_fails" >&2; exit 1; fi
+        case "$5 $7" in
+          "state .state") printf '%s\\n' "$state" ;;
+          "baseRefName .baseRefName") printf '%s\\n' "$base" ;;
+          # The k-th read of the head answers the k-th of $heads, and the last one after that, so
+          # a case can move the head between two reads the way a push during the run would.
+          "headRefOid .headRefOid")
+            k=0
+            while [ -e "$log/head-$k" ]; do k=$((k + 1)); done
+            : > "$log/head-$k"
+            answer=""
+            for head in $heads; do
+              answer="$head"
+              [ "$k" -gt 0 ] || break
+              k=$((k - 1))
+            done
+            printf '%s\\n' "$answer" ;;
+          *) unexpected ;;
+        esac
+        exit 0 ;;
+      merge)
+        [ "$#" -ge 6 ] && [ "$4" = --merge ] && [ "$5" = --match-head-commit ] || unexpected
+        shift 6
+        if [ "$#" -ge 2 ] && [ "$1" = --subject ]; then shift 2; fi
+        [ "$#" -eq 2 ] && [ "$1" = --body ] || unexpected
+        printf 'gh double: the merge fails on purpose, so no case goes past it\\n' >&2
+        exit 1 ;;
+      *) unexpected ;;
+    esac ;;
+  api)
+    [ "$#" -eq 4 ] && [ "$3" = --paginate ] && [ "$4" = --slurp ] || unexpected
+    if [ -n "$api_fails" ]; then printf '%s\\n' "$api_fails" >&2; exit 1; fi
+    case "$2" in
+      "repos/{{owner}}/{{repo}}/issues/$pr/comments") /bin/cat -- "$comments" ;;
+      "repos/{{owner}}/{{repo}}/pulls/$pr/reviews") /bin/cat -- "$reviews" ;;
       *) unexpected ;;
     esac
     exit 0 ;;
-  merge)
-    [ "$#" -ge 4 ] && [ "$4" = --merge ] || unexpected
-    shift 4
-    if [ "$#" -ge 2 ] && [ "$1" = --subject ]; then shift 2; fi
-    if [ "$#" -ge 2 ] && [ "$1" = --body-file ]; then
-      # The bytes, not the path: a path that names another file, or none, shows here.
-      if [ -f "$2" ]; then /bin/cat -- "$2" > "$log/body"; fi
-      shift 2
-    fi
-    [ "$#" -eq 0 ] || unexpected
-    printf 'gh double: the merge fails on purpose, so no case goes past it\\n' >&2
-    exit 1 ;;
   *) unexpected ;;
 esac
 """
 
 PYTHON_DOUBLE = """#!/bin/bash
-# A double for python3, written by tools/land_tests.py. land.sh runs python3 only after its merge,
-# to derive the roadmap, so a case that reaches this has gone past a merge that should have failed.
+# A double for python3, written by tools/land_tests.py. Before its merge land.sh runs the review
+# record reader that sits beside it, and that call goes to the real interpreter, so the reader under
+# test is the real one. Its only other python3 call comes after the merge, to derive the roadmap, so
+# a case that reaches the line below has gone past a merge that should have failed.
+if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
 : > {log}/python3-ran
 printf 'python3 double: ran, so land.sh went past its merge\\n' >&2
 exit 98
@@ -170,7 +231,9 @@ class Case:
     holding the doubles and a way to each real tool, which is the case's whole PATH."""
 
     def __init__(self, test: unittest.TestCase, *, state: str = "OPEN", base: str = "main",
-                 view_fails: str = "", gh: bool = True, python3: bool = True):
+                 heads: tuple[str, ...] = (HEAD,), comments: list | None = None,
+                 reviews: list | None = None, view_fails: str = "", api_fails: str = "",
+                 gh: bool = True, python3: bool = True):
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
         # Resolved, because bash's pwd reports the physical path when the caller's PWD is not
@@ -191,12 +254,21 @@ class Case:
             # (https://github.com/git/git/blob/master/Makefile), and through a link that path
             # would be this directory.
             self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
+        # One page each, as `gh api --paginate --slurp` wraps them (`gh api --help`).
+        listings = {"comments": CLEARS if comments is None else comments, "reviews": reviews or []}
+        for name, entries in listings.items():
+            (self.dir / f"{name}.json").write_text(json.dumps([entries]))
         if gh:
             self.write_executable("gh", GH_DOUBLE.format(
                 log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
-                base=shlex.quote(base), view_fails=shlex.quote(view_fails)))
+                base=shlex.quote(base), heads=shlex.quote(" ".join(heads)),
+                comments=shlex.quote(str(self.dir / "comments.json")),
+                reviews=shlex.quote(str(self.dir / "reviews.json")),
+                view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails)))
         if python3:
-            self.write_executable("python3", PYTHON_DOUBLE.format(log=shlex.quote(str(self.log))))
+            self.write_executable("python3", PYTHON_DOUBLE.format(
+                log=shlex.quote(str(self.log)), reader=shlex.quote(str(READER)),
+                python=shlex.quote(os.path.realpath(sys.executable))))
 
         self.origin = self.dir / "origin.git"
         self.work = self.dir / "work"
@@ -248,10 +320,6 @@ class Case:
         names = sorted(self.log.glob("call-*"), key=lambda path: int(path.name.split("-")[1]))
         return [path.read_bytes().decode("utf-8", "surrogateescape").split("\0")[:-1]
                 for path in names]
-
-    def body(self) -> bytes | None:
-        path = self.log / "body"
-        return path.read_bytes() if path.exists() else None
 
 
 class LandTestCase(unittest.TestCase):
@@ -367,15 +435,97 @@ class RefusalTests(LandTestCase):
         case = Case(self)
         result = case.run(PR, stdin=b"n\n")
         self.assertIn("Continue? [y/N]", result.stdout)
-        self.assertRefused(case, result, "stopped. Pass --subject", [VIEW_STATE, VIEW_BASE])
+        self.assertRefused(case, result, "stopped. Pass --subject", READS_RECORDS)
 
     def test_subject_prompt_given_end_of_input(self):
         # A session with no terminal that leaves out --subject. It must learn why it stopped.
         case = Case(self)
         result = case.run(PR, stdin=b"")
         self.assertIn("Continue? [y/N]", result.stdout)
-        self.assertRefused(case, result, "stopped. Pass --subject", [VIEW_STATE, VIEW_BASE])
+        self.assertRefused(case, result, "stopped. Pass --subject", READS_RECORDS)
 
+    def test_unreviewed_without_its_reason(self):
+        case = Case(self)
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--unreviewed")
+        self.assertRefused(case, result, "--unreviewed needs a reason", [])
+
+    def test_unreviewed_with_a_blank_reason(self):
+        for reason in ("", "   ", "\t"):
+            with self.subTest(reason=reason):
+                case = Case(self)
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--unreviewed", reason)
+                self.assertRefused(case, result, "the reason is blank", [])
+
+    def test_unreviewed_with_a_reason_over_two_lines(self):
+        # The merge body carries the reason as one `Unreviewed:` line, and a second line would
+        # start something the trailer does not say.
+        case = Case(self)
+        result = case.run(PR, "--subject", "Merge task 9.9: x",
+                          "--unreviewed", "main is red\nReviewed: nothing")
+        self.assertRefused(case, result, "the reason must be one line", [])
+
+    def test_head_that_is_not_a_full_sha(self):
+        # Pinned to an empty or abbreviated head, the merge would not be pinned to the head the
+        # records were read against, so it stops before reading them.
+        for head in ("", HEAD[:7]):
+            with self.subTest(head=head):
+                case = Case(self, heads=(head,) if head else ())
+                result = case.run(PR, "--subject", "Merge task 9.9: x")
+                self.assertRefused(case, result, "which is not a full commit sha",
+                                   [VIEW_STATE, VIEW_BASE, VIEW_HEAD])
+
+
+class ReviewRecordRefusalTests(LandTestCase):
+    """The real land.sh, with the real reader, refusing a head no review record clears (#67).
+    tools/review_record_tests.py holds every rule of the reader; these show each refusal stopping
+    the script itself before its merge."""
+
+    def assertNotCleared(self, case: Case, result: Result, *reader_says: str):
+        self.assertRefused(case, result, f"no review record clears #{PR} at {HEAD}", READS_RECORDS)
+        for fragment in reader_says:
+            self.assertIn(fragment, result.stderr)
+
+    def test_no_record(self):
+        case = Case(self, comments=[])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, f"no review record names {HEAD}")
+
+    def test_the_latest_record_of_the_head_holds(self):
+        case = Case(self, comments=[record_comment(HEAD, "hold")])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, "says hold", RECORD_URL)
+
+    def test_a_merge_record_of_an_earlier_head(self):
+        # A review covers the head it read; a commit pushed after it is not covered.
+        case = Case(self, comments=[record_comment(EARLIER, "merge")])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, f"no review record names {HEAD}", EARLIER)
+
+    def test_a_record_not_in_its_form(self):
+        entry = record_comment(HEAD, "merge")
+        entry["body"] = f"Reviewed {HEAD[:7]} against {BASE_SHA[:7]}: merge"
+        case = Case(self, comments=[entry])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, "not in the record's form")
+
+    def test_a_record_from_outside_the_repository(self):
+        # The repository is public: any signed-in GitHub user can comment the line on a pull request.
+        case = Case(self, comments=[record_comment(HEAD, "merge", association="NONE",
+                                                   login="a-stranger")])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, f"no review record names {HEAD}",
+                              "posted by a-stranger, whose author_association is NONE")
+
+    def test_a_record_in_a_commented_review_clears_as_a_comment_does(self):
+        review = {"html_url": f"https://github.com/adammedford/spa-platform/pull/{PR}#pullrequestreview-7",
+                  "body": f"Reviewed {HEAD} against {BASE_SHA}: merge", "state": "COMMENTED",
+                  "submitted_at": "2026-10-18T01:00:00Z", "commit_id": HEAD,
+                  "user": {"login": "adammedford"}, "author_association": "OWNER"}
+        case = Case(self, comments=[], reviews=[review])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertEqual(1, result.status, result.stderr)
+        self.assertIn("the merge fails on purpose", result.stderr)
+        self.assertEqual(f"Reviewed: {HEAD} {review['html_url']}", case.calls()[-1][-1])
 
 
 class SilentExitTests(LandTestCase):
@@ -402,18 +552,27 @@ class SilentExitTests(LandTestCase):
         self.assertEqual([VIEW_STATE], case.calls())
         self.assertNoStrayCall(case)
 
+    def test_gh_api_listing_fails(self):
+        case = Case(self, api_fails="gh: Server Error (HTTP 502)")
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertEqual(1, result.status, result.stderr)
+        self.assertIn("HTTP 502", result.stderr)
+        self.assertEqual([VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS], case.calls())
+        self.assertNoStrayCall(case)
+
 
 class MergeCallTests(LandTestCase):
-    """What gh receives at the merge: the exact arguments and the body's bytes. The double fails
-    every merge, so each case also shows that a failed merge stops everything after it."""
+    """What gh receives at the merge: the exact arguments, the head they pin and the body's bytes.
+    The double fails every merge, so each case also shows that a failed merge stops everything
+    after it."""
 
-    BODY = "Verified by tools/land_tests.py.\n\nOutstanding: none — exact bytes, no final newline".encode()
+    BODY = "Verified by tools/land_tests.py.\n\nOutstanding: none — exact bytes, no final newline"
 
-    def assertMergeCalled(self, case: Case, result: Result, merge: list[str], body: bytes | None = None):
+    def assertMergeCalled(self, case: Case, result: Result, merge: list[str],
+                          before: list[list[str]] = READS_RECORDS):
         self.assertEqual(1, result.status, result.stderr)
         self.assertIn("the merge fails on purpose", result.stderr)
-        self.assertEqual([VIEW_STATE, VIEW_BASE, merge], case.calls())
-        self.assertEqual(body, case.body(), "gh was handed other bytes than the caller named")
+        self.assertEqual(before + [merge], case.calls())
         # Ends with, rather than a last line: the subject prompt leaves no newline before it.
         self.assertTrue(result.stdout.endswith(f"--- merging #{PR}\n"),
                         f"land.sh printed something after its failed merge:\n{result.stdout}")
@@ -425,13 +584,61 @@ class MergeCallTests(LandTestCase):
         subject = "Merge task 9.9: the subject the roadmap reads, with 'quotes' and $dollars"
         result = case.run(PR, "--subject", subject)
         self.assertNotIn("Continue?", result.stdout)
-        self.assertMergeCalled(case, result, MERGE + ["--subject", subject])
+        self.assertMergeCalled(case, result, MERGE + ["--subject", subject, "--body", REVIEWED])
 
     def test_piped_yes_confirms_without_adding_a_subject(self):
         case = Case(self)
         result = case.run(PR, stdin=b"y\n")
         self.assertIn("Continue? [y/N]", result.stdout)
-        self.assertMergeCalled(case, result, MERGE)
+        self.assertMergeCalled(case, result, MERGE + ["--body", REVIEWED])
+
+    def test_the_latest_record_clears_and_its_url_is_the_trailer(self):
+        # A hold, then the reviewer's merge on the same head: the merge's URL rides in the body.
+        later = record_comment(HEAD, "merge", url=f"{RECORD_URL}0")
+        later["created_at"] = "2026-10-18T02:00:00Z"
+        case = Case(self, comments=[record_comment(HEAD, "hold"), later])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertMergeCalled(case, result, MERGE + ["--subject", "Merge task 9.9: x",
+                                                      "--body", f"Reviewed: {HEAD} {RECORD_URL}0"])
+
+    def test_the_merge_is_pinned_to_the_head_the_record_cleared(self):
+        # The pull request moves to another head while land.sh runs. The merge must carry the head
+        # the record named, which GitHub then refuses, and not a head read again, which no record
+        # clears: https://docs.github.com/en/graphql/reference/input-objects#mergepullrequestinput
+        case = Case(self, heads=(HEAD, MOVED))
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertMergeCalled(case, result, MERGE + ["--subject", "Merge task 9.9: x",
+                                                      "--body", REVIEWED])
+
+    def test_unreviewed_merges_pinned_with_its_reason_and_reads_no_records(self):
+        case = Case(self, comments=[])
+        reason = "main is red on the roadmap check; the fix cannot wait for a session"
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--unreviewed", reason)
+        self.assertMergeCalled(case, result,
+                               MERGE + ["--subject", "Merge task 9.9: x", "--body", f"Unreviewed: {reason}"],
+                               before=[VIEW_STATE, VIEW_BASE, VIEW_HEAD])
+
+    def test_the_trailer_follows_the_body_after_one_blank_line(self):
+        for written, trailer_after in ((self.BODY, self.BODY), (self.BODY + "\n\n\n", self.BODY),
+                                       ("", None)):
+            with self.subTest(written=written):
+                case = Case(self)
+                (case.work / "body.md").write_bytes(written.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                body = REVIEWED if trailer_after is None else f"{trailer_after}\n\n{REVIEWED}"
+                self.assertMergeCalled(case, result, MERGE + ["--subject", "Merge task 9.9: x",
+                                                              "--body", body])
+
+    def test_unreviewed_trailer_follows_the_body(self):
+        case = Case(self)
+        (case.work / "body.md").write_bytes(self.BODY.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md",
+                          "--unreviewed", "no session free tonight")
+        self.assertMergeCalled(
+            case, result,
+            MERGE + ["--subject", "Merge task 9.9: x", "--body",
+                     f"{self.BODY}\n\nUnreviewed: no session free tonight"],
+            before=[VIEW_STATE, VIEW_BASE, VIEW_HEAD])
 
     def test_relative_body_path_from_a_subdirectory(self):
         # 2c9962f: the path was checked from the caller's directory and read from the repository's
@@ -439,39 +646,36 @@ class MergeCallTests(LandTestCase):
         case = Case(self)
         sub = case.work / "sub"
         sub.mkdir()
-        (sub / "body.md").write_bytes(self.BODY)
+        (sub / "body.md").write_bytes(self.BODY.encode())
         (case.work / "body.md").write_bytes(b"the decoy at the root\n")
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md", cwd=sub)
         self.assertMergeCalled(
             case, result,
-            MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(sub / "body.md")],
-            self.BODY)
+            MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
 
     def test_relative_body_path_under_an_exported_cdpath(self):
         # With CDPATH exported, `cd sub` goes to the first CDPATH entry holding a sub/ and prints
-        # it, so the path gh is handed names another directory, over two lines.
+        # it, so the path read names another directory, over two lines.
         case = Case(self)
         decoy = case.dir / "decoy"
         (decoy / "sub").mkdir(parents=True)
         (decoy / "sub" / "body.md").write_bytes(b"the decoy under CDPATH\n")
         (case.work / "sub").mkdir()
-        (case.work / "sub" / "body.md").write_bytes(self.BODY)
+        (case.work / "sub" / "body.md").write_bytes(self.BODY.encode())
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "sub/body.md",
                           env=case.env(CDPATH=str(decoy)))
         self.assertMergeCalled(
             case, result,
-            MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(case.work / "sub" / "body.md")],
-            self.BODY)
+            MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
 
     def test_body_file_named_with_a_leading_hyphen(self):
         # dirname and basename read a leading hyphen as an option unless `--` ends their options.
         case = Case(self)
-        (case.work / "-x.md").write_bytes(self.BODY)
+        (case.work / "-x.md").write_bytes(self.BODY.encode())
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "-x.md")
         self.assertMergeCalled(
             case, result,
-            MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(case.work / "-x.md")],
-            self.BODY)
+            MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
 
 
 class HelpTests(LandTestCase):
