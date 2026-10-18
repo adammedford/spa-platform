@@ -11,7 +11,7 @@ namespace Platform.Registry.Tests;
 /// </summary>
 internal static class Examples
 {
-    private static string PathOf(string name) => Path.Combine(AppContext.BaseDirectory, "examples", name);
+    public static string PathOf(string name) => Path.Combine(AppContext.BaseDirectory, "examples", name);
 
     public static string Text(string name) => File.ReadAllText(PathOf(name));
 
@@ -68,4 +68,12 @@ internal static class Examples
     }
 
     public static PlatformPolicy Policy(Func<PlatformPolicy, PlatformPolicy> change) => change(Policy());
+
+    /// <summary>
+    /// <c>maximum</c> on <c>apis[].timeoutSeconds</c> in <c>contracts/registry.schema.json</c>: the
+    /// longest timeout the proxy applies as written (ADR-0019). Read from the contract, so a test never
+    /// carries its own copy of the number.
+    /// </summary>
+    public static long TimeoutSecondsMaximum() =>
+        Json("registry.schema.json")["$defs"]!["api"]!["properties"]!["timeoutSeconds"]!["maximum"]!.GetValue<long>();
 }

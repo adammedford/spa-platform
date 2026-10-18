@@ -9,10 +9,12 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
-| Git | 2.36+ (`--remerge-diff` for A-05 merge audits) | `xcode-select --install` | Everything |  |
+| Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
+| Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
-| Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for |
+| Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for. This is the `terraform` an apply runs |
+| The Terraform floor, 1.11.0 | n/a | `tools/preflight.sh` prints the line, through `hc-install` (`brew install hashicorp/tap/hc-install`) | The local check, on a Terraform change | Below, under "The Terraform floor" |
 | AWS CLI v2 | 2.37.12 | `brew install awscli` | 1.0, 1.6a |  |
 | AWS account and credentials | n/a | `aws configure sso` or `aws configure` | 1.0 | Rights to create the plan's resources. The plan prices us-east-1. |
 | openssl | macOS ships one | n/a | 1.6a | `certs.sh` makes the local certificate authority with it |
@@ -74,6 +76,29 @@ The skeleton adds only `xunit.v3` to projects. Each owner adds the other referen
 
 The AWS provider documents both Cognito features task 1.8 relies on: the `refresh_token_rotation` block on `aws_cognito_user_pool_client`, and the `aws_cognito_managed_login_branding` resource.
 
+### The Terraform floor
+
+The floor is the oldest Terraform the repository supports: 1.11.0. The S3 backend's native lock
+file first shipped in 1.10.0, and 1.11.0 made it generally available and deprecated the DynamoDB
+lock ([1.11.0's changelog](https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md)). One file,
+`.terraform-version`, names it, and three readers share one function for it,
+`tools/terraform-floor.sh` (#69):
+
+- **CI's Terraform job** installs exactly that version through `hashicorp/setup-terraform`.
+- **`tools/check.sh`**, the local check, runs it on a Terraform change when this machine has it,
+  and otherwise runs the `terraform` on PATH and names that version in a warning and its last line.
+- **`tools/preflight.sh`** says whether this machine has it, and prints the line that installs it.
+
+It is installed at `~/.local/share/terraform/<version>/terraform`, one copy per machine for every
+clone and worktree, and outside PATH, so the `terraform` an apply runs is still whatever the person
+chose. HashiCorp's `hc-install` 0.10.0 puts it there, from the tap the Brewfile already names, and
+verifies the release's checksums and signature ([its README](https://github.com/hashicorp/hc-install#cli)).
+A `terraform` on PATH that reports the floor counts too, so a version manager that reads
+`.terraform-version`, such as tfenv or tfswitch, satisfies it without that directory.
+
+Raising the floor is a one-line change to `.terraform-version`, plus the `required_version` line
+in each root and module under `infra/`, which workstream 1 owns.
+
 ## Decided
 
 ### D-1: the JSON Schema validator. JsonSchema.Net 8.0.5, in the gateway
@@ -90,6 +115,53 @@ Decided by the integrator on 14 October 2026, on change request 2.1. The plan as
 The engine runs in the gateway process, through `src/Platform.Registry`, and the earlier recommendation to keep it out is rejected. `contracts/README.md` -> "Rules that JSON Schema cannot express" makes the one shared library the guarantee that the gateway and `spactl` cannot disagree, and several security rules live only in the schema: the source `'*'` and `'unsafe-eval'` in every content security policy directive, `'unsafe-inline'` and `data:` in `script-src`, `additionalProperties: false`, and the `host`, `upstream` and `clientSecretRef` patterns. Keeping the engine out of the gateway would leave it weaker than `spactl` on those rules, or duplicate them in C#. The engine parses a registry document, which the plan already has the gateway trust.
 
 **Revisit when** 8.x stops receiving a fix we need. Then pick a permissively licensed engine from the table above. In shipping code the engine is touched in one file, `src/Platform.Registry/RegistrySchemas.cs`, which is the whole of the gateway's and `spactl`'s exposure to it; the two test projects in the row above call it directly as well, and they are not what a swap has to keep working. A one-file change in the code that ships is why this is recorded here and not as an ADR.
+
+### D-3: the shell scripts' tests. Python's `unittest`, running the real script
+
+Decided on #66, from archived overnight ticket 69's Q1 and Q14, which Adam accepted. `tools/land.sh`
+is the one sanctioned merge path and had no test: its `--body-file` handling was verified with a copy
+of its parse loop, and a review then found it checking a relative path in one directory and reading
+it from another (`2c9962f`).
+
+| Option | Licence | Trade-off |
+| --- | --- | --- |
+| bats-core 1.14.0 | MIT | The usual choice. A new tool in CI and on every machine, and its assertions need `bats-support` and `bats-assert` as well. `tools/land.sh` has no functions to source, so bats would start it as a subprocess too. |
+| Plain bash test scripts | n/a | No tool, and no assertion library: each file rebuilds the setup, the doubles and the reporting, in bash 3.2. |
+| **Python's `unittest`, starting the real script as a subprocess** | Python Software Foundation License (standard library) | No new tool: python3 already runs the pre-push hook, CI's checks and `tools/roadmap.py`, and `tools/land.sh` refuses without it. The shape of the checks' own test companions. **Chosen.** |
+
+The companion is `tools/land_tests.py`, run as `python3 -I`, and nothing is added to any package
+list. It names `/bin/bash` rather than trusting the shebang, so each run tests one known shell. CI
+holds both major versions the shebang `#!/usr/bin/env bash` can pick: bash 3.2.57 on
+`macos-latest` (macOS 26 Arm64), the floor, where `SCRIPT_TESTS_REQUIRE_BASH=3.2` fails the job if
+the image's `/bin/bash` changes, and bash 5.2.21 on `ubuntu-latest` (Ubuntu 24.04). A Mac with
+Homebrew's bash first on PATH runs bash 5 too, but a newer one (5.3.20 on 18 October 2026), which no
+job runs.
+
+`tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
+which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
+python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one for
+its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs. The branch cleanup
+`tools/land.sh` runs after its merge, `tools/prune_branches.py`, has `tools/prune_branches_tests.py`
+(#71), also in both jobs: real git with a bare origin, a gh double, and the one set of cases that
+runs `tools/land.sh` past its merge, because that double's merge really merges.
+
+**The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
+3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
+and no job runs 3.9 for any of them.
+
+**Revisit when** the repository goes private, since the macOS job then bills at $0.062 a minute for
+the standard runner where it now costs nothing; or when a script needs a test that a subprocess
+cannot observe. The choice lives in one test file per script and one CI step each, so it is recorded
+here and not as an ADR, for D-1's reason.
+
+Read on 18 October 2026: Homebrew's [bats-core](https://formulae.brew.sh/api/formula/bats-core.json)
+and [bash](https://formulae.brew.sh/api/formula/bash.json) formulae;
+GitHub's [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [runner pricing](https://docs.github.com/en/billing/reference/actions-runner-pricing); the
+[runner images' label table](https://github.com/actions/runner-images/blob/main/README.md) and the
+[macOS 26 Arm64](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
+and [Ubuntu 24.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+image notes.
 
 ## Open decisions
 

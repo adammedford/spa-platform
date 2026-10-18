@@ -68,7 +68,7 @@ public sealed class RegistrationTests
     public void The_object_store_is_s3_over_the_registry_bucket()
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-        builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "examples", "platform-config.example.json"));
+        builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
         builder.Services.AddSingleton<IAmazonS3>(new AmazonS3Client(
             new Amazon.Runtime.AnonymousAWSCredentials(), Amazon.RegionEndpoint.USEast1));
 
@@ -85,7 +85,7 @@ public sealed class RegistrationTests
     {
         // Read against the contract's own example, so a change to it reaches this test.
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-        builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "examples", "platform-config.example.json"));
+        builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
 
         builder.AddPlatformRegistry();
         using IHost host = builder.Build();

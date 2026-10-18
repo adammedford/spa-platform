@@ -34,6 +34,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0019](0019-registry-documents-a-build-accepts.md) | A build accepts the registry `schemaVersion` its schema names; refusing a value no build could apply is not a new version | — |
 | [0020](0020-tickets-live-in-github-issues.md) | Tickets and specs live in GitHub Issues, worked through `gh`; the contracts, ADRs, glossary and merge bodies stay in the repository, and the markdown tickets filed before it are a read-only archive | — |
 | [0021](0021-pre-accepted-answers-are-provisional.md) | A pre-accepted answer is provisional: a scripted session commits only to confirmed answers, to the documents a session steers by, and the human lands | — |
+| [0022](0022-review-at-the-merge-path.md) | Hold review at `tools/land.sh`: merge only a head whose latest review record says merge, pinned to it, never `--admin`; no gate tag over an open review; required approving reviews rejected while one person holds the only account | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

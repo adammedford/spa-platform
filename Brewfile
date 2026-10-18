@@ -9,7 +9,8 @@
 tap "hashicorp/tap"
 
 cask "dotnet-sdk"                # .NET SDK 10.0. Everything that builds.
-brew "hashicorp/tap/terraform"   # 1.11 or later, for the S3 lock file. Task 1.0 onwards.
+brew "hashicorp/tap/terraform"   # At least the floor in .terraform-version. Task 1.0 onwards.
+brew "hashicorp/tap/hc-install"  # Installs the floor itself, which preflight prints the line for.
 brew "awscli"                    # AWS CLI v2. Terraform credentials, certs.sh, tunnel.sh.
 cask "session-manager-plugin"    # The tunnel to the internal ALB. Task 1.6b.
 

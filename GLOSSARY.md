@@ -142,7 +142,12 @@ sessions, 4 API and security, 5 Fixtures, 6 Verification and operations), each w
 `OWNERSHIP.md`. Not "team".
 
 **Integrator** — the owner of the shared skeleton: contracts, abstractions, test doubles, the
-composition root, `docs/adr/`, `docs/plan/`, CI and package versions.
+composition root, `docs/adr/`, `docs/plan/`, CI and package versions. A role that agent sessions
+play, not a person.
+
+**Agent session** — one agent conversation working in the repository, and the unit in which review
+independence is counted. One workstream, or the integrator, may be many agent sessions. _Avoid_:
+bare "session" wherever the gateway's sessions (session record, session key) could be meant.
 
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
@@ -166,22 +171,62 @@ the night. Provisional until confirmed; nothing is committed, rewritten or filed
 the run's `Overnight <date>` issue. The only answer a session applies to a document, a ticket body
 or a new ticket.
 
-**Review record** — one fixed line in a pull request comment naming the full head sha a review
-covered and its verdict, `merge` or `hold`; the latest line naming the current head decides.
-Written only by a session that wrote none of the commits it covers. Its exact form is #67's to fix.
+**Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
+session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
+give its own pull request. _Avoid_: approval, sign-off.
+
+**Review record** — the line a review leaves on its pull request, naming the exact head it read and
+its verdict: `Reviewed <40-hex head> against <40-hex base>: merge`, or `: hold`, on a line of its
+own in a comment or a review submitted as a comment (`docs/agents/review.md` → "The review record").
+It covers that head and nothing pushed after it, and the latest record naming the current head
+decides. Written only by an agent session that wrote none of the commits it covers. _Avoid_:
+review-evidence line, review disposition, approval.
+
+**Open review** — the state of a pull request whose head no review record yet clears: a review
+running or holding, commits pushed after the last reviewed head, or a merge made without a review.
+It closes when a record names that head with a merge verdict and the findings it raised have landed.
 
 **Hand-over** — the morning's closing statement, on the `Overnight <date>` issue and the console:
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
 every refusal with its reason.
 
+**Landed** — the state of a plan row whose merge subject names it, in the form
+`docs/agents/landing-work.md` fixes. A row is **part-landed** when the subject says "part of", or
+when a split of the row merged. Landed is not done: a row is done when its tests pass in CI, it
+touched only its owner's paths and it leaves no change request open. _Avoid_: "merged" for landed,
+and "landed" for done.
+
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
 Phase 1 accepted. Phase 2 adds G6 to G8.
 
-**Check** — a mechanical guard the pre-push hook or CI runs when applicable: ownership, steering,
-the roadmap, the build, Terraform's format and validate. A check holds a push to the rules; a gate is
-the ladder's checkpoint. Never "gate" for a check, including the one a workflow runs before it
-integrates a branch.
+**Gate tag** — the annotated tag that closes a gate, its message naming the CI run that proved the
+exit test. It is permanent, so what its commit says stays said there. Other tags are not gates.
+_Avoid_: release tag, and "the tag" where another tag could be meant.
+
+**Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
+ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
+the merge. A check holds a push or a merge to the rules; a gate is the ladder's checkpoint. Never
+"gate" for a check, including the one a workflow runs before it integrates a branch.
+
+**Local check** — `tools/check.sh`: the checks a branch must pass on this machine, in one file that
+the pre-push hook, a person before a push and every overnight lane run as written. Its full mode,
+`--full`, adds the test suite, the smoke test and `terraform test`, which the hook leaves to CI, and
+ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themselves.
+
+**Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
+CI installs exactly it, every root's `required_version` asks for at least it, and the local check
+runs it when the machine has it, naming the version it ran either way. Raising it is a one-line
+change to that file plus each root's constraint. _Avoid_: the pinned version, the minimum, for this.
+
+**Test companion** — the tests that sit beside a check or a script, in a file named for it, and
+prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
+copy of its parts. _Avoid_: harness, suite, for these.
+
+**Harness** — one of two things, and never a script's tests. Either the gateway test harness, task
+6.1's in-process host of the composed gateway that the hermetic suites drive, or a G0 feasibility
+harness under `spikes/g0/`, which probes one mechanism and records its evidence ids. Say which when
+the sentence does not. _Avoid_: harness, for a test companion.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
 provider, an in-memory object store, the real mock API and an echo upstream.

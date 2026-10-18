@@ -10,7 +10,6 @@
 set -u
 
 NEED_DOTNET_MAJOR="10.0"
-NEED_TERRAFORM="1.11"
 NEED_AWSCLI="2.0"
 HOSTS="app1.spa-poc.test app2.spa-poc.test app3.spa-poc.test"
 
@@ -42,6 +41,14 @@ ver_ge() {
 
 # first_version TEXT: the first dotted number in TEXT, such as 2.37.12.
 first_version() { printf '%s\n' "$1" | sed -n 's/[^0-9]*\([0-9][0-9]*\(\.[0-9][0-9]*\)\{1,3\}\).*/\1/p' | head -n 1; }
+
+# The Terraform floor's version and where it is installed come from the one file and the one
+# helper that tools/check.sh and CI read them through (#69), so this cannot name a different floor
+# from the one the check runs. Resolved from the script's own directory, for the reason given at
+# tools/aws-project.env below.
+tools_dir="$(cd "$(dirname "$0")" && pwd)"
+. "$tools_dir/terraform-floor.sh"
+floor_file="$(cd "$tools_dir/.." && pwd)/.terraform-version"
 
 echo "Workstation: $(uname -s) $(uname -m)"
 echo
@@ -78,16 +85,39 @@ else
   info "nuget.org" "curl not found, so this was not checked"
 fi
 
-# Terraform
-if have terraform; then
-  tf=$(first_version "$(terraform version 2>/dev/null | head -n 1)")
-  if [ -n "$tf" ] && ver_ge "$tf" "$NEED_TERRAFORM"; then
-    ok "Terraform" "$tf"
+# Terraform. Two rows, because two of them matter. The floor is the version CI runs, which
+# tools/check.sh runs when this machine has it and names a substitute for when it does not; on
+# 2026-10-17 six overnight agents each downloaded it by hand instead. The terraform on PATH is what
+# an apply runs, and every root's required_version asks for at least the floor.
+if floor=$(terraform_floor_read "$floor_file"); then
+  terraform_choose "$floor"
+  if [ "$terraform_used" = "$floor" ]; then
+    ok "Terraform floor ${floor}" "${terraform_bin}, which CI runs and tools/check.sh uses"
   else
-    missing "Terraform >= ${NEED_TERRAFORM}" "found: ${tf:-unknown}. brew install hashicorp/tap/terraform"
+    floor_dir=$(terraform_floor_dir "$floor")
+    if [ -n "$terraform_bin" ]; then
+      instead="runs ${terraform_used:-a terraform of no known version} instead"
+    else
+      instead="runs no Terraform"
+    fi
+    # hc-install is HashiCorp's installer, from the tap the Brewfile already names; it verifies
+    # the release's checksums and signature (https://github.com/hashicorp/hc-install#cli).
+    missing "Terraform floor ${floor}" "not installed, so tools/check.sh ${instead}. brew install hashicorp/tap/hc-install && mkdir -p ${floor_dir} && hc-install install -version ${floor} -path ${floor_dir} terraform"
   fi
 else
-  missing "Terraform >= ${NEED_TERRAFORM}" "brew install hashicorp/tap/terraform"
+  floor=""
+  missing "Terraform floor" "${floor_file} does not name one exact version, such as 1.11.0"
+fi
+
+if have terraform; then
+  tf=$(terraform_version_of terraform)
+  if [ -n "$tf" ] && { [ -z "$floor" ] || ver_ge "$tf" "$floor"; }; then
+    ok "Terraform" "${tf} on PATH"
+  else
+    missing "Terraform >= ${floor:-the floor}" "found: ${tf:-unknown}. brew install hashicorp/tap/terraform"
+  fi
+else
+  missing "Terraform >= ${floor:-the floor}" "brew install hashicorp/tap/terraform"
 fi
 
 # AWS CLI and credentials

@@ -1,12 +1,15 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Three jobs. The documents job runs on every pull request and costs about a minute: the documents a
-# session steers by, the roadmap, the checks' own tests, and -- first, so the other two can read the
-# answer -- which halves of the repository the change touches. The expensive jobs run when their
-# inputs changed: the solution builds and every test project runs for build inputs, and the Terraform
-# roots validate for infra/. The hook shares these path patterns through .github/touches.sh. CI's
-# decision step also runs both jobs for changes to its workflow, the classifier or tools/smoke.sh,
-# or when the base cannot be resolved.
+# Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
+# session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
+# the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh and of
+# the branch cleanup land.sh runs, whether every tracked shell script parses, and --
+# first, so the two expensive jobs can read the answer -- which halves of the repository the change
+# touches. Those two run when their inputs changed: the solution builds and every test project runs
+# for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
+# infra/ and the floor's own file and helper. The hook shares these path patterns
+# through .github/touches.sh. CI's decision step also runs both jobs for changes to its workflow,
+# the classifier or tools/smoke.sh, or when the base cannot be resolved.
 #
 # A job skipped that way still satisfies main's protection, which requires `Build and test` and
 # `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
@@ -17,10 +20,13 @@
 # answer, both expensive jobs run, because a skipped check has to be earned by a diff that proves it
 # unnecessary.
 #
-# Check A-05 is deliberately not here. It lives in .githooks/pre-push, where it catches a session
-# that reached outside its brief at the moment it reached. A blocking CI check would need an
+# Check A-05 is deliberately not here. It lives in tools/check.sh, which .githooks/pre-push runs,
+# where it catches a session that reached outside its brief at the moment it reached. A blocking CI check would need an
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
+#
+# The fourth job runs the shell scripts' test companions and the parse check again on macOS, under
+# the bash 3.2 the scripts target, on every push and pull request; the steps that run them say why.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -102,6 +108,16 @@ jobs:
       - name: CI path decisions include build inputs and survive large diffs
         run: python3 -I .github/touches_tests.py
 
+      - name: Every tracked shell script parses
+        # A script that does not parse fails here, at the push that broke it, rather than in whatever
+        # runs it next: tools/check.sh is run as written by the hook, by a person before a push and
+        # by every overnight lane, so a syntax error there stops all of them at once (#68). The
+        # companion first breaks copies of this repository's own scripts and watches the check
+        # refuse them, because a check that has only ever seen clean scripts cannot show it reads any.
+        run: |
+          python3 -I .github/shell_parse_tests.py
+          python3 -I .github/shell-parse.py
+
       - name: What a session steers by says what the repository says, and every citation resolves
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
@@ -148,6 +164,94 @@ jobs:
         # that merged something -- is the rule that decides whether an integration branch can be
         # pushed through the hook at all rather than around it.
         run: python3 -I .github/path_ownership_tests.py
+
+      - name: The review record reader clears only the head a record names
+        # tools/land.sh merges only a head whose latest review record says merge, and this is the
+        # code that decides it (#67). Its companion feeds it GitHub's shapes of comments and reviews
+        # built to trip each rule -- a hold, an earlier head, an abbreviated or malformed line, a sha
+        # in passing, a review's own commit_id, a line from outside the repository -- because a
+        # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
+        # case of each.
+        run: python3 -I tools/review_record_tests.py
+
+      - name: tools/land.sh refuses before it merges, merges only a reviewed head, and hands gh the body its caller named
+        # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
+        # in one directory and read it from another (2c9962f), which a copy of its parse loop had
+        # verified. The companion runs the real script against real git in throwaway repositories,
+        # the real review record reader and a gh double, so no case reaches GitHub or gets past the
+        # merge. Here it runs under the runner's bash 5, which the script's shebang can also pick;
+        # the bash 3.2 job runs it at the other end of that range. The tool choice is D-3 in
+        # docs/dependencies.md.
+        run: python3 -I tools/land_tests.py
+
+      - name: tools/check.sh runs the hook's checks unchanged, and in full ends on its verdict
+        # The local check is what .githooks/pre-push runs, what a person runs before a push and what
+        # every overnight lane runs in full (#68). Its companion runs the real hook and the real script
+        # in throwaway repositories, with doubles for the Python checks, dotnet, terraform and the
+        # smoke test, and asserts the hook's lines as they were before the checks moved, and that the
+        # full mode's last line is its verdict whichever step stops it. Under bash 5 here; the job below
+        # runs it under 3.2.
+        run: python3 -I tools/check_tests.py
+
+      - name: tools/preflight.sh names the Terraform floor and says whether this machine has it
+        # Preflight's floor row tells a person, or an overnight lane, whether the local check will run
+        # the Terraform CI runs, and prints the command that installs it where the check looks (#69).
+        # Its companion runs the real script with a Terraform double and asserts only those rows.
+        run: python3 -I tools/preflight_tests.py
+
+      - name: A landing deletes the branches it finished, and keeps and lists every other
+        # tools/prune_branches.py deletes branches, locally and on origin, and a deleted branch with
+        # work on it is work lost, so every rule that keeps one is held here (#71): a claim of a row
+        # the roadmap does not call landed, a worktree, commits or a merge resolution main lacks, and
+        # a push to origin after the check. Its companion runs the real script against real git in
+        # throwaway repositories, with a bare origin and a gh double, and runs tools/land.sh past a
+        # merge, which tools/land_tests.py never does, to see the landing delete what it finished.
+        run: python3 -I tools/prune_branches_tests.py
+
+  scripts-bash-3-2:
+    name: Scripts under bash 3.2
+    runs-on: macos-latest
+    # The companion's gh is a double and nothing here reaches AWS, so no token beyond reading the
+    # repository, and no OIDC token.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tools/land.sh refuses before it merges, under the bash 3.2 macOS ships
+        # The Linux runner has bash 5, so it can never show a failure only 3.2 has: under set -u,
+        # 3.2 calls an empty "${array[@]}" an unbound variable where 5 expands it to nothing. The
+        # variable makes the companion fail, not skip, when /bin/bash is not 3.2, which is why
+        # this is macos-latest and not a pinned image: an image that changes the shell turns the
+        # job red rather than quietly testing bash 5. Free while the repository is public (D-3).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/land_tests.py
+
+      - name: tools/check.sh and the hook, under the bash 3.2 macOS ships
+        # The same reason as the step above, for the local check: it is written for 3.2 because the
+        # pre-push hook and every overnight lane on this Mac run it there.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/check_tests.py
+
+      - name: tools/preflight.sh's Terraform rows, under the bash 3.2 macOS ships
+        # Preflight is written for the bash 3.2 macOS ships, which is what a person on a Mac runs.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/preflight_tests.py
+
+      - name: tools/land.sh past its merge, and the cleanup it runs, under the bash 3.2 macOS ships
+        # The lines land.sh runs after its merge are reached by no other companion, and a landing on
+        # this Mac runs them under 3.2.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/prune_branches_tests.py
+
+      - name: Every tracked shell script parses under bash 3.2
+        # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
+        # here even though the documents job, under bash 5, passed it.
+        run: python3 -I .github/shell-parse.py
 
   build-and-test:
     name: Build and test
@@ -197,16 +301,35 @@ jobs:
     name: Terraform
     runs-on: ubuntu-latest
     needs: documents
-    # Only when infra/ changed; the header says why this is an `if` and why it says `!cancelled()`.
+    # Only when infra/ or the floor changed; the header says why this is an `if` and why it says `!cancelled()`.
     if: ${{ !cancelled() && needs.documents.outputs.terraform != 'false' }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: The floor .terraform-version names
+        id: terraform-floor
+        # The floor is the oldest Terraform the repository supports, and this job runs exactly it.
+        # One file names it and tools/check.sh reads the same file through the same function, so a
+        # result on a machine that has the floor holds here, and raising the floor is a one-line
+        # change (#69). The reader refuses anything but one exact version: setup-terraform takes a
+        # range or `latest` too (https://github.com/hashicorp/setup-terraform/blob/v3/action.yml),
+        # and would install the newest release that matched.
+        run: |
+          set -euo pipefail
+          . tools/terraform-floor.sh
+          if ! version="$(terraform_floor_read .terraform-version)"; then
+            echo "::error::.terraform-version does not name one exact version, such as 1.11.0."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "the floor is Terraform $version"
+
       - uses: hashicorp/setup-terraform@v3
         with:
-          # 1.11 is the floor: that release gave the S3 backend its native lock file, which is why
-          # no DynamoDB table exists anywhere in this platform.
-          terraform_version: 1.11.0
+          # The S3 backend's native lock file, which is why no DynamoDB table exists anywhere in
+          # this platform, first shipped in 1.10.0 and became generally available in 1.11.0, which
+          # is the floor: https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
+          terraform_version: ${{ steps.terraform-floor.outputs.version }}
           terraform_wrapper: false
 
       - name: Format

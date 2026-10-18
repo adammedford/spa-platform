@@ -24,12 +24,6 @@ public static class RegistryValidator
     private static readonly JsonDocumentOptions Strict = new() { AllowDuplicateProperties = false };
 
     /// <summary>
-    /// The schema bounds <c>timeoutSeconds</c> below only ("the plan states no upper bound"), but the
-    /// model is a <see cref="TimeSpan"/>, and <see cref="TimeSpan.FromSeconds(long)"/> throws above this.
-    /// </summary>
-    private static readonly long MaximumTimeoutSeconds = TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond;
-
-    /// <summary>
     /// Checks a registry document against <c>contracts/registry.schema.json</c>, then every rule the
     /// schema cannot express, and models it. Any error rejects the document whole.
     /// </summary>
@@ -154,6 +148,8 @@ public static class RegistryValidator
                 $"Issuer '{issuer}' is not configured under Issuers:{{name}}.");
         }
 
+        Exact(findings, entry["session"]!["lifetimeMinutes"]!, $"{at}/session/lifetimeMinutes", "lifetimeMinutes", "minutes");
+
         if (entry["apis"] is not JsonArray apis)
         {
             return;
@@ -167,12 +163,7 @@ public static class RegistryValidator
             JsonObject api = apis[index]!.AsObject();
             string apiAt = $"{at}/apis/{index}";
             Unique(findings, names, api["name"]!.GetValue<string>(), index, RegistryRules.DuplicateApiName, $"{apiAt}/name", "apis[].name", $"{at}/apis");
-
-            if (!JsonInteger.TryRead(api["timeoutSeconds"]!, out long timeout) || timeout > MaximumTimeoutSeconds)
-            {
-                findings.Error(RegistryRules.IntegerOutOfRange, $"{apiAt}/timeoutSeconds",
-                    $"timeoutSeconds is above {MaximumTimeoutSeconds}, the longest timeout a TimeSpan holds.");
-            }
+            Exact(findings, api["timeoutSeconds"]!, $"{apiAt}/timeoutSeconds", "timeoutSeconds", "seconds");
 
             string upstream = api["upstream"]!.GetValue<string>();
             if (HostPolicy.PortAboveMaximum(upstream[(upstream.IndexOf("://", StringComparison.Ordinal) + 3)..]))
@@ -197,6 +188,25 @@ public static class RegistryValidator
             findings.Warning(RegistryRules.MultipleUpstreamOrigins, $"{at}/apis",
                 $"The entry names {origins.Count} upstream origins ({string.Join(", ", origins)}). Phase 1 sends one " +
                 "access token to each, which is safe only inside one trust domain (contracts/upstream-contract.md).");
+        }
+    }
+
+    /// <summary>
+    /// A schema-valid integer that <see cref="Model"/> reads with <see cref="JsonInteger.Read"/>, which
+    /// throws on anything <see cref="JsonInteger.TryRead"/> refuses. The schema's bounds keep both values
+    /// inside a <see cref="long"/>, but not every value the engine accepts as an integer is a whole
+    /// number: JsonSchema.Net 8.0.5 passes <c>30.0000000000000001</c> as <c>"type": "integer"</c>, and
+    /// its exact value has a fractional part (RegistryValidatorTests, the "cannot hold" cases). That is
+    /// contracts/README.md's row "A schema-valid integer the platform cannot hold or apply", so it is
+    /// reported rather than thrown out of <see cref="Validate"/>, and an app definition with it is refused
+    /// before <c>spactl</c> completes it into a registry entry.
+    /// </summary>
+    private static void Exact(Findings findings, JsonNode value, string path, string property, string unit)
+    {
+        if (!JsonInteger.TryRead(value, out _))
+        {
+            findings.Error(RegistryRules.IntegerOutOfRange, path,
+                $"{property} is not a whole number of {unit} the platform can hold exactly.");
         }
     }
 
@@ -230,7 +240,8 @@ public static class RegistryValidator
                 ClientSecretRef: oauth["clientSecretRef"]!.GetValue<string>(),
                 Scopes: Strings(oauth["scopes"]!.AsArray()),
                 Resource: oauth["resource"]?.GetValue<string>()),
-            // Absent apis: an app with no upstream (contracts/README.md, "Using the schemas").
+            // Absent apis: an app with no upstream (contracts/README.md, "Using the schemas"). The schema's
+            // maximum on timeoutSeconds, the proxy's ceiling (ADR-0019), is far inside what a TimeSpan holds.
             Apis: entry["apis"] is JsonArray apis
                 ? [.. apis.Select(api => new ApiDefinition(
                     api!["name"]!.GetValue<string>(),

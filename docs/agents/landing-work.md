@@ -54,34 +54,128 @@ roadmap — and a merge made through the GitHub API or the web UI is created on 
 hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
 commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
+**It merges only a reviewed head.** Before merging, `tools/land.sh` reads the pull request's review
+records and refuses unless the latest record naming its current head says `merge`
+(`docs/agents/review.md` → "The review record"). It then merges pinned to that head, so a push that
+lands while it runs makes GitHub refuse the merge, and it never merges with `--admin`, so the
+required CI checks still bind. It ends the merge body with `Reviewed: <head> <record URL>`. The one
+escape is `--unreviewed "<reason>"`, for a red `main` that cannot wait or no session free to review:
+it merges pinned to the head it saw, ends the body with `Unreviewed: <reason>`, and leaves that
+review open until a record names the merged head ("Gates" below). A merge made any other way is not
+checked at all, which is why nothing else is a sanctioned merge path.
+
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
-rides in the merge commit rather than staying on the pull request. If the row landed without
+rides in the merge commit rather than staying on the pull request. A named pipe or a process
+substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
+input for the confirmation it asks when no `--subject` is given. If the row landed without
 being finished, add an `Outstanding:` line saying what it still owes, and an
 `Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
 branch is deleted when the **task** is done, not when a pull request merges.
+
+**`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
+--delete` (#71). A `task/*` branch goes, locally and on `origin`, once every id its name carries
+reads as landed in `tools/roadmap.py --json`, as a merge subject of the first form above makes it,
+and a split no merge subject names reads as its row; a name whose ids are no plan row, split or
+ticket, left from the archived tracker, claims nothing and is held to the rest of this paragraph
+alone; an `overnight/*` branch goes once its pull request has merged. Either goes only when its
+current tip's work is on `main`, as an ancestor or as patch-equivalent commits with no merge
+carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
+on `origin` since it was checked keeps it there. Everything else is listed with the reason it stays.
+A part-landed row keeps its claim, because the claim is how the next session knows the row is
+taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do and
+deletes nothing; with it, it clears what an earlier landing left, by the same rule.
 
 A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
 request open. Merged is not done.
 
 ## Review
 
-A pull request is reviewed by a session other than the one that wrote the code, with `/code-review`,
-and its findings answered before merge. The spec axis is the plan row plus the contracts rows naming
-it, cited by path; there is no per-task spec file. `docs/agents/review.md` has the rest: how to read
-a branch without touching the shared tree, every source each axis is held to, and when a finding
-holds a merge rather than becoming an `Outstanding:` line.
+Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
+`/code-review`, and its findings answered before merge. The integrator's own work is no exception:
+the unit a review is independent of is the agent session, not the workstream, so any fresh session
+can review it, and the human's reading is the decision to land rather than a review. The spec axis
+is the plan row plus the contracts rows naming it, cited by path; work with no row is held to its
+issue and the decisions it was handed. `docs/agents/review.md` has the rest: how to read a branch
+without touching the shared tree, every source each axis is held to, when a finding holds a merge
+rather than becoming an `Outstanding:` line, and the review record a review leaves.
 
-The integrator's own skeleton work has no second workstream to review it, so it merges on CI plus
-the human. That is the weakest link here, and it is known.
+A review covers exactly the head its record names, and `tools/land.sh` refuses a head no record
+clears ("Land it" above). The check sits in the merge script rather than in branch protection
+because this repository has one GitHub account, which can neither approve its own pull request nor
+be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
+#67 records that choice and when it reopens.
+
+Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
+`tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives
+through a pull request whose head a review record names. This is a rule in prose, not a check, until
+the first time it is broken.
 
 ## Gates
 
-A gate closes when its exit test in `docs/plan/01-plan.md` passes. Tag it:
+A gate closes when its exit test in `docs/plan/01-plan.md` passes and no review of a change it
+covers is open. A gate tag covers every merge since the previous gate tag, and it is permanent:
+what its commit says stays said there however soon `main` corrects it. So it waits while any merge
+in its range has an open review:
+
+- a review still running, or one whose latest record says `hold`;
+- commits pushed after the last reviewed head;
+- a merge made with `--unreviewed`, or before the check existed, that no record clears yet;
+- a re-review of a merged pull request still running.
+
+A review stays open until a record naming the head says `merge` and the findings it raised have
+landed, fixed or carried as `Outstanding:` lines. For a merged pull request that is a record naming
+its **merged head**, the merge commit's second parent, posted on the merged pull request, with its
+findings landing in a follow-up pull request; that clears the review debt the merge left. Then, once
+the exit test's CI run on the commit to be tagged has passed, tag it:
 
 ```bash
 git tag -a <name> -m "<gate>: <exit test>, proved by <CI run URL>"
 ```
 
+To see what the range holds, list its merges, each with both parents and the trailer
+`tools/land.sh` wrote:
+
+```bash
+git fetch origin --tags
+git log --first-parent --merges --format='%h %s%n  parents: %P%n%(trailers:key=Reviewed,key=Unreviewed)' <previous gate tag>..origin/main
+```
+
+A `Reviewed:` line names the record the merge was checked against. An `Unreviewed:` line, or no
+line at all, is a merge to check by hand: its pull request must carry a record naming the merged
+head with `merge`. Before the check landed, a review naming the merged head in full counts in
+whatever shape it was written, as #41 to #43 do; after, only the record line does. To ask the record
+reader about a merged pull request `<n>` and its merged head:
+
+```bash
+printf '{"comments": %s, "reviews": %s}\n' \
+  "$(gh api "repos/{owner}/{repo}/issues/<n>/comments" --paginate --slurp)" \
+  "$(gh api "repos/{owner}/{repo}/pulls/<n>/reviews" --paginate --slurp)" \
+  | python3 -I tools/review_record.py <merged head>
+```
+
+Whether a review is still running is in no record: the tagger checks that none they or anyone else
+dispatched is. That is why this rule is prose and a command rather than a hook or a tag script.
+
 The tag is the record. There is no separate checklist. The name each gate's tag takes is in the
 ladder table in `docs/roadmap.md`, which is where `tools/roadmap.py` reads it to tell a closed gate
 from an open one.
+
+### Review debt from before the check
+
+`contracts-v1` was tagged two minutes after #37 merged, while #37's review was still running; that
+review found claims the tag still freezes, which #39 and #40 corrected on `main`. When #67 decided
+what enforces review, the five merges after that tag that no record named were to be reviewed
+before G2. `g2-local-slice` was tagged before that was done, and stands as it was cut. They are
+review debt like any other, and the next gate tag waits until a record clears each.
+
+| Pull request | Merged head | Merge commit |
+| --- | --- | --- |
+| #38 | `9202d6cc2e9af80cc4e27f24371d488f0399175f` | `733477a` |
+| #39 | `9564347d640b80c86711ea93a6d7ad55da1b9802` | `e376fe2` |
+| #40 | `6c07267ffd2ea422cdaa3a9aad4cda3d7ff0be1e` | `a3ec472` |
+| #44 | `ced5d8d6a49867c85b5547ff9d6f59a0ab488499` | `37fdca2` |
+| #45 | `91a8b2089df820237572719303c9d7195bad3dd9` | `eb65be8` |
+
+As read on 18 October 2026, for #67: none of the five carries a comment or a review, and no merge
+body, issue or pull request names its merged head. Each is cleared by a record naming that head,
+posted on its pull request, by an agent session that wrote none of its commits.

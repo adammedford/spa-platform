@@ -8,8 +8,8 @@ directory, and whatever a pointer in them is supposed to resolve to -- rather th
 against the live repository, which is green and so proves nothing about the red side. The freeze,
 citation and numbering rules each get one case against the repository as well, because their green
 side is the index, the contracts and the tracker as they actually stand. The module resolves its
-root from __file__, so patching that points it at the tree; PLANNED, UNFILED and TRANSCRIPTS are
-module state, so a case that needs an entry sets one.
+root from __file__, so patching that points it at the tree; PLANNED, UNFILED, TRANSCRIPTS and
+UNCOMPARED are module state, so a case that needs an entry sets one.
 
 No case reaches GitHub. The `#NNN` rule asks it which numbers exist, and that lookup is module
 state too: setUp replaces it with one that fails the case, so a tree carrying a `#NNN` has to say
@@ -52,6 +52,7 @@ spec.loader.exec_module(steering)
 LIVE_PLANNED = dict(steering.PLANNED)
 LIVE_UNFILED = dict(steering.UNFILED)
 LIVE_TRANSCRIPTS = dict(steering.TRANSCRIPTS)
+LIVE_UNCOMPARED = dict(steering.UNCOMPARED)
 
 # A pair that passes: pointers that resolve, and no sentence carrying state.
 CLEAN_AGENTS = """# Agent guide
@@ -108,6 +109,29 @@ INDEX_PREAMBLE = """# Contracts
 | Contract | File | Freezes at | Consumed by |
 | --- | --- | --- | --- |
 """
+
+# The two rows of the live index that one relational cell joins: the App definition row names no
+# gate and defers to the Registry document row, which names one. Each is the live row's shape --
+# its Contract and Freezes at cells as the index writes them -- trimmed to the schema it points at,
+# since the example files carry no header. A copy of the whole row would agree with itself whatever
+# the index said; what holds the live rows is the case against the repository, whose floor counts
+# app-definition.schema.json through the Registry document row.
+REGISTRY_ROW = (
+    "| Registry document | [`registry.schema.json`](registry.schema.json) "
+    "| G1a, except the `oauth` section at G1b | Workstreams 2, 3, 4 |"
+)
+APP_DEFINITION_ROW = (
+    "| App definition | [`app-definition.schema.json`](app-definition.schema.json) "
+    "| With the registry document | Workstreams 1, 2 and 5 |"
+)
+
+# The one relational cell that names no row at all, on the row the live index carries it in, and
+# the UNCOMPARED key that exempts that row and no other.
+TEST_DOUBLES_CELL = "With the interface each one stands in for"
+TEST_DOUBLES_ROW = (
+    f"| Test doubles | `src/Platform.Testing` (task I-3) | {TEST_DOUBLES_CELL} | Everyone |"
+)
+TEST_DOUBLES_KEY = ("Test doubles", TEST_DOUBLES_CELL)
 
 # Every citation below is assembled from these pieces rather than written out, and so is every
 # assertion quoting one back. This file is tracked, and the rule under test reads tracked files:
@@ -183,6 +207,8 @@ class SteeringTests(unittest.TestCase):
         steering.UNFILED = {}
         self.addCleanup(setattr, steering, "TRANSCRIPTS", steering.TRANSCRIPTS)
         steering.TRANSCRIPTS = {}
+        self.addCleanup(setattr, steering, "UNCOMPARED", steering.UNCOMPARED)
+        steering.UNCOMPARED = {}
         # The `#NNN` rule's lookup, replaced so that no case reaches GitHub: a tree carrying a
         # citation says what GitHub would answer, or the case fails on this stub.
         self.addCleanup(setattr, steering, "issued_numbers", steering.issued_numbers)
@@ -478,19 +504,150 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("STEERING FAILED: the contracts index has a row this rule cannot read.", out)
         self.assertIn(f"contracts/README.md:{number}: 3 cells in a 4-column table", out)
 
-    def test_a_relational_cell_naming_no_gate_passes(self):
-        """Two rows defer to another row rather than naming a gate, and neither is a failure."""
-        rows = (
-            ("With the registry document", "[`app-definition.schema.json`]"
-                                           "(app-definition.schema.json)"),
-            ("With the interface each one stands in for", "`src/Platform.Testing` (task I-3)"),
+    def test_a_relational_cell_is_compared_through_the_row_it_names(self):
+        """The App definition row's shape: no gate of its own, so it borrows the registry's.
+
+        The count is what the assertion holds, because the defect this case was written for is a
+        header nothing compares, and a skipped header and a compared one both exit 0.
+        """
+        self.write_index(REGISTRY_ROW, APP_DEFINITION_ROW)
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write_schema("contracts/app-definition.schema.json", "G1a")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("contracts/README.md agrees with the 2 freeze headers it indexes", out)
+
+    def test_a_relational_target_whose_header_disagrees_with_the_row_it_defers_to_fails(self):
+        """The disagreement this rule passed in silence before: the registry row and the app
+        definition's own header naming different gates, with nothing in between comparing them.
+
+        The message names the row deferred to as well as both sides, because the cell alone names
+        no gate, and a message quoting only the cell would not say where G1a came from.
+        """
+        number = self.write_index(REGISTRY_ROW, APP_DEFINITION_ROW) + 1
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write_schema("contracts/app-definition.schema.json", "G1b")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: the contracts index and a contract's own freeze header "
+                      "disagree.", out)
+        self.assertIn(
+            f"contracts/README.md:{number}: row 'App definition': the index cell 'With the "
+            "registry document' defers to row 'Registry document', which names G1a, and "
+            "contracts/app-definition.schema.json's header 'Freezes at G1b.' names G1b",
+            out,
         )
-        for cell, files in rows:
+
+    def test_a_relational_cell_naming_no_row_the_index_holds_fails(self):
+        """A cell deferring to nothing makes no claim anything can compare, which is the defect.
+
+        Two shapes: a row the index never held, and the front of a row it does hold, so the
+        lookup is shown to want the whole name and not a prefix of one.
+        """
+        for cell, named in (("With the routing table", "routing table"),
+                            ("With the registry", "registry")):
             with self.subTest(cell=cell):
-                self.write_index(f"| A row | {files} | {cell} | Everyone |")
+                number = self.write_index(
+                    REGISTRY_ROW, APP_DEFINITION_ROW.replace("With the registry document", cell)
+                ) + 1
+                self.write_schema("contracts/registry.schema.json", "G1a")
                 self.write_schema("contracts/app-definition.schema.json", "G1a")
                 code, out = self.check()
-                self.assertEqual(0, code, out)
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: a freeze cell names neither a gate nor a row of "
+                              "the contracts index.", out)
+                self.assertIn(
+                    f"contracts/README.md:{number}: row 'App definition': the index cell "
+                    f"'{cell}' names no gate, and no row of the table is called '{named}'",
+                    out,
+                )
+
+    def test_a_relational_cell_deferring_to_another_relational_cell_fails(self):
+        """One hop and no more: the row deferred to has to name the gate the cell borrows.
+
+        The index writes no chain, and a cycle -- two rows each deferring to the other -- would be
+        a claim with no gate anywhere in it. Failing the second hop catches both without a walk.
+        """
+        number = self.write_index(
+            REGISTRY_ROW,
+            APP_DEFINITION_ROW,
+            "| App example | [`app-definition.example.json`](app-definition.example.json) "
+            "| With the app definition | Workstream 5 |",
+        ) + 2
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write_schema("contracts/app-definition.schema.json", "G1a")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a freeze cell names neither a gate nor a row of the "
+                      "contracts index.", out)
+        self.assertIn(
+            f"contracts/README.md:{number}: row 'App example': the index cell 'With the app "
+            "definition' defers to row 'App definition', which names no gate either",
+            out,
+        )
+
+    def test_an_uncompared_cell_is_exempt_while_a_row_carries_it(self):
+        """The Test doubles row's shape: a cell deferring to one interface per double, and so to
+        no single row, on a row whose target is code with no header to compare."""
+        steering.UNCOMPARED = {TEST_DOUBLES_KEY: "each double has its own interface"}
+        self.write_index(REGISTRY_ROW, TEST_DOUBLES_ROW)
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write("src/Platform.Testing/InMemoryRegistry.cs")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("contracts/README.md agrees with the 1 freeze header it indexes", out)
+
+    def test_an_uncompared_cell_on_another_row_is_compared_like_any_other(self):
+        """The exemption is the Test doubles row's, not its words': the reason given for it -- code
+        with no header -- is false of a row pointing at a contract that carries one, and keyed by
+        the cell alone that row's header would go uncompared on a reason nobody gave for it.
+        """
+        steering.UNCOMPARED = {TEST_DOUBLES_KEY: "each double has its own interface"}
+        number = self.write_index(
+            REGISTRY_ROW,
+            TEST_DOUBLES_ROW,
+            f"| Fixture contract | [`fixture.md`](fixture.md) | {TEST_DOUBLES_CELL} "
+            "| Workstream 5 |",
+        ) + 2
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write("src/Platform.Testing/InMemoryRegistry.cs")
+        self.write_contract("contracts/fixture.md", "G2")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a freeze cell names neither a gate nor a row of the "
+                      "contracts index.", out)
+        self.assertIn(
+            f"contracts/README.md:{number}: row 'Fixture contract': the index cell "
+            f"'{TEST_DOUBLES_CELL}' names no gate, and no row of the table is called "
+            "'interface each one stands in for'",
+            out,
+        )
+        self.assertNotIn("row 'Test doubles'", out)
+
+    def test_an_uncompared_cell_no_row_carries_fails(self):
+        """The list cannot outlive its entries, which is PLANNED's rule one level over.
+
+        The row is still there with one half of its key changed -- the cell reworded, or the row
+        renamed -- which is the case that matters: the exemption was for that row saying those
+        words, and either change is a claim nobody has decided about.
+        """
+        why = "each double has its own interface"
+        for shape, row in (
+            ("a reworded cell", TEST_DOUBLES_ROW.replace(TEST_DOUBLES_CELL,
+                                                         "With the registry document")),
+            ("a renamed row", TEST_DOUBLES_ROW.replace("| Test doubles |", "| Doubles |")),
+        ):
+            with self.subTest(shape=shape):
+                steering.UNCOMPARED = {TEST_DOUBLES_KEY: why}
+                self.write_index(REGISTRY_ROW, row)
+                self.write_schema("contracts/registry.schema.json", "G1a")
+                code, out = self.check()
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: an UNCOMPARED cell is in no row that needs it.",
+                              out)
+                self.assertIn(f"no row 'Test doubles' has the freeze cell '{TEST_DOUBLES_CELL}' "
+                              f"naming no row ({why})", out)
+                self.assertIn("Remove it from UNCOMPARED", out)
 
     def test_a_row_pointing_at_source_code_passes(self):
         """`src/Platform.Abstractions` is a directory of code, and carries no freeze header."""
@@ -521,18 +678,21 @@ class SteeringTests(unittest.TestCase):
 
         The count is asserted as a floor, because a green exit on its own is what a rule that
         compared nothing also prints. The floor is what the index holds today, and a row added to
-        it may raise the number but cannot lower it.
+        it may raise the number but cannot lower it. Eleven counts app-definition.schema.json,
+        compared through the Registry document row its cell defers to; ten was the floor while a
+        relational cell was passed over, so a rule that went back to skipping it goes red here.
         """
         steering.__file__ = str(ROOT / ".github" / "steering.py")
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
         steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        steering.UNCOMPARED = LIVE_UNCOMPARED
         self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)
         counted = re.search(rf"{steering.INDEX} agrees with the (\d+) freeze headers?", out)
         self.assertIsNotNone(counted, out)
-        self.assertGreaterEqual(int(counted.group(1)), 10, out)
+        self.assertGreaterEqual(int(counted.group(1)), 11, out)
 
     # --- a cited ticket number resolves to a file ---------------------------------------------
 
@@ -768,6 +928,7 @@ class SteeringTests(unittest.TestCase):
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
         steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        steering.UNCOMPARED = LIVE_UNCOMPARED
         self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)
@@ -844,6 +1005,7 @@ class SteeringTests(unittest.TestCase):
         steering.PLANNED = LIVE_PLANNED
         steering.UNFILED = LIVE_UNFILED
         steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        steering.UNCOMPARED = LIVE_UNCOMPARED
         self.offline("a test never reaches GitHub")
         code, out = self.check()
         self.assertEqual(0, code, out)

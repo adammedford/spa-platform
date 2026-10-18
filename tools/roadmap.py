@@ -22,8 +22,25 @@ because it reads as coverage.
 
     tools/roadmap.py            rewrite the generated blocks (also --write)
     tools/roadmap.py --check    fail if they are not what the repository says they should be
+    tools/roadmap.py --json     print the same derivation for a program, and write nothing
 
 An unrecognised argument exits 2 and writes nothing, because the default action writes.
+
+--json is for a program that needs to know how far the work has got, so it asks rather than keeping
+a rule of its own (#70). It prints, from the reading the blocks are written from,
+
+    {"closed_gates": [{"gate": "G1a", "tag": "skeleton-v1"}, ...],
+     "rows": {"I-1": "landed", ..., "1.3": "part-landed", ..., "6.8": "ongoing", ...},
+     "splits": {"1.4a": "landed", ..., "2.1b": "part-landed", ...},
+     "tickets": {"issue-65": "landed", ..., "issue-67": "part-landed", ...}}
+
+with every plan row in the plan's order: landed, part-landed, open, or ongoing for a row of a stage
+with no gate. "splits" and "tickets" hold the ids a merge subject names that are not plan rows -- a
+split of a row, 2.1b, and a ticket, issue-66 -- each landed or part-landed by its own subjects, and
+an id no subject names is absent. They are there for tools/prune_branches.py, whose claim branches
+carry those ids and whose rows cannot speak for them (#71). Where the answer would not be whole -- a
+shallow clone, a git that answers with no history, a ladder that does not line up with the plan --
+it exits 1 with nothing on stdout.
 
 The generated text holds no date and no commit id on purpose. It is a function of the tags, the
 merge subjects and the plan, so --check stays quiet until one of those changes, and the push that
@@ -33,6 +50,7 @@ lands a task is the push that updates the roadmap.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
@@ -281,26 +299,29 @@ def parent(id_: str, rows: list[str]) -> str | None:
     return stripped if stripped in rows else None
 
 
-def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
-    """Each plan row's state: 'landed', 'part', or absent."""
-    state: dict[str, str] = {}
+# A ticket's id where a merge subject names it: "Merge task issue-66: ...". Tickets are GitHub
+# issues (ADR-0020), not plan rows, so no ticket reaches the blocks; --json reports them because a
+# claim branch carries the id, and tools/prune_branches.py has to know when that claim is finished
+# (#71). Written in lower case on the branch, and read in any case here.
+TICKET = re.compile(r"^issue-\d+$", re.IGNORECASE)
 
-    def record(id_: str, how: str) -> None:
-        row = parent(id_, rows)
-        if row is None:
-            return
-        # A split id never lands its parent row, however its own merge was worded.
-        how = "part" if row != id_ else how
-        if state.get(row) != "landed":
-            state[row] = how
 
+def landings(root: pathlib.Path) -> list[tuple[str, str]]:
+    """Every (id, how) a merge subject lands, newest first: how is 'landed' or 'part'.
+
+    The one reading of the subject forms. `landed` folds these into plan rows and `own_states` keeps
+    splits and tickets by their own wording, so the two cannot read one subject two ways.
+    """
+    found: list[tuple[str, str]] = []
     for subject in subjects(root):
         match = LANDED_SUBJECT.match(subject)
         if match:
             how = "part" if match.group(1) else "landed"
             for token in re.split(r"[,\s]+and[,\s]+|[,\s]+", match.group(2)):
                 if ID.match(token):
-                    record(token, how)
+                    found.append((token, how))
+                elif TICKET.match(token):
+                    found.append((token.lower(), how))
             continue
         match = LANDED_BRANCH.match(subject)
         if match:
@@ -309,13 +330,98 @@ def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
             id_ = match.group(1)
             if id_.startswith(("i-", "p2-")):
                 id_ = id_.upper()
-            record(id_, "landed")
+            found.append((id_, "landed"))
             continue
         match = LANDED_INTEGRATOR.match(subject) or LANDED_PARENTHESISED.search(subject)
         if match:
-            record(match.group(1), "landed")
+            found.append((match.group(1), "landed"))
+    return found
 
+
+def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
+    """Each plan row's state: 'landed', 'part', or absent."""
+    state: dict[str, str] = {}
+    for id_, how in landings(root):
+        row = parent(id_, rows)
+        if row is None:
+            continue
+        # A split id never lands its parent row, however its own merge was worded.
+        how = "part" if row != id_ else how
+        if state.get(row) != "landed":
+            state[row] = how
     return state
+
+
+def own_states(root: pathlib.Path, rows: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """(splits, tickets): each id that is not a plan row, by the subjects that name it.
+
+    A split's row cannot speak for it. 2.1 landed whole, and later a follow-up split of it merged as
+    "Merge part of task 2.1b", so 2.1b's claim is live under a landed row (#71). Each reads
+    'landed' once any subject lands it whole and 'part-landed' otherwise; an id no subject names is
+    absent. Splits come in the plan's order of their rows, tickets by number.
+    """
+    splits: dict[str, str] = {}
+    tickets: dict[str, str] = {}
+    for id_, how in landings(root):
+        if TICKET.match(id_):
+            into = tickets
+        elif id_ not in rows and id_[-1:].isalpha() and parent(id_, rows):
+            into = splits
+        else:
+            continue
+        if into.get(id_) != "landed":
+            into[id_] = "landed" if how == "landed" else "part-landed"
+    return (
+        {id_: splits[id_] for id_ in sorted(splits, key=lambda s: (rows.index(s[:-1]), s))},
+        {id_: tickets[id_] for id_ in sorted(tickets, key=lambda t: int(t.split("-")[1]))},
+    )
+
+
+# --- what the blocks count -----------------------------------------------------------------------
+
+
+def counted(stages: list[Stage], state: dict[str, str]) -> dict[str, str]:
+    """Each plan row as the generated blocks count it: landed, part-landed, open or ongoing.
+
+    The one reading of a row's state that the blocks and --json share, so the two cannot disagree
+    (#70). A row of a stage with no gate is ongoing whatever its subjects say: "I-7: decide change
+    request 1.6a" lands I-7 by LANDED_INTEGRATOR, yet SX's rows run for the project's whole length
+    and the blocks never count one as landed.
+    """
+    rows: dict[str, str] = {}
+    for stage in stages:
+        for row in stage.rows:
+            if not stage.tag:
+                rows[row] = "ongoing"
+            else:
+                rows[row] = {"landed": "landed", "part": "part-landed"}.get(
+                    state.get(row, ""), "open"
+                )
+    return rows
+
+
+def closed_gates(stages: list[Stage], closed: set[str]) -> list[Stage]:
+    """The stages whose gate tag exists, in ladder order."""
+    return [stage for stage in stages if stage.tag and stage.tag in closed]
+
+
+def report(
+    rows: list[str],
+    stages: list[Stage],
+    counts: dict[str, str],
+    closed: set[str],
+    own: tuple[dict[str, str], dict[str, str]],
+) -> dict:
+    """What --json prints: the closed gates, every plan row's state in the plan's order, and the
+    splits and tickets `own_states` reads."""
+    return {
+        "closed_gates": [
+            {"gate": stage.gate, "tag": stage.tag} for stage in closed_gates(stages, closed)
+        ],
+        "rows": {row: counts[row] for row in rows},
+        "splits": own[0],
+        "tickets": own[1],
+    }
 
 
 # --- rendering -----------------------------------------------------------------------------------
@@ -325,10 +431,10 @@ def ids(values: list[str]) -> str:
     return ", ".join(f"`{value}`" for value in values) if values else "none"
 
 
-def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict[str, str]:
-    ladder_stages = [stage for stage in stages if stage.id != "SX"]
+def render(stages: list[Stage], counts: dict[str, str], closed: set[str]) -> dict[str, str]:
+    """The two generated blocks, from `counted`'s reading of each row and nothing else."""
     first_open = next(
-        (stage for stage in ladder_stages if stage.tag not in closed), None
+        (stage for stage in stages if stage.tag and stage.tag not in closed), None
     )
 
     lines = [
@@ -345,9 +451,9 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
             # about nothing. SX's rows run for the project's whole length.
             lines.append(f"| {stage.title} | {stage.gate} | ongoing | — |")
             continue
-        done = [row for row in stage.rows if state.get(row) == "landed"]
-        part = [row for row in stage.rows if state.get(row) == "part"]
-        open_ = [row for row in stage.rows if row not in state]
+        done = [row for row in stage.rows if counts[row] == "landed"]
+        part = [row for row in stage.rows if counts[row] == "part-landed"]
+        open_ = [row for row in stage.rows if counts[row] == "open"]
         owes = "; ".join(
             filter(
                 None,
@@ -364,18 +470,15 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
 
     # Over the gated stages only: a row that runs throughout is never landed, so counting it would
     # put a ceiling on the total that can never be reached.
-    gated = [row for stage in ladder_stages for row in stage.rows]
-    total = len(gated)
-    all_done = sum(1 for row in gated if state.get(row) == "landed")
-    all_part = sum(1 for row in gated if state.get(row) == "part")
+    total = sum(1 for state in counts.values() if state != "ongoing")
+    all_done = sum(1 for state in counts.values() if state == "landed")
+    all_part = sum(1 for state in counts.values() if state == "part-landed")
 
     summary = (
         f"**Closed gates:** "
         + (
             ", ".join(
-                f"{stage.gate} (`{stage.tag}`)"
-                for stage in ladder_stages
-                if stage.tag in closed
+                f"{stage.gate} (`{stage.tag}`)" for stage in closed_gates(stages, closed)
             )
             or "none yet"
         )
@@ -390,7 +493,7 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
         + "."
     )
     if first_open:
-        owed = [row for row in first_open.rows if state.get(row) != "landed"]
+        owed = [row for row in first_open.rows if counts[row] != "landed"]
         if owed:
             summary += f" {first_open.id} still owes {ids(owed)}."
 
@@ -430,8 +533,22 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="rewrite the blocks: the default, named so a caller can say which it meant",
     )
-    check = parser.parse_args(argv).check
+    mode.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "print the closed gates and each plan row's state (landed, part-landed, open or "
+            "ongoing) as the blocks count them, then each split and ticket a merge subject names, "
+            "and write nothing"
+        ),
+    )
+    arguments = parser.parse_args(argv)
+    check = arguments.check
     root = pathlib.Path(__file__).resolve().parent.parent
+
+    # In JSON mode stdout is the document a program parses, so everything else goes to stderr.
+    def say(line: str = "") -> None:
+        print(line, file=sys.stderr if arguments.json else sys.stdout)
 
     rows = plan_rows(root)
     stages, problems = ladder(root)
@@ -440,21 +557,44 @@ def main(argv: list[str]) -> int:
 
     if problems:
         for line in problems:
-            print(f"  {line}")
-        print()
-        print("ROADMAP FAILED: the ladder does not line up with the plan.")
-        print("The plan is the frozen export and never moves to suit the roadmap, so fix the")
-        print("roadmap: give every plan row exactly one stage, and name no row the plan lacks.")
+            say(f"  {line}")
+        say()
+        say("ROADMAP FAILED: the ladder does not line up with the plan.")
+        say("The plan is the frozen export and never moves to suit the roadmap, so fix the")
+        say("roadmap: give every plan row exactly one stage, and name no row the plan lacks.")
         return 1
 
     if shallow(root):
-        print(
+        if arguments.json:
+            # The blocks mode passes a shallow clone unchecked and writes nothing. A JSON answer is
+            # read, and one derived from part of the history calls landed rows open.
+            say(
+                "roadmap: no state printed: this is a shallow clone, so the tags and merge "
+                "subjects the state is derived from are not all here."
+            )
+            return 1
+        say(
             "roadmap: not checked: this is a shallow clone, so the tags and merge subjects the "
             "state is derived from are not all here."
         )
         return 0
 
-    blocks = render(stages, landed(root, rows), tags(root))
+    if arguments.json and not subjects(root):
+        # `run` turns a git that fails -- a wrong GIT_DIR, a repository git will not read -- into
+        # empty output, and no subjects reads as no row landed: every row open, exit 0, which sends
+        # finished rows back out for work (#70). A repository with a plan has commits.
+        say(
+            "roadmap: no state printed: git returned no commit subjects here, so every row would "
+            "read as open."
+        )
+        return 1
+
+    closed = tags(root)
+    counts = counted(stages, landed(root, rows))
+    if arguments.json:
+        print(json.dumps(report(rows, stages, counts, closed, own_states(root, rows)), indent=2))
+        return 0
+    blocks = render(stages, counts, closed)
 
     stale: list[str] = []
     for name in TARGETS:
