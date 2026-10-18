@@ -173,9 +173,10 @@ the run's `Overnight <date>` issue. The only answer a session applies to a steer
 ticket body or a new ticket.
 
 **Steering document** — a document a session steers by: `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`,
-`OWNERSHIP.md`, the agent guides in `docs/agents/`, the ADRs and `contracts/`. A change to one cites
-its authority: an acceptance criterion of a ticket the human wrote or approved, or a confirmed
-answer. Adding a change request is not a change to one.
+`OWNERSHIP.md`, `CODING_STANDARDS.md`, the agent guides in `docs/agents/`, the ADRs and `contracts/`.
+A change to one cites its authority: an acceptance criterion of the ticket it serves, where the
+human wrote or approved that ticket, or a confirmed answer. Adding a change request is not a change
+to one.
 
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
