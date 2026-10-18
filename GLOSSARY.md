@@ -214,6 +214,11 @@ the pre-push hook, a person before a push and every overnight lane run as writte
 `--full`, adds the test suite, the smoke test and `terraform test`, which the hook leaves to CI, and
 ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themselves.
 
+**Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
+CI installs exactly it, every root's `required_version` asks for at least it, and the local check
+runs it when the machine has it, naming the version it ran either way. Raising it is a one-line
+change to that file plus each root's constraint. _Avoid_: the pinned version, the minimum, for this.
+
 **Test companion** — the tests that sit beside a check or a script, in a file named for it, and
 prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
 copy of its parts. _Avoid_: harness, suite, for these.

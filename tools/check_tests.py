@@ -42,12 +42,24 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "check.sh"
 HOOK = ROOT / ".githooks" / "pre-push"
 TOUCHES = ROOT / ".github" / "touches.sh"
+FLOOR_HELPER = ROOT / "tools" / "terraform-floor.sh"
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+# The floor, as the repository's one file names it: CI installs exactly this version and the local
+# check runs it when this machine has it (#69). Read, not typed, so raising the floor raises the
+# cases with it; the file's own shape is FloorFileTests' to check.
+FLOOR_FILE = ROOT / ".terraform-version"
+FLOOR = FLOOR_FILE.read_text().strip()
+# A release later than any floor this repository will name: what the Mac runs while the floor is
+# not installed. 1.16.5 is what it ran on 2026-10-17.
+LATER = "1.16.5"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
@@ -59,14 +71,21 @@ PORT = "5299"
 
 # A double: records its name and arguments as one call in the shared sequence, then fails when the
 # case named this call, and otherwise prints a line (dotnet, terraform, smoke) or nothing (python3).
+# A Terraform double answers `version` as Terraform does, first line `Terraform v<version>`, with the
+# version the case gave it (#69).
 DOUBLE = """#!/bin/bash
 log={log}
 name={name}
 fails_on={fails_on}
 loud={loud}
+reports={reports}
 n=0
 while [ -e "$log/call-$n" ]; do n=$((n + 1)); done
 printf '%s\\0' "$name" "$@" > "$log/call-$n"
+if [ -n "$reports" ] && [ "$*" = version ]; then
+  printf 'Terraform v%s\\non darwin_arm64\\n' "$reports"
+  exit 0
+fi
 if [ -n "$fails_on" ]; then
   case " $* " in
     *" $fails_on "*) printf '%s double failed: %s\\n' "$name" "$*" >&2; exit 1 ;;
@@ -80,6 +99,7 @@ exit 0
 # module; one root keeps its test in tests/, the module beside its configuration, which are the two
 # places Terraform looks (https://developer.hashicorp.com/terraform/language/tests#test-directory).
 FILES = {
+    ".terraform-version": FLOOR + "\n",
     "README.md": "readme\n",
     "docs/notes.md": "notes\n",
     "src/App/App.cs": "class App {}\n",
@@ -93,10 +113,11 @@ FILES = {
 ROOTS = ["infra/modules/m", "infra/roots/a", "infra/roots/b"]
 TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
-# The hook's lines, as the hook before #68 printed them.
+# The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
+# half now names the version it ran, in a line of its own and in the last line.
 HOOK_RAN = "A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts"
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
-HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ changed."
+HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
 
 PYTHON_CHECKS = [
@@ -110,7 +131,8 @@ SMOKE = [["smoke", "Debug", PORT]]
 
 
 def terraform_checks() -> list[list[str]]:
-    calls = [["terraform", "fmt", "-check", "-recursive", "infra"]]
+    # The check first asks which version it has, to run the floor and name it (#69).
+    calls = [["terraform", "version"], ["terraform", "fmt", "-check", "-recursive", "infra"]]
     for root in ROOTS:
         calls += [["terraform", f"-chdir={root}", "init", "-backend=false", "-input=false"],
                   ["terraform", f"-chdir={root}", "validate"]]
@@ -118,6 +140,22 @@ def terraform_checks() -> list[list[str]]:
 
 
 TERRAFORM_TESTS = [["terraform", f"-chdir={directory}", "test"] for directory in TEST_DIRS]
+
+
+def floor_binary(home: pathlib.Path) -> pathlib.Path:
+    """Where the floor is installed on a machine whose home is `home`: the -path preflight's
+    hc-install line names, typed here from docs/dependencies.md rather than read from the helper."""
+    return home / ".local" / "share" / "terraform" / FLOOR / "terraform"
+
+
+def at_the_floor(me: str, binary: pathlib.Path) -> str:
+    """The line that names the floor when the check runs it (#69)."""
+    return f"{me}: Terraform {FLOOR} from {binary}: the floor, which CI runs."
+
+
+def as_run_by(name: str, calls: list[list[str]]) -> list[list[str]]:
+    """The same calls, made by the double called `name` rather than by `terraform`."""
+    return [[name, *call[1:]] if call[0] == "terraform" else call for call in calls]
 
 
 def bash_version() -> str:
@@ -150,7 +188,9 @@ class Case:
 
     def __init__(self, test: unittest.TestCase, *, change: str | None = None,
                  fails_on: dict[str, str] | None = None, missing: tuple[str, ...] = (),
-                 email: str = "check-tests@users.noreply.github.com", origin: bool = True):
+                 email: str = "check-tests@users.noreply.github.com", origin: bool = True,
+                 path_terraform: str = FLOOR, floor_terraform: str | None = None,
+                 floor_file: str | None = None):
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
         self.dir = pathlib.Path(scratch.name).resolve()
@@ -172,7 +212,16 @@ class Case:
         fails_on = fails_on or {}
         for name, loud in (("python3", ""), ("dotnet", "yes"), ("terraform", "yes")):
             if name not in missing:
-                self.write_executable(self.bin / name, self.double(name, fails_on.get(name, ""), loud))
+                reports = path_terraform if name == "terraform" else ""
+                self.write_executable(self.bin / name,
+                                      self.double(name, fails_on.get(name, ""), loud, reports))
+        # The floor where preflight's line installs it, outside PATH, as hc-install leaves it. It
+        # records its calls as `floor-terraform`, so a case can tell which Terraform ran.
+        self.floor = floor_binary(self.home)
+        if floor_terraform is not None:
+            self.floor.parent.mkdir(parents=True)
+            self.write_executable(self.floor, self.double("floor-terraform", fails_on.get("terraform", ""),
+                                                          "yes", floor_terraform))
 
         self.work = self.dir / "work"
         if origin:
@@ -183,7 +232,10 @@ class Case:
             self.git("init", "-q", "-b", "main", str(self.work), cwd=self.dir)
         self.git("config", "user.name", "Check Tests", cwd=self.work)
         self.git("config", "user.email", email, cwd=self.work)
-        for name, text in FILES.items():
+        files = dict(FILES)
+        if floor_file is not None:
+            files[".terraform-version"] = floor_file
+        for name, text in files.items():
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
@@ -199,6 +251,7 @@ class Case:
         (self.work / ".github" / "touches.sh").symlink_to(TOUCHES)
         (self.work / "tools").mkdir()
         (self.work / "tools" / "check.sh").symlink_to(SCRIPT)
+        (self.work / "tools" / "terraform-floor.sh").symlink_to(FLOOR_HELPER)
         self.write_executable(self.work / "tools" / "smoke.sh",
                               self.double("smoke", fails_on.get("smoke", ""), "yes"))
 
@@ -209,9 +262,10 @@ class Case:
             self.git("add", change, cwd=self.work)
             self.git("commit", "-q", "-m", f"Change {change}", cwd=self.work)
 
-    def double(self, name: str, fails_on: str, loud: str) -> str:
+    def double(self, name: str, fails_on: str, loud: str, reports: str = "") -> str:
         return DOUBLE.format(log=shlex.quote(str(self.log)), name=shlex.quote(name),
-                             fails_on=shlex.quote(fails_on), loud=shlex.quote(loud))
+                             fails_on=shlex.quote(fails_on), loud=shlex.quote(loud),
+                             reports=shlex.quote(reports))
 
     @staticmethod
     def write_executable(path: pathlib.Path, text: str):
@@ -271,7 +325,8 @@ class HookTests(CheckTestCase):
         case = Case(self, change="infra/roots/a/main.tf")
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN}, Terraform pass."], result.stdout)
+        self.assertLines([HOOK_BUILD_SKIPPED, at_the_floor("pre-push", case.bin / "terraform"),
+                          f"pre-push: {HOOK_RAN}, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual("", result.stderr)
         self.assertEqual(PYTHON_CHECKS + terraform_checks(), case.calls())
 
@@ -287,7 +342,8 @@ class HookTests(CheckTestCase):
         case = Case(self, change="infra/roots/a/main.tf", fails_on={"terraform": "validate"})
         result = case.run(hook=True)
         self.assertEqual(1, result.status)
-        self.assertLines([HOOK_BUILD_SKIPPED], result.stdout)
+        self.assertLines([HOOK_BUILD_SKIPPED, at_the_floor("pre-push", case.bin / "terraform")],
+                         result.stdout)
         self.assertLines(["terraform double failed: -chdir=infra/modules/m validate",
                           "pre-push: terraform validate failed in infra/modules/m.", HOOK_FIX],
                          result.stderr)
@@ -328,7 +384,8 @@ class HookTests(CheckTestCase):
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
         self.assertLines(["pre-push: A-05 not checked: no main to diff against."], result.stderr)
-        self.assertLines([f"pre-push: {HOOK_RAN}, the build, Terraform pass."], result.stdout)
+        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
+                          f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual(PYTHON_CHECKS[1:] + BUILD + terraform_checks(), case.calls())
 
     def test_duplicated_build_artifacts(self):
@@ -385,14 +442,14 @@ class FullModeTests(CheckTestCase):
         self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE, case.calls())
         # Shown, not hidden: a lane reads its failure from the log.
         self.assertIn("dotnet double ran: build --nologo --verbosity quiet", result.stdout)
-        self.assertIn("check: Terraform and its tests skipped: nothing under infra/ changed.",
+        self.assertIn("check: Terraform and its tests skipped: nothing under infra/ or the floor changed.",
                       result.stdout)
         self.assertNotIn("pre-push", result.stdout + result.stderr)
 
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
         result = self.full(case)
-        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, Terraform, the Terraform tests.")
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.")
         self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
         self.assertIn("check: build, tests and smoke test skipped: no .NET source changed.",
                       result.stdout)
@@ -504,7 +561,7 @@ class BothHalvesTests(CheckTestCase):
         result = case.run("--full", "--port", PORT, "--both-halves")
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(
-            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, Terraform, the Terraform tests.",
+            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, Terraform {FLOOR}, the Terraform tests.",
             result.last_line(result.stdout))
         self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + terraform_checks() + TERRAFORM_TESTS,
                          case.calls())
@@ -514,8 +571,156 @@ class BothHalvesTests(CheckTestCase):
         case = Case(self, change="docs/notes.md")
         result = case.run("--both-halves")
         self.assertEqual(0, result.status, result.stderr)
-        self.assertLines([f"pre-push: {HOOK_RAN}, the build, Terraform pass."], result.stdout)
+        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
+                          f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual(PYTHON_CHECKS + BUILD + terraform_checks(), case.calls())
+
+
+class FloorTests(CheckTestCase):
+    """#69: a Terraform change checked here is checked by the Terraform CI runs, the floor that
+    .terraform-version names, when this machine has it; when it does not, the check names the
+    version it used instead, so a green result never hides the substitution."""
+
+    def test_the_floor_in_its_directory_runs_every_terraform_call_and_is_named(self):
+        case = Case(self, change="infra/roots/a/main.tf", path_terraform=LATER, floor_terraform=FLOOR)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(
+            PYTHON_CHECKS + as_run_by("floor-terraform", terraform_checks() + TERRAFORM_TESTS),
+            case.calls())
+        self.assertIn(at_the_floor("check", case.floor), result.stdout.splitlines())
+        self.assertEqual(f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.",
+                         result.last_line(result.stdout))
+        self.assertEqual("", result.stderr)
+
+    def test_without_the_floor_the_version_used_is_named_in_the_warning_and_the_verdict(self):
+        # Box 4: a green result says it was not the floor, in the lines a log's tail shows.
+        case = Case(self, change="infra/roots/a/main.tf", path_terraform=LATER)
+        path = case.bin / "terraform"
+        warning = [f"check: warning: Terraform {LATER} from {path}, not the floor {FLOOR} that "
+                   ".terraform-version names and CI runs.",
+                   "check: tools/preflight.sh says how to install the floor."]
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
+        self.assertLines(warning, result.stderr)
+        self.assertEqual(f"check: pass: {FULL_RAN}, Terraform {LATER} instead of the floor {FLOOR}, "
+                         "the Terraform tests.", result.last_line(result.stdout))
+
+    def test_the_hook_names_the_substitute_too(self):
+        case = Case(self, change="infra/roots/a/main.tf", path_terraform=LATER)
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertLines([f"pre-push: warning: Terraform {LATER} from {case.bin / 'terraform'}, not the "
+                          f"floor {FLOOR} that .terraform-version names and CI runs.",
+                          "pre-push: tools/preflight.sh says how to install the floor."], result.stderr)
+        self.assertLines([HOOK_BUILD_SKIPPED,
+                          f"pre-push: {HOOK_RAN}, Terraform {LATER} instead of the floor {FLOOR} pass."],
+                         result.stdout)
+
+    def test_a_terraform_that_reports_no_version_is_named_as_such(self):
+        # Whatever the PATH holds, the verdict must not read as the floor.
+        case = Case(self, change="infra/roots/a/main.tf", path_terraform="")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"check: pass: {FULL_RAN}, Terraform of no known version instead of the floor "
+                         f"{FLOOR}, the Terraform tests.", result.last_line(result.stdout))
+
+    def test_a_floor_directory_holding_another_version_is_not_the_floor(self):
+        # A binary is the floor by what it reports, not by where it sits.
+        case = Case(self, change="infra/roots/a/main.tf", path_terraform=LATER, floor_terraform="1.10.5")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS + [["floor-terraform", "version"]] + terraform_checks() + TERRAFORM_TESTS,
+                         case.calls())
+        self.assertIn(f"Terraform {LATER} instead of the floor {FLOOR}", result.last_line(result.stdout))
+
+    def test_the_floor_runs_where_no_terraform_is_on_path(self):
+        case = Case(self, change="infra/roots/a/main.tf", missing=("terraform",), floor_terraform=FLOOR)
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual("", result.stderr)
+        self.assertEqual(f"pre-push: {HOOK_RAN}, Terraform {FLOOR} pass.", result.last_line(result.stdout))
+
+    def test_neither_the_floor_nor_a_terraform_on_path(self):
+        case = Case(self, change="infra/roots/a/main.tf", missing=("terraform",))
+        hook = case.run(hook=True)
+        self.assertEqual(0, hook.status, hook.stderr)
+        self.assertLines(["pre-push: Terraform not checked: terraform is not on PATH."], hook.stderr)
+        full = case.run("--full", "--port", PORT)
+        self.assertEqual(1, full.status)
+        self.assertEqual("check: fail: terraform is not on PATH.", full.last_line(full.stderr))
+
+    def test_a_file_that_names_no_exact_version_fails_both_modes(self):
+        # A range or `latest` would have CI install the newest release that matches, not the floor.
+        for text in ("<1.12.0\n", "latest\n", "1.11\n", "1.11.0\n1.12.0\n", "1.11.0 \n", ""):
+            for mode in ((), ("--full", "--port", PORT)):
+                with self.subTest(text=text, mode=mode or "the hook's"):
+                    case = Case(self, change="infra/roots/a/main.tf", floor_file=text)
+                    result = case.run(*mode)
+                    self.assertEqual(1, result.status)
+                    self.assertIn(".terraform-version does not name one exact version, such as 1.11.0, so "
+                                  "nothing says which Terraform CI runs.", result.stderr)
+                    self.assertEqual(PYTHON_CHECKS, case.calls())
+
+
+class FloorFileTests(CheckTestCase):
+    """#69's first box: one file names the floor, and CI's Terraform job installs the version it
+    names. The job's step runs here as the workflow holds it, as .github/touches_tests.py runs the
+    decision step, rather than as a second copy of it."""
+
+    STEP_ID = "terraform-floor"
+
+    def workflow_step(self) -> str:
+        workflow = WORKFLOW.read_text()
+        marker = f"        id: {self.STEP_ID}\n"
+        self.assertEqual(1, workflow.count(marker), f"ci.yml has no single step with id {self.STEP_ID}")
+        step = workflow.split(marker, 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("        run: |\n", step)
+        return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+    def run_step(self, text: str) -> tuple[subprocess.CompletedProcess, str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "tools").mkdir()
+            (root / "tools" / "terraform-floor.sh").symlink_to(FLOOR_HELPER)
+            (root / ".terraform-version").write_text(text)
+            output = root / "github-output"
+            output.write_text("")
+            completed = subprocess.run([BASH, "-c", self.workflow_step()], cwd=root, capture_output=True,
+                                       text=True, timeout=30,
+                                       env={"PATH": "/usr/bin:/bin", "GITHUB_OUTPUT": str(output)})
+            return completed, output.read_text()
+
+    def test_the_file_names_one_exact_version(self):
+        # What the reader refuses, CI would refuse too; this is the repository's own file.
+        read = subprocess.run([BASH, "-c", '. "$1"; terraform_floor_read "$2"', "read", str(FLOOR_HELPER),
+                               str(FLOOR_FILE)], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+        self.assertEqual(0, read.returncode, f"{FLOOR_FILE} does not name one exact version")
+        self.assertEqual(FLOOR + "\n", read.stdout)
+
+    def test_ci_reads_the_version_the_file_names(self):
+        for version in (FLOOR, "1.12.3"):
+            with self.subTest(version=version):
+                completed, output = self.run_step(version + "\n")
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertEqual([f"version={version}"], output.splitlines())
+
+    def test_ci_refuses_a_file_that_names_no_exact_version(self):
+        for text in ("<1.12.0\n", "latest\n", "1.11\n", ""):
+            with self.subTest(text=text):
+                completed, output = self.run_step(text)
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("::error::.terraform-version does not name one exact version", completed.stdout)
+                self.assertEqual("", output)
+
+    def test_setup_terraform_installs_what_the_step_read(self):
+        workflow = WORKFLOW.read_text()
+        versions = [line.strip() for line in workflow.splitlines() if line.strip().startswith("terraform_version:")]
+        self.assertEqual([f"terraform_version: ${{{{ steps.{self.STEP_ID}.outputs.version }}}}"], versions)
+        # The step runs first, in the same job as the install.
+        job = workflow.split("\n  terraform:\n", 1)[1]
+        self.assertLess(job.index(f"id: {self.STEP_ID}"), job.index("uses: hashicorp/setup-terraform@"))
 
 
 class InterpreterTests(CheckTestCase):

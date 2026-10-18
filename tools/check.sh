@@ -29,10 +29,17 @@
 #     STANDARDS.md describes as "a test that skips on the machine it runs on".
 #
 # Both modes skip the same halves: the build, the tests and the smoke test when no .NET source
-# changed, and Terraform and its tests when nothing under infra/ did. .github/touches.sh says what
-# each half is, and CI's jobs skip by the same classifier, so a green full check predicts CI's
-# verdict on the same diff. CI additionally runs both halves when its workflow, the classifier or
-# tools/smoke.sh changes; this check does not, so a change to one of those is proved in CI.
+# changed, and Terraform and its tests when nothing under infra/ did, nor the floor's file or its
+# helper. .github/touches.sh says what each half is, and CI's jobs skip by the same classifier, so a
+# green full check predicts CI's verdict on the same diff. CI additionally runs both halves when its
+# workflow, the classifier or tools/smoke.sh changes; this check does not, so a change to one of
+# those is proved in CI.
+#
+# Both modes run Terraform at the floor, the version CI runs, when this machine has it, and name the
+# version in the last line either way (#69). Without the floor they run the terraform on PATH and
+# say so in a warning and in that line, rather than fail: the check still catches most of what it
+# did, and the substitution is visible to whoever reads the verdict. tools/terraform-floor.sh says
+# where the floor lives, and tools/preflight.sh says how to install it.
 #
 # --both-halves runs both halves whatever the diff touches. On main the diff against origin/main is
 # empty, so without it the full check would pass having run none of the three things it adds; #68's
@@ -306,28 +313,51 @@ fi
 # Terraform loads them from (https://developer.hashicorp.com/terraform/language/tests#test-directory).
 # The tests use mock providers, so they need no credentials either. Each such directory holds .tf
 # files, so the loop above has already initialised it.
-if ! touches terraform; then
+#
+# Which Terraform: the floor, the version CI runs, when this machine has it, and otherwise the
+# terraform on PATH, named as a substitute in a warning and in the last line, so a green result
+# never hides it (#69). tools/terraform-floor.sh says where the floor lives and why.
+terraform_half=false
+terraform_bin=""
+if touches terraform; then
+  terraform_half=true
+  . tools/terraform-floor.sh
+  floor="$(terraform_floor_read .terraform-version)" \
+    || fail ".terraform-version does not name one exact version, such as 1.11.0, so nothing says which Terraform CI runs."
+  terraform_choose "$floor"
+fi
+
+if ! $terraform_half; then
   if $full; then
-    echo "check: Terraform and its tests skipped: nothing under infra/ changed."
+    echo "check: Terraform and its tests skipped: nothing under infra/ or the floor changed."
   else
-    echo "pre-push: Terraform skipped: nothing under infra/ changed."
+    echo "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
   fi
-elif command -v terraform > /dev/null; then
-  quietly terraform fmt -check -recursive infra || fail "terraform fmt -check -recursive infra failed."
+elif [ -n "$terraform_bin" ]; then
+  if [ "$terraform_used" = "$floor" ]; then
+    terraform_named="Terraform $floor"
+    echo "$me: Terraform $floor from $terraform_bin: the floor, which CI runs."
+  else
+    terraform_named="Terraform ${terraform_used:-of no known version} instead of the floor $floor"
+    echo "$me: warning: Terraform ${terraform_used:-of no known version} from $terraform_bin, not the floor $floor that .terraform-version names and CI runs." >&2
+    echo "$me: tools/preflight.sh says how to install the floor." >&2
+  fi
+
+  quietly "$terraform_bin" fmt -check -recursive infra || fail "terraform fmt -check -recursive infra failed."
 
   for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
     # init's progress lines stay hidden in both modes. Its errors go to standard error, which the
     # full check shows and the hook, as it always has, does not.
     if $full; then
-      terraform -chdir="$dir" init -backend=false -input=false > /dev/null \
+      "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null \
         || fail "terraform init failed in $dir."
     else
-      terraform -chdir="$dir" init -backend=false -input=false > /dev/null 2>&1 \
+      "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null 2>&1 \
         || fail "terraform init failed in $dir."
     fi
-    quietly terraform -chdir="$dir" validate || fail "terraform validate failed in $dir."
+    quietly "$terraform_bin" -chdir="$dir" validate || fail "terraform validate failed in $dir."
   done
-  ran="$ran, Terraform"
+  ran="$ran, $terraform_named"
 
   if $full; then
     tested=""
@@ -342,7 +372,7 @@ elif command -v terraform > /dev/null; then
     done
     [ -n "$tested" ] || fail "no Terraform test roots found under infra/."
     for dir in $(printf '%s\n' $tested | sort -u); do
-      terraform -chdir="$dir" test || fail "terraform test failed in $dir."
+      "$terraform_bin" -chdir="$dir" test || fail "terraform test failed in $dir."
     done
     ran="$ran, the Terraform tests"
   fi

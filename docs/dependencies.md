@@ -13,7 +13,8 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
-| Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for |
+| Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for. This is the `terraform` an apply runs |
+| The Terraform floor, 1.11.0 | n/a | `tools/preflight.sh` prints the line, through `hc-install` (`brew install hashicorp/tap/hc-install`) | The local check, on a Terraform change | Below, under "The Terraform floor" |
 | AWS CLI v2 | 2.37.12 | `brew install awscli` | 1.0, 1.6a |  |
 | AWS account and credentials | n/a | `aws configure sso` or `aws configure` | 1.0 | Rights to create the plan's resources. The plan prices us-east-1. |
 | openssl | macOS ships one | n/a | 1.6a | `certs.sh` makes the local certificate authority with it |
@@ -75,6 +76,29 @@ The skeleton adds only `xunit.v3` to projects. Each owner adds the other referen
 
 The AWS provider documents both Cognito features task 1.8 relies on: the `refresh_token_rotation` block on `aws_cognito_user_pool_client`, and the `aws_cognito_managed_login_branding` resource.
 
+### The Terraform floor
+
+The floor is the oldest Terraform the repository supports: 1.11.0. The S3 backend's native lock
+file first shipped in 1.10.0, and 1.11.0 made it generally available and deprecated the DynamoDB
+lock ([1.11.0's changelog](https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md)). One file,
+`.terraform-version`, names it, and three readers share one function for it,
+`tools/terraform-floor.sh` (#69):
+
+- **CI's Terraform job** installs exactly that version through `hashicorp/setup-terraform`.
+- **`tools/check.sh`**, the local check, runs it on a Terraform change when this machine has it,
+  and otherwise runs the `terraform` on PATH and names that version in a warning and its last line.
+- **`tools/preflight.sh`** says whether this machine has it, and prints the line that installs it.
+
+It is installed at `~/.local/share/terraform/<version>/terraform`, one copy per machine for every
+clone and worktree, and outside PATH, so the `terraform` an apply runs is still whatever the person
+chose. HashiCorp's `hc-install` 0.10.0 puts it there, from the tap the Brewfile already names, and
+verifies the release's checksums and signature ([its README](https://github.com/hashicorp/hc-install#cli)).
+A `terraform` on PATH that reports the floor counts too, so a version manager that reads
+`.terraform-version`, such as tfenv or tfswitch, satisfies it without that directory.
+
+Raising the floor is a one-line change to `.terraform-version`, plus the `required_version` line
+in each root and module under `infra/`, which workstream 1 owns.
+
 ## Decided
 
 ### D-1: the JSON Schema validator. JsonSchema.Net 8.0.5, in the gateway
@@ -115,7 +139,8 @@ job runs.
 
 `tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
 which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
-python3, dotnet, terraform and the smoke test, and git is real.
+python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one for
+its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
