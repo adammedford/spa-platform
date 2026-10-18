@@ -4,10 +4,10 @@
 #     git diff --name-only <base>...<head> | .github/touches.sh build       # exit 0 when .NET changed
 #     git diff --name-only <base>...<head> | .github/touches.sh terraform   # exit 0 when infra/ changed
 #
-# .githooks/pre-push skips the build and Terraform when a push touches neither half, and
-# .github/workflows/ci.yml skips the same two jobs for the same reason. Those were two copies of two
-# patterns, and a copy agrees with its source until one of them is edited; this is the one place both
-# read them from. CI additionally runs both jobs when its workflow, this classifier or tools/smoke.sh
+# tools/check.sh, which .githooks/pre-push runs, skips the build and Terraform when a change touches
+# neither half, and .github/workflows/ci.yml skips the same two jobs for the same reason. Those were
+# two copies of two patterns, and a copy agrees with its source until one of them is edited; this is
+# the one place both read them from. CI additionally runs both jobs when its workflow, this classifier or tools/smoke.sh
 # changes, or when it cannot resolve the base; those overrides belong to the workflow's decision step.
 #
 # Written for the bash 3.2 that ships with macOS, and for grep -E rather than -P, which BSD grep

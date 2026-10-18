@@ -1,8 +1,9 @@
 # CI. Owner: integrator, written at task I-5.
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
-# session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh and of
-# the review record reader it runs, and --
+# session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
+# the review record reader it runs and of the local check, tools/check.sh, whether every tracked
+# shell script parses, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate for infra/. The hook shares these path patterns
@@ -18,13 +19,13 @@
 # answer, both expensive jobs run, because a skipped check has to be earned by a diff that proves it
 # unnecessary.
 #
-# Check A-05 is deliberately not here. It lives in .githooks/pre-push, where it catches a session
-# that reached outside its brief at the moment it reached. A blocking CI check would need an
+# Check A-05 is deliberately not here. It lives in tools/check.sh, which .githooks/pre-push runs,
+# where it catches a session that reached outside its brief at the moment it reached. A blocking CI check would need an
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
 #
-# The fourth job runs tools/land.sh's test companion again on macOS, under the bash 3.2 the script
-# targets, on every push and pull request; the step that runs it says why.
+# The fourth job runs the shell scripts' test companions and the parse check again on macOS, under
+# the bash 3.2 the scripts target, on every push and pull request; the steps that run them say why.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -106,6 +107,16 @@ jobs:
       - name: CI path decisions include build inputs and survive large diffs
         run: python3 -I .github/touches_tests.py
 
+      - name: Every tracked shell script parses
+        # A script that does not parse fails here, at the push that broke it, rather than in whatever
+        # runs it next: tools/check.sh is run as written by the hook, by a person before a push and
+        # by every overnight lane, so a syntax error there stops all of them at once (#68). The
+        # companion first breaks copies of this repository's own scripts and watches the check
+        # refuse them, because a check that has only ever seen clean scripts cannot show it reads any.
+        run: |
+          python3 -I .github/shell_parse_tests.py
+          python3 -I .github/shell-parse.py
+
       - name: What a session steers by says what the repository says, and every citation resolves
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
@@ -172,8 +183,17 @@ jobs:
         # docs/dependencies.md.
         run: python3 -I tools/land_tests.py
 
-  land-bash-3-2:
-    name: land.sh under bash 3.2
+      - name: tools/check.sh runs the hook's checks unchanged, and in full ends on its verdict
+        # The local check is what .githooks/pre-push runs, what a person runs before a push and what
+        # every overnight lane runs in full (#68). Its companion runs the real hook and the real script
+        # in throwaway repositories, with doubles for the Python checks, dotnet, terraform and the
+        # smoke test, and asserts the hook's lines as they were before the checks moved, and that the
+        # full mode's last line is its verdict whichever step stops it. Under bash 5 here; the job below
+        # runs it under 3.2.
+        run: python3 -I tools/check_tests.py
+
+  scripts-bash-3-2:
+    name: Scripts under bash 3.2
     runs-on: macos-latest
     # The companion's gh is a double and nothing here reaches AWS, so no token beyond reading the
     # repository, and no OIDC token.
@@ -191,6 +211,18 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/land_tests.py
+
+      - name: tools/check.sh and the hook, under the bash 3.2 macOS ships
+        # The same reason as the step above, for the local check: it is written for 3.2 because the
+        # pre-push hook and every overnight lane on this Mac run it there.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/check_tests.py
+
+      - name: Every tracked shell script parses under bash 3.2
+        # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
+        # here even though the documents job, under bash 5, passed it.
+        run: python3 -I .github/shell-parse.py
 
   build-and-test:
     name: Build and test

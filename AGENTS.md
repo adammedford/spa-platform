@@ -53,7 +53,14 @@ dotnet build                                    # the whole solution
 dotnet test --solution SpaPlatform.slnx --ignore-exit-code 8   # every test project; 8 = a project with no tests
 dotnet test --project tests/Platform.Registry.Tests
 tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
+tools/check.sh                                  # the pre-push hook's checks, by hand
+tools/check.sh --full --port 5180               # and the tests, the smoke test and terraform test
 ```
+
+- **`tools/check.sh` is the local check.** The pre-push hook runs it, and every overnight lane runs
+  it with `--full`, whose last line is the verdict. It skips the .NET half or the Terraform half when
+  the branch does not touch it, as CI does, unless given `--both-halves`; its header says what each
+  check catches.
 
 - **Tests run on Microsoft Testing Platform**, set in `global.json`. Name what to run with `--solution` or `--project`: both forms work on every .NET 10 SDK.
 - **A test project with no tests reports exit code 8**, the platform's "zero tests" code. On the empty skeleton that is expected, and `--ignore-exit-code 8` suppresses it.

@@ -209,6 +209,11 @@ ownership, steering, the roadmap, the build, Terraform's format and validate, th
 the merge. A check holds a push or a merge to the rules; a gate is the ladder's checkpoint. Never
 "gate" for a check, including the one a workflow runs before it integrates a branch.
 
+**Local check** — `tools/check.sh`: the checks a branch must pass on this machine, in one file that
+the pre-push hook, a person before a push and every overnight lane run as written. Its full mode,
+`--full`, adds the test suite, the smoke test and `terraform test`, which the hook leaves to CI, and
+ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themselves.
+
 **Test companion** — the tests that sit beside a check or a script, in a file named for it, and
 prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
 copy of its parts. _Avoid_: harness, suite, for these.

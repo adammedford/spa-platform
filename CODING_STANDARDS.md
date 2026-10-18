@@ -9,8 +9,9 @@ reporting.
 
 Everything here is a **judgement call**: something no check could decide. A mechanical rule belongs
 in a check instead, where it runs on every push rather than when a reviewer remembers it. The repo's
-checks are `.githooks/pre-push`, `.github/workflows/ci.yml` and `tests/Gateway.ArchitectureTests`;
-`AGENTS.md` holds the rules an implementation agent needs in context.
+checks are `tools/check.sh` (which `.githooks/pre-push` runs), `.github/workflows/ci.yml` and
+`tests/Gateway.ArchitectureTests`; `AGENTS.md` holds the rules an implementation agent needs in
+context.
 
 ## A comment says why, and names what it answers to
 
