@@ -11,7 +11,7 @@ namespace Platform.Registry.Tests;
 /// </summary>
 internal static class Examples
 {
-    private static string PathOf(string name) => Path.Combine(AppContext.BaseDirectory, "examples", name);
+    public static string PathOf(string name) => Path.Combine(AppContext.BaseDirectory, "examples", name);
 
     public static string Text(string name) => File.ReadAllText(PathOf(name));
 
