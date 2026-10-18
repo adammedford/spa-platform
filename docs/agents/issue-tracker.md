@@ -64,6 +64,21 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
   question number applied, preserves the previous body verbatim in a comment headed with the date,
   and ticks or unticks an acceptance box only for work done or undone. The overnight grill
   comments; it never rewrites. A `Confirm` comment is the human's act: no agent session writes one.
+- **Current claims are the issue's fields; everything written is dated.** What an issue claims now
+  is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
+  its body under the rule above; `docs/agents/triage-labels.md` → "Lifecycle: not labels" says
+  which field holds which state. A comment, a merge body and an archived ticket file are records:
+  true on the day they were written, and never rewritten. A later truth is a new comment. So a body
+  states no status in prose ("remains future work"); where it must say what has landed, it cites the
+  merge. Archived overnight ticket 66 carried such a sentence past the merge of its own work,
+  because no check reads one.
+- **An issue is held open by its own scope.** It closes when what its body asks for has landed,
+  been answered or been declined, and its `## Answer` comment says where each part went, naming
+  anything declined. A spec's required work is its sub-issues, and the spec closes when they are
+  closed. A follow-up, raised by another issue's work, review or out-of-scope list, names where it
+  came from on a `**Raised by:** #NNN` line at the top of its body and is filed as neither a
+  sub-issue nor a blocker of that issue, so it holds its origin open neither way. A sub-issue means
+  "part of" and a blocked-by relationship means "wait for"; no other relation holds an issue open.
 - **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
   cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
   `#NNN` that names neither.
