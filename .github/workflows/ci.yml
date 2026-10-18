@@ -19,8 +19,8 @@
 # answer, both expensive jobs run, because a skipped check has to be earned by a diff that proves it
 # unnecessary.
 #
-# Check A-05 is deliberately not here. It lives in .githooks/pre-push, where it catches a session
-# that reached outside its brief at the moment it reached. A blocking CI check would need an
+# Check A-05 is deliberately not here. It lives in tools/check.sh, which .githooks/pre-push runs,
+# where it catches a session that reached outside its brief at the moment it reached. A blocking CI check would need an
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
 #

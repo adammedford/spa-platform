@@ -138,7 +138,6 @@ class Result:
         self.status = completed.returncode
         self.stdout = completed.stdout.decode("utf-8", "surrogateescape")
         self.stderr = completed.stderr.decode("utf-8", "surrogateescape")
-        self.output = completed.stdout.decode("utf-8", "surrogateescape")
 
     def last_line(self, stream: str) -> str:
         lines = stream.splitlines()
@@ -486,6 +485,37 @@ class FullModeTests(CheckTestCase):
                 self.assertEqual(f"check: fail: {message}.", result.last_line(result.stderr))
                 self.assertIn("usage: tools/check.sh", result.stderr)
                 self.assertEqual([], case.calls())
+
+
+class BothHalvesTests(CheckTestCase):
+    """--both-halves: both halves run whatever the diff touches. On main the diff against
+    origin/main is empty, and #68's second box asks for the full mode green there."""
+
+    def test_an_empty_diff_runs_nothing_heavy_without_it(self):
+        # The case --both-halves exists for: main's own diff, which earns every skip.
+        case = Case(self)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"check: pass: {FULL_RAN}.", result.last_line(result.stdout))
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_the_full_check_runs_everything_on_an_empty_diff(self):
+        case = Case(self)
+        result = case.run("--full", "--port", PORT, "--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(
+            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, Terraform, the Terraform tests.",
+            result.last_line(result.stdout))
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + terraform_checks() + TERRAFORM_TESTS,
+                         case.calls())
+        self.assertNotIn("skipped", result.stdout)
+
+    def test_the_hooks_checks_run_both_halves_on_a_docs_only_change(self):
+        case = Case(self, change="docs/notes.md")
+        result = case.run("--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertLines([f"pre-push: {HOOK_RAN}, the build, Terraform pass."], result.stdout)
+        self.assertEqual(PYTHON_CHECKS + BUILD + terraform_checks(), case.calls())
 
 
 class InterpreterTests(CheckTestCase):

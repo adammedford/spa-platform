@@ -3,6 +3,7 @@
 #
 #     tools/check.sh [--base <ref>]                          what .githooks/pre-push runs
 #     tools/check.sh --full --port <port> [--base <ref>]     and what CI runs that the hook leaves to it
+#     ... [--both-halves]                                    either, without the skips
 #
 # Everything that checks a branch runs this file as written: the pre-push hook, a person before a
 # push, and every lane of the overnight run (#68). There used to be two copies. The hook held its
@@ -33,6 +34,11 @@
 # verdict on the same diff. CI additionally runs both halves when its workflow, the classifier or
 # tools/smoke.sh changes; this check does not, so a change to one of those is proved in CI.
 #
+# --both-halves runs both halves whatever the diff touches. On main the diff against origin/main is
+# empty, so without it the full check would pass having run none of the three things it adds; #68's
+# second box asks for the full mode green on main, and only this makes that run test anything. The
+# hook never passes it, and a lane does not need it: its diff earns its skips.
+#
 # --base names what the branch is judged against, for A-05 and for the halves. The default is the
 # default branch, origin/main, else main: the question is what the branch adds to main. An overnight
 # lane names its fork point instead, so its own commits are judged rather than the night's merges.
@@ -47,18 +53,20 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: tools/check.sh [--base <ref>]" >&2
-  echo "       tools/check.sh --full --port <port> [--base <ref>]" >&2
+  echo "usage: tools/check.sh [--base <ref>] [--both-halves]" >&2
+  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves]" >&2
   echo "check: fail: $1." >&2
   exit 2
 }
 
 full=false
+both=false
 port=""
 named_base=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --full) full=true ;;
+    --both-halves) both=true ;;
     --port)
       [ "$#" -ge 2 ] || usage "--port needs a value"
       port="$2"
@@ -181,9 +189,10 @@ fi
 # Whether this change touches a half. What counts as a half is .github/touches.sh's to say, and CI
 # reads the same patterns. CI's decision step additionally runs both jobs for changes to the workflow,
 # the classifier or tools/smoke.sh. With no base to diff against, assume this change touches both
-# halves: a skipped check has to be earned by a diff that proves it unnecessary.
+# halves: a skipped check has to be earned by a diff that proves it unnecessary. --both-halves asks
+# for both outright; the header says when.
 touches() {
-  [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
+  $both || [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
 }
 
 if command -v python3 > /dev/null; then
@@ -307,6 +316,8 @@ elif command -v terraform > /dev/null; then
   quietly terraform fmt -check -recursive infra || fail "terraform fmt -check -recursive infra failed."
 
   for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
+    # init's progress lines stay hidden in both modes. Its errors go to standard error, which the
+    # full check shows and the hook, as it always has, does not.
     if $full; then
       terraform -chdir="$dir" init -backend=false -input=false > /dev/null \
         || fail "terraform init failed in $dir."
