@@ -215,11 +215,13 @@ python3 -I tools/roadmap.py
 # has already happened.
 #
 # A cleanup that deleted anything ends on a line naming the file it wrote the restore lines to, in
-# the words below, which tools/prune_branches.py keeps as KEPT_IN; the two change together. Its
-# output is held until it ends so that line can be read back, and this script's own last line names
-# the file again (#115). The first landing to run the cleanup deleted 34 branches, its session read
-# this script through `tail -20`, and 14 of the restore lines went with the terminal.
-kept_in="prune_branches: these commands are also in "
+# the words below, which tools/prune_branches.py keeps as RESTORE_FILE_LINE; the two change
+# together. Its output is held until it ends so that line can be read back, and this script's own
+# last line names the file again (#115). The first landing to run the cleanup deleted 34 branches,
+# its session read this script through `tail -20`, and 14 of the restore lines went with the
+# terminal. A cleanup that cannot write the file stops deleting, prints its lines and exits 1, so
+# the last line is then the warning below, and the file, if any, is not named.
+restore_file_line="prune_branches: these commands are also in "
 prune_finished() {
   [ "$base" = main ] || return 0
   echo "--- deleting the branches this landing finished"
@@ -230,8 +232,9 @@ prune_finished() {
     || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
   last="${listing##*"$newline"}"
   case "$last" in
-    "$kept_in"?*)
-      echo "land: the commands that restore what the cleanup deleted are in ${last#"$kept_in"}" ;;
+    "$restore_file_line"?*)
+      restore_file="${last#"$restore_file_line"}"
+      echo "land: the commands that restore what the cleanup deleted are in $restore_file" ;;
   esac
 }
 

@@ -76,7 +76,8 @@ branch is deleted when the **task** is done, not when a pull request merges.
 --delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
 commands that recreate each deleted branch at its old tip:
 `pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
-`git rev-parse --git-common-dir`, which outlives the worktree a landing ran in (#115). A `task/*`
+`git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
+cannot write that file stops deleting, and the last line says it stopped (#115). A `task/*`
 branch goes, locally and on `origin`, once every id its name carries
 reads as landed in `tools/roadmap.py --json`, as a merge subject of the first form above makes it,
 and a split no merge subject names reads as its row; a name whose ids are no plan row, split or
