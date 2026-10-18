@@ -491,7 +491,11 @@ cmd_import() {
     "Key=${PLATFORM_TAG_KEY},Value=${PLATFORM_TAG_VALUE}"
     "Key=Cell,Value=${CELL}"
     "Key=Name,Value=${RESOURCE_NAME}-wildcard"
-    "Key=Domain,Value=${WILDCARD}"
+    # The domain without its wildcard: an ACM tag value may hold letters, numbers, spaces and
+    # _.:/=+-@ only, so "*.${DOMAIN}" is refused with a ValidationException and nothing imports.
+    # Nothing reads this tag; the lookup is by DomainName and the Cell tag (find_acm_certificate,
+    # modules/cell/alb.tf). https://docs.aws.amazon.com/acm/latest/APIReference/API_Tag.html
+    "Key=Domain,Value=${DOMAIN}"
     "Key=ManagedBy,Value=certs.sh"
   )
 
