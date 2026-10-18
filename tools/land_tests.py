@@ -67,6 +67,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -311,13 +312,36 @@ class Case:
         self.git("config", "user.email", "land-tests@example.invalid", cwd=target)
 
     def run(self, *args: str, cwd: pathlib.Path | None = None, stdin: bytes = b"",
-            env: dict[str, str] | None = None, through_shebang: bool = False) -> Result:
+            env: dict[str, str] | None = None, through_shebang: bool = False,
+            pass_fds: tuple[int, ...] = ()) -> Result:
         command = [str(SCRIPT), *args] if through_shebang else [BASH, str(SCRIPT), *args]
+        # pass_fds keeps each descriptor open in land.sh under the same number, as a caller's
+        # `<(...)` does; every other descriptor above 2 is closed (close_fds is on whenever
+        # pass_fds is given): https://docs.python.org/3/library/subprocess.html#subprocess.Popen
         completed = subprocess.run(command, cwd=cwd or self.work, env=env or self.env(),
-                                   input=stdin, capture_output=True, timeout=60)
+                                   input=stdin, capture_output=True, timeout=60, pass_fds=pass_fds)
         result = Result(completed)
         OBSERVED.append(result.stderr)
         return result
+
+    def feed_fifo(self, test: unittest.TestCase, path: pathlib.Path, data: bytes):
+        """Makes a named pipe at `path` and writes `data` into it from a thread once land.sh opens
+        it to read. Opening a FIFO to write blocks until a reader opens it (POSIX open(),
+        https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html), which a case that
+        never reads would leave blocked, so the cleanup opens it to read without blocking first."""
+        os.mkfifo(path)
+        def write():
+            with open(path, "wb") as pipe:
+                pipe.write(data)
+        writer = threading.Thread(target=write, daemon=True)
+        writer.start()
+        def release():
+            if writer.is_alive():
+                reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                writer.join(10)
+                os.close(reader)
+        test.addCleanup(release)
+        return writer
 
     def calls(self) -> list[list[str]]:
         names = sorted(self.log.glob("call-*"), key=lambda path: int(path.name.split("-")[1]))
@@ -360,6 +384,27 @@ class RefusalTests(LandTestCase):
                     make(case.work / name)
                 result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", name)
                 self.assertRefused(case, result, "is not a file", [])
+
+    def test_body_file_naming_a_descriptor_the_caller_did_not_pass(self):
+        # The descriptor is the caller's: /dev/fd/N names whatever land.sh itself holds as N, so a
+        # path whose descriptor was not inherited names nothing, the way a missing path does.
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        self.addCleanup(os.close, write_end)
+        case = Case(self)
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", f"/dev/fd/{read_end}")
+        self.assertRefused(case, result, "is not a file", [])
+
+    def test_body_file_that_is_standard_input(self):
+        # gh reads `--body-file -` as standard input, but land.sh asks its no-subject confirmation
+        # there, so it refuses standard input under any of its names, with the reason.
+        for name in ("-", "/dev/stdin", "/dev/fd/0"):
+            with self.subTest(name=name):
+                case = Case(self)
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", name,
+                                  stdin=b"a body on standard input\n")
+                self.assertRefused(case, result, f"--body-file: {name} is standard input", [])
+                self.assertIn("confirmation", result.land_lines()[0])
 
     def test_body_file_that_cannot_be_read(self):
         # [ -r ] is true for root whatever the mode, so as root this case cannot show the refusal.
@@ -667,6 +712,37 @@ class MergeCallTests(LandTestCase):
         (case.work / "sub" / "body.md").write_bytes(self.BODY.encode())
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "sub/body.md",
                           env=case.env(CDPATH=str(decoy)))
+        self.assertMergeCalled(
+            case, result,
+            MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
+
+    def test_body_from_a_named_pipe(self):
+        # A FIFO is not a regular file, and gh pr merge --body-file reads one, so land.sh does too.
+        for relative in (True, False):
+            with self.subTest(relative=relative):
+                case = Case(self)
+                writer = case.feed_fifo(self, case.work / "body.fifo", self.BODY.encode())
+                name = "body.fifo" if relative else str(case.work / "body.fifo")
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", name)
+                self.assertMergeCalled(
+                    case, result,
+                    MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
+                writer.join(10)
+                self.assertFalse(writer.is_alive(), "land.sh never opened the named pipe to read it")
+
+    def test_body_from_an_inherited_descriptor(self):
+        # What `--body-file <(...)` hands land.sh: a pipe's read end, inherited as /dev/fd/N. Run
+        # from a subdirectory, so the script's move to the repository root comes between the
+        # check and the read, and the bytes show the descriptor was still open when it read.
+        case = Case(self)
+        sub = case.work / "sub"
+        sub.mkdir()
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        with os.fdopen(write_end, "wb") as pipe:
+            pipe.write(self.BODY.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", f"/dev/fd/{read_end}",
+                          cwd=sub, pass_fds=(read_end,))
         self.assertMergeCalled(
             case, result,
             MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])

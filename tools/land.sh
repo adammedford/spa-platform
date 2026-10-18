@@ -11,10 +11,12 @@
 #
 #     git worktree add --detach ../spa-land origin/main
 #
-# --subject is the merge subject a check reads. --body-file is a file holding the merge body, which
-# reaches the merge commit followed by the review trailer below. The body says what was verified and
-# how, and it carries the `Outstanding:` line and the `Outstanding test ids:` line when a row landed
-# without being finished.
+# --subject is the merge subject a check reads. --body-file names the merge body, which reaches the
+# merge commit followed by the review trailer below: a file, or a pipe -- a named pipe, or a
+# process substitution such as `--body-file <(...)` -- but never standard input, `-` included,
+# because with no --subject standard input answers the confirmation. The body says what was
+# verified and how, and it carries the `Outstanding:` line and the `Outstanding test ids:` line
+# when a row landed without being finished.
 # Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
 #
 # It merges only a head a review record clears (#67). A review record is one line a review leaves on
@@ -64,7 +66,22 @@ while [ $# -gt 0 ]; do
     # leaves the merge done and the roadmap stale, which is what this script exists to prevent.
     --body-file)
       [ $# -ge 2 ] || die "--body-file needs a value."
-      [ -f "$2" ] || die "--body-file: $2 is not a file."
+      # Standard input is refused under every name, `-` included, although gh's own --body-file
+      # reads `-` as standard input (https://cli.github.com/manual/gh_pr_merge): with no --subject,
+      # this script reads its confirmation from standard input, and a body there would race the
+      # answer. A deliberate narrowing (#72). `-ef` compares device and inode, so /dev/stdin,
+      # /dev/fd/0 and any path naming the file or pipe standard input is are all caught: bash's manual,
+      # https://www.gnu.org/software/bash/manual/html_node/Bash-Conditional-Expressions.html.
+      if [ "$2" = - ] || [ "$2" -ef /dev/stdin ]; then
+        die "--body-file: $2 is standard input, which answers the confirmation asked when no --subject is given; pass a file, a named pipe or <(...)."
+      fi
+      # A pipe is accepted as well as a regular file: a named pipe, or the /dev/fd/N that a caller's
+      # `--body-file <(...)` hands over, both of which gh reads (#72). -p follows the path to what
+      # it names, so a /dev/fd/N whose descriptor this process did not inherit names nothing and is
+      # refused here, the way a missing path is. The descriptor stays open until the body is read
+      # below, because nothing in this script closes one it inherited; tools/land_tests.py reads
+      # the body through one.
+      [ -f "$2" ] || [ -p "$2" ] || die "--body-file: $2 is not a file or a pipe."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       # Made absolute here, because the script changes to the repository root before the merge and
       # a relative path checked from a subdirectory would then name a different file, or none.
