@@ -68,7 +68,7 @@ BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
 # The real tools land.sh runs before its merge, besides gh and python3, which get doubles. Each is
-# linked into the case's bin directory, which is the whole of the case's PATH.
+# reached from the case's bin directory, which is the whole of the case's PATH.
 TOOLS = ("git", "dirname", "basename", "awk")
 
 PR = "5"
@@ -166,7 +166,7 @@ class Result:
 
 class Case:
     """One throwaway directory: a bare origin, a clone sitting at origin/main, and a bin directory
-    holding the doubles and links to the real tools."""
+    holding the doubles and a way to each real tool, which is the case's whole PATH."""
 
     def __init__(self, test: unittest.TestCase, *, state: str = "OPEN", base: str = "main",
                  view_fails: str = "", gh: bool = True, python3: bool = True):
@@ -185,13 +185,17 @@ class Case:
         for tool in TOOLS:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
-            (self.bin / tool).symlink_to(found)
+            # A one-line exec of the resolved binary rather than a symbolic link: a git built with
+            # RUNTIME_PREFIX finds its helper programs relative to the path it was started from
+            # (https://github.com/git/git/blob/master/Makefile), and through a link that path
+            # would be this directory.
+            self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
         if gh:
-            self.write_double("gh", GH_DOUBLE.format(
+            self.write_executable("gh", GH_DOUBLE.format(
                 log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
                 base=shlex.quote(base), view_fails=shlex.quote(view_fails)))
         if python3:
-            self.write_double("python3", PYTHON_DOUBLE.format(log=shlex.quote(str(self.log))))
+            self.write_executable("python3", PYTHON_DOUBLE.format(log=shlex.quote(str(self.log))))
 
         self.origin = self.dir / "origin.git"
         self.work = self.dir / "work"
@@ -206,7 +210,7 @@ class Case:
         self.git("push", "-q", "origin", "main", cwd=self.work)
         self.git("fetch", "-q", "origin", cwd=self.work)
 
-    def write_double(self, name: str, text: str):
+    def write_executable(self, name: str, text: str):
         path = self.bin / name
         path.write_text(text)
         path.chmod(0o755)
