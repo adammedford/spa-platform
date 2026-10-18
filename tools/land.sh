@@ -44,7 +44,10 @@ while [ $# -gt 0 ]; do
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       # Made absolute here, because the script changes to the repository root before the merge and
       # a relative path checked from a subdirectory would then name a different file, or none.
-      body_file="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
+      # CDPATH is cleared because an exported one sends `cd` to another directory of the same name,
+      # and `cd` prints it, so the path would name another file over two lines. `--` ends each
+      # command's options, so a name starting with a hyphen is a name. tools/land_tests.py has both.
+      body_file="$(CDPATH= cd -- "$(dirname -- "$2")" && pwd)/$(basename -- "$2")"; shift 2 ;;
     # Reads the header rather than naming the lines it sits on: a hard-coded range has to be edited
     # again every time the header moves, and nothing here would catch it when it was not.
     -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
