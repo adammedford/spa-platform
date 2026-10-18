@@ -22,8 +22,19 @@ because it reads as coverage.
 
     tools/roadmap.py            rewrite the generated blocks (also --write)
     tools/roadmap.py --check    fail if they are not what the repository says they should be
+    tools/roadmap.py --json     print the same derivation for a program, and write nothing
 
 An unrecognised argument exits 2 and writes nothing, because the default action writes.
+
+--json is for a program that needs to know how far the work has got, so it asks rather than keeping
+a rule of its own (#70). It prints, from the reading the blocks are written from,
+
+    {"closed_gates": [{"gate": "G1a", "tag": "skeleton-v1"}, ...],
+     "rows": {"I-1": "landed", ..., "1.3": "part-landed", ..., "6.8": "ongoing", ...}}
+
+with every plan row in the plan's order: landed, part-landed, open, or ongoing for a row of a stage
+with no gate. Where the answer would not be whole -- a shallow clone, a ladder that does not line up
+with the plan -- it exits 1 with nothing on stdout.
 
 The generated text holds no date and no commit id on purpose. It is a function of the tags, the
 merge subjects and the plan, so --check stays quiet until one of those changes, and the push that
@@ -33,6 +44,7 @@ lands a task is the push that updates the roadmap.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
@@ -318,6 +330,44 @@ def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
     return state
 
 
+# --- what the blocks count -----------------------------------------------------------------------
+
+
+def counted(stages: list[Stage], state: dict[str, str]) -> dict[str, str]:
+    """Each plan row as the generated blocks count it: landed, part-landed, open or ongoing.
+
+    The one reading of a row's state that the blocks and --json share, so the two cannot disagree
+    (#70). A row of a stage with no gate is ongoing whatever its subjects say: "I-7: decide change
+    request 1.6a" lands I-7 by LANDED_INTEGRATOR, yet SX's rows run for the project's whole length
+    and the blocks never count one as landed.
+    """
+    rows: dict[str, str] = {}
+    for stage in stages:
+        for row in stage.rows:
+            if not stage.tag:
+                rows[row] = "ongoing"
+            else:
+                rows[row] = {"landed": "landed", "part": "part-landed"}.get(
+                    state.get(row, ""), "open"
+                )
+    return rows
+
+
+def closed_gates(stages: list[Stage], closed: set[str]) -> list[Stage]:
+    """The stages whose gate tag exists, in ladder order."""
+    return [stage for stage in stages if stage.tag and stage.tag in closed]
+
+
+def report(rows: list[str], stages: list[Stage], counts: dict[str, str], closed: set[str]) -> dict:
+    """What --json prints: the closed gates, and every plan row's state in the plan's order."""
+    return {
+        "closed_gates": [
+            {"gate": stage.gate, "tag": stage.tag} for stage in closed_gates(stages, closed)
+        ],
+        "rows": {row: counts[row] for row in rows},
+    }
+
+
 # --- rendering -----------------------------------------------------------------------------------
 
 
@@ -325,10 +375,10 @@ def ids(values: list[str]) -> str:
     return ", ".join(f"`{value}`" for value in values) if values else "none"
 
 
-def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict[str, str]:
-    ladder_stages = [stage for stage in stages if stage.id != "SX"]
+def render(stages: list[Stage], counts: dict[str, str], closed: set[str]) -> dict[str, str]:
+    """The two generated blocks, from `counted`'s reading of each row and nothing else."""
     first_open = next(
-        (stage for stage in ladder_stages if stage.tag not in closed), None
+        (stage for stage in stages if stage.tag and stage.tag not in closed), None
     )
 
     lines = [
@@ -345,9 +395,9 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
             # about nothing. SX's rows run for the project's whole length.
             lines.append(f"| {stage.title} | {stage.gate} | ongoing | — |")
             continue
-        done = [row for row in stage.rows if state.get(row) == "landed"]
-        part = [row for row in stage.rows if state.get(row) == "part"]
-        open_ = [row for row in stage.rows if row not in state]
+        done = [row for row in stage.rows if counts[row] == "landed"]
+        part = [row for row in stage.rows if counts[row] == "part-landed"]
+        open_ = [row for row in stage.rows if counts[row] == "open"]
         owes = "; ".join(
             filter(
                 None,
@@ -364,18 +414,15 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
 
     # Over the gated stages only: a row that runs throughout is never landed, so counting it would
     # put a ceiling on the total that can never be reached.
-    gated = [row for stage in ladder_stages for row in stage.rows]
-    total = len(gated)
-    all_done = sum(1 for row in gated if state.get(row) == "landed")
-    all_part = sum(1 for row in gated if state.get(row) == "part")
+    total = sum(1 for state in counts.values() if state != "ongoing")
+    all_done = sum(1 for state in counts.values() if state == "landed")
+    all_part = sum(1 for state in counts.values() if state == "part-landed")
 
     summary = (
         f"**Closed gates:** "
         + (
             ", ".join(
-                f"{stage.gate} (`{stage.tag}`)"
-                for stage in ladder_stages
-                if stage.tag in closed
+                f"{stage.gate} (`{stage.tag}`)" for stage in closed_gates(stages, closed)
             )
             or "none yet"
         )
@@ -390,7 +437,7 @@ def render(stages: list[Stage], state: dict[str, str], closed: set[str]) -> dict
         + "."
     )
     if first_open:
-        owed = [row for row in first_open.rows if state.get(row) != "landed"]
+        owed = [row for row in first_open.rows if counts[row] != "landed"]
         if owed:
             summary += f" {first_open.id} still owes {ids(owed)}."
 
@@ -430,8 +477,21 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="rewrite the blocks: the default, named so a caller can say which it meant",
     )
-    check = parser.parse_args(argv).check
+    mode.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "print the closed gates and each plan row's state (landed, part-landed, open or "
+            "ongoing) as the blocks count them, and write nothing"
+        ),
+    )
+    arguments = parser.parse_args(argv)
+    check = arguments.check
     root = pathlib.Path(__file__).resolve().parent.parent
+
+    # In JSON mode stdout is the document a program parses, so everything else goes to stderr.
+    def say(line: str = "") -> None:
+        print(line, file=sys.stderr if arguments.json else sys.stdout)
 
     rows = plan_rows(root)
     stages, problems = ladder(root)
@@ -440,21 +500,34 @@ def main(argv: list[str]) -> int:
 
     if problems:
         for line in problems:
-            print(f"  {line}")
-        print()
-        print("ROADMAP FAILED: the ladder does not line up with the plan.")
-        print("The plan is the frozen export and never moves to suit the roadmap, so fix the")
-        print("roadmap: give every plan row exactly one stage, and name no row the plan lacks.")
+            say(f"  {line}")
+        say()
+        say("ROADMAP FAILED: the ladder does not line up with the plan.")
+        say("The plan is the frozen export and never moves to suit the roadmap, so fix the")
+        say("roadmap: give every plan row exactly one stage, and name no row the plan lacks.")
         return 1
 
     if shallow(root):
-        print(
+        if arguments.json:
+            # The blocks mode passes a shallow clone unchecked and writes nothing. A JSON answer is
+            # read, and one derived from part of the history calls landed rows open.
+            say(
+                "roadmap: no state printed: this is a shallow clone, so the tags and merge "
+                "subjects the state is derived from are not all here."
+            )
+            return 1
+        say(
             "roadmap: not checked: this is a shallow clone, so the tags and merge subjects the "
             "state is derived from are not all here."
         )
         return 0
 
-    blocks = render(stages, landed(root, rows), tags(root))
+    closed = tags(root)
+    counts = counted(stages, landed(root, rows))
+    if arguments.json:
+        print(json.dumps(report(rows, stages, counts, closed), indent=2))
+        return 0
+    blocks = render(stages, counts, closed)
 
     stale: list[str] = []
     for name in TARGETS:

@@ -21,7 +21,9 @@ plan is right and this file is stale.
 
 Derived, never typed. `tools/roadmap.py` writes the block below from `git tag`, from the merge
 subjects whose form `docs/agents/landing-work.md` fixes, and from the plan's own task tables. Run it
-after landing a row; `--check` runs in `.githooks/pre-push` and in CI.
+after landing a row; `--check` runs in `.githooks/pre-push` and in CI. A program reads the same
+derivation with `--json`: the closed gates, and each plan row as landed, part-landed, open or
+ongoing.
 
 <!-- BEGIN GENERATED stages -->
 | Stage | Gate | Plan rows landed | What the stage still owes |
