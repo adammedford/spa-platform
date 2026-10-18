@@ -28,7 +28,8 @@ a case can see whether the script showed or hid it. A double fails when a case n
 
 **The hook's output is asserted literally.** The expected lines in HookTests are the old hook's
 messages, typed from its text, not read from the script under test (#68: same checks, same skips,
-same messages).
+same messages), except the Terraform lines #69 changed on purpose: the skip message names the floor
+too, a line names the Terraform that ran, and the last line names that version.
 
 Run: python3 -I tools/check_tests.py
 """
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -57,9 +59,19 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 # cases with it; the file's own shape is FloorFileTests' to check.
 FLOOR_FILE = ROOT / ".terraform-version"
 FLOOR = FLOOR_FILE.read_text().strip()
-# A release later than any floor this repository will name: what the Mac runs while the floor is
-# not installed. 1.16.5 is what it ran on 2026-10-17.
-LATER = "1.16.5"
+
+
+def later_than(version: str) -> str:
+    """A release five minor versions after `version`, or 99.0.0 when `version` is not one exact
+    MAJOR.MINOR.PATCH, which FloorFileTests reports."""
+    match = re.fullmatch(r"(\d+)\.(\d+)\.\d+", version)
+    return f"{match[1]}.{int(match[2]) + 5}.5" if match else "99.0.0"
+
+
+# What the Mac runs while the floor is not installed: a later release, as 1.16.5 was to the 1.11.0
+# floor on 2026-10-17. Worked out from the floor rather than typed, so raising the floor to 1.16.5
+# or past it leaves these cases a substitute that is not the floor (#69: a one-line change).
+LATER = later_than(FLOOR)
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 

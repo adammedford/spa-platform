@@ -13,9 +13,11 @@
 # command, and 15 agents spent about 85 tool calls repairing it before any could run. A file has no
 # quoting layer to lose a character in, and a change to it reaches every caller at once.
 #
-# The default mode is the hook's checks, unchanged from when they lived in the hook: the same
-# checks, the same skips and the same messages, which is why its lines say "pre-push:". They cost
-# about a second, plus the build and Terraform when the change touches their half.
+# The default mode is the hook's checks, as they were when they lived in the hook: the same checks,
+# the same skips and the same messages, which is why its lines say "pre-push:". The exception is the
+# Terraform half, which #69 changed on purpose: its skip message names the floor too, a line names
+# the Terraform it ran, and the last line names that version. They cost about a second, plus the
+# build and Terraform when the change touches their half.
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
 # port the caller names, and `terraform test` for every root and module that has tests. Its lines

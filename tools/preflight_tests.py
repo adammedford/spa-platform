@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -38,9 +39,22 @@ BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
 # The floor as the repository's one file names it, read rather than typed so raising it raises the
-# cases with it. LATER stands for what this Mac runs while the floor is not installed.
+# cases with it.
 FLOOR = (ROOT / ".terraform-version").read_text().strip()
-LATER = "1.16.5"
+
+
+def later_than(version: str) -> str:
+    """A release five minor versions after `version`, or 99.0.0 when `version` is not one exact
+    MAJOR.MINOR.PATCH, which tools/check_tests.py's FloorFileTests reports."""
+    match = re.fullmatch(r"(\d+)\.(\d+)\.\d+", version)
+    return f"{match[1]}.{int(match[2]) + 5}.5" if match else "99.0.0"
+
+
+# LATER stands for what this Mac runs while the floor is not installed, as 1.16.5 was to the 1.11.0
+# floor on 2026-10-17. Worked out from the floor rather than typed, so raising the floor to 1.16.5
+# or past it does not make the terraform on PATH the floor, or older than it (#69: a one-line
+# change). OLDER is older than any floor the repository can raise to.
+LATER = later_than(FLOOR)
 OLDER = "1.10.5"
 
 # The real tools preflight reads its answers with. Everything else it looks for is absent.
