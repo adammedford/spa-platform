@@ -45,7 +45,8 @@
 # commit, run tools/roadmap.py on it, and push the refresh as its own commit when the blocks moved.
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
 # see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
-# this script deletes the branches the merge finished and lists the ones it keeps (#71); its
+# this script deletes the branches the merge finished and lists the ones it keeps (#71), and when it
+# deleted any, this script's last line names the file of the commands that restore them (#115); its
 # companion, tools/prune_branches_tests.py, runs this script through a merge to see it happen.
 #
 # Written for the bash 3.2 that ships with macOS.
@@ -212,11 +213,29 @@ python3 -I tools/roadmap.py
 # It deletes only what its rules allow and lists every branch it keeps and why. A cleanup that stops
 # leaves finished branches behind, not a wrong merge, so it warns rather than failing a landing that
 # has already happened.
+#
+# A cleanup that deleted anything ends on a line naming the file it wrote the restore lines to, in
+# the words below, which tools/prune_branches.py keeps as RESTORE_FILE_LINE; the two change
+# together. Its output is held until it ends so that line can be read back, and this script's own
+# last line names the file again (#115). The first landing to run the cleanup deleted 34 branches,
+# its session read this script through `tail -20`, and 14 of the restore lines went with the
+# terminal. A cleanup that cannot write the file stops deleting, prints its lines and exits 1, so
+# the last line is then the warning below, and the file, if any, is not named.
+restore_file_line="prune_branches: these commands are also in "
 prune_finished() {
   [ "$base" = main ] || return 0
   echo "--- deleting the branches this landing finished"
-  python3 -I "$here/prune_branches.py" --delete \
+  pruned=0
+  listing="$(python3 -I "$here/prune_branches.py" --delete)" || pruned=$?
+  [ -z "$listing" ] || printf '%s\n' "$listing"
+  [ "$pruned" -eq 0 ] \
     || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
+  last="${listing##*"$newline"}"
+  case "$last" in
+    "$restore_file_line"?*)
+      restore_file="${last#"$restore_file_line"}"
+      echo "land: the commands that restore what the cleanup deleted are in $restore_file" ;;
+  esac
 }
 
 if git diff --quiet -- README.md docs/roadmap.md; then
