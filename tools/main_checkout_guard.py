@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """Keeps branch work out of the repository's main checkout. Owner: integrator.
 
-A Claude Code PreToolUse hook, run before every Bash call by the entry in the tracked
-`.claude/settings.json` (#114). The main checkout is the clone's own working tree, the worktree whose
-git directory is the common directory, and the sessions running at once share it: its branch is
-whichever one a session last left it on. On 2026-10-18 a session ran `git rebase origin/main` there,
-taking it for its own branch, after another had switched it to `ws1/certs-domain-tag` and committed
-on it; the rebase did nothing only because that branch already held origin/main. So in that checkout
-this refuses a Bash call that runs `git rebase`, `switch`, `checkout <branch-or-commit>`, `reset`,
-`commit`, `merge`, `pull`, `cherry-pick`, `revert` or `stash`, and names the route instead: a
-worktree of the session's own, as docs/agents/landing-work.md -> "Take a task" says.
+A Claude Code PreToolUse hook (#114). The entry in the tracked `.claude/settings.json` runs it before
+each Bash call of a session started in a checkout that holds both files. The main checkout is the
+clone's own working tree, the worktree whose git directory is the common directory, and the sessions
+running at once share it: its branch is whichever one a session last left it on. On 2026-10-18 a
+session ran `git rebase origin/main` there, taking it for its own branch, after another had switched
+it to `ws1/certs-domain-tag` and committed on it; the rebase did nothing only because that branch
+already held origin/main. So in that checkout this refuses a Bash call that runs `git rebase`,
+`switch`, `checkout <branch-or-commit>`, `reset`, `commit`, `merge`, `pull`, `cherry-pick`, `revert`
+or `stash`, and names the route instead: a worktree of the session's own, as
+docs/agents/landing-work.md -> "Take a task" says.
 
 **What passes.** The same commands in a linked worktree; git that reads, `git stash list` and
-`git stash show` among it; `git worktree add`; `git checkout` with `--`, which restores files from
-whatever commit it names and moves no branch; and every other command, file edits included. The
-checkout guarded is the main worktree of the repository this file is tracked in, so another
-repository's, a scratch one or a clone made for a mutation run, is left alone.
+`git stash show` among it; `git worktree add`; `git checkout` with a path after `--`, which restores
+that path from whatever commit it names and moves no branch; and every other command, file edits
+included. The checkout guarded is the main worktree of the repository this file is tracked in, so
+another repository's, a scratch one or a clone made for a mutation run, is left alone.
 
 **How it reads a command.** Claude Code hands the hook the command as text, and as `cwd` the
 directory the session is in, which follows its `cd`s (https://code.claude.com/docs/en/hooks). The
 hook reads the text as a shell would, as far as finding each git invocation and where it runs needs:
-separators, quoting, `cd`, `pushd` and `~`, a variable the command itself assigned, a subshell's own
-directory, `$(...)` and backticks, here-document bodies as text rather than commands, assignment and
-`env` prefixes, and git's own options before the subcommand, `-C` among them
-(https://git-scm.com/docs/git#_options). Whether a directory is the main worktree is git's answer:
-its git directory and its common directory are one directory
+separators, quoting, `cd`, `pushd` and `~`, a subshell's own directory, `$(...)` and backticks,
+here-document bodies as text rather than commands, redirections, assignment and `env` prefixes and
+the other words that run the word after them, and git's own options before the subcommand, `-C`
+among them (https://git-scm.com/docs/git#_options). A variable is what the command itself assigned,
+`$PWD` is the directory the reading has reached, and any other variable is what the hook's own
+environment holds, so one the session's shell holds differently is read wrong. Whether a directory
+is the main worktree is git's answer: its git directory and its common directory are one directory
 (https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---git-common-dir).
 
 **What it does not read**, which makes it a tripwire for a session that mistook the checkout for its
@@ -41,8 +44,7 @@ python3 exits 2 on a missing script, which Claude Code would read as a refusal o
 That also makes a mistyped path in the entry silent, which is why the test companion runs the entry
 as written.
 
-Written for Python 3.9, the python3 Apple's command line tools install, which is the one a session on
-a Mac finds first.
+Written to run on Python 3.9, the python3 Apple's command line tools install on a Mac.
 
 Test companion: tools/main_checkout_guard_tests.py.
 """
@@ -69,17 +71,19 @@ Here, read-only git, `git worktree add`, `git checkout -- <path>` and file edits
 docs/agents/landing-work.md -> "Take a task" says why.
 """
 
-# The subcommands #114 names that move the checkout's branch or rewrite its history whatever follows
-# them. `checkout` and `stash` are decided by what follows, in moves_the_checkout().
+# The subcommands #114 refuses whatever follows them. Most of their forms move the branch or rewrite
+# history; the ticket refuses the few that do not, such as `git reset -- <path>`, with the rest.
+# `checkout` and `stash` are decided by what follows them, in moves_the_checkout().
 MOVES = {"rebase", "switch", "reset", "commit", "merge", "pull", "cherry-pick", "revert"}
 
 # git's options before the subcommand that take the next word as their value, so that word is not
 # the subcommand (https://git-scm.com/docs/git#_options; git 2.54 takes each in this separate form).
 VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
 
-# Longest first, so `&&` is read before `&` and `<<-` before `<<`.
+# The shell's operators, longest first, so `&&` is read before `&` and `<<-` before `<<`.
 OPERATORS = sorted({"<<<", "<<-", "&>>", "&&", "||", ";;", "|&", "&>", ">>", ">&", "<&", ">|", "<>", "<<",
                     ";", "&", "|", "(", ")", "<", ">", "\n"}, key=len, reverse=True)
+# The operators that redirect: the word after one is its target, and the command goes on past it.
 REDIRECTIONS = {"<<<", "<<-", "&>>", "&>", ">>", ">&", "<&", ">|", "<>", "<<", "<", ">"}
 HEREDOCS = {"<<", "<<-"}
 
@@ -91,12 +95,27 @@ PREFIXES = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "tim
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=")
 
-# A part of a word whose value only the running shell knows.
-UNKNOWN = ("unknown",)
+
+class Variable:
+    """A `$name` or `${name}` in a word."""
+
+    def __init__(self, name):
+        self.name = name
+
+
+class Substitution:
+    """A `$(...)` or backticks in a word: the tokens of the command it runs."""
+
+    def __init__(self, tokens):
+        self.tokens = tokens
+
+
+# A part of a word whose value only the running shell knows: `$'...'`, `${name:-default}`.
+UNKNOWN = object()
 
 
 class Word:
-    """One shell word: its literal text, the variables it names and the commands it substitutes."""
+    """One shell word: its literal text, with the variables and substitutions it holds."""
 
     def __init__(self, parts):
         self.parts = []
@@ -167,7 +186,7 @@ class Lexer:
             elif c in "$`":
                 add(self.expansion())
             elif c == "~" and word is None and self.ends_word(self.i + 1):
-                add(("var", "HOME"))
+                add(Variable("HOME"))
                 self.i += 1
             elif op:
                 # The 2 in `2>/dev/null` names a file descriptor, not an argument.
@@ -220,38 +239,36 @@ class Lexer:
         return parts
 
     def expansion(self):
-        """The expansion at a `$` or a backtick: a variable, a substituted command, or UNKNOWN."""
+        """The expansion at a `$` or a backtick: a Variable, a Substitution, UNKNOWN, or a plain `$`."""
         if self.at("`"):
-            return self.backticks()
+            end = self.closing(self.i + 1, "`")
+            inner = self.text[self.i + 1:end]
+            self.i = end + 1
+            return Substitution(Lexer(inner).tokens())
         if self.at("$("):
             self.i += 2
-            return ("sub", self.tokens(nested=True))
+            return Substitution(self.tokens(nested=True))
         if self.at("${"):
             start = self.i + 2
             self.i += 1
             self.skip_balanced("{", "}")
             content = self.text[start:self.i - 1]
-            return ("var", content) if NAME.fullmatch(content) else UNKNOWN
+            return Variable(content) if NAME.fullmatch(content) else UNKNOWN
         if self.at("$'"):
-            j = self.i + 2
-            while j < len(self.text) and self.text[j] != "'":
-                j += 2 if self.text[j] == "\\" else 1
-            self.i = j + 1
+            self.i = self.closing(self.i + 2, "'") + 1
             return UNKNOWN
         name = NAME.match(self.text, self.i + 1)
         if name:
             self.i = name.end()
-            return ("var", name.group())
+            return Variable(name.group())
         self.i += 1
         return "$"
 
-    def backticks(self):
-        j = self.i + 1
-        while j < len(self.text) and self.text[j] != "`":
+    def closing(self, j, mark):
+        """The index of the first mark at or after j that no backslash escapes, or the text's end."""
+        while j < len(self.text) and self.text[j] != mark:
             j += 2 if self.text[j] == "\\" else 1
-        inner = self.text[self.i + 1:j]
-        self.i = j + 1
-        return ("sub", Lexer(inner).tokens())
+        return j
 
     def skip_balanced(self, opening, closing):
         depth = 0
@@ -280,12 +297,13 @@ class Shell:
         """The word's text, or None when part of it is something only the running shell knows."""
         text = []
         for part in word.parts:
-            if isinstance(part, str):
-                text.append(part)
-                continue
             value = None
-            if part[0] == "var":
-                value = self.variables.get(part[1], os.environ.get(part[1]))
+            if isinstance(part, str):
+                value = part
+            elif isinstance(part, Variable):
+                # The shell keeps PWD where its cds took it; the hook's own PWD is somewhere else.
+                fallback = self.cwd if part.name == "PWD" else os.environ.get(part.name)
+                value = self.variables.get(part.name, fallback)
             if value is None:
                 return None
             text.append(value)
@@ -311,8 +329,8 @@ def git_calls(tokens, shell):
     for token in tokens + ["\n"]:
         if isinstance(token, Word):
             for part in token.parts:
-                if isinstance(part, tuple) and part[0] == "sub":
-                    yield from git_calls(part[1], shell.copy())
+                if isinstance(part, Substitution):
+                    yield from git_calls(part.tokens, shell.copy())
             if target:
                 target = False
             else:
@@ -371,7 +389,10 @@ def moves_the_checkout(subcommand, args):
     if subcommand in MOVES:
         return True
     if subcommand == "checkout":
-        return "--" not in args
+        # `--` ends the commit and options; only a path after it makes checkout restore that path
+        # rather than switch, and `git checkout <branch> --` still switches
+        # (https://git-scm.com/docs/git-checkout).
+        return "--" not in args or args.index("--") == len(args) - 1
     if subcommand == "stash":
         return not args or args[0] not in ("list", "show")
     return False

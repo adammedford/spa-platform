@@ -8,7 +8,10 @@ the tool input a session's Bash call would send, so the cases are the commands t
 **Real git in a throwaway directory.** One fixture serves every case, because the hook only reads:
 a repository whose first commit holds copies of the guard and of the tracked `.claude/settings.json`,
 a linked worktree of it, a symbolic link to it, a second repository, and a directory that is in none.
-HOME is the throwaway directory, so `~` names it, and git reads no system or global configuration.
+The throwaway directory keeps the path the system gives it, which on macOS runs through a symbolic
+link (/var is /private/var). HOME is that directory, so `~` names it; PWD is the main checkout, as a
+hook started by a session there inherits it; and git reads the fixture's own configuration and no
+system or user one.
 
 **The settings entry runs as written.** Its command is read from this checkout's
 `.claude/settings.json` and run through a shell with CLAUDE_PROJECT_DIR naming the fixture, as
@@ -39,14 +42,17 @@ SETTINGS = ".claude/settings.json"
 ROUTE = "git worktree add -b <branch> <path> origin/main"
 
 # Each command #114's first box names, in the forms a session writes them. `git checkout` is there
-# with a branch, a new branch and a commit; its path form is in PATH_CHECKOUTS below.
-MOVES = (
+# with a branch, a new branch and a commit, and with a `--` that no path follows, which still
+# switches; its path form is in PATH_CHECKOUTS below.
+BRANCH_WORK = (
     "git rebase origin/main",
     "git switch main",
     "git switch -c task/new origin/main",
     "git checkout task/linked",
     "git checkout -b task/new origin/main",
     "git checkout HEAD~1",
+    "git checkout task/linked --",
+    "git checkout -b task/new --",
     "git reset --hard origin/main",
     "git reset HEAD~1",
     "git commit -m 'work in progress'",
@@ -78,7 +84,8 @@ READ_ONLY = (
     "git stash show -p stash@{0}",
 )
 
-# `git checkout` with `--` restores files and moves no branch, whichever commit it reads them from.
+# `git checkout` with a path after `--` restores that path and moves no branch, whichever commit it
+# reads it from.
 PATH_CHECKOUTS = (
     "git checkout -- README.md",
     "git checkout HEAD -- README.md",
@@ -117,18 +124,19 @@ class Fixture:
 
     def __init__(self):
         self.directory = tempfile.TemporaryDirectory()
-        top = pathlib.Path(os.path.realpath(self.directory.name))
+        top = pathlib.Path(self.directory.name)
         self.top = top
         config = top / "gitconfig"
         config.write_text("[user]\n\tname = Guard test\n\temail = test@example.test\n"
                           "[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n"
                           "[maintenance]\n\tauto = false\n")
         # The hook runs with the session's PATH, which is where it finds git; nothing else is
-        # inherited.
+        # inherited, and PWD is set below.
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(top), "LC_ALL": "C",
                     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config)}
 
         self.main = top / "repo"
+        self.env["PWD"] = str(self.main)
         for name in (GUARD, SETTINGS):
             target = self.main / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -210,7 +218,7 @@ class Refused(GuardCase):
     """#114's first box: the branch-moving commands, in the main worktree, by either route."""
 
     def test_each_branch_moving_command_is_refused_in_the_main_checkout_and_told_the_route(self):
-        for command in MOVES:
+        for command in BRANCH_WORK:
             with self.subTest(command=command):
                 self.assertRefused(command, self.fx.main)
 
@@ -222,7 +230,7 @@ class Refused(GuardCase):
         self.assertRefused(f"git -C {self.fx.alias} pull", self.fx.plain)
 
     def test_git_C_reaches_the_main_checkout_from_anywhere(self):
-        for command in MOVES:
+        for command in BRANCH_WORK:
             with self.subTest(command=command, cwd="plain"):
                 self.assertRefused(command.replace("git ", f"git -C {self.fx.main} ", 1), self.fx.plain)
         with self.subTest(cwd="linked"):
@@ -239,19 +247,58 @@ class Refused(GuardCase):
             with self.subTest(command=command):
                 self.assertRefused(command, self.fx.plain)
 
+    def test_each_word_that_runs_the_word_after_it_reaches_git(self):
+        main = self.fx.main
+        for command, cwd in (
+            ("! git pull", main),
+            ("{ git pull; }", main),
+            ("if git pull; then :; fi", main),
+            ("if true; then git pull; fi", main),
+            ("if false; then :; else git pull; fi", main),
+            ("if false; then :; elif git pull; then :; fi", main),
+            ("for f in a; do git pull; done", main),
+            ("while git pull; do break; done", main),
+            ("until git pull; do break; done", main),
+            ("time git pull", main),
+            ("command git pull", main),
+            (f"builtin cd {main} && git pull", self.fx.plain),
+            ("exec git pull", main),
+            ("nohup git pull", main),
+            ("noglob git pull", main),
+            ("env git pull", main),
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, cwd)
+
+    def test_each_option_git_reads_a_value_after_still_leaves_the_subcommand(self):
+        for command in ("git -c user.name=someone commit -m 'work'",
+                        "git --git-dir .git commit -m 'work'",
+                        "git --work-tree . commit -m 'work'",
+                        "git --namespace scratch commit -m 'work'",
+                        "git --config-env user.name=HOME commit -m 'work'",
+                        "git --attr-source HEAD commit -m 'work'"):
+            with self.subTest(command=command):
+                self.assertRefused(command, self.fx.main)
+
+    def test_a_redirection_before_the_command_is_not_the_command(self):
+        for command in ("</dev/null git pull", ">/dev/null git pull", ">>notes.txt git pull",
+                        ">|notes.txt git pull", "<>notes.txt git pull", "<&0 git pull", ">&2 git pull",
+                        "&>/dev/null git pull", "&>>notes.txt git pull", "<<<input git pull",
+                        "<<EOF git pull\nbody\nEOF", "<<-EOF git pull\n\tbody\n\tEOF",
+                        # Its file descriptor is not a word either.
+                        ">/dev/null 2>&1 git pull"):
+            with self.subTest(command=command):
+                self.assertRefused(command, self.fx.main)
+
     def test_the_shell_forms_a_session_writes_still_reach_git(self):
         main = self.fx.main
         for command, cwd in (
             ("GIT_EDITOR=true git rebase --continue", main),
             ("env GIT_EDITOR=true git merge --continue", main),
-            ("command git commit -m 'work'", main),
+            ('for f in a; do git commit -m "$f"; done', main),
             ("/usr/bin/git commit -m 'work'", main),
-            ("git -c user.name=someone commit -m 'work'", main),
             ("true && git reset --hard origin/main", main),
             ("git stash list | head -1 && git stash pop", main),
-            ("if git diff --quiet; then git pull; fi", main),
-            ('for f in a; do git commit -m "$f"; done', main),
-            ("{ git fetch origin; git merge origin/main; }", main),
             ("git \\\n  commit -m 'work'", main),
             # The form a session writes a commit message in, apostrophe and parenthesis included. zsh,
             # which the Bash tool runs here, parses it; the bash 3.2 macOS ships does not.
@@ -261,8 +308,7 @@ class Refused(GuardCase):
             (f"(cd {main} && git commit -m 'work')", self.fx.plain),
             (f"wt={main}; git -C \"$wt\" commit -m 'work'", self.fx.plain),
             (f"wt={main}; git -C \"${{wt}}\" commit -m 'work'", self.fx.plain),
-            # A redirection may come before the command, and its file descriptor is not a word.
-            (">/dev/null 2>&1 git pull", main),
+            (f"cd {main} && git -C \"$PWD\" commit -m 'work'", self.fx.linked),
             # What follows a quote, a substitution or a here-document is a command again.
             ("printf $'it\\'s\\n'; git commit -m 'work'", main),
             (f"echo \"$( (cd {self.fx.linked} && git status) )\" && git -C {main} pull", self.fx.plain),
@@ -278,23 +324,25 @@ class Passes(GuardCase):
     """#114's second box: what the guard lets through."""
 
     def test_the_same_commands_pass_in_a_linked_worktree(self):
-        for command in MOVES:
+        for command in BRANCH_WORK:
             with self.subTest(command=command):
                 self.assertPasses(command, self.fx.linked)
 
     def test_git_C_or_cd_into_a_linked_worktree_passes_from_the_main_checkout(self):
-        for command in MOVES:
+        for command in BRANCH_WORK:
             with self.subTest(command=command):
                 self.assertPasses(command.replace("git ", f"git -C {self.fx.linked} ", 1), self.fx.main)
         for command in ("git -C ../linked commit -m 'work'", f"cd {self.fx.linked} && git commit -m 'work'",
-                        "cd ../linked; git rebase origin/main", f"pushd {self.fx.linked} && git commit -m 'work'"):
+                        "cd ../linked; git rebase origin/main", f"pushd {self.fx.linked} && git commit -m 'work'",
+                        # $PWD is where the command's cd took it, not the hook's own PWD.
+                        f"cd {self.fx.linked} && git -C \"$PWD\" commit -m 'work'"):
             with self.subTest(command=command):
                 self.assertPasses(command, self.fx.main)
 
     def test_another_repositorys_checkout_and_no_repository_pass(self):
         # The guard keeps this repository's main checkout; a scratch repository or a clone made
         # for a mutation run is a main worktree of its own, and is nobody else's checkout.
-        for command in MOVES:
+        for command in BRANCH_WORK:
             with self.subTest(command=command, cwd="another repository"):
                 self.assertPasses(command, self.fx.other)
             with self.subTest(command=command, cwd="no repository"):
