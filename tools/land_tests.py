@@ -41,8 +41,9 @@ body path checked in one directory and read in another reaches gh as other bytes
 
 **A refusal is any exit before the merge call**, with or without a `land:` line. Each `die` above
 `gh pr merge` has a case, and the last case to run reads land.sh and fails naming any of them that
-no case produced, so a refusal added later without a case turns this companion red. Run the whole
-file: a subset leaves that closing case with less to see.
+no case produced, or whose message it cannot match to a `land:` line, so a refusal added later
+without a case turns this companion red. Run the whole file: a subset leaves that closing case with
+less to see.
 
 Each case asserts the exit status, the `land:` line by the fragment that names the refusal (not the
 whole sentence, so a rewording is not a test edit), and exactly what the gh double recorded.
@@ -408,7 +409,7 @@ class MergeCallTests(LandTestCase):
 
     BODY = "Verified by tools/land_tests.py.\n\nOutstanding: none — exact bytes, no final newline".encode()
 
-    def assertMerged(self, case: Case, result: Result, merge: list[str], body: bytes | None = None):
+    def assertMergeCalled(self, case: Case, result: Result, merge: list[str], body: bytes | None = None):
         self.assertEqual(1, result.status, result.stderr)
         self.assertIn("the merge fails on purpose", result.stderr)
         self.assertEqual([VIEW_STATE, VIEW_BASE, merge], case.calls())
@@ -424,13 +425,13 @@ class MergeCallTests(LandTestCase):
         subject = "Merge task 9.9: the subject the roadmap reads, with 'quotes' and $dollars"
         result = case.run(PR, "--subject", subject)
         self.assertNotIn("Continue?", result.stdout)
-        self.assertMerged(case, result, MERGE + ["--subject", subject])
+        self.assertMergeCalled(case, result, MERGE + ["--subject", subject])
 
     def test_piped_yes_confirms_without_adding_a_subject(self):
         case = Case(self)
         result = case.run(PR, stdin=b"y\n")
         self.assertIn("Continue? [y/N]", result.stdout)
-        self.assertMerged(case, result, MERGE)
+        self.assertMergeCalled(case, result, MERGE)
 
     def test_relative_body_path_from_a_subdirectory(self):
         # 2c9962f: the path was checked from the caller's directory and read from the repository's
@@ -441,9 +442,10 @@ class MergeCallTests(LandTestCase):
         (sub / "body.md").write_bytes(self.BODY)
         (case.work / "body.md").write_bytes(b"the decoy at the root\n")
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md", cwd=sub)
-        self.assertMerged(case, result,
-                          MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(sub / "body.md")],
-                          self.BODY)
+        self.assertMergeCalled(
+            case, result,
+            MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(sub / "body.md")],
+            self.BODY)
 
     def test_relative_body_path_under_an_exported_cdpath(self):
         # With CDPATH exported, `cd sub` goes to the first CDPATH entry holding a sub/ and prints
@@ -456,7 +458,7 @@ class MergeCallTests(LandTestCase):
         (case.work / "sub" / "body.md").write_bytes(self.BODY)
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "sub/body.md",
                           env=case.env(CDPATH=str(decoy)))
-        self.assertMerged(
+        self.assertMergeCalled(
             case, result,
             MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(case.work / "sub" / "body.md")],
             self.BODY)
@@ -466,9 +468,10 @@ class MergeCallTests(LandTestCase):
         case = Case(self)
         (case.work / "-x.md").write_bytes(self.BODY)
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "-x.md")
-        self.assertMerged(case, result,
-                          MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(case.work / "-x.md")],
-                          self.BODY)
+        self.assertMergeCalled(
+            case, result,
+            MERGE + ["--subject", "Merge task 9.9: x", "--body-file", str(case.work / "-x.md")],
+            self.BODY)
 
 
 class HelpTests(LandTestCase):
@@ -517,6 +520,10 @@ class CompletenessTests(unittest.TestCase):
 
     MERGE_CALL = re.compile(r"^\s*gh pr merge\b", re.MULTILINE)
     DIE = re.compile(r'\bdie "((?:[^"\\]|\\.)*)"')
+    # Every use of die, whatever follows it: all but the function's own definition. Whole-line
+    # comments are dropped first, so prose naming die is not counted as a use.
+    DIE_USE = re.compile(r"\bdie\b(?!\s*\(\))")
+    COMMENT = re.compile(r"^\s*#.*$", re.MULTILINE)
     VARIABLE = re.compile(r"\$(?:\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9#*@?$!-])")
 
     def pattern(self, message: str) -> re.Pattern:
@@ -529,8 +536,17 @@ class CompletenessTests(unittest.TestCase):
         text = SCRIPT.read_text()
         merge = self.MERGE_CALL.search(text)
         self.assertIsNotNone(merge, "land.sh has no `gh pr merge` line to read refusals above")
-        messages = self.DIE.findall(text[:merge.start()])
+        above = self.COMMENT.sub("", text[:merge.start()])
+        messages = self.DIE.findall(above)
         self.assertTrue(messages, "found no `die` above the merge call; this case would check nothing")
+        # A refusal this case cannot read would otherwise pass unseen: a single-quoted message is not
+        # found at all, and one with no literal word, such as die "$reason", matches any land: line.
+        unread = [line.strip() for line in above.splitlines()
+                  if len(self.DIE_USE.findall(line)) != len(self.DIE.findall(line))]
+        unread += [f'die "{message}"' for message in messages
+                   if not re.search(r"\w", "".join(self.VARIABLE.split(message)))]
+        self.assertEqual([], unread, "a `die` above the merge call that this case cannot match to a "
+                                     "land: line; give it a double-quoted message with a literal word")
         seen = "\n".join(OBSERVED)
         missing = [message for message in messages if not self.pattern(message).search(seen)]
         self.assertEqual([], missing, "a refusal above the merge call that no case produced")

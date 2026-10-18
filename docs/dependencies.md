@@ -107,10 +107,11 @@ it from another (`2c9962f`).
 
 The companion is `tools/land_tests.py`, run as `python3 -I`, and nothing is added to any package
 list. It names `/bin/bash` rather than trusting the shebang, so each run tests one known shell. CI
-holds the two ends of the range the shebang `#!/usr/bin/env bash` can pick: bash 3.2.57 on
+holds both major versions the shebang `#!/usr/bin/env bash` can pick: bash 3.2.57 on
 `macos-latest` (macOS 26 Arm64), the floor, where `SCRIPT_TESTS_REQUIRE_BASH=3.2` fails the job if
-the image's `/bin/bash` changes, and bash 5.2.21 on `ubuntu-latest` (Ubuntu 24.04), which a Mac
-with Homebrew's bash first on PATH also runs.
+the image's `/bin/bash` changes, and bash 5.2.21 on `ubuntu-latest` (Ubuntu 24.04). A Mac with
+Homebrew's bash first on PATH runs bash 5 too, but a newer one (5.3.20 on 18 October 2026), which no
+job runs.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
@@ -121,7 +122,8 @@ the standard runner where it now costs nothing; or when a script needs a test th
 cannot observe. The choice lives in one test file per script and one CI step each, so it is recorded
 here and not as an ADR, for D-1's reason.
 
-Read on 18 October 2026: Homebrew's [bats-core formula](https://formulae.brew.sh/api/formula/bats-core.json);
+Read on 18 October 2026: Homebrew's [bats-core](https://formulae.brew.sh/api/formula/bats-core.json)
+and [bash](https://formulae.brew.sh/api/formula/bash.json) formulae;
 GitHub's [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 and [runner pricing](https://docs.github.com/en/billing/reference/actions-runner-pricing); the
 [runner images' label table](https://github.com/actions/runner-images/blob/main/README.md) and the

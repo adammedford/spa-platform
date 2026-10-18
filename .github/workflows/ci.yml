@@ -2,11 +2,11 @@
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
 # session steers by, the roadmap, the checks' own tests, tools/land.sh's test companion, and --
-# first, so the next two can read the answer -- which halves of the repository the change touches. The expensive jobs run when their
-# inputs changed: the solution builds and every test project runs for build inputs, and the Terraform
-# roots validate for infra/. The hook shares these path patterns through .github/touches.sh. CI's
-# decision step also runs both jobs for changes to its workflow, the classifier or tools/smoke.sh,
-# or when the base cannot be resolved.
+# first, so the two expensive jobs can read the answer -- which halves of the repository the change
+# touches. Those two run when their inputs changed: the solution builds and every test project runs
+# for build inputs, and the Terraform roots validate for infra/. The hook shares these path patterns
+# through .github/touches.sh. CI's decision step also runs both jobs for changes to its workflow,
+# the classifier or tools/smoke.sh, or when the base cannot be resolved.
 #
 # A job skipped that way still satisfies main's protection, which requires `Build and test` and
 # `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
