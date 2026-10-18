@@ -18,11 +18,14 @@ branches and no others, and deletes a copy only when all three of these hold:
   1. Its work is finished, by its kind's rule.
        task/<id>-<slug>   every id the name carries reads as landed in `tools/roadmap.py --json`:
                           a plan row in "rows", a split of one (2.1b) in "splits", a ticket
-                          (issue-66) in "tickets". A part-landed, open or ongoing id keeps the
+                          (issue-66) in "tickets". A split no merge subject names reads as its row,
+                          because a row that landed whole landed its splits with it: 3.0 did, and
+                          3.0a and 3.0b were never named. A part-landed, open or ongoing id keeps the
                           branch, because the claim is how the next session knows the row is taken.
                           An id that is none of the three, or no id, claims nothing a session could
-                          take -- since ADR-0020 a claim names a row, a split or an issue -- so rules
-                          2 and 3 alone decide such a branch.
+                          take -- ADR-0020 made every ticket a GitHub issue, so a live claim names a
+                          row, a split or issue-<n>, and a ticket-<n> name is the archived tracker's
+                          -- so rules 2 and 3 alone decide such a branch.
        overnight/<date>   a pull request from it into main has merged, as gh reports.
   2. No worktree has it checked out. The cleanup never removes a worktree.
   3. Its current tip's work is on origin/main: the tip is an ancestor, or every commit on it that
@@ -33,7 +36,11 @@ branches and no others, and deletes a copy only when all three of these hold:
 
 Each copy is judged by its own tip: the local branch, and the branch on origin as `git ls-remote`
 reads it. Origin's copy is deleted by a push whose lease names the tip judged, so a push made to it
-since keeps it. A local copy is deleted only while its tip is still the one judged.
+since keeps it. A local copy is deleted only while its tip is still the one judged, and when git
+refuses to delete it, origin's copy is kept with it.
+
+Rule 3 uses `git merge-tree --write-tree`, which Git 2.38 introduced, so the floor
+docs/dependencies.md gives git is 2.38.
 
 HEAD must be origin/main or behind it: the roadmap reads HEAD's merge subjects as well as main's, and
 one only HEAD has would call a row landed that main has not landed. It exits 0 once every branch is
@@ -54,8 +61,9 @@ MAIN = "origin/main"
 # The ids a claim branch's name carries, in the forms the task tables and the tracker give them:
 # task/2.1-registry, task/i-3-abstractions, task/1.4a-cell, task/issue-66-land-tests, and two rows
 # claimed at once, task/1.2-and-1.5-network-and-bucket. A split letter is read on every row form,
-# P2-1a too, though the roadmap reports no such split: unreported, it reads as open, and is kept.
-ID = r"(?:[Ii]-\d+[a-z]?|[Pp]2-\d+[a-z]?|\d+\.\d+[a-z]?|issue-\d+)"
+# P2-1a too, though the roadmap reports no such split: unreported, it reads as its row, P2-1. A
+# ticket id is read in any case, as tools/roadmap.py reads it.
+ID = r"(?:[Ii]-\d+[a-z]?|[Pp]2-\d+[a-z]?|\d+\.\d+[a-z]?|(?i:issue)-\d+)"
 TASK = re.compile(rf"^task/({ID}(?:-and-{ID})*)(?:-|$)")
 # The integration branch an overnight run builds and lands as one pull request.
 OVERNIGHT = re.compile(r"^overnight/\d{4}-\d{2}-\d{2}$")
@@ -104,19 +112,32 @@ def roadmap_states(root: str) -> dict:
 
 
 def normal(id_: str) -> str:
-    """An id as the roadmap writes it: I-3 and P2-1 with a capital, 1.4a and issue-66 as written."""
-    return id_ if id_[0].isdigit() or id_.startswith("issue-") else id_[0].upper() + id_[1:]
+    """An id as the roadmap writes it: I-3 and P2-1 with a capital, 1.4a as written, and issue-66 in
+    lower case, as tools/roadmap.py reads a ticket id written in any case."""
+    if id_.lower().startswith("issue-"):
+        return id_.lower()
+    return id_ if id_[0].isdigit() else id_[0].upper() + id_[1:]
 
 
-def id_state(id_: str, states: dict) -> str:
-    """landed, part-landed, open or ongoing, or unknown for an id the plan and the tracker lack."""
+def id_state(id_: str, states: dict) -> tuple[str, str]:
+    """(state, how the reason names the id): landed, part-landed, open or ongoing, or unknown for an
+    id the plan and the tracker lack.
+
+    A split a merge subject names reads by its own subjects, so 2.1b's "part of" keeps its claim
+    under a row that landed whole. A split no subject names reads as its row: a row that landed
+    whole landed its splits with it, and a fresh follow-up claim that has commits main lacks, or is
+    checked out in a worktree, is kept by rules 3 and 2 whatever its id reads as.
+    """
     if id_ in states["rows"]:
-        return states["rows"][id_]
+        return states["rows"][id_], id_
     if id_.startswith("issue-"):
-        return states["tickets"].get(id_, "open")
-    if id_[-1].isalpha() and id_[:-1] in states["rows"]:
-        return states["splits"].get(id_, "open")
-    return "unknown"
+        return states["tickets"].get(id_, "open"), id_
+    row = id_[:-1]
+    if id_[-1].isalpha() and row in states["rows"]:
+        if id_ in states["splits"]:
+            return states["splits"][id_], id_
+        return states["rows"][row], f"{id_} (as its row {row})"
+    return "unknown", id_
 
 
 def merged_pull_request(branch: str) -> tuple[bool, str]:
@@ -148,21 +169,22 @@ def finished(branch: str, states: dict) -> tuple[bool, str]:
         if not OVERNIGHT.match(branch):
             return False, "its name is no overnight/<date>, so nothing says which run it is"
         return merged_pull_request(branch)
-    # A name that carries no id the roadmap knows is no claim a session could take: since ADR-0020 a
-    # claim names a plan row, a split of one or an issue, so such a name -- task/ticket-71-...,
-    # task/2.7a-... -- is left over from the archived tracker, and its work alone decides it.
+    # A name that carries no id the roadmap knows is no claim a session could take: ADR-0020 made
+    # every ticket a GitHub issue, so a live claim names a plan row, a split of one or issue-<n>, and
+    # such a name -- task/ticket-71-..., task/2.7a-... -- is left over from the archived tracker, and
+    # its work alone decides it.
     match = TASK.match(branch)
     if not match:
         return True, "its name carries no task id, so it claims nothing a session could take"
     ids = [normal(id_) for id_ in re.split(r"-and-", match.group(1))]
     claimed = []
     for id_ in ids:
-        state = id_state(id_, states)
+        state, named = id_state(id_, states)
         if state == "unknown":
             continue
         if state != "landed":
-            return False, f"{id_} is {state}, so the branch is its claim"
-        claimed.append(id_)
+            return False, f"{named} is {state}, so the branch is its claim"
+        claimed.append(named)
     if not claimed:
         return True, (f"{' and '.join(ids)} {'names' if len(ids) == 1 else 'name'} no plan row, "
                       f"split or ticket, so it claims nothing a session could take")
@@ -180,8 +202,10 @@ def on_main(tip: str) -> tuple[bool, str]:
     if ancestor != 1:
         return False, "git could not compare its tip with origin/main, so its work is uncertain"
     # `git cherry` marks each commit the tip has and main lacks: `-` when main has a commit with the
-    # same patch id, `+` when it has none. It leaves merge commits out, which is why the merges are
-    # read on their own below. https://git-scm.com/docs/git-cherry
+    # same patch id, `+` when it has none (https://git-scm.com/docs/git-cherry). It leaves merge
+    # commits out, which its manual does not say and its source does: cmd_cherry walks with
+    # `revs.max_parents = 1` (https://github.com/git/git/blob/master/builtin/log.c), and the merge
+    # case in prune_branches_tests.py asserts it as its premise. So the merges are read below.
     cherry = git("cherry", MAIN, tip, check=False)
     if cherry.returncode != 0:
         return False, "git cherry could not compare it with origin/main, so its work is uncertain"
@@ -193,8 +217,9 @@ def on_main(tip: str) -> tuple[bool, str]:
     # A merge's own changes -- a conflict resolved by hand, an edit made while merging -- are in no
     # patch `git cherry` reads, and nothing can find them on main by patch id. So each merge the tip
     # has and main lacks must be the merge git makes unaided: `git merge-tree --write-tree` prints
-    # the tree a merge of the two parents gives, and exits 1 on a conflict
-    # (https://git-scm.com/docs/git-merge-tree). Any other merge leaves the work uncertain.
+    # the tree a merge of the two parents gives, exits 1 on a conflict, and exits with anything else
+    # when it cannot merge at all, as a git older than 2.38 does ("Exit status",
+    # https://git-scm.com/docs/git-merge-tree). Any other merge leaves the work uncertain.
     merges = git("rev-list", "--min-parents=2", f"{MAIN}..{tip}", check=False)
     if merges.returncode != 0:
         return False, "git could not list the merges on it, so its work is uncertain"
@@ -203,6 +228,9 @@ def on_main(tip: str) -> tuple[bool, str]:
         if len(parents) != 2:
             return False, f"merge {merge[:12]} has {len(parents)} parents, so its work is uncertain"
         unaided = git("merge-tree", "--write-tree", *parents, check=False)
+        if unaided.returncode not in (0, 1):
+            return False, (f"git could not re-make merge {merge[:12]} (merge-tree --write-tree "
+                           f"needs git 2.38): {last_line(unaided)}, so its work is uncertain")
         made = git("rev-parse", f"{merge}^{{tree}}").stdout.strip()
         if unaided.returncode != 0 or unaided.stdout.split()[:1] != [made]:
             return False, (f"merge {merge[:12]} has changes of its own, which nothing finds on "
@@ -238,7 +266,9 @@ def worktrees() -> dict[str, str]:
 
     Read from the porcelain listing, whose `branch refs/heads/<name>` line is the branch a worktree
     has checked out: https://git-scm.com/docs/git-worktree#_porcelain_format. A worktree whose
-    directory is gone is still listed, and still keeps its branch: removing it is for a person.
+    directory is gone is still listed, and still keeps its branch: removing it is for a person. A
+    worktree in the middle of a rebase or a bisect lists as `detached`, so its branch is not here;
+    `git branch -D` still refuses that branch, and `main` then keeps origin's copy with it.
     """
     found: dict[str, str] = {}
     path = ""
@@ -276,7 +306,9 @@ def remove(copy: Copy) -> str | None:
     current = git("rev-parse", "--verify", "--quiet", f"refs/heads/{copy.branch}", check=False)
     if current.stdout.strip() != copy.tip:
         return "its tip moved after it was judged"
-    # `git branch -D` refuses a branch any worktree has checked out, at the moment it deletes.
+    # `git branch -D` refuses a branch any worktree has checked out, or is rebasing or bisecting, at
+    # the moment it deletes: "cannot delete branch '<name>' used by worktree at '<path>'". The manual
+    # does not say so; prune_branches_tests.py's mid-rebase case holds it.
     done = git("branch", "-D", copy.branch, check=False)
     if done.returncode != 0:
         return f"git refused the delete: {last_line(done)}"
@@ -322,13 +354,21 @@ def main(argv: list[str]) -> int:
         return 1
 
     restore = []
+    # Branches whose copy here git would not delete. The local copy is judged first, so a refusal,
+    # which is git seeing a worktree use the branch where the porcelain listing does not, keeps
+    # origin's copy too: a session working there pushes to it.
+    held: set[str] = set()
     for verdict in verdicts:
         copy, reason = verdict.copy, verdict.reason
         if not arguments.delete:
             word = "delete" if verdict.delete else "keep"
+        elif verdict.delete and copy.where == "origin" and copy.branch in held:
+            word, reason = "kept", "the copy here was not deleted, so origin's is kept with it"
         elif verdict.delete:
             refused = remove(copy)
             word, reason = ("deleted", reason) if refused is None else ("kept", refused)
+            if refused is not None and copy.where == "local":
+                held.add(copy.branch)
             if refused is None:
                 restore.append(f"git branch {copy.branch} {copy.tip}" if copy.where == "local"
                                else f"git push origin {copy.tip}:refs/heads/{copy.branch}")

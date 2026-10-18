@@ -35,9 +35,10 @@ call's arguments and fails the merge, so no case gets past it. Any other call is
 python3 three times. Before its merge it runs tools/review_record.py beside it, and the double hands
 that call to the real interpreter, so every case reads its records with the real reader (#67). After
 the merge it derives the roadmap and then deletes the branches the merge finished, so the double
-fails any other call; tools/prune_branches_tests.py runs land.sh past a merge for those two. The merge body is an argument, so
-its bytes are in the record of the merge call, and they are what expose a wrong path: a body path
-checked in one directory and read in another reaches gh as other bytes or none.
+fails any other call; tools/prune_branches_tests.py runs land.sh past a merge for those two. The
+merge body is an argument, so its bytes are in the record of the merge call, and they are what
+expose a wrong path: a body path checked in one directory and read in another reaches gh as other
+bytes or none.
 
 **No detached housekeeping.** Each repository, clone and bare origin is made with `gc.auto=0` and
 `maintenance.auto=false`. The cases fetch and commit, which is when git may start `gc --auto` or

@@ -302,13 +302,15 @@ class EveryIdFormReadsItsOwnState(Case):
             "task/6.8-runbooks": "Merge task 6.8: the runbooks so far",
             "task/ticket-71-a05": "Merge pull request #45 from adammedford/task/ticket-71-a05",
             "task/2.7a-hosting-names-its-stages": "Merge part of task 2.7a: an archived ticket's id",
+            # The way 3.0a and 3.0b landed: inside the merge that landed their row whole.
+            "task/3.2a-landed-with-its-row": "Merge task 3.2: the options, the split's work in it",
         }
         for branch, subject in landed.items():
             self.commit(branch, branch.replace("/", "_") + ".txt")
             self.land(subject, branch)
         self.land("Merge part of task 1.5: the bucket, first half")
         for branch in ("task/2.1c-fresh-follow-up", "task/issue-90-not-yet", "task/9.9-nothing",
-                       "task/p2-1a-a-split-of-a-phase-2-row"):
+                       "task/p2-1a-a-split-of-a-phase-2-row", "task/Issue-91-upper-case"):
             self.commit(branch, branch.replace("/", "_") + ".txt")
 
         code, out, err = self.prune()
@@ -318,17 +320,26 @@ class EveryIdFormReadsItsOwnState(Case):
             "task/2.1-registry": ("delete", "2.1 is landed"),
             # 2.1 landed, yet its split's own merge said "part of": a live claim under a done row.
             "task/2.1b-follow-up": ("keep", "2.1b is part-landed, so the branch is its claim"),
-            # A split no subject names yet is a fresh claim, whatever its row says.
-            "task/2.1c-fresh-follow-up": ("keep", "2.1c is open, so the branch is its claim"),
+            # A split no subject names reads as its row, and a fresh follow-up claim of a landed
+            # row is kept by the work on it that main lacks.
+            "task/2.1c-fresh-follow-up": (
+                "keep",
+                "2.1c (as its row 2.1) is landed, and 1 commit on it has no equivalent on origin/main",
+            ),
+            # Its row landed whole with its work inside: a leftover, which the one-off pass clears.
+            "task/3.2a-landed-with-its-row": ("delete", "3.2a (as its row 3.2) is landed"),
             "task/3.0a-harness": ("delete", "3.0a is landed"),
             "task/issue-66-land-tests": ("delete", "issue-66 is landed"),
             "task/issue-67-review": ("keep", "issue-67 is part-landed, so the branch is its claim"),
             "task/issue-90-not-yet": ("keep", "issue-90 is open, so the branch is its claim"),
+            # Read in any case, as tools/roadmap.py reads a ticket id.
+            "task/Issue-91-upper-case": ("keep", "issue-91 is open, so the branch is its claim"),
             "task/1.2-and-1.5-network-and-bucket":
                 ("keep", "1.5 is part-landed, so the branch is its claim"),
             "task/i-3-abstractions": ("delete", "I-3 is landed"),
             "task/6.8-runbooks": ("keep", "6.8 is ongoing, so the branch is its claim"),
-            "task/p2-1a-a-split-of-a-phase-2-row": ("keep", "P2-1a is open, so the branch is its claim"),
+            "task/p2-1a-a-split-of-a-phase-2-row":
+                ("keep", "P2-1a (as its row P2-1) is open, so the branch is its claim"),
             # An id that names no row, split or ticket is no claim a session could take: since
             # ADR-0020 claims name a plan row, a split of one or an issue, so such a name is left
             # over from the archived tracker. Its work alone decides it.
@@ -437,6 +448,31 @@ class AMergesOwnChangesMustBeOnMainToo(Case):
             verdict, reason = verdicts[("task/2.1-registry", where)]
             self.assertEqual("kept", verdict, out)
             self.assertIn(f"merge {tip[:12]} has changes of its own", reason)
+        self.assertIn("task/2.1-registry", self.local())
+        self.assertIn("task/2.1-registry", self.remote())
+
+    def test_a_git_that_cannot_re_make_the_merge_keeps_the_branch_and_says_why(self):
+        # A git older than 2.38 has no `merge-tree --write-tree`, and exits 129 on it, which is
+        # neither the clean merge nor the conflict the check reads.
+        self.build(None)
+        real = os.readlink(self.bin / "git")
+        (self.bin / "git").unlink()
+        (self.bin / "git").write_text(
+            "#!/bin/bash\n"
+            "[ \"$1\" = merge-tree ] && { echo 'usage: git merge-tree <branch1> <branch2>' >&2; "
+            "exit 129; }\n"
+            f"exec {shlex.quote(real)} \"$@\"\n"
+        )
+        (self.bin / "git").chmod(0o755)
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        for where in ("local", "origin"):
+            verdict, reason = self.verdicts(out)[("task/2.1-registry", where)]
+            self.assertEqual("kept", verdict, out)
+            self.assertIn("git could not re-make merge", reason)
+            self.assertIn("needs git 2.38", reason)
         self.assertIn("task/2.1-registry", self.local())
         self.assertIn("task/2.1-registry", self.remote())
 
@@ -688,6 +724,34 @@ class AWorktreeKeepsItsBranch(Case):
         self.assertIn("task/2.1-registry", self.local())
         self.assertIn("task/2.1-registry", self.remote())
         self.assertTrue((tree / "registry.txt").exists())
+
+    def test_a_worktree_rebasing_a_finished_branch_keeps_it_here_and_on_origin(self):
+        # Mid-rebase, the porcelain listing calls the worktree detached and names no branch, so only
+        # git's own refusal at `git branch -D` sees the worktree; origin's copy is kept with it.
+        tip = self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        tree = self.scratch / "spa-2.1"
+        self.git("worktree", "add", "-q", str(tree), "task/2.1-registry")
+        stopped = subprocess.run(["git", "rebase", "-q", "--exec", "false", "HEAD~1"], cwd=tree,
+                                 env=self.env, capture_output=True, text=True, check=False)
+        self.assertNotEqual(0, stopped.returncode, "the premise: the rebase stops")
+        listing = self.git("worktree", "list", "--porcelain")
+        self.assertNotIn("branch refs/heads/task/2.1-registry", listing,
+                         "the premise: the listing names no branch for a worktree mid-rebase")
+        self.assertEqual(tip, self.git("rev-parse", "task/2.1-registry"))
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        verdicts = self.verdicts(out)
+        verdict, reason = verdicts[("task/2.1-registry", "local")]
+        self.assertEqual("kept", verdict, out)
+        self.assertIn("used by worktree", reason)
+        self.assertEqual(("kept", "the copy here was not deleted, so origin's is kept with it"),
+                         verdicts[("task/2.1-registry", "origin")])
+        self.assertIn("task/2.1-registry", self.local())
+        self.assertIn("task/2.1-registry", self.remote())
+        self.assertIn("prune_branches: deleted 0 and kept 2.", out)
 
 
 class LandingDeletesWhatItFinished(Case):

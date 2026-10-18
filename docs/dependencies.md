@@ -9,7 +9,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
-| Git | 2.36+ (`--remerge-diff` for A-05 merge audits) | `xcode-select --install` | Everything |  |
+| Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
