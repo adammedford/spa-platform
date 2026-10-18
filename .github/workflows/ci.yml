@@ -2,8 +2,8 @@
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
-# the review record reader it runs, of the local check, tools/check.sh, and of tools/preflight.sh,
-# whether every tracked shell script parses, and --
+# the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh and of
+# the branch cleanup land.sh runs, whether every tracked shell script parses, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
@@ -199,6 +199,15 @@ jobs:
         # Its companion runs the real script with a Terraform double and asserts only those rows.
         run: python3 -I tools/preflight_tests.py
 
+      - name: A landing deletes the branches it finished, and keeps and lists every other
+        # tools/prune_branches.py deletes branches, locally and on origin, and a deleted branch with
+        # work on it is work lost, so every rule that keeps one is held here (#71): a claim of a row
+        # the roadmap does not call landed, a worktree, commits or a merge resolution main lacks, and
+        # a push to origin after the check. Its companion runs the real script against real git in
+        # throwaway repositories, with a bare origin and a gh double, and runs tools/land.sh past a
+        # merge, which tools/land_tests.py never does, to see the landing delete what it finished.
+        run: python3 -I tools/prune_branches_tests.py
+
   scripts-bash-3-2:
     name: Scripts under bash 3.2
     runs-on: macos-latest
@@ -231,6 +240,13 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/preflight_tests.py
+
+      - name: tools/land.sh past its merge, and the cleanup it runs, under the bash 3.2 macOS ships
+        # The lines land.sh runs after its merge are reached by no other companion, and a landing on
+        # this Mac runs them under 3.2.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/prune_branches_tests.py
 
       - name: Every tracked shell script parses under bash 3.2
         # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails

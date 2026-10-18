@@ -140,7 +140,10 @@ job runs.
 `tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
 which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
 python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one for
-its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs.
+its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs. The branch cleanup
+`tools/land.sh` runs after its merge, `tools/prune_branches.py`, has `tools/prune_branches_tests.py`
+(#71), also in both jobs: real git with a bare origin, a gh double, and the one set of cases that
+runs `tools/land.sh` past its merge, because that double's merge really merges.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,

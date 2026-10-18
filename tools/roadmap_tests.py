@@ -203,6 +203,61 @@ class JsonModeTests(Documents):
             self.assertIn("'9.9'", self.errors.getvalue())
 
 
+class SplitsAndTicketsTests(Documents):
+    """#71: a split of a row and a ticket each read by their own merge subjects.
+
+    tools/prune_branches.py deletes a claim branch only when the id its name carries is done, and a
+    split's plan row cannot say: 2.1 landed whole, and then a follow-up split of it, 2.1b, merged
+    "part of", so 2.1b's claim is live under a landed row. A ticket is no plan row at all. So --json
+    reports each by the subjects naming it, in the forms docs/agents/landing-work.md fixes.
+    """
+
+    SUBJECTS = [
+        "Merge part of task 2.1b: the validator reports a timeout above the maximum",
+        "Merge task 2.1: registry validator, schema check and per-entry fingerprint",
+        "Merge task 3.0a: one half of the G0 spike",
+        "Merge pull request #17 from adam/task/1.4a-cell-ecs-terraform",
+        "Merge part of task issue-67: land.sh merges only a reviewed head",
+        "Merge task issue-66: land.sh's test companion runs the real script",
+        "Merge task Issue-70: the rest of the JSON mode",
+        "Merge part of task issue-70: tools/roadmap.py --json",
+        "Merge tasks issue-68 and issue-69: two tickets in one merge",
+        "Task issue-72: a branch's own commit, which lands nothing",
+        "Merge part of task 6.8a: a split of the stage with no gate",
+    ]
+
+    def derived(self):
+        code, output = self.invoke(["--json"])
+        self.assertEqual(0, code, self.errors.getvalue())
+        return json.loads(output)
+
+    def test_a_split_reads_by_its_own_subjects_whatever_its_row_says(self):
+        derived = self.derived()
+        self.assertEqual(
+            {"2.1b": "part-landed", "3.0a": "landed", "1.4a": "landed", "6.8a": "part-landed"},
+            derived["splits"],
+        )
+        # In the plan's order of the rows they split, as the rows are listed.
+        self.assertEqual(["1.4a", "2.1b", "3.0a", "6.8a"], list(derived["splits"]))
+        # The rows themselves read as they always have: a split never lands its row.
+        self.assertEqual("landed", derived["rows"]["2.1"])
+        self.assertEqual("part-landed", derived["rows"]["3.0"])
+        self.assertEqual("part-landed", derived["rows"]["1.4"])
+
+    def test_a_ticket_reads_by_its_own_subjects_and_never_reaches_the_rows(self):
+        derived = self.derived()
+        self.assertEqual(
+            ["issue-66", "issue-67", "issue-68", "issue-69", "issue-70"], list(derived["tickets"])
+        )
+        self.assertEqual(
+            {"issue-66": "landed", "issue-67": "part-landed", "issue-68": "landed",
+             "issue-69": "landed", "issue-70": "landed"},
+            derived["tickets"],
+        )
+        self.assertEqual(roadmap.plan_rows(self.root), list(derived["rows"]))
+        self.assertNotIn("issue-66", derived["rows"])
+
+
 class LandedInsideAMergeTests(unittest.TestCase):
     """#70: rows that landed inside a merge whose own subject names no id read as landed.
 

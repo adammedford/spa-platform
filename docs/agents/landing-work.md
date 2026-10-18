@@ -70,6 +70,19 @@ being finished, add an `Outstanding:` line saying what it still owes, and an
 `Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
 branch is deleted when the **task** is done, not when a pull request merges.
 
+**`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
+--delete` (#71). A `task/*` branch goes, locally and on `origin`, once every id its name carries
+reads as landed in `tools/roadmap.py --json`, which is to say a merge subject of the first form
+above named it; a name whose ids are no plan row, split or ticket, left from the archived tracker,
+claims nothing and is held to the rest of this paragraph alone; an `overnight/*` branch goes once
+its pull request has merged. Either goes only when its current tip's work is on `main`, as an
+ancestor or as patch-equivalent commits with no merge carrying changes of its own, and no worktree
+has it checked out, and a push to it on `origin` since it was checked keeps it there. Everything
+else is listed with the reason it stays. A part-landed row keeps its claim, because the claim is how
+the next session knows the row is taken. Run without `--delete` from a checkout at `origin/main`,
+the script says what it would do and deletes nothing; with it, it clears what an earlier landing
+left, by the same rule.
+
 A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
 request open. Merged is not done.
 
