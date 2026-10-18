@@ -24,12 +24,6 @@ public static class RegistryValidator
     private static readonly JsonDocumentOptions Strict = new() { AllowDuplicateProperties = false };
 
     /// <summary>
-    /// The schema bounds <c>timeoutSeconds</c> below only ("the plan states no upper bound"), but the
-    /// model is a <see cref="TimeSpan"/>, and <see cref="TimeSpan.FromSeconds(long)"/> throws above this.
-    /// </summary>
-    private static readonly long MaximumTimeoutSeconds = TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond;
-
-    /// <summary>
     /// Checks a registry document against <c>contracts/registry.schema.json</c>, then every rule the
     /// schema cannot express, and models it. Any error rejects the document whole.
     /// </summary>
@@ -168,12 +162,6 @@ public static class RegistryValidator
             string apiAt = $"{at}/apis/{index}";
             Unique(findings, names, api["name"]!.GetValue<string>(), index, RegistryRules.DuplicateApiName, $"{apiAt}/name", "apis[].name", $"{at}/apis");
 
-            if (!JsonInteger.TryRead(api["timeoutSeconds"]!, out long timeout) || timeout > MaximumTimeoutSeconds)
-            {
-                findings.Error(RegistryRules.IntegerOutOfRange, $"{apiAt}/timeoutSeconds",
-                    $"timeoutSeconds is above {MaximumTimeoutSeconds}, the longest timeout a TimeSpan holds.");
-            }
-
             string upstream = api["upstream"]!.GetValue<string>();
             if (HostPolicy.PortAboveMaximum(upstream[(upstream.IndexOf("://", StringComparison.Ordinal) + 3)..]))
             {
@@ -230,7 +218,8 @@ public static class RegistryValidator
                 ClientSecretRef: oauth["clientSecretRef"]!.GetValue<string>(),
                 Scopes: Strings(oauth["scopes"]!.AsArray()),
                 Resource: oauth["resource"]?.GetValue<string>()),
-            // Absent apis: an app with no upstream (contracts/README.md, "Using the schemas").
+            // Absent apis: an app with no upstream (contracts/README.md, "Using the schemas"). The schema's
+            // maximum on timeoutSeconds, the proxy's ceiling (ADR-0019), is far inside what a TimeSpan holds.
             Apis: entry["apis"] is JsonArray apis
                 ? [.. apis.Select(api => new ApiDefinition(
                     api!["name"]!.GetValue<string>(),

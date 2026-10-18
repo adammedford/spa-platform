@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Platform.Abstractions;
 
@@ -280,22 +281,60 @@ public sealed class RegistryValidatorTests
     }
 
     [Fact]
-    public void The_G2_schema_accepts_the_proxy_ceiling_and_rejects_larger_timeouts()
+    public void A_timeout_at_the_contract_ceiling_is_accepted_and_modelled()
     {
-        RegistryValidation atCeiling = RegistryValidator.Validate(Respell("timeoutSeconds", "2147483"), Examples.Policy(), null);
-        Assert.True(atCeiling.IsValid, string.Join('\n', atCeiling.Errors));
-        Assert.Equal(TimeSpan.FromSeconds(2147483), Assert.Single(Assert.Single(atCeiling.Apps).Apis).Timeout);
+        long ceiling = Examples.TimeoutSecondsMaximum();
 
-        // Schema validation runs before model conversion, so it rejects even integers a TimeSpan
-        // could hold. ADR-0019 makes applicability to the proxy the contract's bound.
-        foreach (string spelling in new[] { "2147484", "922337203685", "922337203686" })
-        {
-            RegistryValidation above = RegistryValidator.Validate(Respell("timeoutSeconds", spelling), Examples.Policy(), null);
-            Assert.False(above.IsValid);
-            Assert.Empty(above.Apps);
-            RegistryIssue error = Assert.Single(above.Errors);
-            Assert.Equal((RegistryRules.Schema, "/apps/0/apis/0/timeoutSeconds"), (error.Rule, error.Path));
-        }
+        RegistryValidation result = RegistryValidator.Validate(
+            Respell("timeoutSeconds", ceiling.ToString(CultureInfo.InvariantCulture)), Examples.Policy(), null);
+
+        Assert.True(result.IsValid, string.Join('\n', result.Errors));
+        Assert.Equal(TimeSpan.FromSeconds(ceiling), Assert.Single(Assert.Single(result.Apps).Apis).Timeout);
+    }
+
+    /// <summary>
+    /// ADR-0019: above the contract's <c>maximum</c> the proxy would apply a different limit from the
+    /// one stated, so the refusal is the README row "A schema-valid integer the platform cannot hold
+    /// or apply", reported under its own id rather than as a generic schema finding.
+    /// </summary>
+    [Fact]
+    public void One_second_above_the_contract_ceiling_is_out_of_range_and_says_why()
+    {
+        long ceiling = Examples.TimeoutSecondsMaximum();
+
+        RejectsTimeoutAsOutOfRange((ceiling + 1).ToString(CultureInfo.InvariantCulture), ceiling);
+    }
+
+    /// <summary>
+    /// The first is the validator's old <c>TimeSpan</c> bound and the second one second above it, the
+    /// first value that bound refused. The last two are beyond Int64, which the schema still reads as
+    /// integers (contracts/README.md, the same row).
+    /// </summary>
+    [Theory]
+    [InlineData("922337203685")]
+    [InlineData("922337203686")]
+    [InlineData("1e30")]
+    [InlineData("9223372036854775808")]
+    public void Every_timeout_above_the_contract_ceiling_is_out_of_range(string spelling) =>
+        RejectsTimeoutAsOutOfRange(spelling, Examples.TimeoutSecondsMaximum());
+
+    private static void RejectsTimeoutAsOutOfRange(string spelling, long ceiling)
+    {
+        RegistryValidation result = RegistryValidator.Validate(Respell("timeoutSeconds", spelling), Examples.Policy(), null);
+
+        Assert.False(result.IsValid);
+        Assert.Empty(result.Apps);
+        RegistryIssue error = Assert.Single(result.Errors);
+        Assert.Equal((RegistryRules.IntegerOutOfRange, "/apps/0/apis/0/timeoutSeconds"), (error.Rule, error.Path));
+        AssertNamesTheCeilingAndWhy(error.Message, ceiling);
+    }
+
+    /// <summary>The ceiling as a number, and the reason: the proxy could not apply a longer one as written.</summary>
+    internal static void AssertNamesTheCeilingAndWhy(string message, long ceiling)
+    {
+        Assert.Contains(ceiling.ToString(CultureInfo.InvariantCulture), message, StringComparison.Ordinal);
+        Assert.Contains("proxy", message, StringComparison.Ordinal);
+        Assert.Contains("as written", message, StringComparison.Ordinal);
     }
 
     /// <summary>The contract example's text with one integer's spelling changed and nothing else.</summary>

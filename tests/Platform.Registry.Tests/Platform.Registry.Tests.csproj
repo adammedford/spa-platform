@@ -19,4 +19,10 @@
     <None Include="../../fixtures/apps/*.json" Link="examples/apps/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The registry schema itself, so the bound the validator reports is checked against the
+       contract's own number rather than a copy of it (task 2.1b, ADR-0019). -->
+  <ItemGroup>
+    <None Include="../../contracts/registry.schema.json" Link="examples/registry.schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
