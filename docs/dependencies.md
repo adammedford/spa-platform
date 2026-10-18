@@ -113,6 +113,10 @@ the image's `/bin/bash` changes, and bash 5.2.21 on `ubuntu-latest` (Ubuntu 24.0
 Homebrew's bash first on PATH runs bash 5 too, but a newer one (5.3.20 on 18 October 2026), which no
 job runs.
 
+`tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
+which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
+python3, dotnet, terraform and the smoke test, and git is real.
+
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
 and no job runs 3.9 for any of them.
