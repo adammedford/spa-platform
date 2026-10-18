@@ -33,8 +33,8 @@ a rule of its own (#70). It prints, from the reading the blocks are written from
      "rows": {"I-1": "landed", ..., "1.3": "part-landed", ..., "6.8": "ongoing", ...}}
 
 with every plan row in the plan's order: landed, part-landed, open, or ongoing for a row of a stage
-with no gate. Where the answer would not be whole -- a shallow clone, a ladder that does not line up
-with the plan -- it exits 1 with nothing on stdout.
+with no gate. Where the answer would not be whole -- a shallow clone, a git that answers with no
+history, a ladder that does not line up with the plan -- it exits 1 with nothing on stdout.
 
 The generated text holds no date and no commit id on purpose. It is a function of the tags, the
 merge subjects and the plan, so --check stays quiet until one of those changes, and the push that
@@ -521,6 +521,16 @@ def main(argv: list[str]) -> int:
             "state is derived from are not all here."
         )
         return 0
+
+    if arguments.json and not subjects(root):
+        # `run` turns a git that fails -- a wrong GIT_DIR, a repository git will not read -- into
+        # empty output, and no subjects reads as no row landed: every row open, exit 0, which sends
+        # finished rows back out for work (#70). A repository with a plan has commits.
+        say(
+            "roadmap: no state printed: git returned no commit subjects here, so every row would "
+            "read as open."
+        )
+        return 1
 
     closed = tags(root)
     counts = counted(stages, landed(root, rows))

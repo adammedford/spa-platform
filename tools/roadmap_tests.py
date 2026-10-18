@@ -186,11 +186,16 @@ class JsonModeTests(Documents):
 
     def test_no_state_is_printed_when_it_would_not_be_whole(self):
         # A program reads stdout as the answer, so a partial one must not reach it: a shallow clone
-        # lacks the subjects, and a ladder that does not line up with the plan has no row count.
+        # lacks the subjects, a git that fails returns none, and a ladder that does not line up with
+        # the plan has no row count.
         shallow = patch.object(roadmap, "shallow", return_value=True)
         with self.subTest(case="shallow clone"), shallow:
             self.assertEqual((1, ""), self.invoke(["--json"]))
             self.assertIn("shallow clone", self.errors.getvalue())
+        silent = patch.object(roadmap, "subjects", return_value=[])
+        with self.subTest(case="git returned no history"), silent:
+            self.assertEqual((1, ""), self.invoke(["--json"]))
+            self.assertIn("no commit subjects", self.errors.getvalue())
         with self.subTest(case="a cited row the plan lacks"):
             path = self.root / roadmap.ROADMAP
             path.write_text(path.read_text() + "\nCites `9.9`.\n")
