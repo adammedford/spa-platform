@@ -3,6 +3,11 @@
 One file per decision, numbered, in the format every file here follows: status, date, deciders,
 plan ref, then Context, Decision, Alternatives rejected, Consequences, Evidence.
 
+A draft carries no number until it is committed. It is titled, and cited, as `ADR draft: <title>`,
+and the session that commits it takes the next free number at that moment. A scripted session
+drafts an ADR and never commits one (ADR-0021 decision 4), so a number chosen while drafting is
+only the one free then, and another ADR can take it before the draft lands (#116).
+
 ADR-0001 to ADR-0012 restate decisions D1 to D12 from the Plan tab, which is exported to
 `docs/plan/01-plan.md`. The plan is a **frozen export** whose source of truth is the Claude Doc, so
 it is never edited in place. These files are the **live decision record**: a decision made or
