@@ -85,8 +85,10 @@ branch is deleted when the **task** is done, not when a pull request merges.
 commands that recreate each deleted branch at its old tip:
 `pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
 `git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
-cannot write that file stops deleting, and the last line says it stopped (#115). A `task/*`
-branch goes, locally and on `origin`, once every id its name carries
+cannot write that file stops deleting, and the last line says it stopped (#115). A command
+recreates its branch while the repository still has the commit it names: a tip `main` does not
+reach, one whose work landed only as patch-equivalents, has no other copy once git's garbage
+collection prunes it. A `task/*` branch goes, locally and on `origin`, once every id its name carries
 reads as landed in `tools/roadmap.py --json`, as a merge subject of the first form above makes it,
 and a split no merge subject names reads as its row; a name whose ids are no plan row, split or
 ticket, left from the archived tracker, claims nothing and is held to the rest of this paragraph

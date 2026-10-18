@@ -178,6 +178,10 @@ A change to one cites its authority: an acceptance criterion of the ticket it se
 human wrote or approved that ticket, or a confirmed answer. Adding a change request is not a change
 to one.
 
+**Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
+common directory. Concurrent sessions share it, so a session's branch work happens in a linked
+worktree of its own (`docs/agents/landing-work.md`, "Take a task").
+
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
 give its own pull request. _Avoid_: approval, sign-off.
