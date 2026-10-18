@@ -7,7 +7,7 @@ namespace Platform.Registry;
 /// Reads a JSON Schema <c>integer</c> as the platform's <see cref="long"/>. Draft 2020-12 calls any
 /// number with a zero fractional part an integer, so <c>30</c>, <c>30.0</c> and <c>3e1</c> all pass
 /// <c>"type": "integer"</c> (https://json-schema.org/draft/2020-12/json-schema-core#section-6.3), and
-/// the schemas bound no upper value for <c>revision</c> or <c>timeoutSeconds</c>. <see cref="JsonElement.TryGetInt64"/>
+/// the schema bounds no upper value for <c>revision</c>. <see cref="JsonElement.TryGetInt64"/>
 /// accepts only the first spelling and only within Int64
 /// (https://learn.microsoft.com/dotnet/api/system.text.json.jsonelement.trygetint64), so a reader that
 /// trusted the schema threw on a schema-valid document instead of reporting it.
