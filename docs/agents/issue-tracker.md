@@ -65,12 +65,13 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
   and ticks or unticks an acceptance box only for work done or undone. The overnight grill
   comments; it never rewrites. A `Confirm` comment is the human's act: no agent session writes one.
 - **Current claims are the issue's fields; everything written is dated.** What an issue claims now
-  is its state, labels, assignee and blocked-by relationships, corrected in place, and its body
-  under the rule above; `docs/agents/triage-labels.md` → Lifecycle says which field holds which
-  state. A comment, a merge body and an archived ticket file are records: true on the day they were
-  written, and never rewritten. A later truth is a new comment. So a body states no status in prose
-  ("remains future work"); where it must say what has landed, it cites the merge. Archived overnight
-  ticket 66 carried such a sentence past the merge of its own work, because no check reads one.
+  is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
+  its body under the rule above; `docs/agents/triage-labels.md` → "Lifecycle: not labels" says
+  which field holds which state. A comment, a merge body and an archived ticket file are records:
+  true on the day they were written, and never rewritten. A later truth is a new comment. So a body
+  states no status in prose ("remains future work"); where it must say what has landed, it cites the
+  merge. Archived overnight ticket 66 carried such a sentence past the merge of its own work,
+  because no check reads one.
 - **An issue is held open by its own scope.** It closes when what its body asks for has landed,
   been answered or been declined, and its `## Answer` comment says where each part went, naming
   anything declined. A spec's required work is its sub-issues, and the spec closes when they are
