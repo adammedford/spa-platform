@@ -153,7 +153,8 @@ bare "session" wherever the gateway's sessions (session record, session key) cou
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
-cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
+cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
+spec.
 
 **Spec** — the statement of a feature's problem, solution and acceptance that its tickets are cut
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
@@ -164,12 +165,18 @@ recommendation as decided instead of stopping for the human. Given per run, and 
 run's `Overnight <date>` issue. Not "approval".
 
 **Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
-the night. Provisional until confirmed; nothing is committed, rewritten or filed on it alone. Not
-"accepted".
+the night. Provisional until confirmed: a lane's code may rest on it until the human lands, but no
+steering document, ticket body or new ticket does. Not "accepted".
 
 **Confirmed answer** — an answer the human wrote, or a pre-accepted answer the human confirmed on
-the run's `Overnight <date>` issue. The only answer a session applies to a document, a ticket body
-or a new ticket.
+the run's `Overnight <date>` issue. The only answer a session applies to a steering document, a
+ticket body or a new ticket.
+
+**Steering document** — a document a session steers by: `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`,
+`OWNERSHIP.md`, `CODING_STANDARDS.md`, the agent guides in `docs/agents/`, the ADRs and `contracts/`.
+A change to one cites its authority: an acceptance criterion of the ticket it serves, where the
+human wrote or approved that ticket, or a confirmed answer. Adding a change request is not a change
+to one.
 
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
