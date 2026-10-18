@@ -19,8 +19,9 @@ wraps each page in an outer array (`gh api --help`), which is why every fixture 
 
 **Each refusal has a case that shows it firing**, against an input that would merge if the rule were
 gone: a hold, a record of an earlier head, an abbreviated or malformed line, a sha mentioned in
-passing, a review's own `commit_id`, a review that is not `COMMENTED`. docs/agents/review.md ->
-"Landing or holding" fixes the record line these cases hold the reader to.
+passing, a review's own `commit_id`, a review that is not `COMMENTED`, a line posted from outside
+the repository. docs/agents/review.md -> "Landing or holding" fixes the record line these cases hold
+the reader to.
 
 Run: python3 -I tools/review_record_tests.py
 """
@@ -49,16 +50,24 @@ def record(head: str, verdict: str, base: str = BASE) -> str:
     return f"Reviewed {head} against {base}: {verdict}"
 
 
-def comment(n: int, body: str | None, at: str) -> dict:
+def comment(n: int, body: str | None, at: str, association: str = "OWNER",
+            login: str = "adammedford") -> dict:
     return {"id": n, "html_url": f"{PULL}#issuecomment-{n}", "body": body, "created_at": at,
-            "updated_at": at, "user": {"login": "adammedford"}, "author_association": "OWNER"}
+            "updated_at": at, "user": {"login": login}, "author_association": association}
 
 
 def review(n: int, body: str | None, at: str | None, state: str = "COMMENTED",
-           commit_id: str = EARLIER) -> dict:
+           commit_id: str = EARLIER, association: str = "OWNER",
+           login: str = "adammedford") -> dict:
     return {"id": n, "html_url": f"{PULL}#pullrequestreview-{n}", "body": body, "state": state,
-            "submitted_at": at, "commit_id": commit_id, "user": {"login": "adammedford"},
-            "author_association": "OWNER"}
+            "submitted_at": at, "commit_id": commit_id, "user": {"login": login},
+            "author_association": association}
+
+
+# GitHub's author_association values for an account outside the repository: everything but OWNER,
+# MEMBER and COLLABORATOR, from enum CommentAuthorAssociation in
+# https://docs.github.com/public/fpt/schema.docs.graphql
+OUTSIDE = ("CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE")
 
 
 class Outcome:
@@ -133,6 +142,22 @@ class ClearedTests(ReaderTestCase):
                               [comment(31, record(HEAD, "merge"), "2026-10-18T01:00:00Z")]],
                  "reviews": []}
         self.assertCleared(read(pages=pages), f"{PULL}#issuecomment-31")
+
+    def test_a_record_from_each_account_the_repository_lets_in(self):
+        # The owner is the only one today; a collaborator is who reopens the decision (#67).
+        for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+            with self.subTest(association=association):
+                outcome = read(comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z",
+                                                 association=association)])
+                self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_a_later_hold_from_outside_the_repository_does_not_hold(self):
+        # The other half of the case below: an outside account can neither clear a head nor stop
+        # one, so a stranger's hold cannot force the lander onto --unreviewed.
+        outcome = read(comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z"),
+                                 comment(12, record(HEAD, "hold"), "2026-10-18T02:00:00Z",
+                                         association="NONE", login="a-stranger")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
 
     def test_the_base_is_not_compared(self):
         # main's protection sets strict: false, leaving base drift to CI, so a record names its base
@@ -217,6 +242,21 @@ class RefusalTests(ReaderTestCase):
                 outcome = read(reviews=[review(21, record(HEAD, "merge"), at, state=state)])
                 self.assertRefused(outcome, f"no review record names {HEAD}")
 
+    def test_a_record_from_outside_the_repository(self):
+        # The repository is public, so any signed-in GitHub user can comment on a pull request and
+        # write the line; it is not the reviewing agent session's record.
+        for association in OUTSIDE:
+            with self.subTest(association=association):
+                outcome = read(
+                    comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z",
+                                      association=association, login="a-stranger")],
+                    reviews=[review(21, record(HEAD, "merge"), "2026-10-18T01:00:01Z",
+                                    association=association, login="a-stranger")])
+                self.assertRefused(
+                    outcome, f"no review record names {HEAD}",
+                    f"posted by a-stranger, whose author_association is {association}",
+                    f"{PULL}#issuecomment-11", f"{PULL}#pullrequestreview-21")
+
     def test_a_dismissed_hold_still_leaves_an_earlier_merge_standing(self):
         # The other half of the case above: a review that is not COMMENTED is not read at all, so
         # it neither clears nor holds.
@@ -260,6 +300,12 @@ class InputTests(ReaderTestCase):
         entry = comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")
         del entry["html_url"]
         self.assertUnreadable(read(comments=[entry]), "html_url")
+
+    def test_a_record_with_no_author_association(self):
+        # Both listings carry the field, so its absence is input that is not GitHub's shape.
+        entry = comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")
+        del entry["author_association"]
+        self.assertUnreadable(read(comments=[entry]), "author_association")
 
     def test_an_empty_body_is_no_record_rather_than_unreadable(self):
         # GitHub returns a review with no summary as an empty body, and an older one as null.

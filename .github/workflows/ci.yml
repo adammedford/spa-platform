@@ -157,8 +157,9 @@ jobs:
         # tools/land.sh merges only a head whose latest review record says merge, and this is the
         # code that decides it (#67). Its companion feeds it GitHub's shapes of comments and reviews
         # built to trip each rule -- a hold, an earlier head, an abbreviated or malformed line, a sha
-        # in passing, a review's own commit_id -- because a guard nobody has seen refuse is a
-        # decoration, and the land.sh companion below runs only one case of each.
+        # in passing, a review's own commit_id, a line from outside the repository -- because a
+        # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
+        # case of each.
         run: python3 -I tools/review_record_tests.py
 
       - name: tools/land.sh refuses before it merges, merges only a reviewed head, and hands gh the body its caller named

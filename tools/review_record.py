@@ -35,9 +35,16 @@ them holds.
   read: https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request
 - A review that is not `COMMENTED`. The one account here cannot approve or request changes on its
   own pull request, a dismissed review was withdrawn, and a pending one is unsubmitted.
+- A line posted by an account from outside the repository. The repository is public, so any
+  signed-in GitHub user can comment on its pull requests, and a record comes only from the reviewing
+  agent session (Q7, Q8). GitHub's `author_association` on each comment and review says which: its
+  owner (`OWNER`), a member of the organisation that owns it (`MEMBER`) and a collaborator invited
+  to it (`COLLABORATOR`) are read; every other value, `CONTRIBUTOR` and `NONE` among them, neither
+  clears nor holds.
 
-Every comment and review here is written by the same GitHub account, so the reader cannot tell who
-wrote a record. It is a sequencing guard against haste, not a check of identity (Q3).
+On this repository the only such account is its owner's, which every agent session and the human
+share, so the reader cannot tell which of them wrote a record. It is a sequencing guard against
+haste, not a check of identity (Q3).
 
 The fields read are GitHub's REST shapes, and nothing else of them:
 https://docs.github.com/en/rest/issues/comments#list-issue-comments and
@@ -61,6 +68,13 @@ RECORD = re.compile(r"Reviewed (?P<head>[0-9a-f]{40}) against (?P<base>[0-9a-f]{
 # say why it did not count, never to clear anything.
 NEAR_MISS = re.compile(r"\breviewed\b.*\b[0-9a-fA-F]{7,}\b", re.IGNORECASE)
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# The author_association values of an account the repository has let in. Both REST listings carry
+# the field (the two pages cited above), and GitHub's schema says what each value means, enum
+# CommentAuthorAssociation in https://docs.github.com/public/fpt/schema.docs.graphql: OWNER "is the
+# owner of the repository", MEMBER "is a member of the organization that owns the repository",
+# COLLABORATOR "has been invited to collaborate on the repository". CONTRIBUTOR only "has previously
+# committed to the repository", which anyone whose commit was once merged has.
+REPOSITORY_ACCOUNTS = ("OWNER", "MEMBER", "COLLABORATOR")
 
 
 class Unreadable(Exception):
@@ -93,7 +107,7 @@ def when(entry: dict, field: str, name: str) -> datetime.datetime:
         raise Unreadable(f"a record in {name} has no {field} in GitHub's form: {value!r}") from None
 
 
-def read_entry(entry: dict, at_field: str, name: str, near_misses: list[str]) -> list[Record]:
+def read_entry(entry: dict, at_field: str, name: str, not_read: list[str]) -> list[Record]:
     body = entry.get("body") or ""
     if not isinstance(body, str):
         raise Unreadable(f"a body in {name} is not text")
@@ -103,7 +117,17 @@ def read_entry(entry: dict, at_field: str, name: str, near_misses: list[str]) ->
         match = RECORD.fullmatch(line)
         if match is None:
             if NEAR_MISS.search(line):
-                near_misses.append(f"{entry.get('html_url', name)}: {line}")
+                not_read.append(f"not in the record's form, so not read: "
+                                f"{entry.get('html_url', name)}: {line}")
+            continue
+        association = entry.get("author_association")
+        if not isinstance(association, str) or not association:
+            raise Unreadable(f"a record in {name} has no author_association")
+        if association not in REPOSITORY_ACCOUNTS:
+            login = (entry.get("user") or {}).get("login", "an unknown account")
+            not_read.append(f"posted by {login}, whose author_association is {association}, "
+                            f"from outside the repository, so not read: "
+                            f"{entry.get('html_url', name)}: {line}")
             continue
         url = entry.get("html_url")
         if not isinstance(url, str) or not url:
@@ -119,18 +143,18 @@ def records(listings: object) -> tuple[list[Record], list[str]]:
         if name not in listings:
             raise Unreadable(f"the input has no {name}")
     found: list[Record] = []
-    near_misses: list[str] = []
+    not_read: list[str] = []
     for entry in entries(listings["comments"], "comments"):
-        found += read_entry(entry, "created_at", "comments", near_misses)
+        found += read_entry(entry, "created_at", "comments", not_read)
     for entry in entries(listings["reviews"], "reviews"):
         if entry.get("state") == "COMMENTED":
-            found += read_entry(entry, "submitted_at", "reviews", near_misses)
-    return found, near_misses
+            found += read_entry(entry, "submitted_at", "reviews", not_read)
+    return found, not_read
 
 
 def judge(head: str, listings: object) -> tuple[str | None, list[str]]:
     """The URL of the record that clears `head`, or None and the lines that say why not."""
-    found, near_misses = records(listings)
+    found, not_read = records(listings)
     naming = [record for record in found if record.head == head]
     if naming:
         latest = max(record.at for record in naming)
@@ -145,8 +169,7 @@ def judge(head: str, listings: object) -> tuple[str | None, list[str]]:
         for record in others[-3:]:
             reasons.append(f"a record names {record.head} ({record.verdict}): {record.url}. A "
                            "review covers the head it read; commits pushed since need their own.")
-    for line in near_misses:
-        reasons.append(f"not in the record's form, so not read: {line}")
+    reasons += not_read
     reasons.append(f"the form, on a line of its own: {FORM}. docs/agents/review.md -> "
                    "Landing or holding.")
     return None, reasons

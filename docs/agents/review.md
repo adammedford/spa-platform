@@ -117,8 +117,10 @@ Reviewed <40-hex head> against <40-hex base>: hold
 - **Nothing else is a record**: not a sha mentioned in passing, which once named a head as where
   fixes went that only their writer had verified; not the `commit_id` GitHub stores on a review,
   which defaults to the newest commit whether or not the reviewer read it; not a review submitted
-  as an approval, a request for changes, or one later dismissed; and not a line in any other form,
-  backticks included.
+  as an approval, a request for changes, or one later dismissed; not a line posted by an account
+  from outside the repository, since it is public and anyone signed in to GitHub can comment (only
+  an `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR` is read); and not a line in any
+  other form, backticks included.
 
 Post it with the findings, from the session that ran the review:
 
@@ -136,7 +138,8 @@ EOF
 Merge with `tools/land.sh`, never `gh pr merge` alone. It reads the records with
 `tools/review_record.py`, refuses a head no record clears, pins the merge to the head the record
 names, and writes `Reviewed: <head> <record URL>` at the end of the merge body. #67 decided this.
-Every comment here is posted through one GitHub account, so a record cannot show who wrote it: the
+Every record the check reads is posted through the one GitHub account that owns this repository,
+which every agent session and the human share, so a record cannot show which of them wrote it: the
 check stops a merge made before its review, or after commits the review never saw, and cannot stop a
 session that writes the line without reviewing.
 

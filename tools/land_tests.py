@@ -97,12 +97,14 @@ RECORD_URL = f"https://github.com/adammedford/spa-platform/pull/{PR}#issuecommen
 REVIEWED = f"Reviewed: {HEAD} {RECORD_URL}"
 
 
-def record_comment(head: str, verdict: str, url: str = RECORD_URL) -> dict:
+def record_comment(head: str, verdict: str, url: str = RECORD_URL, association: str = "OWNER",
+                   login: str = "adammedford") -> dict:
     """A pull request comment carrying a review record, in the shape GitHub's REST API lists it:
     https://docs.github.com/en/rest/issues/comments#list-issue-comments. The line is written out
     here rather than read from the reader, which is the thing under test."""
     return {"html_url": url, "body": f"## Standards\n\nPASS.\n\nReviewed {head} against {BASE_SHA}: {verdict}\n",
-            "created_at": "2026-10-18T01:00:00Z", "user": {"login": "adammedford"}}
+            "created_at": "2026-10-18T01:00:00Z", "user": {"login": login},
+            "author_association": association}
 
 
 CLEARS = [record_comment(HEAD, "merge")]
@@ -506,10 +508,19 @@ class ReviewRecordRefusalTests(LandTestCase):
         result = case.run(PR, "--subject", "Merge task 9.9: x")
         self.assertNotCleared(case, result, "not in the record's form")
 
+    def test_a_record_from_outside_the_repository(self):
+        # The repository is public: any signed-in GitHub user can comment the line on a pull request.
+        case = Case(self, comments=[record_comment(HEAD, "merge", association="NONE",
+                                                   login="a-stranger")])
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertNotCleared(case, result, f"no review record names {HEAD}",
+                              "posted by a-stranger, whose author_association is NONE")
+
     def test_a_record_in_a_commented_review_clears_as_a_comment_does(self):
         review = {"html_url": f"https://github.com/adammedford/spa-platform/pull/{PR}#pullrequestreview-7",
                   "body": f"Reviewed {HEAD} against {BASE_SHA}: merge", "state": "COMMENTED",
-                  "submitted_at": "2026-10-18T01:00:00Z", "commit_id": HEAD}
+                  "submitted_at": "2026-10-18T01:00:00Z", "commit_id": HEAD,
+                  "user": {"login": "adammedford"}, "author_association": "OWNER"}
         case = Case(self, comments=[], reviews=[review])
         result = case.run(PR, "--subject", "Merge task 9.9: x")
         self.assertEqual(1, result.status, result.stderr)
