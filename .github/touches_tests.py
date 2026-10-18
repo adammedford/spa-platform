@@ -32,6 +32,19 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(half=half):
                 self.assertEqual(1, self.classify(half, ["docs/adr/0020-decision.md"]))
 
+    def test_what_decides_which_terraform_runs_triggers_the_terraform_half(self):
+        # Raising the floor changes what every root is checked with, so it has to be checked (#69).
+        for path in (".terraform-version", "tools/terraform-floor.sh"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("terraform", [path]))
+                self.assertEqual(1, self.classify("build", [path]))
+
+    def test_neighbours_of_those_paths_trigger_neither_half(self):
+        for path in ("docs/.terraform-version", ".terraform-version.bak", "tools/terraform-floor.sh.orig",
+                     "tools/scripts/terraform-floor.sh"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("terraform", [path]))
+
     def test_an_early_match_survives_a_path_list_larger_than_the_pipe_buffer(self):
         trailing = [f"docs/{i:05d}-{'a' * 100}.md" for i in range(3000)]
         for half, first in (("build", "Directory.Build.props"),
@@ -89,6 +102,10 @@ class WorkflowDecisionTests(unittest.TestCase):
     def test_a_schema_only_push_runs_build_and_tests(self):
         self.assertEqual({"build": "true", "terraform": "false"},
                          self.decide(["contracts/registry.schema.json"]))
+
+    def test_raising_the_floor_runs_the_terraform_job(self):
+        self.assertEqual({"build": "false", "terraform": "true"},
+                         self.decide([".terraform-version"], event="pull_request"))
 
     def test_a_change_in_both_halves_runs_both_jobs(self):
         self.assertEqual({"build": "true", "terraform": "true"},

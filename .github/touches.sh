@@ -2,7 +2,7 @@
 # Which half of the repository a change touches. Owner: integrator.
 #
 #     git diff --name-only <base>...<head> | .github/touches.sh build       # exit 0 when .NET changed
-#     git diff --name-only <base>...<head> | .github/touches.sh terraform   # exit 0 when infra/ changed
+#     git diff --name-only <base>...<head> | .github/touches.sh terraform   # exit 0 when infra/ or the floor changed
 #
 # tools/check.sh, which .githooks/pre-push runs, skips the build and Terraform when a change touches
 # neither half, and .github/workflows/ci.yml skips the same two jobs for the same reason. Those were
@@ -17,8 +17,9 @@ case "${1:-}" in
   # Contracts are embedded by Platform.Registry and read by behavior tests; nuget.config controls
   # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50).
   build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config)$' ;;
-  # Every Terraform root and module is under infra/.
-  terraform) pattern='^infra/' ;;
+  # Every Terraform root and module is under infra/. The floor's file and the helper that reads it
+  # decide which Terraform checks them, so raising the floor runs them too (#69).
+  terraform) pattern='^infra/|^\.terraform-version$|^tools/terraform-floor\.sh$' ;;
   *)
     # An unknown half is reported and answered yes, not no: both callers skip a check on a no, so a
     # typo here has to cost a build rather than save one.

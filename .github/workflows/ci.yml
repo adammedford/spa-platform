@@ -2,11 +2,12 @@
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
-# the review record reader it runs and of the local check, tools/check.sh, whether every tracked
-# shell script parses, and --
+# the review record reader it runs, of the local check, tools/check.sh, and of tools/preflight.sh,
+# whether every tracked shell script parses, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
-# for build inputs, and the Terraform roots validate for infra/. The hook shares these path patterns
+# for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
+# infra/ and the floor's own file and helper. The hook shares these path patterns
 # through .github/touches.sh. CI's decision step also runs both jobs for changes to its workflow,
 # the classifier or tools/smoke.sh, or when the base cannot be resolved.
 #
@@ -192,6 +193,12 @@ jobs:
         # runs it under 3.2.
         run: python3 -I tools/check_tests.py
 
+      - name: tools/preflight.sh names the Terraform floor and says whether this machine has it
+        # Preflight's floor row tells a person, or an overnight lane, whether the local check will run
+        # the Terraform CI runs, and prints the command that installs it where the check looks (#69).
+        # Its companion runs the real script with a Terraform double and asserts only those rows.
+        run: python3 -I tools/preflight_tests.py
+
   scripts-bash-3-2:
     name: Scripts under bash 3.2
     runs-on: macos-latest
@@ -218,6 +225,12 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/check_tests.py
+
+      - name: tools/preflight.sh's Terraform rows, under the bash 3.2 macOS ships
+        # Preflight is written for the bash 3.2 macOS ships, which is what a person on a Mac runs.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/preflight_tests.py
 
       - name: Every tracked shell script parses under bash 3.2
         # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
@@ -272,16 +285,35 @@ jobs:
     name: Terraform
     runs-on: ubuntu-latest
     needs: documents
-    # Only when infra/ changed; the header says why this is an `if` and why it says `!cancelled()`.
+    # Only when infra/ or the floor changed; the header says why this is an `if` and why it says `!cancelled()`.
     if: ${{ !cancelled() && needs.documents.outputs.terraform != 'false' }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: The floor .terraform-version names
+        id: terraform-floor
+        # The floor is the oldest Terraform the repository supports, and this job runs exactly it.
+        # One file names it and tools/check.sh reads the same file through the same function, so a
+        # result on a machine that has the floor holds here, and raising the floor is a one-line
+        # change (#69). The reader refuses anything but one exact version: setup-terraform takes a
+        # range or `latest` too (https://github.com/hashicorp/setup-terraform/blob/v3/action.yml),
+        # and would install the newest release that matched.
+        run: |
+          set -euo pipefail
+          . tools/terraform-floor.sh
+          if ! version="$(terraform_floor_read .terraform-version)"; then
+            echo "::error::.terraform-version does not name one exact version, such as 1.11.0."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "the floor is Terraform $version"
+
       - uses: hashicorp/setup-terraform@v3
         with:
-          # 1.11 is the floor: that release gave the S3 backend its native lock file, which is why
-          # no DynamoDB table exists anywhere in this platform.
-          terraform_version: 1.11.0
+          # The S3 backend's native lock file, which is why no DynamoDB table exists anywhere in
+          # this platform, first shipped in 1.10.0 and became generally available in 1.11.0, which
+          # is the floor: https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
+          terraform_version: ${{ steps.terraform-floor.outputs.version }}
           terraform_wrapper: false
 
       - name: Format
