@@ -9,7 +9,12 @@
 - **Evidence:** `spikes/g0/cognito/report-cognito.md` and `output-cognito.txt`, run 2026-10-16
   01:09Z against Cognito user pool `us-east-2_iRHq0u84V` in project `146873694665`. 19 expectations
   held, none failed, 5 findings. Its 24 cleanup revocation requests received successful HTTP
-  responses; no refresh checks followed that cleanup. The harness created nothing in AWS.
+  responses; no refresh checks followed that cleanup. The harness created nothing in AWS. That
+  pool was in the sample project the new AWS experience creates beside the one made for this
+  work, which is where the 2026-10-15 sitting had applied the identity root; the platform's own
+  pool, `us-east-2_7PJ6SDHlO`, was applied into the project made for the work on 2026-10-17. The
+  G0 findings above remain evidence from the original pool; the new pool has apply and
+  discovery-document evidence, not a repeat of those G0 probes.
 
 ## Context
 
