@@ -81,13 +81,66 @@ stages a feature they write rather than replace.
 
 ## Landing or holding
 
-A pull request is reviewed by a session other than the one that wrote the code, and its findings are
-answered before merge. Merge when nothing found is a defect: the spec is met, no assertion is
-unfailable on the thing it claims, and the diff stayed in its owner's paths. Record the rest as an
-`Outstanding:` line in the merge body, which `docs/agents/landing-work.md` requires anyway.
+Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
+`/code-review`, and its findings are answered before merge. No pull request is exempt by what it
+touches or where it came from: workstream and integrator work, a tracker-only or docs-only change, a
+generated one and an overnight run's integration branch each need a review of their exact head. A
+lane merged into an integration branch is covered by the review of the pull request that brings that
+branch to `main`, which also covers what no lane review saw: the integration merges, the reviewer's
+own fix commits and the roadmap refresh. The human's reading is the decision to land, not a review.
 
-Hold when a finding shows the change does not do what it says, or when the test that proves it
-cannot fail. Merge with `tools/land.sh`, never `gh pr merge` alone.
+Merge when nothing found is a defect: the spec is met, no assertion is unfailable on the thing it
+claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the
+merge body, which `docs/agents/landing-work.md` requires anyway. Hold when a finding shows the change
+does not do what it says, or when the test that proves it cannot fail.
 
-The integrator's own work has no second workstream to review it and merges on CI plus the human.
-That is the weakest link here, so it earns the thorough pass rather than the quick one.
+### The review record
+
+When both axes have reported, the reviewing session posts its verdict as a review record: one line,
+on a line of its own, in a pull request comment or in the body of a review submitted as a comment.
+
+```text
+Reviewed <40-hex head> against <40-hex base>: merge
+Reviewed <40-hex head> against <40-hex base>: hold
+```
+
+- **The head is the commit the review read**, `git rev-parse origin/<branch>` after the fetch the
+  review started from, and not whatever the branch points at when the record is posted. The base is
+  the commit it diffed against, `git merge-base origin/main origin/<branch>`. Both are written in
+  full, lowercase as git prints them: an abbreviated sha is not a record.
+- **A record covers that head and nothing pushed after it.** A commit pushed after the review, a fix
+  for its own findings included, needs a review of its own by an agent session that wrote none of
+  those commits. That review may cover only the commits since the last reviewed head. A merge of
+  `main` into the branch is such a commit, and its resolution is reviewed as "Standards" above says.
+- **The latest record naming the current head decides.** A hold answered without a new commit, a
+  finding shown not to be a defect, is cleared by the reviewer posting `merge` on the same head.
+- **Nothing else is a record**: not a sha mentioned in passing, which once named a head as where
+  fixes went that only their writer had verified; not the `commit_id` GitHub stores on a review,
+  which defaults to the newest commit whether or not the reviewer read it; not a review submitted
+  as an approval, a request for changes, or one later dismissed; and not a line in any other form,
+  backticks included.
+
+Post it with the findings, from the session that ran the review:
+
+```bash
+gh pr comment <n> --body-file - <<'EOF'
+## Standards
+...
+## Spec
+...
+
+Reviewed <40-hex head> against <40-hex base>: merge
+EOF
+```
+
+Merge with `tools/land.sh`, never `gh pr merge` alone. It reads the records with
+`tools/review_record.py`, refuses a head no record clears, pins the merge to the head the record
+names, and writes `Reviewed: <head> <record URL>` at the end of the merge body. #67 decided this.
+Every comment here is posted through one GitHub account, so a record cannot show who wrote it: the
+check stops a merge made before its review, or after commits the review never saw, and cannot stop a
+session that writes the line without reviewing.
+
+A merge that cannot wait for a review, a red `main` or no session free, uses
+`tools/land.sh --unreviewed "<reason>"`. Its review stays open: a record naming the merged head is
+posted on the merged pull request when the review runs, its findings land in a follow-up, and
+`docs/agents/landing-work.md` → "Gates" says what waits for it.
