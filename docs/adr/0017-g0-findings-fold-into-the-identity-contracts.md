@@ -13,7 +13,8 @@
   pool was in the sample project the new AWS experience creates beside the one made for this
   work, which is where the 2026-10-15 sitting had applied the identity root; the platform's own
   pool, `us-east-2_7PJ6SDHlO`, was applied into the project made for the work on 2026-10-17. The
-  findings are properties of Cognito, not of a pool, and hold for both.
+  G0 findings above remain evidence from the original pool; the new pool has apply and
+  discovery-document evidence, not a repeat of those G0 probes.
 
 ## Context
 
