@@ -324,25 +324,6 @@ class Case:
         OBSERVED.append(result.stderr)
         return result
 
-    def feed_fifo(self, test: unittest.TestCase, path: pathlib.Path, data: bytes):
-        """Makes a named pipe at `path` and writes `data` into it from a thread once land.sh opens
-        it to read. Opening a FIFO to write blocks until a reader opens it (POSIX open(),
-        https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html), which a case that
-        never reads would leave blocked, so the cleanup opens it to read without blocking first."""
-        os.mkfifo(path)
-        def write():
-            with open(path, "wb") as pipe:
-                pipe.write(data)
-        writer = threading.Thread(target=write, daemon=True)
-        writer.start()
-        def release():
-            if writer.is_alive():
-                reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-                writer.join(10)
-                os.close(reader)
-        test.addCleanup(release)
-        return writer
-
     def calls(self) -> list[list[str]]:
         names = sorted(self.log.glob("call-*"), key=lambda path: int(path.name.split("-")[1]))
         return [path.read_bytes().decode("utf-8", "surrogateescape").split("\0")[:-1]
@@ -363,6 +344,25 @@ class LandTestCase(unittest.TestCase):
                         f"no land: line containing {fragment!r} in:\n{result.stderr}")
         self.assertEqual(calls, case.calls())
         self.assertNoStrayCall(case)
+
+    def feed_fifo(self, path: pathlib.Path, data: bytes):
+        """Makes a named pipe at `path` and writes `data` into it from a thread once land.sh opens
+        it to read. Opening a FIFO to write blocks until a reader opens it (POSIX open(),
+        https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html), which a case that
+        never reads would leave blocked, so the cleanup opens it to read without blocking first."""
+        os.mkfifo(path)
+        def write():
+            with open(path, "wb") as pipe:
+                pipe.write(data)
+        writer = threading.Thread(target=write, daemon=True)
+        writer.start()
+        def release():
+            if writer.is_alive():
+                reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                writer.join(10)
+                os.close(reader)
+        self.addCleanup(release)
+        return writer
 
 
 class RefusalTests(LandTestCase):
@@ -721,7 +721,7 @@ class MergeCallTests(LandTestCase):
         for relative in (True, False):
             with self.subTest(relative=relative):
                 case = Case(self)
-                writer = case.feed_fifo(self, case.work / "body.fifo", self.BODY.encode())
+                writer = self.feed_fifo(case.work / "body.fifo", self.BODY.encode())
                 name = "body.fifo" if relative else str(case.work / "body.fifo")
                 result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", name)
                 self.assertMergeCalled(
