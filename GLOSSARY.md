@@ -174,6 +174,12 @@ Written only by a session that wrote none of the commits it covers. Its exact fo
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
 every refusal with its reason.
 
+**Landed** — the state of a plan row whose merge subject names it, in the form
+`docs/agents/landing-work.md` fixes. A row is **part-landed** when the subject says "part of", or
+when a split of the row merged. Landed is not done: a row is done when its tests pass in CI, it
+touched only its owner's paths and it leaves no change request open. _Avoid_: "merged" for landed,
+and "landed" for done.
+
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
 Phase 1 accepted. Phase 2 adds G6 to G8.
@@ -182,6 +188,15 @@ Phase 1 accepted. Phase 2 adds G6 to G8.
 the roadmap, the build, Terraform's format and validate. A check holds a push to the rules; a gate is
 the ladder's checkpoint. Never "gate" for a check, including the one a workflow runs before it
 integrates a branch.
+
+**Test companion** — the tests that sit beside a check or a script, in a file named for it, and
+prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
+copy of its parts. _Avoid_: harness, suite, for these.
+
+**Harness** — one of two things, and never a script's tests. Either the gateway test harness, task
+6.1's in-process host of the composed gateway that the hermetic suites drive, or a G0 feasibility
+harness under `spikes/g0/`, which probes one mechanism and records its evidence ids. Say which when
+the sentence does not. _Avoid_: harness, for a test companion.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
 provider, an in-memory object store, the real mock API and an echo upstream.
