@@ -106,9 +106,9 @@ fi
 
 # The project, the profile and the Region have to be the intended ones, which tools/aws-project.env
 # names. This check printed the account and the Region for weeks and compared them to nothing, so a
-# sitting applied the bootstrap root into the wrong project and spent an evening on guardrails that
-# project has and the intended one does not. Having the values and no expectation to hold them to is
-# what made that possible.
+# sitting applied the bootstrap root into the sample project AWS creates beside the real one and
+# spent an evening on that project's guardrails. Having the values and no expectation to hold them
+# to is what made that possible.
 #
 # Resolved from the script's own directory rather than the caller's. Every other row here is
 # cwd-independent, and a guard that reports "nothing says which project is intended" when run from
@@ -134,7 +134,7 @@ project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
 # come from a checkout on any platform. If one is contrived locally, sourcing it yields a trailing
 # CR that this parse does not, and the guard then fails closed on two strings that look identical.
 project_env_get() {
-  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "$project_env" 2>/dev/null \
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1=//p" "${2:-$project_env}" 2>/dev/null \
     | tail -n 1 | tr -d '\r' \
     | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//' \
           -e 's/^"\(.*\)"$/\1/' -e 's/^'\''\(.*\)'\''$/\1/'
@@ -194,6 +194,27 @@ if [ "$aws_ok" -eq 1 ]; then
     missing "AWS Region" "profile '${using}' is configured for '${cfg_region:-unset}', expected '${want_region}', so a shell that has not sourced tools/aws-project.env would use it. aws configure set region ${want_region} --profile ${using}"
   else
     ok "AWS project" "profile '${using}', region ${eff_region}, as tools/aws-project.env names"
+  fi
+
+  # The profile is not the project. `aws login` stores whichever console session the human picked,
+  # and on 2026-10-17 the same named profile resolved to a different project than it had two days
+  # earlier, while the row above said ok both times: the stack had been built in the sample project
+  # AWS creates beside the real one. So the account is compared too, against a value kept out of
+  # the tracked tree as change request 1.5 asks: tools/aws-project.local.env, git-ignored, one line,
+  # AWS_ACCOUNT_ID=<12 digits>. The wizard that runs an apply writes it after the human confirms the
+  # project's name in AWS Settings, which is the only place that name is shown.
+  local_env="$(cd "$(dirname "$0")" && pwd)/aws-project.local.env"
+  want_account=""
+  [ -f "$local_env" ] && want_account=$(project_env_get AWS_ACCOUNT_ID "$local_env")
+  if [ -z "$want_account" ]; then
+    missing "AWS account" "nothing says which project's account is intended. Confirm the project's name in AWS Settings, then: echo AWS_ACCOUNT_ID=<its 12-digit account id> > tools/aws-project.local.env"
+  elif [ -z "$acct" ] || [ "$acct" = "None" ]; then
+    missing "AWS account" "not checked: no credentials resolved"
+  elif [ "$acct" != "$want_account" ]; then
+    want4=$(printf '%s' "$want_account" | sed 's/.*\(....\)$/\1/')
+    missing "AWS account" "signed in to the account ending ${tail4}, expected the one ending ${want4}. Open that project's console from AWS Settings, then: aws login --profile ${using}"
+  else
+    ok "AWS account" "ending ${tail4}, as tools/aws-project.local.env names"
   fi
 else
   missing "AWS credentials" "not checked: the AWS CLI is missing"
