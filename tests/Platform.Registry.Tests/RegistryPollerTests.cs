@@ -139,7 +139,7 @@ public sealed class RegistryPollerTests
         if (configured)
         {
             // The contract's own example configuration: Registry:*, Policy:* and Issuers:*.
-            builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "examples", "platform-config.example.json"));
+            builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
         }
 
         return builder;
