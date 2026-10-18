@@ -1,8 +1,8 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Three jobs. The documents job runs on every pull request and costs about a minute: the documents a
-# session steers by, the roadmap, the checks' own tests, and -- first, so the other two can read the
-# answer -- which halves of the repository the change touches. The expensive jobs run when their
+# Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
+# session steers by, the roadmap, the checks' own tests, tools/land.sh's test companion, and --
+# first, so the next two can read the answer -- which halves of the repository the change touches. The expensive jobs run when their
 # inputs changed: the solution builds and every test project runs for build inputs, and the Terraform
 # roots validate for infra/. The hook shares these path patterns through .github/touches.sh. CI's
 # decision step also runs both jobs for changes to its workflow, the classifier or tools/smoke.sh,
@@ -21,6 +21,9 @@
 # that reached outside its brief at the moment it reached. A blocking CI check would need an
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
+#
+# The fourth job runs tools/land.sh's test companion again on macOS, under the bash 3.2 the script
+# targets, on every push and pull request; the step that runs it says why.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -148,6 +151,35 @@ jobs:
         # that merged something -- is the rule that decides whether an integration branch can be
         # pushed through the hook at all rather than around it.
         run: python3 -I .github/path_ownership_tests.py
+
+      - name: tools/land.sh refuses before it merges, and hands gh the body its caller named
+        # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
+        # in one directory and read it from another (2c9962f), which a copy of its parse loop had
+        # verified. The companion runs the real script against real git in throwaway repositories
+        # and a gh double, so no case reaches GitHub or gets past the merge. Here it runs under the
+        # runner's bash 5, which the script's shebang can also pick; the bash 3.2 job runs it at
+        # the other end of that range. The tool choice is D-3 in docs/dependencies.md.
+        run: python3 -I tools/land_tests.py
+
+  land-bash-3-2:
+    name: land.sh under bash 3.2
+    runs-on: macos-latest
+    # The companion's gh is a double and nothing here reaches AWS, so no token beyond reading the
+    # repository, and no OIDC token.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tools/land.sh refuses before it merges, under the bash 3.2 macOS ships
+        # The Linux runner has bash 5, so it can never show a failure only 3.2 has: under set -u,
+        # 3.2 calls an empty "${array[@]}" an unbound variable where 5 expands it to nothing. The
+        # variable makes the companion fail, not skip, when /bin/bash is not 3.2, which is why
+        # this is macos-latest and not a pinned image: an image that changes the shell turns the
+        # job red rather than quietly testing bash 5. Free while the repository is public (D-3).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/land_tests.py
 
   build-and-test:
     name: Build and test
