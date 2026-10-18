@@ -65,7 +65,9 @@ review open until a record names the merged head ("Gates" below). A merge made a
 checked at all, which is why nothing else is a sanctioned merge path.
 
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
-rides in the merge commit rather than staying on the pull request. If the row landed without
+rides in the merge commit rather than staying on the pull request. A named pipe or a process
+substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
+input for the confirmation it asks when no `--subject` is given. If the row landed without
 being finished, add an `Outstanding:` line saying what it still owes, and an
 `Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
 branch is deleted when the **task** is done, not when a pull request merges.
