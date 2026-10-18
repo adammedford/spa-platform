@@ -87,7 +87,9 @@ git diff --quiet && git diff --cached --quiet \
 if [ -z "$subject" ]; then
   printf 'land: no --subject given, so GitHub will use its own. docs/agents/landing-work.md fixes\n'
   printf '      the two forms this must take, and tools/roadmap.py reads them. Continue? [y/N] '
-  read -r reply
+  # End of input is a no. Under set -e a bare `read` that meets it ends the script with status 1
+  # before the refusal below can say why, which is all a session with no terminal would see.
+  read -r reply || reply=""
   case "$reply" in [yY]*) ;; *) die "stopped. Pass --subject \"Merge task <id>: ...\"." ;; esac
 fi
 
