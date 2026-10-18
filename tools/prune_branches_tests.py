@@ -28,6 +28,7 @@ Run: python3 -I tools/prune_branches_tests.py
 
 from __future__ import annotations
 
+import datetime
 import os
 import pathlib
 import shlex
@@ -210,10 +211,14 @@ class Case(unittest.TestCase):
 
     # --- reading the result ------------------------------------------------------------------
 
-    def prune(self, *args):
-        done = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], cwd=self.work,
-                              env=self.env, capture_output=True, text=True, check=False)
+    def prune(self, *args, cwd=None, **env):
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], cwd=cwd or self.work,
+                              env={**self.env, **env}, capture_output=True, text=True, check=False)
         return done.returncode, done.stdout, done.stderr
+
+    def restore_lines(self, output):
+        """The commands under the script's "To restore one" heading, without their indent."""
+        return [line[2:] for line in output.splitlines() if line.startswith("  git ")]
 
     def verdicts(self, output):
         """{(branch, where): (verdict, reason)} from the script's lines."""
@@ -754,6 +759,150 @@ class AWorktreeKeepsItsBranch(Case):
         self.assertIn("prune_branches: deleted 0 and kept 2.", out)
 
 
+class ADeletionLeavesItsRestoreCommandsInAFile(Case):
+    """When --delete deletes anything, the restore lines it prints are written to
+    pruned-branches/<UTC date>-<12-hex HEAD sha>.txt under the repository's common git directory,
+    and the path is printed (#115). On 18 October 2026 a landing deleted 34 branches, its session
+    read land.sh through `tail -20`, and 14 restore lines were lost with the terminal.
+
+    The file is found here from the clone's own .git, not from anything the script says, and every
+    run is made from a linked worktree, as tools/land.sh's header asks: there the worktree's own git
+    directory is not the common one, so a file in the wrong one is seen.
+    """
+
+    def utc_today(self):
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    def far_from_utc(self):
+        """A POSIX TZ whose local date is not today's UTC date: twelve hours behind UTC before
+        noon, fourteen ahead after it. A file named by the local date is then misnamed whatever the
+        hour, on any machine. In TZ a positive offset is west of Greenwich:
+        https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap08.html"""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        hours = -12 if now.hour < 12 else 14
+        zone = "AOE12" if hours < 0 else "LINT-14"
+        local = now.astimezone(datetime.timezone(datetime.timedelta(hours=hours)))
+        self.assertNotEqual(now.date(), local.date(), "the premise: the local date is not UTC's")
+        return zone
+
+    def linked_worktree(self):
+        tree = self.scratch / "spa-prune"
+        self.git("worktree", "add", "-q", "--detach", str(tree), "main")
+        self.assertNotEqual(self.git("rev-parse", "--absolute-git-dir", cwd=tree),
+                            str(self.work / ".git"),
+                            "the premise: a linked worktree has a git directory of its own")
+        return tree
+
+    def files(self):
+        directory = self.work / ".git" / "pruned-branches"
+        return sorted(directory.iterdir()) if directory.exists() else []
+
+    def tips(self):
+        """{(where, branch): tip} for every branch here and on origin."""
+        found = {}
+        for line in self.git("for-each-ref", "--format=%(refname:strip=2) %(objectname)",
+                             "refs/heads").splitlines():
+            branch, tip = line.split()
+            found[("local", branch)] = tip
+        for line in self.git("ls-remote", "--heads", "origin").splitlines():
+            tip, ref = line.split("\t")
+            found[("origin", ref[len("refs/heads/"):])] = tip
+        return found
+
+    def test_the_file_holds_exactly_the_printed_lines_and_each_recreates_a_copy_at_its_tip(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/2.2-hosting", "hosting.txt", push=False)
+        self.land("Merge task 2.2: hosting", "task/2.2-hosting")
+        self.commit("task/3.1-scheme", "scheme.txt")
+        tree = self.linked_worktree()
+        head = self.git("rev-parse", "HEAD", cwd=tree)
+        zone = self.far_from_utc()
+        dates = {self.utc_today()}
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", cwd=tree, TZ=zone)
+
+        dates.add(self.utc_today())
+        self.assertEqual(0, code, err)
+        deleted = sorted(set(before) - set(self.tips()))
+        self.assertEqual([("local", "task/2.1-registry"), ("local", "task/2.2-hosting"),
+                          ("origin", "task/2.1-registry")], deleted,
+                         "the premise: both copies of 2.1 and the one copy of 2.2 go, 3.1 stays")
+        files = self.files()
+        self.assertEqual(1, len(files), out)
+        self.assertIn(files[0].name, {f"{date}-{head[:12]}.txt" for date in dates})
+        printed = self.restore_lines(out)
+        self.assertEqual("".join(f"{line}\n" for line in printed), files[0].read_text(), out)
+        # The path, whole, as the last line says it.
+        said = out.splitlines()[-1].split()[-1]
+        self.assertTrue(os.path.isabs(said), out)
+        self.assertEqual(files[0], pathlib.Path(said).resolve())
+
+        # Judged by what each line does, not by what it says: run in turn, each brings back exactly
+        # one deleted copy, at the tip it had, and together they bring back every one.
+        lines = files[0].read_text().splitlines()
+        self.assertEqual(len(deleted), len(lines), lines)
+        for line in lines:
+            with self.subTest(line=line):
+                missing = set(before) - set(self.tips())
+                ran = subprocess.run(["/bin/sh", "-c", line], cwd=self.work, env=self.env,
+                                     capture_output=True, text=True, check=False)
+                self.assertEqual(0, ran.returncode, ran.stderr)
+                now = self.tips()
+                back = [copy for copy in missing if copy in now]
+                self.assertEqual(1, len(back), f"{line} brought back {back}")
+                self.assertEqual(before[back[0]], now[back[0]], f"{line} is not at its old tip")
+        self.assertEqual(before, self.tips())
+
+    def test_a_dry_run_or_a_run_that_deletes_nothing_writes_no_file(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        tree = self.linked_worktree()
+
+        code, out, err = self.prune(cwd=tree)
+
+        self.assertEqual(0, code, err)
+        self.assertIn("--delete would delete 2 and keep 0", out, "the premise: there is work to do")
+        self.assertEqual([], self.files(), out)
+        self.assertNotIn("pruned-branches", out)
+
+        # A worktree on the finished branch keeps both copies, so --delete deletes nothing.
+        self.git("worktree", "add", "-q", str(self.scratch / "spa-2.1"), "task/2.1-registry")
+
+        code, out, err = self.prune("--delete", cwd=tree)
+
+        self.assertEqual(0, code, err)
+        self.assertIn("prune_branches: deleted 0 and kept 2.", out)
+        self.assertEqual([], self.files(), out)
+        self.assertNotIn("pruned-branches", out)
+
+    def test_a_later_run_at_the_same_head_adds_its_lines_after_the_earlier_runs(self):
+        registry = self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        hosting = self.commit("task/2.2-hosting", "hosting.txt", push=False)
+        self.land("Merge task 2.2: hosting", "task/2.2-hosting")
+        tree = self.linked_worktree()
+        # The first run keeps 2.2 for its worktree; the second, once that is gone, deletes it.
+        hold = self.scratch / "spa-2.2"
+        self.git("worktree", "add", "-q", str(hold), "task/2.2-hosting")
+
+        code, first, err = self.prune("--delete", cwd=tree)
+        self.assertEqual(0, code, err)
+        self.git("worktree", "remove", str(hold))
+        code, second, err = self.prune("--delete", cwd=tree)
+        self.assertEqual(0, code, err)
+
+        files = self.files()
+        self.assertEqual(1, len(files), first + second)
+        self.assertEqual([f"git branch task/2.1-registry {registry}",
+                          f"git push origin {registry}:refs/heads/task/2.1-registry",
+                          f"git branch task/2.2-hosting {hosting}"],
+                         files[0].read_text().splitlines())
+        for out in (first, second):
+            self.assertEqual(files[0], pathlib.Path(out.splitlines()[-1].split()[-1]).resolve())
+
+
 class LandingDeletesWhatItFinished(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
@@ -770,11 +919,26 @@ class LandingDeletesWhatItFinished(Case):
         done = subprocess.run(
             [BASH, str(LAND), "5", "--subject", subject,
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
-            cwd=self.work, env=self.env, capture_output=True, text=True, check=False,
+            cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, check=False,
         )
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        # One stream, in the order a terminal or a pipe would show it, so its last line is the one
+        # a session reading `tools/land.sh ... | tail -1` would see.
+        self.assertEqual(0, done.returncode, done.stdout)
         self.assertIn(subject, self.git("log", "-3", "--format=%s", "origin/main"))
-        return done.stdout + done.stderr
+        return done.stdout
+
+    def assert_the_last_line_names_the_restore_file(self, out):
+        """land.sh's own last line names the file of the cleanup's restore lines (#115)."""
+        directory = self.work / ".git" / "pruned-branches"
+        files = sorted(directory.iterdir()) if directory.exists() else []
+        self.assertEqual(1, len(files), out)
+        self.assertTrue(files[0].name.endswith(f"-{self.git('rev-parse', 'HEAD')[:12]}.txt"),
+                        files[0].name)
+        self.assertEqual(self.restore_lines(out), files[0].read_text().splitlines())
+        last = out.splitlines()[-1]
+        self.assertTrue(last.startswith("land: "), out)
+        self.assertEqual(files[0], pathlib.Path(last.split()[-1]).resolve(), out)
 
     def test_landing_a_row_as_done_deletes_its_claim_and_keeps_a_part_landed_rows(self):
         self.commit("task/3.1-scheme", "scheme.txt")
@@ -788,6 +952,7 @@ class LandingDeletesWhatItFinished(Case):
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
         self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        self.assert_the_last_line_names_the_restore_file(out)
 
     def test_a_part_landed_rows_claim_survives_its_own_landing(self):
         self.commit("task/3.1-scheme", "scheme.txt")
@@ -797,6 +962,9 @@ class LandingDeletesWhatItFinished(Case):
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
         self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        # A landing whose cleanup deleted nothing writes no file and names none.
+        self.assertFalse((self.work / ".git" / "pruned-branches").exists(), out)
+        self.assertNotIn("pruned-branches", out)
 
     def test_landing_an_overnight_pull_request_deletes_its_branch(self):
         self.commit("overnight/2026-10-17", "lane.txt")
@@ -807,6 +975,7 @@ class LandingDeletesWhatItFinished(Case):
         self.assertNotIn("overnight/2026-10-17", self.local(), out)
         self.assertNotIn("overnight/2026-10-17", self.remote(), out)
         self.assertIn("pull request #5 from it merged", out)
+        self.assert_the_last_line_names_the_restore_file(out)
 
 
 def require_bash():

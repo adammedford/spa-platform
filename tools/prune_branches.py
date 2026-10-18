@@ -39,6 +39,18 @@ reads it. Origin's copy is deleted by a push whose lease names the tip judged, s
 since keeps it. A local copy is deleted only while its tip is still the one judged, and when git
 refuses to delete it, origin's copy is kept with it.
 
+Every copy deleted gets a restore line, the git command that recreates it at the tip it had. The
+lines are printed at the end, and each is also added, the moment its copy is gone, to
+pruned-branches/<UTC date>-<12-hex HEAD sha>.txt in the repository's common git directory, which
+the last line printed names (#115). On 18 October 2026 the first landing to run this deleted 34
+branches, its session read the landing through `tail -20`, and 14 of the lines went with the
+terminal. The common directory is the one every worktree shares, so the file outlives the worktree
+a landing ran in. A dry run, or a run that deletes nothing, writes no file, and a later run at the
+same HEAD on the same day adds its lines after the earlier run's. A line works while this
+repository still has the commit it names; a tip main does not reach, one whose work landed as
+patch-equivalents, has no other copy here once git's garbage collection prunes it
+(https://git-scm.com/docs/git-gc).
+
 Rule 3 uses `git merge-tree --write-tree`, which Git 2.38 introduced, so the floor
 docs/dependencies.md gives git is 2.38.
 
@@ -50,13 +62,18 @@ judged, whatever it kept; 1, deleting nothing, when it cannot judge; 2 for an un
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
+import pathlib
 import re
 import subprocess
 import sys
 from typing import NamedTuple
 
 MAIN = "origin/main"
+# How the last line names the file of restore lines. tools/land.sh reads a line by these words to
+# name the file in its own last line, so the two change together.
+KEPT_IN = "prune_branches: these commands are also in "
 
 # The ids a claim branch's name carries, in the forms the task tables and the tracker give them:
 # task/2.1-registry, task/i-3-abstractions, task/1.4a-cell, task/issue-66-land-tests, and two rows
@@ -320,6 +337,32 @@ def last_line(done: subprocess.CompletedProcess) -> str:
     return lines[-1] if lines else f"exit {done.returncode}"
 
 
+# --- the restore lines -------------------------------------------------------------------------
+
+
+def restore_file() -> pathlib.Path:
+    """Where a run's restore lines go: pruned-branches/<UTC date>-<12-hex HEAD sha>.txt in the
+    common git directory, which every worktree of the repository shares
+    (https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---git-common-dir).
+    Not a linked worktree's own git directory, a sub-directory of $GIT_DIR/worktrees that removing
+    the worktree removes with it (https://git-scm.com/docs/git-worktree#_details): a landing runs in
+    a worktree made for it, and the lines are wanted after it is gone."""
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    head = git("rev-parse", "--verify", "HEAD").stdout.strip()
+    date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return pathlib.Path(common) / "pruned-branches" / f"{date}-{head[:12]}.txt"
+
+
+def keep(path: pathlib.Path, line: str) -> None:
+    """Add one restore line to the file as soon as its copy is gone, before the next copy is
+    deleted, so a run that stops part-way leaves a line for each copy it deleted, but at most the
+    one it was deleting when it stopped. Added, never replaced: an earlier run at the same HEAD that
+    day keeps its lines."""
+    path.parent.mkdir(exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(f"{line}\n")
+
+
 def main(argv: list[str]) -> int:
     # No abbreviations: argparse would otherwise read a typo such as --delet as --delete
     # (https://docs.python.org/3/library/argparse.html#allow-abbrev), and the one flag here deletes.
@@ -349,6 +392,9 @@ def main(argv: list[str]) -> int:
         # overnight branch costs one question to GitHub.
         kinds = {name: finished(name, states) for name in {copy.branch for copy in found}}
         verdicts = [judge(copy, kinds[copy.branch], trees) for copy in found]
+        # Named before anything is deleted, so a git that cannot say where it goes deletes nothing.
+        # Only a deletion writes it.
+        kept_in = restore_file() if arguments.delete else None
     except Refused as refusal:
         print(f"prune_branches: {refusal}", file=sys.stderr)
         return 1
@@ -370,8 +416,10 @@ def main(argv: list[str]) -> int:
             if refused is not None and copy.where == "local":
                 held.add(copy.branch)
             if refused is None:
-                restore.append(f"git branch {copy.branch} {copy.tip}" if copy.where == "local"
-                               else f"git push origin {copy.tip}:refs/heads/{copy.branch}")
+                line = (f"git branch {copy.branch} {copy.tip}" if copy.where == "local"
+                        else f"git push origin {copy.tip}:refs/heads/{copy.branch}")
+                keep(kept_in, line)
+                restore.append(line)
         else:
             word = "kept"
         print(f"{word:<8} {copy.where:<7} {copy.branch}  {copy.tip[:12]}  {reason}")
@@ -386,6 +434,8 @@ def main(argv: list[str]) -> int:
         print("To restore one, recreate it at the tip it had:")
         for line in restore:
             print(f"  {line}")
+        # The last line; tools/land.sh finds it by KEPT_IN to name the file in its own last line.
+        print(f"{KEPT_IN}{kept_in}")
     return 0
 
 
