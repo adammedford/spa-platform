@@ -3,10 +3,8 @@ using Microsoft.Extensions.Configuration;
 namespace Platform.Registry.Tests;
 
 /// <summary>
-/// How these tests load a JSON file into a host's configuration (issue #75). <c>AddJsonFile</c> reads
-/// through a <c>PhysicalFileProvider</c> whose default filters exclude dot-prefixed and hidden files, and
-/// macOS flags every file under <c>.claude/worktrees/</c> hidden, so in an agent's worktree it threw
-/// <c>FileNotFoundException</c> for a file that was there.
+/// <c>JsonConfiguration.AddJsonWithoutFileProvider</c>, the way these tests load a JSON file into a host's
+/// configuration (issue #75), reads a file that <c>AddJsonFile</c>'s file provider excludes.
 /// </summary>
 public sealed class JsonConfigurationTests
 {
