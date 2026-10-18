@@ -9,7 +9,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
-| Git | 2.36+ (`--remerge-diff` for A-05 merge audits) | `xcode-select --install` | Everything |  |
+| Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
@@ -140,7 +140,10 @@ job runs.
 `tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
 which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
 python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one for
-its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs.
+its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs. The branch cleanup
+`tools/land.sh` runs after its merge, `tools/prune_branches.py`, has `tools/prune_branches_tests.py`
+(#71), also in both jobs: real git with a bare origin, a gh double, and the one set of cases that
+runs `tools/land.sh` past its merge, because that double's merge really merges.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,

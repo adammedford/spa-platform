@@ -32,11 +32,13 @@ strict gh double: it answers the three `pr view` shapes land.sh uses, the two `a
 pull request's comments and reviews (from the case's own fixtures), and `pr merge`; it records every
 call's arguments and fails the merge, so no case gets past it. Any other call is recorded and exits
 97, which turns a new gh call in land.sh into a red case instead of an empty answer. land.sh runs
-python3 twice. Before its merge it runs tools/review_record.py beside it, and the double hands that
-call to the real interpreter, so every case reads its records with the real reader (#67). After the
-merge it derives the roadmap, so the double fails any other call. The merge body is an argument, so
-its bytes are in the record of the merge call, and they are what expose a wrong path: a body path
-checked in one directory and read in another reaches gh as other bytes or none.
+python3 three times. Before its merge it runs tools/review_record.py beside it, and the double hands
+that call to the real interpreter, so every case reads its records with the real reader (#67). After
+the merge it derives the roadmap and then deletes the branches the merge finished, so the double
+fails any other call; tools/prune_branches_tests.py runs land.sh past a merge for those two. The
+merge body is an argument, so its bytes are in the record of the merge call, and they are what
+expose a wrong path: a body path checked in one directory and read in another reaches gh as other
+bytes or none.
 
 **No detached housekeeping.** Each repository, clone and bare origin is made with `gc.auto=0` and
 `maintenance.auto=false`. The cases fetch and commit, which is when git may start `gc --auto` or
@@ -193,8 +195,9 @@ esac
 PYTHON_DOUBLE = """#!/bin/bash
 # A double for python3, written by tools/land_tests.py. Before its merge land.sh runs the review
 # record reader that sits beside it, and that call goes to the real interpreter, so the reader under
-# test is the real one. Its only other python3 call comes after the merge, to derive the roadmap, so
-# a case that reaches the line below has gone past a merge that should have failed.
+# test is the real one. Its other python3 calls come after the merge, to derive the roadmap and to
+# delete the branches the merge finished, so a case that reaches the line below has gone past a
+# merge that should have failed.
 if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
 : > {log}/python3-ran
 printf 'python3 double: ran, so land.sh went past its merge\\n' >&2

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Lands a reviewed pull request: check its review record, merge, regenerate the roadmap, push.
+# Lands a reviewed pull request: check its review record, merge, regenerate the roadmap, push, and
+# delete the branches the landing finished.
 # Owner: integrator.
 #
 #     tools/land.sh <pr-number> [--subject "<merge subject>"] [--body-file <path>]
@@ -41,7 +42,9 @@
 # So: merge with --merge-queue off and the subject the pull request body asks for, fetch the merge
 # commit, run tools/roadmap.py on it, and push the refresh as its own commit when the blocks moved.
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
-# see that nothing else rode in with it.
+# see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
+# this script deletes the branches the merge finished and lists the ones it keeps (#71); its
+# companion, tools/prune_branches_tests.py, runs this script through a merge to see it happen.
 #
 # Written for the bash 3.2 that ships with macOS.
 
@@ -185,8 +188,23 @@ git merge --ff-only "origin/$base" \
 echo "--- deriving the roadmap"
 python3 -I tools/roadmap.py
 
+# A merge that lands a row as done finishes its claim branch, and a merged overnight pull request
+# finishes its integration branch: docs/agents/landing-work.md -> "Land it" says each is deleted
+# then, and this is where (#71). The cleanup beside this script reads which rows the roadmap now
+# calls landed, so it runs once the merge is fetched, from this checkout, which sits at origin/main.
+# It deletes only what its rules allow and lists every branch it keeps and why. A cleanup that stops
+# leaves finished branches behind, not a wrong merge, so it warns rather than failing a landing that
+# has already happened.
+prune_finished() {
+  [ "$base" = main ] || return 0
+  echo "--- deleting the branches this landing finished"
+  python3 -I "$here/prune_branches.py" --delete \
+    || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
+}
+
 if git diff --quiet -- README.md docs/roadmap.md; then
   echo "land: the generated blocks did not move, so there is nothing to refresh."
+  prune_finished
   exit 0
 fi
 
@@ -202,3 +220,4 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 echo "--- pushing the refresh"
 git push origin "HEAD:$base"
 echo "land: #$pr is in and the roadmap says so."
+prune_finished
