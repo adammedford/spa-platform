@@ -17,6 +17,14 @@ git worktree add -b task/<id>-<slug> ../spa-<id> origin/main
 git config core.hooksPath .githooks   # once per clone, not per worktree
 ```
 
+**The main checkout is shared.** Concurrent sessions run in the clone's own working tree, and its
+branch is whichever one a session last left it on, so a commit, rebase or switch made there acts on
+another session's work. A session never moves the main checkout's branch or rewrites its history:
+its own branch lives in its own worktree, made as above. In a Claude Code session started in a
+checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
+before each Bash call, and it refuses the branch-moving git commands in the main checkout and names
+this route (#114). A person's terminal runs no such hook.
+
 ## Build it
 
 Write only inside your owner's paths. `OWNERSHIP.md` lists them, and `.githooks/pre-push` fails a
