@@ -37,9 +37,11 @@ public static class RegistryRules
 
     /// <summary>
     /// The README row "A schema-valid integer the platform cannot hold or apply": a <c>revision</c>
-    /// beyond Int64, or a <c>timeoutSeconds</c> above the schema's <c>maximum</c>, the longest timeout the
-    /// proxy applies as written (ADR-0019). The schema enforces that maximum; this id rather than
-    /// <see cref="Schema"/> tells a caller the limit is the proxy's, not the document format's.
+    /// beyond Int64; a <c>timeoutSeconds</c> above the schema's <c>maximum</c>, the longest timeout the
+    /// proxy applies as written (ADR-0019); or a <c>timeoutSeconds</c> or <c>lifetimeMinutes</c> the schema
+    /// engine accepts as an integer that is not exactly a whole number. The schema enforces that maximum;
+    /// this id rather than <see cref="Schema"/> tells a caller the limit is the platform's, not the
+    /// document format's.
     /// Reported rather than thrown, so a caller always gets a <see cref="RegistryValidation"/>.
     /// </summary>
     public const string IntegerOutOfRange = "integer-out-of-range";

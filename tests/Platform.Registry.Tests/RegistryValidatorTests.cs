@@ -267,9 +267,16 @@ public sealed class RegistryValidatorTests
         Assert.Equal(TimeSpan.FromMinutes(480), app.SessionLifetime);
     }
 
+    /// <summary>
+    /// The last two are inside every bound, and JsonSchema.Net passes them as <c>"type": "integer"</c>,
+    /// but neither is exactly a whole number, so the model's reader refuses them. Without the validator's
+    /// check they threw out of <see cref="RegistryValidator.Validate"/>.
+    /// </summary>
     [Theory]
     [InlineData("revision", "9223372036854775808", "/revision")]
     [InlineData("revision", "1e30", "/revision")]
+    [InlineData("timeoutSeconds", "30.0000000000000001", "/apps/0/apis/0/timeoutSeconds")]
+    [InlineData("lifetimeMinutes", "480.0000000000000001", "/apps/0/session/lifetimeMinutes")]
     public void An_integer_the_model_cannot_hold_is_an_error_not_an_exception(string property, string spelling, string path)
     {
         RegistryValidation result = RegistryValidator.Validate(Respell(property, spelling), Examples.Policy(), null);

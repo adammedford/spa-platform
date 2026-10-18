@@ -148,6 +148,8 @@ public static class RegistryValidator
                 $"Issuer '{issuer}' is not configured under Issuers:{{name}}.");
         }
 
+        Exact(findings, entry["session"]!["lifetimeMinutes"]!, $"{at}/session/lifetimeMinutes", "lifetimeMinutes", "minutes");
+
         if (entry["apis"] is not JsonArray apis)
         {
             return;
@@ -161,6 +163,7 @@ public static class RegistryValidator
             JsonObject api = apis[index]!.AsObject();
             string apiAt = $"{at}/apis/{index}";
             Unique(findings, names, api["name"]!.GetValue<string>(), index, RegistryRules.DuplicateApiName, $"{apiAt}/name", "apis[].name", $"{at}/apis");
+            Exact(findings, api["timeoutSeconds"]!, $"{apiAt}/timeoutSeconds", "timeoutSeconds", "seconds");
 
             string upstream = api["upstream"]!.GetValue<string>();
             if (HostPolicy.PortAboveMaximum(upstream[(upstream.IndexOf("://", StringComparison.Ordinal) + 3)..]))
@@ -185,6 +188,25 @@ public static class RegistryValidator
             findings.Warning(RegistryRules.MultipleUpstreamOrigins, $"{at}/apis",
                 $"The entry names {origins.Count} upstream origins ({string.Join(", ", origins)}). Phase 1 sends one " +
                 "access token to each, which is safe only inside one trust domain (contracts/upstream-contract.md).");
+        }
+    }
+
+    /// <summary>
+    /// A schema-valid integer that <see cref="Model"/> reads with <see cref="JsonInteger.Read"/>, which
+    /// throws on anything <see cref="JsonInteger.TryRead"/> refuses. The schema's bounds keep both values
+    /// inside a <see cref="long"/>, but not every value the engine accepts as an integer is a whole
+    /// number: JsonSchema.Net 8.0.5 passes <c>30.0000000000000001</c> as <c>"type": "integer"</c>, and
+    /// its exact value has a fractional part (RegistryValidatorTests, the "cannot hold" cases). That is
+    /// contracts/README.md's row "A schema-valid integer the platform cannot hold or apply", so it is
+    /// reported rather than thrown out of <see cref="Validate"/>, and an app definition with it is refused
+    /// before <c>spactl</c> completes it into a registry entry.
+    /// </summary>
+    private static void Exact(Findings findings, JsonNode value, string path, string property, string unit)
+    {
+        if (!JsonInteger.TryRead(value, out _))
+        {
+            findings.Error(RegistryRules.IntegerOutOfRange, path,
+                $"{property} is not a whole number of {unit} the platform can hold exactly.");
         }
     }
 

@@ -45,7 +45,9 @@ internal static class RegistrySchemas
     /// <summary>
     /// Where <c>apis[].timeoutSeconds</c> is defined, as a pointer into <c>registry.schema.json</c>.
     /// <c>app-definition.schema.json</c> reaches the same definition by <c>$ref</c>, so the engine reports
-    /// a failure of it under this one location whichever of the two documents was evaluated.
+    /// a failure of it under this one location whichever of the two documents was evaluated: an output
+    /// unit's schema location is dereferenced and uses the canonical URI of the schema resource
+    /// (https://json-schema.org/draft/2020-12/json-schema-core#section-12.3.2).
     /// </summary>
     private const string TimeoutSecondsPointer = "/$defs/api/properties/timeoutSeconds";
 

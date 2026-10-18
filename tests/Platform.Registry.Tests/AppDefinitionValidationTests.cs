@@ -72,6 +72,32 @@ public sealed class AppDefinitionValidationTests
         RegistryValidatorTests.AssertNamesTheCeilingAndWhy(error.Message, ceiling);
     }
 
+    /// <summary>
+    /// Schema-valid integers the model cannot hold exactly (RegistryValidatorTests has the registry's
+    /// cases). Refused in the definition, so <c>spactl app add</c> never completes one into a registry
+    /// entry that the gateway would then refuse.
+    /// </summary>
+    [Theory]
+    [InlineData("/apis/0/timeoutSeconds", "30.0000000000000001")]
+    [InlineData("/session/lifetimeMinutes", "480.0000000000000001")]
+    public void An_integer_the_model_cannot_hold_is_refused_in_a_definition_too(string path, string spelling)
+    {
+        AppDefinitionValidation result = Validate(Definition(d =>
+        {
+            if (path == "/session/lifetimeMinutes")
+            {
+                d["session"]!["lifetimeMinutes"] = JsonNode.Parse(spelling);
+            }
+            else
+            {
+                d["apis"]![0]!["timeoutSeconds"] = JsonNode.Parse(spelling);
+            }
+        }));
+
+        RegistryIssue error = Assert.Single(result.Errors);
+        Assert.Equal((RegistryRules.IntegerOutOfRange, path), (error.Rule, error.Path));
+    }
+
     [Theory]
     [InlineData("app1.json", 1)]
     [InlineData("app2.json", 1)]
