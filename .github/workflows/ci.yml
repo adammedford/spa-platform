@@ -265,8 +265,8 @@ jobs:
         run: python3 -I .github/shell-parse.py
 
       - name: The main-checkout guard, under the git and sh macOS ships
-        # Every session runs the hook on a Mac, through its /bin/sh and its git, where the documents
-        # job runs it on Linux; where a temporary directory sits behind a symbolic link (/var is
+        # The sessions here run the hook on a Mac, through its /bin/sh and its git, where the
+        # documents job runs it on Linux; a temporary directory behind a symbolic link (/var is
         # /private/var) is one of the ways the two differ.
         run: python3 -I tools/main_checkout_guard_tests.py
 
