@@ -111,8 +111,11 @@ INDEX_PREAMBLE = """# Contracts
 """
 
 # The two rows of the live index that one relational cell joins: the App definition row names no
-# gate and defers to the Registry document row, which names one. Written as the live index writes
-# them, so a case built on them is built on the shape actually in the tree.
+# gate and defers to the Registry document row, which names one. Each is the live row's shape --
+# its Contract and Freezes at cells as the index writes them -- trimmed to the schema it points at,
+# since the example files carry no header. A copy of the whole row would agree with itself whatever
+# the index said; what holds the live rows is the case against the repository, whose floor counts
+# app-definition.schema.json through the Registry document row.
 REGISTRY_ROW = (
     "| Registry document | [`registry.schema.json`](registry.schema.json) "
     "| G1a, except the `oauth` section at G1b | Workstreams 2, 3, 4 |"
@@ -122,11 +125,13 @@ APP_DEFINITION_ROW = (
     "| With the registry document | Workstreams 1, 2 and 5 |"
 )
 
-# The one relational cell that names no row at all, on the row the live index carries it in.
+# The one relational cell that names no row at all, on the row the live index carries it in, and
+# the UNCOMPARED key that exempts that row and no other.
 TEST_DOUBLES_CELL = "With the interface each one stands in for"
 TEST_DOUBLES_ROW = (
     f"| Test doubles | `src/Platform.Testing` (task I-3) | {TEST_DOUBLES_CELL} | Everyone |"
 )
+TEST_DOUBLES_KEY = ("Test doubles", TEST_DOUBLES_CELL)
 
 # Every citation below is assembled from these pieces rather than written out, and so is every
 # assertion quoting one back. This file is tracked, and the rule under test reads tracked files:
@@ -584,7 +589,7 @@ class SteeringTests(unittest.TestCase):
     def test_an_uncompared_cell_is_exempt_while_a_row_carries_it(self):
         """The Test doubles row's shape: a cell deferring to one interface per double, and so to
         no single row, on a row whose target is code with no header to compare."""
-        steering.UNCOMPARED = {TEST_DOUBLES_CELL: "each double has its own interface"}
+        steering.UNCOMPARED = {TEST_DOUBLES_KEY: "each double has its own interface"}
         self.write_index(REGISTRY_ROW, TEST_DOUBLES_ROW)
         self.write_schema("contracts/registry.schema.json", "G1a")
         self.write("src/Platform.Testing/InMemoryRegistry.cs")
@@ -592,22 +597,57 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         self.assertIn("contracts/README.md agrees with the 1 freeze header it indexes", out)
 
+    def test_an_uncompared_cell_on_another_row_is_compared_like_any_other(self):
+        """The exemption is the Test doubles row's, not its words': the reason given for it -- code
+        with no header -- is false of a row pointing at a contract that carries one, and keyed by
+        the cell alone that row's header would go uncompared on a reason nobody gave for it.
+        """
+        steering.UNCOMPARED = {TEST_DOUBLES_KEY: "each double has its own interface"}
+        number = self.write_index(
+            REGISTRY_ROW,
+            TEST_DOUBLES_ROW,
+            f"| Fixture contract | [`fixture.md`](fixture.md) | {TEST_DOUBLES_CELL} "
+            "| Workstream 5 |",
+        ) + 2
+        self.write_schema("contracts/registry.schema.json", "G1a")
+        self.write("src/Platform.Testing/InMemoryRegistry.cs")
+        self.write_contract("contracts/fixture.md", "G2")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a freeze cell names neither a gate nor a row of the "
+                      "contracts index.", out)
+        self.assertIn(
+            f"contracts/README.md:{number}: row 'Fixture contract': the index cell "
+            f"'{TEST_DOUBLES_CELL}' names no gate, and no row of the table is called "
+            "'interface each one stands in for'",
+            out,
+        )
+        self.assertNotIn("row 'Test doubles'", out)
+
     def test_an_uncompared_cell_no_row_carries_fails(self):
         """The list cannot outlive its entries, which is PLANNED's rule one level over.
 
-        The row is still there and its cell has been reworded, which is the case that matters: the
-        exemption was for the words, and new words are a claim nobody has decided about.
+        The row is still there with one half of its key changed -- the cell reworded, or the row
+        renamed -- which is the case that matters: the exemption was for that row saying those
+        words, and either change is a claim nobody has decided about.
         """
         why = "each double has its own interface"
-        steering.UNCOMPARED = {TEST_DOUBLES_CELL: why}
-        self.write_index(REGISTRY_ROW, TEST_DOUBLES_ROW.replace(TEST_DOUBLES_CELL,
-                                                                "With the registry document"))
-        self.write_schema("contracts/registry.schema.json", "G1a")
-        code, out = self.check()
-        self.assertEqual(1, code, out)
-        self.assertIn("STEERING FAILED: an UNCOMPARED cell is in no row that needs it.", out)
-        self.assertIn(f"no freeze cell reads '{TEST_DOUBLES_CELL}' and names no row ({why})", out)
-        self.assertIn("Remove it from UNCOMPARED", out)
+        for shape, row in (
+            ("a reworded cell", TEST_DOUBLES_ROW.replace(TEST_DOUBLES_CELL,
+                                                         "With the registry document")),
+            ("a renamed row", TEST_DOUBLES_ROW.replace("| Test doubles |", "| Doubles |")),
+        ):
+            with self.subTest(shape=shape):
+                steering.UNCOMPARED = {TEST_DOUBLES_KEY: why}
+                self.write_index(REGISTRY_ROW, row)
+                self.write_schema("contracts/registry.schema.json", "G1a")
+                code, out = self.check()
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: an UNCOMPARED cell is in no row that needs it.",
+                              out)
+                self.assertIn(f"no row 'Test doubles' has the freeze cell '{TEST_DOUBLES_CELL}' "
+                              f"naming no row ({why})", out)
+                self.assertIn("Remove it from UNCOMPARED", out)
 
     def test_a_row_pointing_at_source_code_passes(self):
         """`src/Platform.Abstractions` is a directory of code, and carries no freeze header."""

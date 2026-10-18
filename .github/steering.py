@@ -30,8 +30,8 @@ never froze at, contradicting `contracts/pipeline.md` two directories away. A ce
 than the header -- `G1a; stage order changed at G1b` -- so the comparison is on the leading gate
 token, and a cell naming no gate at all -- `With the registry document` -- borrows the gate of the
 row it names, against which its own target's header is compared. A cell naming no row the index
-holds fails, since it is a claim nothing can compare; the one cell that names no single row by
-design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
+holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
+by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
 and the line it passes prints how many headers it compared: a rule that quietly compares nothing
 is the defect it was written to catch, one level up.
 
@@ -146,10 +146,14 @@ GATE = re.compile(r"\bG\d[a-z]?\b")
 # second hop rules out a cycle without walking one.
 RELATIONAL = re.compile(r"^\s*(?:with\s+(?:the\s+)?)?(?P<row>.*?)\s*\.?\s*$", re.IGNORECASE)
 
-# Relational cells that name no single row, keyed by the cell as the index writes it, and so
-# compared with nothing. PLANNED's rule one level over: this check fails once no row carries the
-# cell, so a reworded cell is a new claim, compared or reported, rather than one waved through on
-# the old words' exemption.
+# Rows whose relational cell names no single row, and so compared with nothing, keyed by the row's
+# Contract cell and its freeze cell as the index writes them. PLANNED's rule one level over: this
+# check fails once no row carries the pair, so a reworded cell or a renamed row is a new claim,
+# compared or reported, rather than one waved through on the old words' exemption. The row is in
+# the key because the reason is the row's and not the words': another row carrying the same cell
+# over a contract with a header would otherwise go uncompared on a reason that is false of it,
+# which is the exception scoped to the identifier that CODING_STANDARDS.md's "A universal names its
+# exceptions by the writer" warns of.
 #
 # The Test doubles row stays exempt. Its cell defers to one interface per double, not to one row:
 # the interfaces sit in the Records and interfaces row at two gates -- G1a, and G1b for the
@@ -159,8 +163,8 @@ RELATIONAL = re.compile(r"^\s*(?:with\s+(?:the\s+)?)?(?P<row>.*?)\s*\.?\s*$", re
 # for, and the shared contract suites (ObjectStoreContract, SessionStoreContract) that run the
 # double and the real implementation through the same cases.
 UNCOMPARED = {
-    "With the interface each one stands in for":
-        "Test doubles: each double freezes with its own interface, and the code carries no header",
+    ("Test doubles", "With the interface each one stands in for"):
+        "each double freezes with its own interface, and the code carries no header",
 }
 
 # The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON
@@ -412,8 +416,8 @@ def freeze_disagreements(
         if not claimed:
             deferred = spoken(RELATIONAL.match(cell).group("row"))
             named = by_name.get(deferred)
-            if named is None and cell in UNCOMPARED:
-                exempt.add(cell)
+            if named is None and (name, cell) in UNCOMPARED:
+                exempt.add((name, cell))
                 continue
             if named is None:
                 nowhere.append(
@@ -446,12 +450,12 @@ def freeze_disagreements(
     return found, unreadable, nowhere, outlived(exempt), compared
 
 
-def outlived(exempt: set[str]) -> list[str]:
+def outlived(exempt: set[tuple[str, str]]) -> list[str]:
     """The UNCOMPARED entries that exempted no row this run, so the list cannot outlive them."""
     return [
-        f"no freeze cell reads '{cell}' and names no row ({why})"
-        for cell, why in UNCOMPARED.items()
-        if cell not in exempt
+        f"no row '{row}' has the freeze cell '{cell}' naming no row ({why})"
+        for (row, cell), why in UNCOMPARED.items()
+        if (row, cell) not in exempt
     ]
 
 
@@ -731,8 +735,9 @@ def main() -> int:
             "STEERING FAILED: a freeze cell names neither a gate nor a row of the contracts index.",
             "A cell naming no gate defers to the row it names -- 'With the registry document' --",
             "and is compared through that row's gate, so a name no row carries is a claim nothing",
-            "compares. Name a gate, or a row naming one as its Contract cell spells it. A cell",
-            "deferring to no single row goes in UNCOMPARED in this script, with the reason.",
+            "compares. Name a gate, or a row naming one as its Contract cell spells it. A row",
+            "whose cell defers to no single row goes in UNCOMPARED in this script, keyed by the",
+            "row and its cell, with the reason.",
         ),
         report(
             uncompared,
