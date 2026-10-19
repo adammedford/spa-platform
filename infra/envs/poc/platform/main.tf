@@ -58,9 +58,14 @@ locals {
   # fixtures/MockApi/MockApiOptions.cs -> Default fixes along with the two ports. App 3 is
   # deliberately not read: F-07 logs it in and has the mock API refuse its call.
   #
-  # try(), because the first apply of this root runs on the sample image with no mock API container
-  # (docs/plan/05-infrastructure-and-cost.md -> First deployment, step 3), and the module only needs
-  # a client id once mock_api_image is supplied.
+  # try() absorbs a missing output, never a missing state (Q4 on #98). A state with no clients
+  # output, which is what a destroyed apps root leaves, or with no entry for app 1 or app 2, gives
+  # an empty client id. That is harmless while mock_api_image is empty: the module needs a client id
+  # only once that image is supplied, and refuses the image without one. A missing state fails the
+  # read above with "Unable to find remote state" before try() runs, and that hard dependency is
+  # kept on purpose: the first deployment applies the apps root before this one
+  # (docs/plan/05-infrastructure-and-cost.md -> First deployment, steps 2 and 3).
+  # https://github.com/hashicorp/terraform/blob/v1.11.0/internal/builtin/providers/terraform/data_source_state.go#L162-L168
   app_clients = try(data.terraform_remote_state.apps.outputs.clients, {})
 
   # The two the mock API admits, and only these two. Named here rather than inline in the module
