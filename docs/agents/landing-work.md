@@ -72,6 +72,19 @@ it merges pinned to the head it saw, ends the body with `Unreviewed: <reason>`, 
 review open until a record names the merged head ("Gates" below). A merge made any other way is not
 checked at all, which is why nothing else is a sanctioned merge path.
 
+**The pull request's description closes the tickets it completes.** It carries one `Closes #n`
+line for each of them and one `Ticket: #n` line for each ticket it only advances. When
+`tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
+names; `Ticket:` is not a closing keyword, so its ticket stays open. A complete ticket stays open
+and assigned until then. The lines go in the description, not in the merge body passed with
+`--body-file`, and that body puts no closing keyword (close, fix or resolve, in any form) before a
+`#n`, because GitHub reads it there too: a keyword in a commit message closes its issue once the
+commit is on the default branch, and the merge body becomes the merge commit's message
+(https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+A keyword there closes its ticket at the merge, whatever the description says: 83f53f0, the merge
+of #120, closed #105, which #120's description named only as `Ticket: #105`, through a sentence in
+its body saying a later session would close it.
+
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
 substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
