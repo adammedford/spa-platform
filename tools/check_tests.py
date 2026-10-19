@@ -132,9 +132,12 @@ HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
 
+# The steering check is handed the base A-05 judges against, for its authority rule's range
+# (#102), and is run without one when there is no base, so that it reads every commit instead.
+STEERING = ["python3", "-I", ".github/steering.py"]
 PYTHON_CHECKS = [
     ["python3", "-I", ".github/path-ownership.py", "origin/main", "HEAD"],
-    ["python3", "-I", ".github/steering.py"],
+    STEERING + ["--base", "origin/main"],
     ["python3", "-I", "tools/roadmap.py", "--check"],
 ]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
@@ -364,7 +367,7 @@ class HookTests(CheckTestCase):
         case = Case(self, change="docs/notes.md", fails_on={"python3": ".github/steering.py"})
         result = case.run(hook=True)
         self.assertEqual(1, result.status)
-        self.assertLines(["python3 double failed: -I .github/steering.py",
+        self.assertLines(["python3 double failed: -I .github/steering.py --base origin/main",
                           "pre-push: the steering check failed.", HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS[:2], case.calls())
 
@@ -398,7 +401,8 @@ class HookTests(CheckTestCase):
         self.assertLines(["pre-push: A-05 not checked: no main to diff against."], result.stderr)
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
-        self.assertEqual(PYTHON_CHECKS[1:] + BUILD + terraform_checks(), case.calls())
+        # No base, so the steering check is handed none and reads every commit HEAD reaches.
+        self.assertEqual([STEERING] + PYTHON_CHECKS[2:] + BUILD + terraform_checks(), case.calls())
 
     def test_duplicated_build_artifacts(self):
         case = Case(self, change="docs/notes.md")
@@ -482,6 +486,8 @@ class FullModeTests(CheckTestCase):
         result = self.full(case, "--base", fork)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}.")
         self.assertEqual(["python3", "-I", ".github/path-ownership.py", fork, "HEAD"], case.calls()[0])
+        # The steering check's authority rule judges the same range A-05 does (#102).
+        self.assertEqual(STEERING + ["--base", fork], case.calls()[1])
 
     def test_failures_end_on_the_verdict_and_stop_there(self):
         cases = {
