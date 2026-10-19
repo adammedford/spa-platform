@@ -24,9 +24,8 @@
    process on one port for S3 and SSM). Its S3 answers `If-None-Match` with 304 and conditional PUTs
    with 412, keeps versions, and its SSM resolves `name:version` and decrypts a SecureString, which is
    exactly the surface `S3ObjectStore` and `ParameterStoreClientSecretSource` use. **LocalStack** no
-   longer ships a token-free image: from 23 March 2026 it is a single image that needs an auth token,
-   its free plan is for non-commercial use, and the last token-free release is `4.14.0` from an archived
-   repository. **MinIO** has no Parameter Store and its community repository is unmaintained.
+   longer ships a community image: from 23 March 2026 it is a single licensed image, its free plan is
+   for non-commercial use, and the last community release is `4.14.0` from an archived repository. **MinIO** has no Parameter Store and its community repository is unmaintained.
 4. Seeding is a bucket with versioning, one SecureString parameter, a release prefix and the registry
    object. `spactl` does the last two against the same endpoint, because it builds its S3 client from the
    same default chain. `/readyz` answering `{"revision":42}` is the done signal.
@@ -220,7 +219,10 @@ where its JSON requests go.
   access using a LocalStack for AWS account and an auth token." A free plan continues for cases including
   "You're using LocalStack for non-commercial purposes." ([Moving to a single image][ls-blog]) The docs
   call the token "a mandatory credential required to start the LocalStack container and activate
-  licensed features" ([Auth token][ls-token]); the plans page lists Hobby "for non-commercial use" and
+  licensed features" ([Auth token][ls-token]), while the Docker-images page says the image "will display
+  a warning if you do not set an Auth Token" and "will not activate the Pro features"
+  ([Docker images][ls-images]); the two disagree on whether the container boots without one, and the
+  verdict below does not rest on that. The plans page lists Hobby "for non-commercial use" and
   Base, Ultimate and Enterprise "for commercial use" ([Licensing][ls-licensing]). Calendar versioning
   (`YYYY.MM.patch`) starts with the end-of-March 2026 release; "Releases up to and including `v4.14.0`
   use semantic versioning" ([Docker images][ls-images]). The `localstack/localstack` GitHub repository is
@@ -338,7 +340,8 @@ Notes on the list:
 ## 5. Seeding
 
 From the host, with the AWS CLI v2 and `spactl`. Both are pointed at the published port; `127.0.0.1` is
-an IP literal, so path style holds there too. The CLI reads `--endpoint-url`; `spactl` builds
+an IP literal, so path style holds there too. The CLI v2 honours `AWS_ENDPOINT_URL`
+([Service-specific endpoints][sdkref-ss]); `spactl` builds
 `new AmazonS3Client()` when `--bucket` is given without `--region` (`tools/spactl/SpactlEnvironment.cs`),
 so it reads the same four variables as the container.
 
@@ -379,6 +382,14 @@ dotnet run --project tools/spactl -- wait --url http://127.0.0.1:8080 --revision
 Without `spactl`, steps 3 and 4 are `aws s3 cp --recursive fixtures/spa/app1 "s3://$BUCKET/apps/app1/releases/2026-10-10.1/"`
 and `aws s3 cp /tmp/registry.json "s3://$BUCKET/registry/registry.json"`; the gateway checks neither
 the prefix nor the write condition.
+
+`fixtures/apps/` is not on this path because `registry.example.json` already carries app1 complete,
+which is the shortest route to one live app. A second fixture app goes in through
+`spactl app add fixtures/apps/app2.json --release <published release> --config ... --bucket "$BUCKET" --outputs <file>`,
+where the outputs file is a local copy of `contracts/infra-outputs.example.json` with a
+`clients.app2` entry (`clientId`, `secretParameter`, `secretVersion`, all `required` by
+`contracts/infra-outputs.schema.json`) and a matching SecureString put first: `AppEntry.Complete`
+builds `clientSecretRef` as `ssm:{secretParameter}:{secretVersion}` from that entry.
 
 What `/readyz` needs, read from the code: `Health.ReadyAsync` answers 503 while
 `snapshot.Revision < 1` and 200 with `{"revision":N}` after (`src/Platform.Hosting/Health.cs`). The
@@ -433,8 +444,9 @@ Nothing here was executed. Three checks settle the parts that rest on reading al
    in the path, or a gateway warning "The registry object ... could not be read (HttpRequestException ...)"
    naming a host of the form `<bucket>.10.90.0.10`, means the `isIp` reading of the rules is wrong for
    the pinned package, and `MOTO_S3_CUSTOM_ENDPOINTS`/`S3_IGNORE_SUBDOMAIN_BUCKETNAME` cannot fix the
-   SDK side; the fallback is a network alias per bucket or a one-line `ForcePathStyle` the integrator
-   would have to accept.
+   SDK side; the fallback is a network alias per bucket, or a one-line `ForcePathStyle` in
+   `src/Platform.Registry/PlatformRegistryExtensions.cs`, which is workstream 2's path and the code
+   change the ticket rules out.
 2. **moto's `127.0.0.1` caveat.** The server-mode page says `127.0.0.1` "may not work". The source read
    says an IPv4 host is path-based and dispatch comes from the signature, which covers it; the proof is
    step 2 and step 3 of the seeding succeeding from the host.
