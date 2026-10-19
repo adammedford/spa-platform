@@ -70,8 +70,14 @@ So each app is described once.
 **Platform configuration** — settings from the task environment (`Policy:*`, `Issuers:*`,
 `Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them.
 
-**Release** — an immutable S3 prefix, `apps/{appId}/releases/{release}/`. The registry names the live
-one, so activation and rollback are registry changes. See ADR-0009.
+**Release** — an S3 prefix, `apps/{appId}/releases/{release}/`, in which each key is written once. A
+release can gain a key, but outside teardown it never changes or loses one. The registry names the
+live release, so activation and rollback are registry changes. See ADR-0009.
+_Avoid_: "immutable prefix". The prefix can grow; only its keys are fixed.
+
+**Release key** — the key of one object under a release. It is the unit the platform bucket keeps
+write-once, and the unit P-04 tests.
+_Avoid_: "release" on its own when one object is meant.
 
 ## The request path
 
