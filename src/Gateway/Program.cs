@@ -27,45 +27,44 @@ builder.AddPlatformSecurity();      // 4
 
 WebApplication app = builder.Build();
 
-// Stage 1. The request log line and the trace scope, in place of the framework's default request
-// log, which includes the query string. First, so every rejection a later stage answers is logged
-// and counted under its rule id, including the method allowlist's 405. The line carries no value
-// forwarded headers settle -- no
-// scheme, no client address, no host -- which is why it can run before they are settled
-// (ADR-0018, at G1b; until then the two stages below ran the other way round).
+// The request log line and the trace scope, in place of the framework's default request log, which
+// includes the query string. First, so every rejection a later stage answers is logged and counted
+// under its rule id, including the method allowlist's 405. The line carries no value forwarded
+// headers settle -- no scheme, no client address, no host -- which is why it can run before they
+// are settled (ADR-0018, at G1b; until then the two stages below ran the other way round).
 app.UsePlatformTelemetry();
 
-// Stage 2. Before everything that reads the scheme and the client address, and before the
-// antiforgery cookie's SecurePolicy = Always is applied: a __Host- cookie sent without Secure is
-// discarded (ADR-0007). The method allowlist runs here too.
+// Before everything that reads the scheme and the client address, and before the antiforgery
+// cookie's SecurePolicy = Always is applied: a __Host- cookie sent without Secure is discarded
+// (ADR-0007). The method allowlist runs here too.
 app.UsePlatformForwardedHeaders();
 
-// Stage 3. Before host resolution, so the ALB health check and `spactl wait` need no registry entry
-// and no known host.
+// Before host resolution, so the ALB health check and `spactl wait` need no registry entry and no
+// known host.
 app.UsePlatformHealth();
 
-// Stage 4. The request authority must equal a registry host exactly. The app and the snapshot are
-// pinned for the request as IAppFeature. Any other host gets 404 before routing runs.
+// The request authority must equal a registry host exactly. The app and the snapshot are pinned for
+// the request as IAppFeature. Any other host gets 404 before routing runs.
 app.UsePlatformHostResolution();
 
-// Stage 5.
+// After host resolution, which pins the app whose content security policy this stage sends.
 app.UsePlatformSecurityHeaders();
 
-// Stage 6. Before authentication, because no rule in the gate needs the user.
+// Before authentication, because no rule in the gate needs the user.
 app.UsePlatformRequestGate();
 
-// Stage 7. The framework's own. The schemes come from workstream 3, and the OpenID Connect callback
-// is handled here.
+// The framework's own. The schemes come from workstream 3, and the OpenID Connect callback is
+// handled here.
 app.UseRouting();
 app.UseAuthentication();
 
-// Stage 8. A session before any asset (ADR-0008).
+// A session before any asset (ADR-0008).
 app.UsePlatformShellGate();
 
-// Stage 9. After the request gate, because the token check needs the user.
+// After the request gate, because the token check needs the user.
 app.UsePlatformAntiforgery();
 
-// Stage 10. /bff/*, then /api/{name}/{rest} through YARP, then everything else from S3.
+// /bff/*, then /api/{name}/{rest} through YARP, then everything else from S3.
 app.MapPlatformBff();
 app.MapPlatformProxy();
 app.MapPlatformAssets();
