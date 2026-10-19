@@ -75,11 +75,13 @@ when the blocks moved, the refresh commit's parent, paths and subject.
 **The cases run at the same time** (#107), on the threads of tools/companion_runner.py: one per
 CPU, up to eight, unless SCRIPT_TESTS_JOBS names another number. That rests on each case keeping to
 its own throwaway directory and its own constructed environment. No case changes the working
-directory, os.environ or anything else the process shares, and a new case must not either. The
-completeness case runs alone, once every other case has finished, and reports last. The tools in a
-case's bin directory are links to wrappers written once for the run, because on the Mac this was
-measured on a newly written file costs about 45 ms more the first time it runs; the doubles are
-still each case's own.
+directory, os.environ or anything else the process shares, and a new case must not either, but for
+one list: Case.run appends each run's standard error to OBSERVED, which CPython does atomically
+(https://docs.python.org/3/faq/library.html#what-kinds-of-global-value-mutation-are-thread-safe),
+and only the completeness case reads it. That case runs alone, once every other case has finished,
+and reports last. The tools in a case's bin directory are links to wrappers written once for the
+run, because on the Mac this was measured on a newly written file costs about 45 ms more the first
+time it runs; the doubles are still each case's own.
 
 Run: python3 -I tools/land_tests.py
 """

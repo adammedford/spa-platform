@@ -10,17 +10,29 @@ proofs, each a whole run. Run one at a time, their cases leave every core but on
 a run that took 32 to 35 seconds takes 6 to 8 on the 12-core Mac it was measured on.
 
 **What stays unittest's.** A companion calls main() where it called unittest.main(), so its
-command line, its exit status, the names it is asked to run and its output are unittest's: Runner is
-a unittest.TextTestRunner whose suite runs its cases on a pool of threads. Each case reports to a
-Recorder of its own, and the main thread replays each recorder into the real result in the suite's
-order, so the output reads as a serial run's would, and two runs can be compared line for line.
+command line, its exit status, the names it is asked to run and its output are unittest's, but for
+-b, which it refuses (below). Runner is a unittest.TextTestRunner whose suite runs its cases on a
+pool of threads. Each case reports to a Recorder of its own, and the main thread replays each
+recorder into the real result in the suite's order, so the output reads as a serial run's would, and
+two runs can be compared line for line. What a case reports of its duration is replayed with the
+rest, so --durations (Python 3.12 and later) prints what unittest's own runner would.
+
+-b buffers standard output and standard error during each test and adds them to its failure report
+(https://docs.python.org/3/library/unittest.html#cmdoption-unittest-b), by swapping sys.stdout and
+sys.stderr for the whole process from one test's start to its stop. With cases running at the same
+time, a case's output would land in another case's report, or in none, so Runner exits 2 instead,
+as main() does for a SCRIPT_TESTS_JOBS it cannot read.
 
 **What a companion keeps to.** Its cases share one process, so none may change what the process
 shares: the working directory, os.environ, the umask, a signal handler. Each case keeps to its own
 throwaway directory and passes its own environment to what it runs, which is how the three
-companions were already written. A class whose cases read what every other case left behind, as
-tools/land_tests.py's completeness case reads every refusal the others produced, sets
-`runs_after_the_others = True`: its cases run one at a time, once every other case has finished.
+companions were already written. The one shared thing a case may change is a list it only appends
+to, which CPython does atomically
+(https://docs.python.org/3/faq/library.html#what-kinds-of-global-value-mutation-are-thread-safe):
+tools/land_tests.py's Case.run appends each run's standard error to OBSERVED. A class whose cases
+read such a list, as tools/land_tests.py's completeness case reads every refusal the others
+produced, sets `runs_after_the_others = True`: its cases run one at a time, once every other case
+has finished.
 
 A module's setUpModule and tearDownModule run once, around every case, as unittest's own suite runs
 them. A class with its own setUpClass or tearDownClass is an error and its cases do not run, since
@@ -82,6 +94,9 @@ class Recorder(unittest.TestResult):
         super().__init__()
         self.events: list[tuple[str, tuple]] = []
         self.stop_all = stop
+        # TestCase.subTest reads the result's failfast to end a case at its first failing subTest,
+        # as a serial run would (https://github.com/python/cpython/blob/3.9/Lib/unittest/case.py,
+        # and the same in 3.14).
         self.failfast = failfast
 
     def failed(self):
@@ -114,6 +129,12 @@ class Recorder(unittest.TestResult):
         self.events.append(("addUnexpectedSuccess", (test,)))
         self.failed()
 
+    def addDuration(self, test, elapsed):
+        # Called by Python 3.12 and later as each case finishes, for --durations
+        # (https://docs.python.org/3/library/unittest.html#unittest.TestResult.addDuration). Kept on
+        # the recorder, as TestResult's own method keeps it, --durations would print nothing.
+        self.events.append(("addDuration", (test, elapsed)))
+
     def replay(self, test: unittest.TestCase, result: unittest.TestResult):
         result.startTest(test)
         for name, args in self.events:
@@ -123,7 +144,8 @@ class Recorder(unittest.TestResult):
 
 class Fixture:
     """A fixture that raised or was refused, in a result: named as unittest's own suite names one,
-    "setUpModule (<module>)" or "setUpClass (<module>.<class>)"."""
+    "setUpModule (<module>)" or "setUpClass (<module>.<class>)", in its _ErrorHolder
+    (https://github.com/python/cpython/blob/3.9/Lib/unittest/suite.py, and the same in 3.14)."""
 
     failureException = None
 
@@ -193,7 +215,12 @@ def run_one(test: unittest.TestCase, stop: threading.Event, failfast: bool) -> R
 
 class Concurrently:
     """A suite's cases, run on `jobs` threads when TextTestRunner.run calls this as `test(result)`,
-    and reported to `result` in the suite's order."""
+    and reported to `result` in the suite's order.
+
+    unittest documents run() as taking a TestSuite or a TestCase
+    (https://docs.python.org/3/library/unittest.html#unittest.TextTestRunner.run); that it calls
+    whatever it is given as `test(result)` is its source's
+    (https://github.com/python/cpython/blob/3.9/Lib/unittest/runner.py, and the same in 3.14)."""
 
     def __init__(self, suite: unittest.TestSuite, jobs: int, failfast: bool):
         self.suite = suite
@@ -242,6 +269,11 @@ class Runner(unittest.TextTestRunner):
 
     def __init__(self, *args, jobs: int | None = None, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.buffer:
+            # The module's docstring says why -b cannot hold a case's output for its report here.
+            print("companion_runner: -b cannot buffer cases that run at the same time; run without it.",
+                  file=sys.stderr)
+            raise SystemExit(2)
         self.jobs = jobs_for(os.environ, os.cpu_count()) if jobs is None else jobs
 
     def run(self, test):

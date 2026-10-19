@@ -102,6 +102,41 @@ class ReportingTests(RunnerTestCase):
         self.assertEqual(["test_raises"], [test.id().split(".")[-1] for test, _ in result.errors])
         self.assertIn("FAILED (failures=2, errors=1)", printed)
 
+    def test_a_skip_an_expected_failure_and_an_unexpected_success_are_each_reported(self):
+        # No companion has one yet, so no other case here would see one dropped. An unexpected
+        # success fails the run since Python 3.4
+        # (https://docs.python.org/3/library/unittest.html#unittest.TestResult.wasSuccessful).
+        module = self.module(Outcomes=cases(
+            "Outcomes",
+            test_skipped=unittest.skip("on purpose")(lambda self: None),
+            test_fails_as_expected=unittest.expectedFailure(lambda self: self.fail("expected")),
+            test_passes_unexpectedly=unittest.expectedFailure(lambda self: None)))
+        result, printed = self.run_module(module)
+        self.assertEqual(3, result.testsRun)
+        self.assertEqual(["test_skipped"], [test.id().split(".")[-1] for test, _ in result.skipped])
+        self.assertEqual(["test_fails_as_expected"],
+                         [test.id().split(".")[-1] for test, _ in result.expectedFailures])
+        self.assertEqual(["test_passes_unexpectedly"],
+                         [test.id().split(".")[-1] for test in result.unexpectedSuccesses])
+        self.assertFalse(result.wasSuccessful(), printed)
+        self.assertIn("FAILED (skipped=1, expected failures=1, unexpected successes=1)", printed)
+
+    def test_what_a_case_reports_of_its_duration_reaches_the_result(self):
+        # Python 3.12 and later report each case's time through addDuration, which --durations
+        # prints (https://docs.python.org/3/library/unittest.html#unittest.TestResult.addDuration).
+        # Reported by hand, so this holds under 3.9 too, whose cases report none.
+        received = []
+
+        class Receiving(unittest.TestResult):
+            def addDuration(self, test, elapsed):
+                received.append((test.id(), elapsed))
+
+        test = cases("Timed", test_one=lambda self: None)("test_one")
+        recorder = runner.Recorder(threading.Event(), failfast=False)
+        recorder.addDuration(test, 1.5)
+        recorder.replay(test, Receiving())
+        self.assertEqual([(test.id(), 1.5)], received)
+
     def test_each_case_runs_once_and_is_reported_in_the_suites_order(self):
         # The first case sleeps longest, so the cases finish in the reverse of the suite's order.
         ran = collections.Counter()
@@ -288,6 +323,14 @@ class MainTests(unittest.TestCase):
         done = self.companion("Cases", SCRIPT_TESTS_JOBS="lots")
         self.assertEqual(2, done.returncode, done.stderr)
         self.assertEqual("companion_runner: SCRIPT_TESTS_JOBS='lots' is not a whole number of at least 1.",
+                         done.stderr.strip())
+
+    def test_buffering_is_refused_before_any_case(self):
+        # -b swaps the process's standard streams for one test at a time, and here several run at
+        # once, so a case's output would land in another case's report.
+        done = self.companion("Cases", "-b")
+        self.assertEqual(2, done.returncode, done.stderr)
+        self.assertEqual("companion_runner: -b cannot buffer cases that run at the same time; run without it.",
                          done.stderr.strip())
 
 

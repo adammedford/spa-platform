@@ -152,9 +152,9 @@ five files it reads, and the refresh commit and its push, and answers the cleanu
 
 Those three, `tools/land_tests.py`, `tools/check_tests.py` and `tools/prune_branches_tests.py`, run
 their cases at the same time through `tools/companion_runner.py` (#107): unittest's own text runner
-and command line, with the cases on threads, one per CPU up to eight unless `SCRIPT_TESTS_JOBS`
-names another number. It is the standard library too, and has a companion of its own,
-`tools/companion_runner_tests.py`, in both jobs.
+and command line, but for `-b`, which it refuses, with the cases on threads, one per CPU up to eight
+unless `SCRIPT_TESTS_JOBS` names another number. It uses nothing outside the standard library
+either, and has a companion of its own, `tools/companion_runner_tests.py`, in both jobs.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
