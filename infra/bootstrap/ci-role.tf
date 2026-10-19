@@ -4,8 +4,9 @@
 # resource the three platform roots own. It writes nothing, which is why CI runs
 # `terraform plan -lock=false` unless allow_state_lock is turned on.
 #
-# Scoped to what a plan needs and nothing more. Task 1.9 asserts on permissions,
-# so a widened statement here should fail a review before it fails a test.
+# Scoped to what a plan needs and nothing more. No test reads these permissions
+# but the bucket statement's (tests/root.tftest.hcl), so a widened statement here
+# has to fail review.
 
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.create_github_oidc_provider && local.trust_github ? 1 : 0

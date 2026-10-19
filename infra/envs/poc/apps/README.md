@@ -116,3 +116,8 @@ terraform -chdir=infra/envs/poc/apps init -backend=false && terraform -chdir=inf
 They read the definitions, `fixtures/onboarding/app3.json` (P-02), `fixtures/cognito/pool.json`
 and the contracts rather than repeating them. CI's Terraform job runs them, with every other
 directory under `infra/` that has tests, after `fmt` and `validate`.
+
+The P-02 run plans the fixtures with `fixtures/onboarding/app3.json` added, as ADR-0016 decision 2
+asks. It fails on a fourth resource block, a module call or a `.tf.json` file, on a definition
+that shares an existing app's `appId`, and on any change the addition makes to an existing app's
+client, branding style or parameter.
