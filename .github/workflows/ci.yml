@@ -191,6 +191,14 @@ jobs:
         # case of each.
         run: python3 -I tools/review_record_tests.py
 
+      - name: The companions' runner reports every case it runs, each in its suite's order
+        # tools/land_tests.py, tools/check_tests.py and tools/prune_branches_tests.py run their cases
+        # at the same time through tools/companion_runner.py (#107), so a failure the runner lost
+        # would turn all three green at once. Its companion runs throwaway cases built to trip each
+        # rule through it -- a failure, an error, a failing subTest, a case that must run after the
+        # others, a module fixture that raises -- under unittest's own runner, not the one it tests.
+        run: python3 -I tools/companion_runner_tests.py
+
       - name: tools/land.sh refuses before it merges, merges only a reviewed head with the body its caller named, and pushes the roadmap's refresh alone
         # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
         # in one directory and read it from another (2c9962f), which a copy of its parse loop had
@@ -253,6 +261,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: The companions' runner, on macOS
+        # The companions below run through it here as well, under the Python this image ships, where
+        # the documents job runs another.
+        run: python3 -I tools/companion_runner_tests.py
 
       - name: tools/land.sh before, at and after its merge, under the bash 3.2 macOS ships
         # The Linux runner has bash 5, so it can never show a failure only 3.2 has: under set -u,
