@@ -32,13 +32,13 @@ git itself. gh is the one call that leaves the machine, so each case's bin holds
 it answers the three `pr view` shapes land.sh uses, the two `api` listings of the pull request's
 comments and reviews (from the case's own fixtures), and `pr merge`, and it records every call's
 arguments. Any other call is recorded and exits 97, which turns a new gh call in land.sh into a red
-case instead of an empty answer. land.sh runs python3 three times. Before its merge it runs
+case instead of an empty answer. land.sh runs python3 up to three times. Before its merge it runs
 tools/review_record.py beside it, and the double hands that call to the real interpreter, so every
-case reads its records with the real reader (#67). After the merge it derives the roadmap and then
-deletes the branches the merge finished, and the double records each of those two calls with the
-directory it ran in. The merge body is an argument, so its bytes are in the record of the merge
-call, and they are what expose a wrong path: a body path checked in one directory and read in
-another reaches gh as other bytes or none.
+case reads its records with the real reader (#67). After the merge it derives the roadmap and then,
+for a merge into main only, deletes the branches the merge finished, and the double records each of
+those calls with the directory it ran in. The merge body is an argument, so its bytes are in the
+record of the merge call, and they are what expose a wrong path: a body path checked in one
+directory and read in another reaches gh as other bytes or none.
 
 **Most cases stop at the merge.** Their gh double fails `pr merge`, and their python3 double fails
 the two calls after it, so none of them gets past a merge.
@@ -184,8 +184,11 @@ unexpected() {{
 # A case that goes past the merge names $server, a clone of its origin standing in for GitHub's
 # side, and the merge then goes through as GitHub makes one: a merge commit on the base, with the
 # subject and the body as its message and the pinned head as its second parent, pushed to origin, so
-# that land.sh's own `git fetch origin` brings it back. GitHub refuses a pin that is not the pull
-# request's head, the "OID that the pull request head ref must match to allow merge"
+# that land.sh's own `git fetch origin` brings it back. GitHub's default merge method merges "using
+# the `--no-ff` option":
+# https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/about-merge-methods-on-github.
+# GitHub refuses a pin that is not the pull request's head, the "OID that the pull request head ref
+# must match to allow merge"
 # (https://docs.github.com/en/graphql/reference/input-objects#mergepullrequestinput), and this
 # refuses one that is not the last of $heads. Every such case passes --subject; without one GitHub
 # titles the commit itself, which this does not imitate. $during_merge runs first, when the case has
@@ -263,14 +266,15 @@ esac
 """
 
 PYTHON_DOUBLE = """#!/bin/bash
-# A double for python3, written by tools/land_tests.py. land.sh runs python3 three times. Before its
-# merge it runs the review record reader beside it, and that call goes to the real interpreter in
-# every case, so the reader under test is the real one. After the merge it derives the roadmap from
-# the repository root and then runs the branch cleanup beside it, and each of those calls is recorded
-# with the directory it ran in. Where the merge fails, both are unexpected: a case that reaches them
-# has gone past a merge that should have stopped it. Where the merge goes through, the roadmap goes
-# to the real interpreter, over the copies of its inputs the case's clone holds, and the cleanup
-# deletes nothing and prints nothing, since tools/prune_branches_tests.py runs the real one.
+# A double for python3, written by tools/land_tests.py. land.sh runs python3 up to three times.
+# Before its merge it runs the review record reader beside it, and that call goes to the real
+# interpreter in every case, so the reader under test is the real one. After the merge it derives
+# the roadmap from the repository root and then, for a merge into main only, runs the branch cleanup
+# beside it, and each of those calls is recorded with the directory it ran in. Where the merge
+# fails, both are unexpected: a case that reaches them has gone past a merge that should have
+# stopped it. Where the merge goes through, the roadmap goes to the real interpreter, over the
+# copies of its inputs the case's clone holds, and the cleanup deletes nothing and prints nothing,
+# since tools/prune_branches_tests.py runs the real one.
 if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
 n=0
 while [ -e {log}/python3-call-$n ]; do n=$((n + 1)); done
@@ -531,7 +535,8 @@ class LandTestCase(unittest.TestCase):
         run only once a merge has gone through."""
         self.assertFalse((case.log / "unexpected").exists(),
                          f"land.sh made a gh call the double does not answer: {case.calls()}")
-        self.assertEqual([], case.python3_calls(), "land.sh ran python3 past its merge")
+        self.assertEqual([], case.python3_calls(),
+                         "land.sh made a python3 call other than the record reader's")
 
     def assertRefused(self, case: Case, result: Result, fragment: str, calls: list[list[str]]):
         """A refusal: status 1, a `land:` line naming it, and gh asked exactly `calls`."""
