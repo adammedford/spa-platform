@@ -135,7 +135,8 @@ needs credentials, a state bucket and the first-deployment order in
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come
   from this module's own bucket and variables, and `TrustedNetworks` names only the ALB
-  subnet ranges, so stage 1 trusts the load balancer and nothing wider.
+  subnet ranges, so `UsePlatformForwardedHeaders` trusts the load balancer and nothing
+  wider.
 
 ### The task role is the security object of record
 

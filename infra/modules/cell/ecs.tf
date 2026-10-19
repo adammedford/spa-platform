@@ -95,12 +95,13 @@ locals {
     # upstreams it may name.
     { for index, suffix in var.allowed_host_suffixes : "Policy__AllowedHostSuffixes__${index}" => suffix },
     { for index, upstream in var.allowed_upstreams : "Policy__AllowedUpstreams__${index}" => upstream },
-    # Stage 1 trusts X-Forwarded-Proto and X-Forwarded-For from these addresses and from nowhere
-    # else (contracts/pipeline.md stage 1, N-09). The contract names the value itself -- "The ALB
-    # subnets, in CIDR form" (contracts/platform-config.schema.json ->
-    # ForwardedHeaders.TrustedNetworks) -- so it is the subnets the load balancer sits in, which is
-    # where its addresses come from (alb.tf). The cell's whole VPC range would also trust every
-    # unallocated address in it, and only two subnets out of the range are allocated.
+    # UsePlatformForwardedHeaders trusts X-Forwarded-Proto and X-Forwarded-For from these addresses
+    # and from nowhere else (contracts/pipeline.md, UsePlatformForwardedHeaders; N-09). The contract
+    # names the value itself -- "The ALB subnets, in CIDR form"
+    # (contracts/platform-config.schema.json -> ForwardedHeaders.TrustedNetworks) -- so it is the
+    # subnets the load balancer sits in, which is where its addresses come from (alb.tf). The cell's
+    # whole VPC range would also trust every unallocated address in it, and only two subnets out of
+    # the range are allocated.
     { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
   )
