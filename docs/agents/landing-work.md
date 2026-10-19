@@ -41,6 +41,31 @@ references `Platform.Abstractions` and no other workstream's project, so a real 
 workstream's code is a need for Abstractions, which is the case above. Otherwise the row was taken
 out of order.
 
+**A commit that changes a steering document names its authority** (ADR-0023). The steering
+documents are `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`, `OWNERSHIP.md`, `CODING_STANDARDS.md`,
+`docs/agents/`, `docs/adr/` and `contracts/`. The commit's message ends with a trailer in one of two
+forms, on a line of its own in the last paragraph, beside any other trailers:
+
+```
+Authority: #<n>     the ticket whose acceptance criterion asks for the change,
+                    a ticket the human wrote or approved
+Authority: <URL>    the comment on this repository that holds a confirmed answer, as GitHub
+                    links it: https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>
+```
+
+A pre-accepted answer, a follow-up a night raised, an archived ticket's proposal and a reviewer's
+finding are not authority. `git commit --amend --no-edit --trailer "Authority: #<n>"` adds the
+trailer to the last commit. git reads trailers from the message's last paragraph alone, and an
+`Authority:` line inside the prose is not one.
+
+`.github/steering.py` holds this, in the pre-push hook and in CI, on every branch (#102). It reads
+each non-merge commit between the base the check judges against and HEAD, made since the starting
+point the script records, and fails one that changes a steering document with no `Authority:`
+trailer, a `#<n>` that names no issue (a pull request's number included), or a URL that is not a
+comment on this repository, naming the commit and the paths. A merge needs no trailer, and neither
+does a commit that only adds a change request under `contracts/changes/`; editing or removing one
+does. Whether what the trailer cites decides the change is the reviewer's call, not the check's.
+
 ## Land it
 
 One branch per task, one pull request, merged with a merge commit. CI must be green.
@@ -71,6 +96,14 @@ escape is `--unreviewed "<reason>"`, for a red `main` that cannot wait or no ses
 it merges pinned to the head it saw, ends the body with `Unreviewed: <reason>`, and leaves that
 review open until a record names the merged head ("Gates" below). A merge made any other way is not
 checked at all, which is why nothing else is a sanctioned merge path.
+
+**The pull request's description closes the tickets it completes.** It carries one `Closes #n`
+line for each of them and one `Ticket: #n` line for each ticket it only advances. When
+`tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
+names; `Ticket:` is not a closing keyword, so its ticket stays open
+(https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+A complete ticket stays open and assigned until then. The lines go in the description, not in the
+merge body passed with `--body-file`.
 
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process

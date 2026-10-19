@@ -31,11 +31,20 @@ messages, typed from its text, not read from the script under test (#68: same ch
 same messages), except the Terraform lines #69 changed on purpose: the skip message names the floor
 too, a line names the Terraform that ran, and the last line names that version.
 
+**The cases run at the same time** (#107), on the threads of tools/companion_runner.py: one per
+CPU, up to eight, unless SCRIPT_TESTS_JOBS names another number. That rests on each case keeping to
+its own throwaway directory and its own constructed environment. No case changes the working
+directory, os.environ or anything else the process shares, and a new case must not either. The
+real tools in a case's bin directory are links to wrappers written once for the run, because on the
+Mac this was measured on a newly written file costs about 45 ms more the first time it runs; the
+doubles are still each case's own.
+
 Run: python3 -I tools/check_tests.py
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import pathlib
 import re
@@ -48,6 +57,9 @@ import textwrap
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools" / "companion_runner.py")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "check.sh"
 HOOK = ROOT / ".githooks" / "pre-push"
 TOUCHES = ROOT / ".github" / "touches.sh"
@@ -132,9 +144,12 @@ HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
 
+# The steering check is handed the base A-05 judges against, for its authority rule's range
+# (#102), and is run without one when there is no base, so that it reads every commit instead.
+STEERING = ["python3", "-I", ".github/steering.py"]
 PYTHON_CHECKS = [
     ["python3", "-I", ".github/path-ownership.py", "origin/main", "HEAD"],
-    ["python3", "-I", ".github/steering.py"],
+    STEERING + ["--base", "origin/main"],
     ["python3", "-I", "tools/roadmap.py", "--check"],
 ]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
@@ -216,10 +231,10 @@ class Case:
         for tool in TOOLS:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
-            # An exec of the resolved binary rather than a link, as land_tests.py does: a git built
-            # with RUNTIME_PREFIX finds its helpers relative to the path it was started from.
-            self.write_executable(self.bin / tool,
-                                  f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
+            # A link to an exec of the resolved binary, written once for the run, rather than a
+            # link to the binary, as land_tests.py does: a git built with RUNTIME_PREFIX finds its
+            # helpers relative to the path it was started from.
+            runner.link_tool(self.bin / tool, os.path.realpath(found))
         (self.bin / "bash").symlink_to(BASH)
         fails_on = fails_on or {}
         for name, loud in (("python3", ""), ("dotnet", "yes"), ("terraform", "yes")):
@@ -364,7 +379,7 @@ class HookTests(CheckTestCase):
         case = Case(self, change="docs/notes.md", fails_on={"python3": ".github/steering.py"})
         result = case.run(hook=True)
         self.assertEqual(1, result.status)
-        self.assertLines(["python3 double failed: -I .github/steering.py",
+        self.assertLines(["python3 double failed: -I .github/steering.py --base origin/main",
                           "pre-push: the steering check failed.", HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS[:2], case.calls())
 
@@ -398,7 +413,8 @@ class HookTests(CheckTestCase):
         self.assertLines(["pre-push: A-05 not checked: no main to diff against."], result.stderr)
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
-        self.assertEqual(PYTHON_CHECKS[1:] + BUILD + terraform_checks(), case.calls())
+        # No base, so the steering check is handed none and reads every commit HEAD reaches.
+        self.assertEqual([STEERING] + PYTHON_CHECKS[2:] + BUILD + terraform_checks(), case.calls())
 
     def test_duplicated_build_artifacts(self):
         case = Case(self, change="docs/notes.md")
@@ -482,6 +498,8 @@ class FullModeTests(CheckTestCase):
         result = self.full(case, "--base", fork)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}.")
         self.assertEqual(["python3", "-I", ".github/path-ownership.py", fork, "HEAD"], case.calls()[0])
+        # The steering check's authority rule judges the same range A-05 does (#102).
+        self.assertEqual(STEERING + ["--base", fork], case.calls()[1])
 
     def test_failures_end_on_the_verdict_and_stop_there(self):
         cases = {
@@ -754,4 +772,4 @@ class InterpreterTests(CheckTestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    runner.main()

@@ -11,6 +11,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | --- | --- | --- | --- | --- |
 | Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
+| GitHub CLI, signed in | 2.102.0 | `brew install gh`, then `gh auth login` | Every landing, and the tracker, which is GitHub Issues | `tools/land.sh` refuses to start without gh on PATH, and `tools/preflight.sh` counts gh as missing until it is signed in (#96) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
 | Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for. This is the `terraform` an apply runs |
@@ -139,11 +140,21 @@ job runs.
 
 `tools/check.sh`, the local check, has a companion of the same shape, `tools/check_tests.py` (#68),
 which also runs `.githooks/pre-push`; both run in the same two jobs. Its doubles stand in for
-python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one for
-its Terraform rows, `tools/preflight_tests.py` (#69), in the same two jobs. The branch cleanup
+python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight.sh` has one,
+`tools/preflight_tests.py`, in the same two jobs. Built for its Terraform rows (#69) and extended to
+the rest (#96), it runs a whole-file copy of the script beside crafted env files, since the script
+reads them from beside itself, with an `aws` double and no `curl` on PATH. The branch cleanup
 `tools/land.sh` runs after its merge, `tools/prune_branches.py`, has `tools/prune_branches_tests.py`
-(#71), also in both jobs: real git with a bare origin, a gh double, and the one set of cases that
-runs `tools/land.sh` past its merge, because that double's merge really merges.
+(#71), also in both jobs: real git with a bare origin, and a gh double whose merge really merges, so
+it runs `tools/land.sh` past its merge to see the cleanup run. `tools/land_tests.py` goes past the
+merge the same way since #97, for the fast-forward, the real `tools/roadmap.py` over copies of the
+five files it reads, and the refresh commit and its push, and answers the cleanup with a double.
+
+Those three, `tools/land_tests.py`, `tools/check_tests.py` and `tools/prune_branches_tests.py`, run
+their cases at the same time through `tools/companion_runner.py` (#107): unittest's own text runner
+and command line, but for `-b`, which it refuses, with the cases on threads, one per CPU up to eight
+unless `SCRIPT_TESTS_JOBS` names another number. It uses nothing outside the standard library
+either, and has a companion of its own, `tools/companion_runner_tests.py`, in both jobs.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
@@ -188,6 +199,7 @@ Read on 11 October 2026.
 
 - [.NET 10 downloads](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
 - Homebrew catalogue: [dotnet-sdk](https://formulae.brew.sh/api/cask/dotnet-sdk.json), [awscli](https://formulae.brew.sh/api/formula/awscli.json), [session-manager-plugin](https://formulae.brew.sh/api/cask/session-manager-plugin.json), [docker-desktop](https://formulae.brew.sh/api/cask/docker-desktop.json), [colima](https://formulae.brew.sh/api/formula/colima.json)
+- Homebrew catalogue: [gh](https://formulae.brew.sh/api/formula/gh.json), read on 19 October 2026 for the GitHub CLI row (#96)
 - [HashiCorp tap formula for Terraform](https://raw.githubusercontent.com/hashicorp/homebrew-tap/master/Formula/terraform.rb)
 - [Terraform registry: hashicorp/aws](https://registry.terraform.io/v1/providers/hashicorp/aws), and the provider's pages for [aws_cognito_user_pool_client](https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/cognito_user_pool_client.html.markdown) and [aws_cognito_managed_login_branding](https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/main/website/docs/r/cognito_managed_login_branding.html.markdown)
 - [Terraform registry: hashicorp/random](https://registry.terraform.io/v1/providers/hashicorp/random), read on 13 October 2026 for the row above. The licence is the `LICENSE.txt` in the provider each lock file pins.

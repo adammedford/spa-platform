@@ -78,7 +78,9 @@ jobs:
         # meanwhile. The two jobs below read the answer. Every job runs when there is no base to
         # diff against -- a push whose `before` GitHub does not have -- and when the files that make
         # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh, which only the
-        # build job exercises. A decision cannot vouch for a change to itself.
+        # build job exercises. A decision cannot vouch for a change to itself. The base it resolved
+        # is an output too, empty when there was none, for the steering check's authority rule,
+        # which judges the commits from it to HEAD: one place decides the range, not two.
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -91,9 +93,11 @@ jobs:
           esac
           build=true
           terraform=true
+          resolved=""
           if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
             echo "::notice::no base to diff against ($base), so every job runs."
           else
+            resolved="$base"
             changed="$(git diff --name-only "$base"...HEAD)"
             # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
             if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$' > /dev/null; then
@@ -105,6 +109,7 @@ jobs:
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "terraform=$terraform" >> "$GITHUB_OUTPUT"
+          echo "base=$resolved" >> "$GITHUB_OUTPUT"
           echo "build=$build terraform=$terraform"
 
       - name: CI path decisions include build inputs and survive large diffs
@@ -120,7 +125,7 @@ jobs:
           python3 -I .github/shell_parse_tests.py
           python3 -I .github/shell-parse.py
 
-      - name: What a session steers by says what the repository says, and every citation resolves
+      - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
         # let a progress line sit directly under the paragraph forbidding it for two sessions running.
@@ -129,15 +134,25 @@ jobs:
         # which claims that a number resolves to a spec somebody can open; the tickets in each
         # tracker directory, where two files sharing a number leave a citation of it ambiguous; and
         # the issue citations in every tracked file, each of which claims a number GitHub has issued
-        # to an issue or pull request here, which the check asks GitHub about with the token below.
+        # to an issue or pull request here, which the check asks GitHub about with the token below;
+        # and the commits this change adds, each of which, if it changes a steering document, must
+        # name what authorised it in an `Authority:` trailer (ADR-0023, #102). Those are judged from
+        # the base the decision step resolved, or over every commit HEAD reaches when it resolved
+        # none, so a push GitHub has no `before` for is judged rather than skipped.
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         env:
-          # For `gh api`, which the check runs once to list the issue and pull request numbers.
+          # For `gh api`, which the check runs once to list the issue and pull request numbers, and
+          # once per comment an `Authority:` trailer cites.
           GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.touches.outputs.base }}
         run: |
           python3 -I .github/steering_tests.py
-          python3 -I .github/steering.py
+          if [ -n "$BASE" ]; then
+            python3 -I .github/steering.py --base "$BASE"
+          else
+            python3 -I .github/steering.py
+          fi
 
       - name: Plan generation stays disabled until its private pipeline is reviewed
         # A plan's `after` holds the values the apply will write, so the identity root's plan
@@ -176,14 +191,25 @@ jobs:
         # case of each.
         run: python3 -I tools/review_record_tests.py
 
-      - name: tools/land.sh refuses before it merges, merges only a reviewed head, and hands gh the body its caller named
+      - name: The companions' runner reports every case it runs, each in its suite's order
+        # tools/land_tests.py, tools/check_tests.py and tools/prune_branches_tests.py run their cases
+        # at the same time through tools/companion_runner.py (#107), so a failure the runner lost
+        # would turn all three green at once. Its companion runs throwaway cases built to trip each
+        # rule through it -- a failure, an error, a failing subTest, a case that must run after the
+        # others, a module fixture that raises -- under unittest's own runner, not the one it tests.
+        run: python3 -I tools/companion_runner_tests.py
+
+      - name: tools/land.sh refuses before it merges, merges only a reviewed head with the body its caller named, and pushes the roadmap's refresh alone
         # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
         # in one directory and read it from another (2c9962f), which a copy of its parse loop had
         # verified. The companion runs the real script against real git in throwaway repositories,
-        # the real review record reader and a gh double, so no case reaches GitHub or gets past the
-        # merge. Here it runs under the runner's bash 5, which the script's shebang can also pick;
-        # the bash 3.2 job runs it at the other end of that range. The tool choice is D-3 in
-        # docs/dependencies.md.
+        # the real review record reader and a gh double, so no case reaches GitHub. Most cases stop
+        # at the merge, which their double fails. The cases past it (#97) have a double that merges
+        # into the bare origin as GitHub would, and the real tools/roadmap.py, and see the
+        # fast-forward refusal, the exit when the blocks did not move, and the refresh pushed with
+        # nothing else in it. Here it runs under the runner's bash 5, which the script's shebang can
+        # also pick; the bash 3.2 job runs it at the other end of that range. The tool choice is D-3
+        # in docs/dependencies.md.
         run: python3 -I tools/land_tests.py
 
       - name: tools/check.sh runs the hook's checks unchanged, and in full ends on its verdict
@@ -195,10 +221,15 @@ jobs:
         # runs it under 3.2.
         run: python3 -I tools/check_tests.py
 
-      - name: tools/preflight.sh names the Terraform floor and says whether this machine has it
-        # Preflight's floor row tells a person, or an overnight lane, whether the local check will run
-        # the Terraform CI runs, and prints the command that installs it where the check looks (#69).
-        # Its companion runs the real script with a Terraform double and asserts only those rows.
+      - name: tools/preflight.sh holds the AWS credentials to the project its file names, and counts what day one needs
+        # Preflight is where tools/land.sh sends a reader without gh, and its AWS project guard is
+        # what stands between an apply and the wrong project (7a364fe). Its companion runs a
+        # whole-file copy of the script beside crafted env files, with doubles for aws, terraform,
+        # git, dotnet, openssl, gh and python3 and no curl, so no case reaches the network or AWS.
+        # It covers each form of the env file against what `set -a; .` makes of it, the nine guard
+        # cases, the profile's configured Region and the account pin, an exported CDPATH, the gh and
+        # python3 rows (#96), and the Terraform floor's rows (#69). Under bash 5 here; the job below
+        # runs it under 3.2.
         run: python3 -I tools/preflight_tests.py
 
       - name: A landing deletes the branches it finished, and keeps and lists every other
@@ -207,7 +238,8 @@ jobs:
         # the roadmap does not call landed, a worktree, commits or a merge resolution main lacks, and
         # a push to origin after the check. Its companion runs the real script against real git in
         # throwaway repositories, with a bare origin and a gh double, and runs tools/land.sh past a
-        # merge, which tools/land_tests.py never does, to see the landing delete what it finished.
+        # merge to see the landing delete what it finished. tools/land_tests.py covers the steps
+        # between that merge and the cleanup, and answers the cleanup with a double.
         run: python3 -I tools/prune_branches_tests.py
 
       - name: The main-checkout guard refuses branch work in the main checkout, and nothing else
@@ -230,7 +262,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: tools/land.sh refuses before it merges, under the bash 3.2 macOS ships
+      - name: The companions' runner, on macOS
+        # The companions below run through it here as well, under the Python this image ships, where
+        # the documents job runs another.
+        run: python3 -I tools/companion_runner_tests.py
+
+      - name: tools/land.sh before, at and after its merge, under the bash 3.2 macOS ships
         # The Linux runner has bash 5, so it can never show a failure only 3.2 has: under set -u,
         # 3.2 calls an empty "${array[@]}" an unbound variable where 5 expands it to nothing. The
         # variable makes the companion fail, not skip, when /bin/bash is not 3.2, which is why
@@ -247,15 +284,15 @@ jobs:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/check_tests.py
 
-      - name: tools/preflight.sh's Terraform rows, under the bash 3.2 macOS ships
+      - name: tools/preflight.sh, under the bash 3.2 macOS ships
         # Preflight is written for the bash 3.2 macOS ships, which is what a person on a Mac runs.
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/preflight_tests.py
 
-      - name: tools/land.sh past its merge, and the cleanup it runs, under the bash 3.2 macOS ships
-        # The lines land.sh runs after its merge are reached by no other companion, and a landing on
-        # this Mac runs them under 3.2.
+      - name: The cleanup tools/land.sh runs after its merge, under the bash 3.2 macOS ships
+        # tools/land_tests.py answers the cleanup with a double, so only this companion runs the
+        # real one past a merge, and a landing on this Mac runs it under 3.2.
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/prune_branches_tests.py

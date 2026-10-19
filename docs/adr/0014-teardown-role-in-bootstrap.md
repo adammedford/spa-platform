@@ -1,6 +1,7 @@
 # ADR-0014: Create the teardown role in `infra/bootstrap`, and derive its name from the cell
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-19 by change request 1.5a:** item 6's default bucket name
+  is the account regional one; the decision is unchanged.
 - **Date:** 2026-10-15
 - **Deciders:** integrator
 - **Plan ref:** No decision row. `docs/plan/02-contracts.md` → S3 layout and
@@ -103,7 +104,9 @@ account-qualified name; it misses the current unsuffixed default and is broader 
    `s3:ListBucketVersions` on the bucket ARN, where the bucket is
    intended to default to `spa-platform-<cell>-<account id>`; use the actual bucket ARN rather than
    reconstructing that string. Destroying the three roots runs as the operator's own
-   principal, not as this role.
+   principal, not as this role. **Amended 2026-10-19:** change request 1.5a replaced that
+   default with `spa-platform-<cell>-<account id>-<region>-an`, in S3's account regional
+   namespace (`contracts/s3-layout.md`).
 7. **The cell name is validated identically in both roots:** 3 to 22 characters,
    `^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$`, no leading or trailing hyphen, with a comment naming where
    each bound comes from. The lower bound is the frozen contracts' appId shape; the upper is the

@@ -8,7 +8,9 @@
 #
 # Every statement below is asserted at plan time in tests/module.tftest.hcl, including one
 # assertion that fails on a statement the test does not recognise, so a widened grant breaks a test
-# instead of waiting for a reviewer to notice. Plan row 1.9 then polices the applied plan (P-03).
+# instead of waiting for a reviewer to notice. Those runs, with the one that holds the bucket policy
+# to refusals only, are P-03 (plan row 1.9), which ADR-0016 makes an assertion on the configuration
+# against a mock provider rather than on an applied plan.
 
 data "aws_partition" "current" {}
 data "aws_region" "current" {}

@@ -199,6 +199,12 @@ run "the_module_builds_one_listener_and_one_target_group" {
     error_message = "Invalid header fields must be dropped at the load balancer."
   }
 
+  # The plan allowlist further down counts resource types, so it cannot see a block inside aws_lb.
+  assert {
+    condition     = length(aws_lb.cell.access_logs) == 0
+    error_message = "Access logs stay off in Phase 1 (Q8 on #98): an entry records the login callback's query string, authorization code and state included (T13, ADR-0007). modules/cell/alb.tf says why."
+  }
+
   assert {
     condition     = length(aws_lb.cell.subnets) == 2
     error_message = "The load balancer must sit in both of the cell's subnets."
@@ -474,6 +480,31 @@ run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
   }
 }
 
+# What main.tf's try() absorbs (Q4 on #98): an apps root state that exists and carries no clients
+# output, which is what a destroyed apps root leaves. Both client ids are then empty, which the
+# module accepts while mock_api_image is empty and refuses once it is set, as
+# a_mock_api_image_with_no_client_ids_is_refused in modules/cell/tests/module.tftest.hcl shows. A
+# missing state is the other half and is not absorbed: the read itself fails the plan, before try()
+# runs, and a test that overrides the read cannot reach that failure.
+run "an_apps_root_state_with_no_clients_output_leaves_the_mock_api_s_allowlists_empty" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.apps
+    values = {
+      outputs = {}
+    }
+  }
+
+  assert {
+    condition = local.mock_api_clients == {
+      app1 = ""
+      app2 = ""
+    }
+    error_message = "An apps root state with no clients output must leave both client ids empty, not fail the plan: that is the missing output main.tf's try() absorbs."
+  }
+}
+
 # --- Change request 1.5: the teardown role and the cell name ------------------------------------
 
 run "the_teardown_principal_is_the_role_bootstrap_creates_looked_up_by_its_derived_name" {
@@ -548,4 +579,264 @@ run "cell_refuses_a_trailing_hyphen_at_this_root" {
   }
 
   expect_failures = [var.cell]
+}
+
+
+# --- Task 1.9: the platform plan allowlist (P-01) ------------------------------------------------
+#
+# P-01: "Exactly one ALB, one listener, one target group, one ECS service, one bucket. No NAT
+# gateway, database or EC2 instance." (docs/plan/04-tests.md). Plan row 1.9 makes it an allowlist of
+# resource types and counts, and ADR-0016 makes it an assertion on the configuration, planned
+# against the mock provider above, because CI holds no AWS credentials. What these runs prove is
+# the plan the configuration produces, never the account.
+#
+# They read the configuration's source, because a plan holds no list of its resources that a test
+# can enumerate: a test addresses only resources it already knows the names of, and a root test
+# cannot address a module's resources at all. What only this root can hold is that modules/cell is
+# the whole of its plan, and how many of each type that plan contains.
+#
+# Each pattern takes a block's labels in quotes, the only form `terraform fmt` leaves: CI's Format
+# step and tools/check.sh both run `fmt -check` before any test, and an unquoted label fails it. A
+# name is whatever sits between the quotes, since Terraform accepts capitals and hyphens in one
+# (modules/cell/tests/network.tftest.hcl cites the rule). Paths are built on path.module, the root
+# itself, because Terraform refuses an assertion that refers to nothing in the configuration.
+
+run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_else" {
+  command = plan
+
+  # The next run finds the module's declarations with this same pattern, which is what shows that
+  # the zero found here is the root's and not the pattern's.
+  assert {
+    condition = length(regexall(
+      "(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"",
+      join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
+    )) == 0
+    error_message = "The platform root declares no resource of its own: its plan is modules/cell's, which the next run holds to the allowlist. A resource here, such as a NAT gateway, a rule on the task's group or a policy on its role, is in the plan with no allowlist reading it."
+  }
+
+  # A block written on one line holds one argument, and `terraform fmt -check` passes it as it is.
+  # The module pattern below and the next two runs' meta-argument patterns end a block at a closing
+  # brace in the first column, so they read past a one-line block into the next one, or past the
+  # end. Two such blocks passed every run here: module "nat" { source = "./nat" } at the end of
+  # versions.tf, which put a NAT gateway in this root's plan; and, with the allowlist raised to two
+  # buckets, resource "aws_s3_bucket" "extra" { count = 2 } ahead of the platform bucket in
+  # modules/cell, while the plan held three.
+  assert {
+    condition = alltrue([
+      for header in regexall("(?m)^(?:resource|module)\\s[^\\n]*$", join("\n", concat(
+        [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+        [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+      ))) : endswith(trimspace(header), "{")
+    ])
+    error_message = "Every resource and module block in the platform root and modules/cell opens a block of its own lines. A one-line block carries its source, count or for_each where the patterns that read them never look."
+  }
+
+  # Every pattern in this file finds a declaration where it starts a line. `terraform fmt -check`
+  # re-indents a block and fails a comment between its keyword and its labels, but it passes a block
+  # comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "unlisted_probe" {} in
+  # modules/cell passed every run here, a second bucket in a plan held to one. So a line that names a
+  # resource or module block names it at its start, or is a # or // comment.
+  #
+  # Terraform has three comment forms (https://developer.hashicorp.com/terraform/language/syntax/configuration#comments).
+  # A # or // comment runs to the end of its line, so nothing after one is live; only a /* */ comment
+  # can end in front of live text on its line, and inside one a line can start with #. The exemption
+  # read /*<newline># rationale */ resource "aws_s3_bucket" "unlisted_probe" {} as a comment, and
+  # every run passed with the second bucket. Stripping block comments before matching would mean
+  # lexing strings, heredocs and nested interpolation in RE2, because these files hold /* inside
+  # strings ("${aws_s3_bucket.platform.arn}/*"), and a lexer that misses one form is the next miss.
+  # Every block comment ends in */ (an unterminated one does not parse), so files holding no */ hold
+  # no block comment: write comments with #. A string that needs */ is built so the two characters
+  # are not adjacent in the source, such as "apps/*${"/"}releases".
+  assert {
+    condition = !strcontains(join("\n", concat(
+      [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+      [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+    )), "*/")
+    error_message = "The platform root and modules/cell hold no /* */ comment: one can end in front of a declaration on the same line, where no pattern here reads it, and inside one a line can start with #. Write the comment with #."
+  }
+
+  assert {
+    condition = alltrue([
+      for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", concat(
+        [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+        [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+      ))) : can(regex("^(?:(?:resource|module)\\s|\\s*(?:#|//))", line))
+    ])
+    error_message = "Every resource and module block in the platform root and modules/cell starts its own line. A declaration behind a block comment, /* ... */ resource, is in the plan where no pattern here reads it."
+  }
+
+  assert {
+    condition = [
+      for m in regexall("(?ms)^module\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :
+      [m[0], try(regex("(?m)^\\s*source\\s*=\\s*\"([^\"]+)\"", m[1])[0], "")]
+    ] == [["cell", "../../../modules/cell"]]
+    error_message = "The platform root calls one module, cell, from ../../../modules/cell, and nothing else: another module call brings resources of any type into the plan, with no allowlist naming them."
+  }
+
+  # count or for_each on the call multiplies every resource in the module, so "exactly one ALB" would
+  # read true of the source and false of the plan.
+  assert {
+    condition = alltrue([
+      for m in regexall("(?ms)^module\\s+\"[^\"]+\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :
+      length(regexall("(?m)^\\s*(count|for_each)\\s*=", m[0])) == 0
+    ])
+    error_message = "The cell module is called with no count or for_each: either multiplies every resource in it, so one ALB becomes two."
+  }
+
+  # Terraform loads *.tf.json beside *.tf (https://developer.hashicorp.com/terraform/language/files),
+  # and a block in JSON syntax is invisible to every pattern in this file.
+  assert {
+    condition     = length(fileset(path.module, "*.tf.json")) == 0 && length(fileset("${path.module}/../../../modules/cell", "*.tf.json")) == 0
+    error_message = "The platform root and modules/cell are written in .tf files only: a .tf.json file declares blocks that no source-reading assertion sees."
+  }
+
+  assert {
+    condition = length(regexall(
+      "(?m)^module\\s+\"",
+      join("\n", [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")])
+    )) == 0
+    error_message = "modules/cell calls no child module, so its own .tf files are the whole of what it adds to the plan, which is what the allowlist in the next run reads."
+  }
+}
+
+# The allowlist: every type the platform plan may hold, and how many of each. The numbers come from
+# the plan rows and the decisions recorded on them, not from a count of the source this reads. Row
+# 1.2: a VPC, two public subnets in two zones with no NAT, so an internet gateway, a route table, its
+# default route and an association per subnet; the ALB's and the task's security groups, with one
+# rule into each and one out of each; and the VPC's default group, adopted with no rule (ticket 03,
+# question 3). Row 1.3: one load balancer, one listener, one target group. Row 1.5: one bucket,
+# private, versioned and TLS only, as its public access block, ownership controls, versioning and
+# policy, with the module's default encryption beside them; and two image repositories. Row 1.4: one
+# cluster, one task definition, one service and a log group, with a role for the agent and a role
+# for the task, each with its one policy.
+#
+# A run against the module rather than the root, because only that can address the module's
+# resources, and three of them are for_each: their instance counts are in the plan, not the source.
+# Every other declaration carries no count or for_each, so it is exactly one instance; the first
+# assertion is what makes that true rather than assumed. The run before this one holds that the
+# module is the root's whole plan.
+#
+# Adding a type, or another of one, means editing this map in the same change, which is where the
+# author is made to say what the resource is for. The run after this one holds the part of P-01 no
+# edit here can change.
+run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes = [".spa-poc.test:8443"]
+    allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+
+    # modules/cell's source, read from the root's directory, which is where terraform test resolves
+    # a relative path even in a run against a module.
+    cell_source = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  # Only the three declarations whose instances the next assertion counts may carry count or
+  # for_each. Two spaces is the canonical indent of a block's own argument, which `fmt -check` keeps,
+  # and is what tells a meta-argument from a dynamic block's for_each further in.
+  assert {
+    condition = toset([
+      for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", var.cell_source) :
+      "${m[0]}.${m[1]}" if length(regexall("(?m)^  (count|for_each)\\s*=", m[2])) > 0
+      ]) == toset(keys({
+        "aws_subnet.public"                  = aws_subnet.public
+        "aws_route_table_association.public" = aws_route_table_association.public
+        "aws_ecr_repository.repository"      = aws_ecr_repository.repository
+    }))
+    error_message = "Only the subnets, their route table associations and the image repositories may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
+  }
+
+  assert {
+    condition = {
+      for type in distinct([for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]]) :
+      type => sum([
+        for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) :
+        lookup({
+          "aws_subnet.public"                  = length(aws_subnet.public)
+          "aws_route_table_association.public" = length(aws_route_table_association.public)
+          "aws_ecr_repository.repository"      = length(aws_ecr_repository.repository)
+        }, "${m[0]}.${m[1]}", 1)
+        if m[0] == type
+      ])
+      } == {
+      aws_vpc                                            = 1
+      aws_internet_gateway                               = 1
+      aws_subnet                                         = 2
+      aws_route_table                                    = 1
+      aws_route                                          = 1
+      aws_route_table_association                        = 2
+      aws_security_group                                 = 2
+      aws_vpc_security_group_ingress_rule                = 2
+      aws_vpc_security_group_egress_rule                 = 2
+      aws_default_security_group                         = 1
+      aws_lb                                             = 1
+      aws_lb_listener                                    = 1
+      aws_lb_target_group                                = 1
+      aws_s3_bucket                                      = 1
+      aws_s3_bucket_versioning                           = 1
+      aws_s3_bucket_public_access_block                  = 1
+      aws_s3_bucket_ownership_controls                   = 1
+      aws_s3_bucket_server_side_encryption_configuration = 1
+      aws_s3_bucket_policy                               = 1
+      aws_ecr_repository                                 = 2
+      aws_ecs_cluster                                    = 1
+      aws_ecs_task_definition                            = 1
+      aws_ecs_service                                    = 1
+      aws_cloudwatch_log_group                           = 1
+      aws_iam_role                                       = 2
+      aws_iam_role_policy                                = 2
+    }
+    error_message = "The platform plan holds a type the allowlist does not name, or a different number of one it does (plan row 1.9, P-01). Name the type and its count in this map, in the same change, and say what it is for."
+  }
+}
+
+# P-01's own sentence, held apart from the allowlist: an edit that adds a NAT gateway to the map
+# above, or a second load balancer, still fails here, because P-01 forbids them and the allowlist's
+# author does not get to decide otherwise. The five types are counted from the declarations, which
+# the run before this one shows are single instances unless they are the three for_each ones; none
+# of the five is.
+#
+# The forbidden types are P-01's three words made specific. A NAT gateway. An EC2 instance, or the
+# capacity that launches one: a launch template or configuration, an Auto Scaling group, a fleet or
+# a spot request, a dedicated host, an ECS capacity provider (it exists only to put tasks on
+# instances), an EKS node group, an EMR cluster or a Lightsail instance. A database, by every AWS
+# database service's resource prefix; aws_dynamodb_table among them is a Phase 1 tripwire, because
+# Session.Store admits dynamodb only in Phase 2 (Q81 in
+# .scratch/overnight/questions-2026-10-15-answered.md, answered yes). The list is a floor, not a
+# closure: the allowlist above is the closure, and this is what an edit to it cannot lower.
+run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_and_no_nat_gateway_instance_or_database" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes = [".spa-poc.test:8443"]
+    allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    cell_source           = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  # One declaration of each, carrying no count or for_each, is exactly one instance of each.
+  assert {
+    condition = alltrue([
+      for type in ["aws_lb", "aws_lb_listener", "aws_lb_target_group", "aws_ecs_service", "aws_s3_bucket"] : [
+        for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", var.cell_source) :
+        length(regexall("(?m)^  (count|for_each)\\s*=", m[2])) if m[0] == type
+      ] == [0]
+    ])
+    error_message = "P-01: exactly one ALB, one listener, one target group, one ECS service and one bucket. Each is one declaration with no count or for_each."
+  }
+
+  assert {
+    condition = [
+      for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]
+      if can(regex("^aws_(nat_gateway|instance|spot_instance_request|spot_fleet_request|ec2_fleet|ec2_host|launch_template|launch_configuration|autoscaling_group|ecs_capacity_provider|eks_node_group|emr_cluster|lightsail_instance|db_.+|rds_.+|dynamodb_.+|docdb.*|neptune_.+|elasticache_.+|memorydb_.+|redshift.*|dsql_.+|keyspaces_.+|timestreamwrite_.+|opensearch_domain|elasticsearch_domain)$", m[0]))
+    ] == []
+    error_message = "P-01: no NAT gateway, database or EC2 instance in the platform plan. The cell sends 443 out from the task's public address (plan row 1.2), runs on Fargate (plan row 1.4) and keeps its state in S3 (contracts/s3-layout.md)."
+  }
 }

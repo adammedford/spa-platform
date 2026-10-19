@@ -30,15 +30,28 @@ named twice while absent and later dropped rather than written.
 One progress claim per pattern, each asserting the label that pattern prints, because the claim as
 AGENTS.md actually carried it tripped three patterns at once and so pinned none of them: deleting
 any one left the case green on the other two.
+
+The authority rule reads commits rather than the tree, so its cases commit: every commit made at a
+time the case names, either side of the rule's starting point, and never at the clock's, since
+which side a commit falls on is what the rule reads. They name the range as the hook and CI do,
+with `--base`, and the cases against the live repository name an empty one, `--base HEAD`, so a
+case about the tree does not also judge the repository's history. The comment lookup is a second
+GitHub seam, stubbed in setUp as the number lookup is; both lookups' own parsing is held by cases
+that point their commands at a stand-in for gh rather than at GitHub.
 """
 
+from __future__ import annotations
+
 import contextlib
+import datetime
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -53,6 +66,45 @@ LIVE_PLANNED = dict(steering.PLANNED)
 LIVE_UNFILED = dict(steering.UNFILED)
 LIVE_TRANSCRIPTS = dict(steering.TRANSCRIPTS)
 LIVE_UNCOMPARED = dict(steering.UNCOMPARED)
+
+# The two GitHub lookups as the module defines them, kept because setUp replaces both with stubs
+# that fail the case, and the cases holding their own parsing need the real functions back.
+REAL_ISSUED_NUMBERS = steering.issued_numbers
+REAL_COMMENT_URL = steering.comment_url
+
+# Either side of the authority rule's starting point, read from the module rather than typed, so
+# moving the starting point moves these with it: a day before it, and an hour after.
+SINCE = steering.AUTHORITY_SINCE
+BEFORE = SINCE - datetime.timedelta(days=1)
+AFTER = SINCE + datetime.timedelta(hours=1)
+
+# One file in each place ADR-0023 decision 2 names as a steering document, typed here rather than
+# read from the module: the case holding the module's list to the ADR is a separate one.
+STEERING_EXAMPLES = (
+    "GLOSSARY.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "OWNERSHIP.md",
+    "CODING_STANDARDS.md",
+    "docs/agents/review.md",
+    "docs/adr/0024-a-decision.md",
+    "contracts/pipeline.md",
+)
+
+# Paths that sit beside a steering document and are not one: a prefix match on the names above, or
+# a name matched anywhere in the tree rather than at the root, would hold each of these.
+STEERING_NEIGHBOURS = (
+    "GLOSSARY.md.orig",
+    "docs/GLOSSARY.md",
+    "src/AGENTS.md",
+    "docs/agents-archive/review.md",
+    "docs/adrs/0001-a-decision.md",
+    "contracts-old/pipeline.md",
+)
+
+# A comment on an issue, in the form GitHub writes a comment's URL, and the comment id in it.
+COMMENT_ID = "6253500774"
+COMMENT = f"https://github.com/adammedford/spa-platform/issues/98#issuecomment-{COMMENT_ID}"
 
 # A pair that passes: pointers that resolve, and no sentence carrying state.
 CLEAN_AGENTS = """# Agent guide
@@ -184,6 +236,26 @@ def unissued(number: int) -> str:
     return f"cites {issue(number)}, which names no issue or pull request of this repository"
 
 
+def message(subject: str, *authorities: str) -> str:
+    """A commit message as this repository writes one: a subject, a body, and a last paragraph of
+    trailers, one `Authority:` line per authority, beside the attribution line."""
+    trailers = "".join(f"Authority: {authority}\n" for authority in authorities)
+    return (f"{subject}\n\nWhat changed and why.\n\n{trailers}"
+            "Co-Authored-By: Steering Tests <steering-tests@example.test>\n")
+
+
+def holds(sha: str, subject: str, *paths: str) -> str:
+    """The line the authority rule prints for a commit that names no authority."""
+    return (f'commit {sha[:12]} ("{subject}") changes {", ".join(paths)} and carries no '
+            "Authority: trailer")
+
+
+def refuses(sha: str, subject: str, paths: tuple[str, ...], authority: str, why: str) -> str:
+    """The line the authority rule prints for an `Authority:` trailer that resolves to nothing."""
+    return (f'commit {sha[:12]} ("{subject}") changes {", ".join(paths)}, and Authority: '
+            f"{authority} {why}")
+
+
 # 91e2103's line as AGENTS.md carried it.
 GATE_SCORE = (
     "- **Gate G0 is open, with three of its five items passed.** The shipped handler, token "
@@ -210,34 +282,78 @@ class SteeringTests(unittest.TestCase):
         self.addCleanup(setattr, steering, "UNCOMPARED", steering.UNCOMPARED)
         steering.UNCOMPARED = {}
         # The `#NNN` rule's lookup, replaced so that no case reaches GitHub: a tree carrying a
-        # citation says what GitHub would answer, or the case fails on this stub.
+        # citation says what GitHub would answer, or the case fails on this stub. The authority
+        # rule's comment lookup likewise, for a trailer naming a comment's URL.
         self.addCleanup(setattr, steering, "issued_numbers", steering.issued_numbers)
         steering.issued_numbers = self.no_lookup
+        self.addCleanup(setattr, steering, "comment_url", steering.comment_url)
+        steering.comment_url = self.no_comment_lookup
+        # The commands the real lookups run, which the cases holding their parsing point at a
+        # stand-in for gh.
+        self.addCleanup(setattr, steering, "GH_ISSUES", steering.GH_ISSUES)
+        self.addCleanup(setattr, steering, "GH_COMMENT", steering.GH_COMMENT)
 
         # The citation rule reads the files git tracks, so the tree has to be a repository for it
         # to see anything at all. No commit is needed: `git ls-files` reads the index, and
-        # check() stages whatever the case has written by then.
+        # check() stages whatever the case has written by then. The authority rule reads commits,
+        # so the repository can make them: an identity, no signing, and no housekeeping, since a
+        # commit otherwise starts a detached `git maintenance run --auto` that can still be writing
+        # into .git when the case's cleanup removes it (ThrowawayRepositoryTests in
+        # .github/path_ownership_tests.py has the detail).
         self.git("init", "--quiet")
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "user.name", "Steering Tests")
+        self.git("config", "user.email", "steering-tests@example.test")
+        self.git("config", "commit.gpgsign", "false")
 
         self.reset()
         for pointer in CLEAN_POINTERS:
             self.write(pointer)
 
-    def git(self, *arguments: str) -> None:
-        subprocess.run(("git", *arguments), cwd=self.root, check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def git(self, *arguments: str, env: dict[str, str] | None = None) -> str:
+        done = subprocess.run(("git", *arguments), cwd=self.root, check=True, env=env,
+                              capture_output=True, text=True)
+        return done.stdout.strip()
 
-    def no_lookup(self, root: pathlib.Path) -> tuple[set[int], str]:
+    def no_lookup(self, root: pathlib.Path) -> tuple[set[int], set[int], str]:
         self.fail("the check asked GitHub for its numbers; a case whose tree cites a `#NNN` says "
                   "what GitHub would answer with github() or offline()")
 
-    def github(self, *numbers: int) -> None:
-        """What GitHub would answer: these are the numbers it has issued to issues and pull requests."""
-        steering.issued_numbers = lambda root: (set(numbers), "")
+    def no_comment_lookup(self, root: pathlib.Path, comment: str) -> tuple[str | None, str]:
+        self.fail("the check asked GitHub for a comment; a case whose trailer names one says what "
+                  "GitHub would answer with comments()")
+
+    def github(self, *numbers: int, pulls: tuple[int, ...] = ()) -> None:
+        """What GitHub would answer: these numbers are issues, and `pulls` are pull requests."""
+        steering.issued_numbers = lambda root: (set(numbers), set(pulls), "")
 
     def offline(self, why: str) -> None:
         """What the lookup says when GitHub cannot be asked: no numbers, and the reason."""
-        steering.issued_numbers = lambda root: (set(), why)
+        steering.issued_numbers = lambda root: (set(), set(), why)
+
+    def comments(self, kept: dict[str, str], why: str = "") -> None:
+        """What GitHub would answer for a comment id: the URL it keeps that comment at, or None for
+        an id it has no comment under here; or, given `why`, that it could not be asked."""
+        steering.comment_url = lambda root, comment: (None, why) if why else (kept.get(comment), "")
+
+    def commit(self, subject_or_message: str, *, made: datetime.datetime = AFTER,
+               authored: datetime.datetime | None = None) -> str:
+        """Commit everything the case has written, and say which commit it became.
+
+        Made at the time the case names, never the clock's, and authored then too unless the case
+        says otherwise: which side of the starting point a commit falls on is what the rule reads.
+        """
+        self.git("add", "--all")
+        dates = {"GIT_COMMITTER_DATE": made.isoformat(),
+                 "GIT_AUTHOR_DATE": (authored or made).isoformat()}
+        self.git("commit", "--quiet", "--allow-empty", "--no-verify", "-m", subject_or_message,
+                 env={**os.environ, **dates})
+        return self.git("rev-parse", "HEAD")
+
+    def baseline(self) -> str:
+        """The tree as setUp left it, committed a day before the starting point: the base a case's
+        own commits are judged against, and itself a steering commit the rule must not hold."""
+        return self.commit("The tree before the rule", made=BEFORE)
 
     def reset(self) -> None:
         self.write("AGENTS.md", CLEAN_AGENTS)
@@ -289,15 +405,28 @@ class SteeringTests(unittest.TestCase):
         self.write(relative, f"# A document\n\n{text}\n")
         return 3
 
-    def check(self) -> tuple[int, str]:
-        """The exit code and output of the check, as CI reads them."""
+    def check(self, *arguments: str) -> tuple[int, str]:
+        """The exit code and output of the check, as CI reads them, run with these arguments.
+
+        The arguments are passed rather than left to sys.argv, which holds whatever this runner
+        was started with: a test name or `-v` there is not an argument of the check's.
+        """
         # Staged here rather than in setUp, because a case writes its own files after setUp ran
         # and the rule only sees what the index holds.
         self.git("add", "--all")
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            code = steering.main()
+            code = steering.main(list(arguments))
         return code, buffer.getvalue()
+
+    def live(self) -> None:
+        """Point the check back at the repository, with the repository's own exemption lists."""
+        steering.__file__ = str(ROOT / ".github" / "steering.py")
+        steering.PLANNED = LIVE_PLANNED
+        steering.UNFILED = LIVE_UNFILED
+        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
+        steering.UNCOMPARED = LIVE_UNCOMPARED
+        self.offline("a test never reaches GitHub")
 
     def test_a_clean_pair_passes(self):
         code, out = self.check()
@@ -682,13 +811,8 @@ class SteeringTests(unittest.TestCase):
         compared through the Registry document row its cell defers to; ten was the floor while a
         relational cell was passed over, so a rule that went back to skipping it goes red here.
         """
-        steering.__file__ = str(ROOT / ".github" / "steering.py")
-        steering.PLANNED = LIVE_PLANNED
-        steering.UNFILED = LIVE_UNFILED
-        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
-        steering.UNCOMPARED = LIVE_UNCOMPARED
-        self.offline("a test never reaches GitHub")
-        code, out = self.check()
+        self.live()
+        code, out = self.check("--base", "HEAD")
         self.assertEqual(0, code, out)
         counted = re.search(rf"{steering.INDEX} agrees with the (\d+) freeze headers?", out)
         self.assertIsNotNone(counted, out)
@@ -924,13 +1048,8 @@ class SteeringTests(unittest.TestCase):
         own is what a rule reading no files also prints. The floor is what the tree holds today,
         and a document added to it may raise the number but cannot lower it.
         """
-        steering.__file__ = str(ROOT / ".github" / "steering.py")
-        steering.PLANNED = LIVE_PLANNED
-        steering.UNFILED = LIVE_UNFILED
-        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
-        steering.UNCOMPARED = LIVE_UNCOMPARED
-        self.offline("a test never reaches GitHub")
-        code, out = self.check()
+        self.live()
+        code, out = self.check("--base", "HEAD")
         self.assertEqual(0, code, out)
         counted = re.search(r"(\d+) ticket citations? resolves? to a spec\.", out)
         self.assertIsNotNone(counted, out)
@@ -1001,13 +1120,8 @@ class SteeringTests(unittest.TestCase):
         trackers held when the rule landed: filing a ticket raises the count, and only deleting
         one lowers it, which is a change that should lower this floor on purpose.
         """
-        steering.__file__ = str(ROOT / ".github" / "steering.py")
-        steering.PLANNED = LIVE_PLANNED
-        steering.UNFILED = LIVE_UNFILED
-        steering.TRANSCRIPTS = LIVE_TRANSCRIPTS
-        steering.UNCOMPARED = LIVE_UNCOMPARED
-        self.offline("a test never reaches GitHub")
-        code, out = self.check()
+        self.live()
+        code, out = self.check("--base", "HEAD")
         self.assertEqual(0, code, out)
         counted = re.search(r"(\d+) tickets? (?:each )?holds? a number no other ticket", out)
         self.assertIsNotNone(counted, out)
@@ -1133,7 +1247,7 @@ class SteeringTests(unittest.TestCase):
 
         def lookup(root):
             asked.append(root)
-            return {43}, ""
+            return {43}, set(), ""
 
         steering.issued_numbers = lookup
         self.cite_in("docs/adr/0021-a-decision.md", f"Decided in {issue(43)}.")
@@ -1199,6 +1313,430 @@ class SteeringTests(unittest.TestCase):
         cited, untracked = steering.issue_citations(ROOT)
         self.assertEqual([], untracked)
         self.assertGreaterEqual(len(cited), 150, cited[:5])
+
+    # --- a commit that changes a steering document cites its authority -------------------------
+
+    def test_a_steering_commit_naming_no_authority_fails_with_the_commit_and_its_paths(self):
+        """7569b1f's shape: a lane's glossary entry, citing nothing, here beside a guide change.
+
+        The line names the commit and every steering path it changed, so the session that has to
+        reword it knows which commit and what the authority has to cover without opening it.
+        """
+        base = self.baseline()
+        self.append("AGENTS.md", "A line.")
+        self.write("GLOSSARY.md", "# Glossary\n\n**Local check** -- the checks a branch passes.\n")
+        self.write("docs/agents/landing-work.md", "# Landing work\n")
+        subject = "Task issue-68: the glossary gains Local check"
+        sha = self.commit(message(subject))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a commit changes a steering document and cites no "
+                      "authority.", out)
+        self.assertIn(holds(sha, subject, "AGENTS.md", "GLOSSARY.md",
+                            "docs/agents/landing-work.md"), out)
+        self.assertIn("docs/agents/landing-work.md has the forms", out)
+
+    def test_a_change_to_each_steering_document_is_held(self):
+        """One commit per place ADR-0023 decision 2 names: five root files and three directories.
+
+        Each judged alone, from the commit before it, so a line naming the wrong path or a place
+        the rule stopped reading shows up as that place's subtest and no other.
+        """
+        self.baseline()
+        for path in STEERING_EXAMPLES:
+            with self.subTest(path=path):
+                base = self.git("rev-parse", "HEAD")
+                if (self.root / path).exists():
+                    self.append(path, "A line.")
+                else:
+                    self.write(path, "# A steering document\n")
+                subject = f"Change {path}"
+                sha = self.commit(message(subject))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(holds(sha, subject, path), out)
+
+    def test_a_path_beside_a_steering_document_is_not_held(self):
+        """A prefix of a steering name, or the name away from the root, is another file.
+
+        The summary is checked too, because the rule passing and the rule finding nothing to hold
+        both exit 0, and only the missing authority clause tells this from a commit that cited one.
+        """
+        base = self.baseline()
+        for path in STEERING_NEIGHBOURS:
+            self.write(path, "# Not a steering document\n")
+        self.commit(message("Write beside the steering documents"))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertNotIn("authority", out)
+
+    def test_an_authority_naming_an_issue_passes_and_is_counted(self):
+        """The green side of `Authority: #<n>`, and the count the line it passes prints.
+
+        The count is what the assertion holds, as the citation rules' green cases do: a rule
+        deleted outright also exits 0, and the sentence has to say how many commits it vouched for.
+        """
+        self.github(102)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, as the ticket asks", issue(102)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_two_authorised_commits_are_both_counted(self):
+        """The singular above and the plural here, so the count is a number and not a word."""
+        self.github(101, 102)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary", issue(102)))
+        self.write("docs/agents/landing-work.md", "# Landing work\n")
+        self.commit(message("The landing guide", issue(101)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("2 commits changing a steering document cite their authority.", out)
+
+    def test_an_authority_naming_no_issue_fails(self):
+        """A `#<n>` past the end of GitHub's sequence: a pointer at nothing, like a dangling
+        `#NNN`."""
+        self.github(43)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on a number nobody issued"
+        sha = self.commit(message(subject, issue(999)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: an Authority: trailer names no issue and no comment on "
+                      "this repository.", out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), issue(999),
+                              "names no issue of this repository"), out)
+
+    def test_an_authority_naming_a_pull_request_fails(self):
+        """A ticket is an issue, and a pull request has no acceptance criterion to ask for a change.
+
+        The number is in GitHub's sequence, so the `#NNN` rule would take it; the authority rule
+        tells the two apart from the same listing.
+        """
+        self.github(43, pulls=(120,))
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on a pull request"
+        sha = self.commit(message(subject, issue(120)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), issue(120),
+                              "names a pull request, not an issue"), out)
+
+    def test_an_authority_naming_a_comment_github_keeps_there_passes(self):
+        """The second form: a confirmed answer's comment, as ADR-0023 cites R4's on #98."""
+        self.comments({COMMENT_ID: COMMENT})
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, as Adam confirmed", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_a_url_that_is_not_a_comment_fails_without_asking_github(self):
+        """A page that is not a comment, an issue's own URL, a review comment, and prose citing a
+        number: none is either form, and the stubs in setUp prove GitHub was asked nothing."""
+        self.baseline()
+        for authority in (
+            "https://example.test/confirmed",
+            "https://github.com/adammedford/spa-platform/issues/98",
+            "https://github.com/adammedford/spa-platform/pull/45#discussion_r1234",
+            f"confirmed by Adam on {issue(67)}",
+        ):
+            with self.subTest(authority=authority):
+                base = self.git("rev-parse", "HEAD")
+                self.append("AGENTS.md", "A line.")
+                subject = "Change AGENTS.md on a citation of neither form"
+                sha = self.commit(message(subject, authority))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(refuses(sha, subject, ("AGENTS.md",), authority,
+                                      "is neither #<n> nor the URL of a comment on this "
+                                      "repository"), out)
+
+    def test_a_comment_url_this_repository_has_no_comment_under_fails(self):
+        """GitHub's 404 for the id: no comment here, whatever the URL's shape promised."""
+        self.comments({})
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on a comment that does not exist"
+        sha = self.commit(message(subject, COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                              "names no comment on this repository"), out)
+
+    def test_a_comment_url_that_is_not_where_github_keeps_the_comment_fails(self):
+        """Another repository's URL, and this repository's under the wrong issue.
+
+        The id is one this repository has, so only comparing the whole URL with the one GitHub
+        keeps tells either from the real thing; the line names that URL, so the fix is a copy.
+        """
+        self.comments({COMMENT_ID: COMMENT})
+        self.baseline()
+        for authority in (
+            f"https://github.com/someone/elsewhere/issues/98#issuecomment-{COMMENT_ID}",
+            f"https://github.com/adammedford/spa-platform/issues/97#issuecomment-{COMMENT_ID}",
+        ):
+            with self.subTest(authority=authority):
+                base = self.git("rev-parse", "HEAD")
+                self.append("AGENTS.md", "A line.")
+                subject = "Change AGENTS.md on a comment elsewhere"
+                sha = self.commit(message(subject, authority))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(refuses(sha, subject, ("AGENTS.md",), authority,
+                                      f"is not where GitHub keeps comment {COMMENT_ID}: "
+                                      f"{COMMENT}"), out)
+
+    def test_every_authority_a_commit_names_is_judged(self):
+        """A second trailer citing nothing fails beside one that resolves, and the commit is not
+        counted: a pointer at nothing is the defect whatever else sits next to it."""
+        self.github(102)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on two citations"
+        sha = self.commit(message(subject, issue(102), issue(999)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), issue(999),
+                              "names no issue of this repository"), out)
+        self.assertNotIn(f"Authority: {issue(102)} ", out)
+
+    def test_an_authority_line_inside_the_prose_is_not_a_trailer(self):
+        """git reads a trailer from the group of trailers that ends the message, and a group
+        holding a line of prose is not one unless it holds a trailer git knows: so the issue this
+        line names, which GitHub has issued, authorises nothing written this way."""
+        self.github(102)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, cited in passing"
+        sha = self.commit(f"{subject}\n\nThe ticket asks for it, so this line cites\n"
+                          f"Authority: {issue(102)}\n")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(holds(sha, subject, "GLOSSARY.md"), out)
+
+    def test_the_trailer_s_key_is_read_in_any_case(self):
+        """git matches a trailer's key in any case, and the rule reads it through git."""
+        self.github(102)
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(f"The glossary\n\nauthority: {issue(102)}\n")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_a_merge_passes_without_a_trailer(self):
+        """A merge's own resolution here changes the glossary, which is the hardest merge to pass.
+
+        What a merge brings in is commits, each held on its own: the side branch's commit touches
+        code and passes, and the merge carries a steering line no trailer authorises and passes too.
+        """
+        base = self.baseline()
+        self.git("checkout", "--quiet", "-b", "side")
+        self.write("src/App/App.cs", "class App {}\n")
+        self.commit("Code on a side branch")
+        self.git("checkout", "--quiet", "-")
+        self.git("merge", "--quiet", "--no-ff", "--no-commit", "side")
+        self.write("GLOSSARY.md", "# Glossary\n\nA line the merge itself adds.\n")
+        self.commit("Merge side, with a glossary line of its own")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_steering_commit_made_before_the_starting_point_passes(self):
+        """Made before the rule was written, so it could not have known it; and rewording it would
+        mean rewriting a branch that has landed."""
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit("The glossary, before the rule", made=BEFORE)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_commit_authored_before_the_starting_point_and_made_after_it_is_held(self):
+        """An amend or a rebase keeps the author date and makes the commit again: judged by its
+        author date, a commit first written before the rule could carry a steering change added
+        after it."""
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, amended after the rule"
+        sha = self.commit(message(subject), made=AFTER, authored=BEFORE)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(holds(sha, subject, "GLOSSARY.md"), out)
+
+    def test_a_change_request_added_passes_without_a_trailer(self):
+        """ADR-0023 decision 2: adding a change request is not a change to a steering document,
+        and AGENTS.md gives it to every workstream as the way to ask for a contract change."""
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-102-a-request.md", "# A change request\n")
+        self.commit(message("Ask for a contract change"))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_change_request_edited_or_removed_is_held(self):
+        """Only adding one passes: editing or removing a change request is the integrator deciding
+        it, a change to contracts/ like any other."""
+        request = f"{steering.CHANGE_REQUESTS}issue-102-a-request.md"
+        self.write(request, "# A change request\n\n**Status:** open\n")
+        self.baseline()
+        for shape in ("edited", "removed"):
+            with self.subTest(shape=shape):
+                base = self.git("rev-parse", "HEAD")
+                if shape == "edited":
+                    self.append(request, "**Decision:** accepted")
+                else:
+                    (self.root / request).unlink()
+                subject = f"The change request, {shape}"
+                sha = self.commit(message(subject))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(holds(sha, subject, request), out)
+
+    def test_offline_a_steering_commit_naming_no_authority_still_fails(self):
+        """The trailer's presence needs no network, so no network is no excuse for its absence.
+
+        The range holds a commit citing an issue as well, so GitHub is asked and found unreachable
+        in this run, rather than never asked: the offline line proves the condition held.
+        """
+        self.offline("gh is not on PATH")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary", issue(102)))
+        self.write("docs/agents/landing-work.md", "# Landing work\n")
+        subject = "The landing guide, offline"
+        sha = self.commit(message(subject))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(holds(sha, subject, "docs/agents/landing-work.md"), out)
+        self.assertIn("steering: 1 Authority: citation not checked: gh is not on PATH.", out)
+
+    def test_offline_citations_are_reported_as_not_checked_and_pass(self):
+        """Both forms, with GitHub unreachable: one line says how many went unchecked and why, as
+        the `#NNN` rule says of its own, and the summary claims nothing about them."""
+        self.offline("gh is not on PATH")
+        self.comments({}, why="gh is not on PATH")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary", issue(102)))
+        self.write("docs/agents/landing-work.md", "# Landing work\n")
+        self.commit(message("The landing guide", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("steering: 2 Authority: citations not checked: gh is not on PATH.", out)
+        self.assertNotIn("authority.", out)
+
+    def test_offline_a_citation_of_neither_form_still_fails(self):
+        """Neither form is decided by the shape alone, so it fails with GitHub unreachable."""
+        self.offline("gh is not on PATH")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on prose"
+        sha = self.commit(message(subject, "confirmed by Adam"))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), "confirmed by Adam",
+                              "is neither #<n> nor the URL of a comment on this repository"), out)
+
+    def test_without_a_base_every_commit_head_reaches_is_judged(self):
+        """No base named is no range skipped: the hook on a clone with no main names none, and
+        the rule then reads every commit since the starting point rather than none."""
+        self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, judged with no base"
+        sha = self.commit(message(subject))
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn(holds(sha, subject, "GLOSSARY.md"), out)
+
+    def test_without_a_base_a_history_from_before_the_starting_point_passes(self):
+        """The same reading over a history the rule predates: nothing to hold, and no failure."""
+        self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, before the rule"), made=BEFORE)
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_base_that_names_no_commit_is_refused(self):
+        """A typo in the base would otherwise judge nothing and pass, as tools/check.sh's would."""
+        self.baseline()
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as stopped:
+            steering.main(["--base", "no-such-ref"])
+        self.assertEqual(2, stopped.exception.code)
+        self.assertIn("no commit no-such-ref to judge the commits against", errors.getvalue())
+
+    def test_the_steering_documents_are_the_ones_adr_0023_names(self):
+        """A guard reads the thing it guards: the list is decision 2's, read from the ADR, and the
+        change requests' directory is the one GLOSSARY.md's *Change request* names."""
+        adr = next((ROOT / "docs" / "adr").glob("0023-*.md")).read_text()
+        decision = adr.split("**The steering documents are**", 1)[1]
+        decision = decision.split("Adding a change request", 1)[0]
+        self.assertEqual(sorted(re.findall(r"`([^`]+)`", decision)),
+                         sorted(steering.STEERING_DOCUMENTS))
+        glossary = (ROOT / "GLOSSARY.md").read_text()
+        self.assertIn(f"`{steering.CHANGE_REQUESTS}<task-id>-<slug>.md`", glossary)
+
+    # --- the two GitHub lookups, against a stand-in for gh ------------------------------------
+
+    def stand_in(self, script: str, *arguments: str) -> tuple[str, ...]:
+        """A command that runs `script` in this interpreter, in place of gh."""
+        return (sys.executable, "-I", "-c", script, *arguments)
+
+    def test_the_listing_tells_issues_from_pull_requests(self):
+        """The line the --jq writes per number, read back into issues and pull requests."""
+        steering.GH_ISSUES = self.stand_in(
+            "print('43 issue'); print('120 pull'); print('102 issue')")
+        self.assertEqual(({43, 102}, {120}, ""), REAL_ISSUED_NUMBERS(self.root))
+
+    def test_the_listing_says_what_gh_said_when_it_fails(self):
+        steering.GH_ISSUES = self.stand_in(
+            "import sys; sys.stderr.write('\\ngh: Bad credentials (HTTP 401)\\n'); sys.exit(1)")
+        self.assertEqual((set(), set(), "gh: Bad credentials (HTTP 401)"),
+                         REAL_ISSUED_NUMBERS(self.root))
+
+    def test_the_listing_refuses_an_answer_that_is_not_its_lines(self):
+        """An answer in the old shape, a bare number, is refused rather than read as an issue."""
+        steering.GH_ISSUES = self.stand_in("print('43')")
+        issues, pulls, why = REAL_ISSUED_NUMBERS(self.root)
+        self.assertEqual((set(), set()), (issues, pulls))
+        self.assertTrue(why.startswith("gh answered with something other than numbers"), why)
+
+    def test_the_comment_lookup_returns_the_url_github_keeps_the_comment_at(self):
+        """The id goes where the command names {comment}, and the answer is the URL gh prints."""
+        steering.GH_COMMENT = self.stand_in(
+            "import sys; print('https://github.com/o/r/issues/1#issuecomment-' + sys.argv[1])",
+            "{comment}")
+        self.assertEqual(("https://github.com/o/r/issues/1#issuecomment-5", ""),
+                         REAL_COMMENT_URL(self.root, "5"))
+
+    def test_the_comment_lookup_reads_a_404_as_no_comment(self):
+        """GitHub's answer for an id this repository has no comment under: an answer, not a
+        reason the citation went unchecked."""
+        steering.GH_COMMENT = self.stand_in(
+            "import sys; sys.stderr.write('gh: Not Found (HTTP 404)\\n'); sys.exit(1)")
+        self.assertEqual((None, ""), REAL_COMMENT_URL(self.root, "5"))
+
+    def test_the_comment_lookup_reports_any_other_failure_as_unchecked(self):
+        for script, why in (
+            ("import sys; sys.stderr.write('error connecting to api.github.com\\n'); sys.exit(1)",
+             "error connecting to api.github.com"),
+            ("import sys; sys.exit(3)", "gh exited 3 and said nothing"),
+        ):
+            with self.subTest(why=why):
+                steering.GH_COMMENT = self.stand_in(script)
+                self.assertEqual((None, why), REAL_COMMENT_URL(self.root, "5"))
+        steering.GH_COMMENT = ("no-such-command-for-steering-tests", "{comment}")
+        self.assertEqual((None, "gh is not on PATH"), REAL_COMMENT_URL(self.root, "5"))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,16 @@ vpc_cidr = "10.20.0.0/16"
 # The wildcard certificate tools/scripts/certs.sh imported, without the wildcard.
 certificate_domain = "spa-poc.test"
 
+# The first apply runs the sample image, because the gateway image does not
+# exist yet (docs/plan/05-infrastructure-and-cost.md -> First deployment,
+# step 3): public.ecr.aws/nginx/nginx-unprivileged:stable-alpine (Q5 on #98).
+# It is built for arm64 and listens on 8080, the gateway port, where the stock
+# nginx image listens on 80 and its target would never turn healthy:
+# https://github.com/nginx/docker-nginx-unprivileged
+# The tag moves to each new build, so pin the image by the digest the tag
+# points to when you apply: put it in place of <digest> and uncomment the line.
+# gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>"
+
 # / on the sample image, /readyz once the gateway runs.
 health_check_path = "/"
 

@@ -23,12 +23,18 @@ names the case's own file, LC_ALL=C. Every repository is made with `gc.auto=0` a
 3.2 that macOS ships. When SCRIPT_TESTS_REQUIRE_BASH is set (CI's macOS job sets it to 3.2), a
 different /bin/bash fails the run rather than skipping it.
 
+**The cases run at the same time** (#107), on the threads of tools/companion_runner.py: one per
+CPU, up to eight, unless SCRIPT_TESTS_JOBS names another number. That rests on each case keeping to
+its own throwaway directory and its own constructed environment. No case changes the working
+directory, os.environ or anything else the process shares, and a new case must not either.
+
 Run: python3 -I tools/prune_branches_tests.py
 """
 
 from __future__ import annotations
 
 import datetime
+import importlib.util
 import os
 import pathlib
 import shlex
@@ -40,6 +46,9 @@ import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools" / "companion_runner.py")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "prune_branches.py"
 LAND = ROOT / "tools" / "land.sh"
 BASH = "/bin/bash"
@@ -85,7 +94,7 @@ unexpected() {{
 }}
 
 # Bash's own substitution, because the case's PATH holds no tr.
-flat() {{ printf '%s' "${{1//\//_}}"; }}
+flat() {{ printf '%s' "${{1//\\//_}}"; }}
 
 case "$1 $2" in
   "pr list")
@@ -963,9 +972,11 @@ class ADeletionLeavesItsRestoreCommandsInAFile(Case):
 class LandingDeletesWhatItFinished(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
-    The real script, under /bin/bash, as tools/land_tests.py runs it, but past the merge: here the
-    gh double's merge really merges, into the case's origin from a clone standing in for GitHub's
-    side. --unreviewed spares the review records, which tools/land_tests.py covers.
+    The real script, under /bin/bash, as tools/land_tests.py runs it, past a merge that really
+    merges, into the case's origin from a clone standing in for GitHub's side. tools/land_tests.py
+    covers the steps between that merge and the cleanup, and answers the cleanup with a double;
+    these cases run the real one. --unreviewed spares the review records, which tools/land_tests.py
+    covers.
     """
 
     def land_pull_request(self, branch, subject):
@@ -1078,4 +1089,4 @@ def require_bash():
 
 if __name__ == "__main__":
     require_bash()
-    unittest.main()
+    runner.main()

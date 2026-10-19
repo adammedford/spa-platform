@@ -129,6 +129,7 @@ internal static class YarpActivityTimeout
         $"{what}. The proxy's timeout ceiling, {nameof(ProxyTimeout)}."
         + $"{nameof(ProxyTimeout.MaximumTimeoutSeconds)}, was measured against {MeasuredAgainst} by "
         + "reading YARP's own internals. An upgrade has moved them, so this test can no longer see "
-        + "what the proxy applies: re-measure the ceiling, update the constant, and tell workstream "
-        + "2, which validates apis[].timeoutSeconds against it (tasks 4.1a and 2.1b).");
+        + "what the proxy applies: re-measure the ceiling, and if it has moved, update the constant "
+        + "and file a change request for the maximum contracts/registry.schema.json states for "
+        + "apis[].timeoutSeconds, which is set to that ceiling (ADR-0019 decision 3).");
 }

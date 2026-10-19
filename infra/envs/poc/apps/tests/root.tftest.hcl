@@ -50,6 +50,46 @@ variables {
     for f in fileset("../../../../fixtures/apps", "*.json") :
     jsondecode(file("../../../../fixtures/apps/${f}")).appId => jsondecode(file("../../../../fixtures/apps/${f}"))
   }
+
+  # Every argument the root sets on each app's three resources, per existing appId: what the plan
+  # without a third definition gives, and so what the plan with one must give too (ADR-0016
+  # decision 2: "unchanged existing ones"). The run before P-02's holds the plan to these values and
+  # holds this map to the root's arguments, so an argument added to main.tf without an entry here
+  # fails there. The arguments that depend on the cell or the pool (the names, the description and
+  # user_pool_id) are added in the runs, because Terraform 1.11 lets a file-level variable refer to
+  # no other variable. Two are read differently, and the run says how: the branding style's
+  # client_id and the parameter's value are the client's computed id and secret, unknown at plan.
+  # Built from fixtures/apps/ as fixture_apps is, since no variable here may read that one.
+  existing_app_resources = {
+    for app in [for f in fileset("../../../../fixtures/apps", "*.json") : jsondecode(file("../../../../fixtures/apps/${f}"))] :
+    app.appId => {
+      client = {
+        generate_secret                      = true
+        allowed_oauth_flows_user_pool_client = true
+        allowed_oauth_flows                  = toset(["code"])
+        allowed_oauth_scopes                 = toset(app.oauth.scopes)
+        supported_identity_providers         = toset(["COGNITO"])
+        callback_urls                        = toset(["https://${app.host}/signin-oidc"])
+        logout_urls                          = toset(["https://${app.host}/"])
+        access_token_validity                = 5
+        id_token_validity                    = 5
+        # The longest session contracts/registry.schema.json allows, plus the root's hour of margin.
+        refresh_token_validity        = jsondecode(file("../../../../contracts/registry.schema.json"))["$defs"].session.properties.lifetimeMinutes.maximum + 60
+        token_validity_units          = { access_token = "minutes", id_token = "minutes", refresh_token = "minutes" }
+        refresh_token_rotation        = { feature = "ENABLED", retry_grace_period_seconds = 10 }
+        enable_token_revocation       = true
+        prevent_user_existence_errors = "ENABLED"
+        explicit_auth_flows           = toset(["ALLOW_USER_SRP_AUTH"])
+      }
+      branding = {
+        use_cognito_provided_values = true
+      }
+      parameter = {
+        type = "SecureString"
+        tier = "Standard"
+      }
+    }
+  }
 }
 
 run "one_client_branding_style_and_parameter_per_definition" {
@@ -217,9 +257,87 @@ run "tags_are_the_ones_the_contract_names" {
   }
 }
 
-# P-02: onboarding a third definition adds one client, one branding style and one parameter.
-# The run reads fixtures/onboarding/app3.json itself; every resource in the root is one of the
-# three per-definition maps, so their keys are the whole plan.
+# Each existing app's three resources as the plan without a third definition gives them, argument
+# by argument: the values P-02's run holds the same resources to in the plan with one.
+run "every_argument_of_each_app_s_resources_is_the_one_existing_app_resources_names" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for id, expected in var.existing_app_resources : (
+        {
+          name                                 = aws_cognito_user_pool_client.app[id].name
+          user_pool_id                         = aws_cognito_user_pool_client.app[id].user_pool_id
+          generate_secret                      = aws_cognito_user_pool_client.app[id].generate_secret
+          allowed_oauth_flows_user_pool_client = aws_cognito_user_pool_client.app[id].allowed_oauth_flows_user_pool_client
+          allowed_oauth_flows                  = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_flows)
+          allowed_oauth_scopes                 = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_scopes)
+          supported_identity_providers         = toset(aws_cognito_user_pool_client.app[id].supported_identity_providers)
+          callback_urls                        = toset(aws_cognito_user_pool_client.app[id].callback_urls)
+          logout_urls                          = toset(aws_cognito_user_pool_client.app[id].logout_urls)
+          access_token_validity                = aws_cognito_user_pool_client.app[id].access_token_validity
+          id_token_validity                    = aws_cognito_user_pool_client.app[id].id_token_validity
+          refresh_token_validity               = aws_cognito_user_pool_client.app[id].refresh_token_validity
+          token_validity_units                 = aws_cognito_user_pool_client.app[id].token_validity_units[0]
+          refresh_token_rotation               = aws_cognito_user_pool_client.app[id].refresh_token_rotation[0]
+          enable_token_revocation              = aws_cognito_user_pool_client.app[id].enable_token_revocation
+          prevent_user_existence_errors        = aws_cognito_user_pool_client.app[id].prevent_user_existence_errors
+          explicit_auth_flows                  = toset(aws_cognito_user_pool_client.app[id].explicit_auth_flows)
+          } == merge(expected.client, {
+            name         = "spa-platform-${var.cell}-${id}"
+            user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id
+        })
+        && {
+          user_pool_id                = aws_cognito_managed_login_branding.app[id].user_pool_id
+          use_cognito_provided_values = aws_cognito_managed_login_branding.app[id].use_cognito_provided_values
+        } == merge(expected.branding, { user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id })
+        && {
+          name        = aws_ssm_parameter.client_secret[id].name
+          description = aws_ssm_parameter.client_secret[id].description
+          type        = aws_ssm_parameter.client_secret[id].type
+          tier        = aws_ssm_parameter.client_secret[id].tier
+          } == merge(expected.parameter, {
+            name        = "/spa-platform/${var.cell}/apps/${id}/client-secret"
+            description = "OAuth client secret for app ${id} of cell ${var.cell}. Read it; never copy it into a file."
+        })
+      )
+    ])
+    error_message = "An existing app's client, branding style or parameter differs from existing_app_resources in this file. Change the map in the same change as main.tf, and say why."
+  }
+
+  # The map names every argument main.tf sets on the three blocks: the names read from the source,
+  # less the meta-arguments, are its keys and the ones added above. The two computed references are
+  # held to their expressions in the source instead: the branding style names its own app's
+  # client, and the parameter's value is that client's secret, which ignore_changes keeps an apply
+  # from writing again once the parameter exists (main.tf), so no later plan can change it.
+  assert {
+    condition = alltrue([
+      for block in [
+        ["aws_cognito_user_pool_client", "app", concat(keys(values(var.existing_app_resources)[0].client), ["name", "user_pool_id"])],
+        ["aws_cognito_managed_login_branding", "app", concat(keys(values(var.existing_app_resources)[0].branding), ["user_pool_id", "client_id"])],
+        ["aws_ssm_parameter", "client_secret", concat(keys(values(var.existing_app_resources)[0].parameter), ["name", "description", "value"])],
+        ] : setsubtract([
+          for m in regexall("(?m)^  ([a-z_]+)\\s*[={]", regex("(?ms)^resource\\s+\"${block[0]}\"\\s+\"${block[1]}\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]) : m[0]
+      ], ["for_each", "lifecycle"]) == toset(block[2])
+    ])
+    error_message = "main.tf sets an argument on an app's client, branding style or parameter that existing_app_resources does not hold, so P-02 would not see onboarding change it. Add it to the map."
+  }
+
+  assert {
+    condition = (
+      length(aws_cognito_managed_login_branding.app) > 0
+      && can(regex("(?m)^  client_id\\s*= aws_cognito_user_pool_client\\.app\\[each\\.key\\]\\.id$", regex("(?ms)^resource\\s+\"aws_cognito_managed_login_branding\"\\s+\"app\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]))
+      && can(regex("(?m)^  value\\s*= aws_cognito_user_pool_client\\.app\\[each\\.key\\]\\.client_secret$", regex("(?ms)^resource\\s+\"aws_ssm_parameter\"\\s+\"client_secret\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]))
+    )
+    error_message = "Each app's branding style names that app's own client, and its parameter holds that client's secret."
+  }
+}
+
+# P-02: "A new app adds one Cognito client, one branding style and one parameter, nothing else"
+# (docs/plan/04-tests.md). ADR-0016 decision 2 makes it a comparison of configuration plans: the
+# fixture definitions, which every run above plans, then the same with one more, asserting exactly
+# what is added and that the existing apps are unchanged. The run reads
+# fixtures/onboarding/app3.json itself.
 run "a_third_definition_adds_exactly_three_resources" {
   command = plan
 
@@ -239,11 +357,75 @@ run "a_third_definition_adds_exactly_three_resources" {
     error_message = "A third definition adds exactly its client, branding style and parameter (P-02)."
   }
 
+  # One of each per definition file. merge() keeps the last of two definitions that share an appId
+  # across the directories, so a second file naming app2 would change app2's client rather than add
+  # one, with the keys above still matching.
+  assert {
+    condition = alltrue([
+      for n in [
+        length(aws_cognito_user_pool_client.app),
+        length(aws_cognito_managed_login_branding.app),
+        length(aws_ssm_parameter.client_secret),
+      ] : n == length(flatten([for dir in var.definition_dirs : fileset(dir, "*.json")]))
+    ])
+    error_message = "The root plans one client, one branding style and one parameter per definition file in definition_dirs. Fewer means two files share an appId, and the later one has replaced an existing app's definition (P-02)."
+  }
+
+  # "Unchanged existing ones" (ADR-0016 decision 2). A run reads only an earlier run's outputs, never
+  # its plan, so this holds every argument of each existing app's resources, in the plan that adds
+  # the third, to existing_app_resources: the values the run before this one holds the plan without
+  # it to, and which that run shows name every argument main.tf sets. A selection of them missed
+  # allowed_oauth_flows = length(local.apps) > 2 ? ["implicit"] : ["code"] with every run green.
+  assert {
+    condition = alltrue([
+      for id, expected in var.existing_app_resources : (
+        {
+          name                                 = aws_cognito_user_pool_client.app[id].name
+          user_pool_id                         = aws_cognito_user_pool_client.app[id].user_pool_id
+          generate_secret                      = aws_cognito_user_pool_client.app[id].generate_secret
+          allowed_oauth_flows_user_pool_client = aws_cognito_user_pool_client.app[id].allowed_oauth_flows_user_pool_client
+          allowed_oauth_flows                  = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_flows)
+          allowed_oauth_scopes                 = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_scopes)
+          supported_identity_providers         = toset(aws_cognito_user_pool_client.app[id].supported_identity_providers)
+          callback_urls                        = toset(aws_cognito_user_pool_client.app[id].callback_urls)
+          logout_urls                          = toset(aws_cognito_user_pool_client.app[id].logout_urls)
+          access_token_validity                = aws_cognito_user_pool_client.app[id].access_token_validity
+          id_token_validity                    = aws_cognito_user_pool_client.app[id].id_token_validity
+          refresh_token_validity               = aws_cognito_user_pool_client.app[id].refresh_token_validity
+          token_validity_units                 = aws_cognito_user_pool_client.app[id].token_validity_units[0]
+          refresh_token_rotation               = aws_cognito_user_pool_client.app[id].refresh_token_rotation[0]
+          enable_token_revocation              = aws_cognito_user_pool_client.app[id].enable_token_revocation
+          prevent_user_existence_errors        = aws_cognito_user_pool_client.app[id].prevent_user_existence_errors
+          explicit_auth_flows                  = toset(aws_cognito_user_pool_client.app[id].explicit_auth_flows)
+          } == merge(expected.client, {
+            name         = "spa-platform-${var.cell}-${id}"
+            user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id
+        })
+        && {
+          user_pool_id                = aws_cognito_managed_login_branding.app[id].user_pool_id
+          use_cognito_provided_values = aws_cognito_managed_login_branding.app[id].use_cognito_provided_values
+        } == merge(expected.branding, { user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id })
+        && {
+          name        = aws_ssm_parameter.client_secret[id].name
+          description = aws_ssm_parameter.client_secret[id].description
+          type        = aws_ssm_parameter.client_secret[id].type
+          tier        = aws_ssm_parameter.client_secret[id].tier
+          } == merge(expected.parameter, {
+            name        = "/spa-platform/${var.cell}/apps/${id}/client-secret"
+            description = "OAuth client secret for app ${id} of cell ${var.cell}. Read it; never copy it into a file."
+        })
+      )
+    ])
+    error_message = "Onboarding a definition leaves every argument of every existing app's client, branding style and parameter as it is without it (ADR-0016 decision 2, P-02)."
+  }
+
   # The keys above are the whole plan only while the root's resources are those three maps: a
-  # fourth resource block, in any file of the root, fails here.
+  # fourth resource block, in any file of the root, fails here. A name is whatever sits between the
+  # quotes, since Terraform accepts capitals and hyphens in one; a pattern of lower case and
+  # underscores missed resource "aws_ssm_parameter" "Extra-Secret" with every run green.
   assert {
     condition = length(aws_cognito_user_pool_client.app) > 0 && toset(regexall(
-      "(?m)^resource \"([a-z0-9_]+)\" \"([a-z0-9_]+)\"",
+      "(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"",
       join("\n", [for f in fileset(".", "*.tf") : file(f)])
       )) == toset([
       ["aws_cognito_user_pool_client", "app"],
@@ -251,6 +433,41 @@ run "a_third_definition_adds_exactly_three_resources" {
       ["aws_ssm_parameter", "client_secret"],
     ])
     error_message = "The apps root may hold only the three per-definition resources (P-02)."
+  }
+
+  # Both patterns here find a declaration where it starts a line, and `terraform fmt -check` passes a
+  # block comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "x" {} passed the
+  # platform root's runs, which share these patterns. So a line that names a resource or module block
+  # names it at its start, or is a # or // comment.
+  #
+  # That exemption holds only while no /* */ comment exists: inside one a line can start with #, and
+  # /*<newline># rationale */ resource "aws_s3_bucket" "x" {} passed the platform root's runs. The
+  # argument guard in the run before this one reads an argument where it starts a line too, and
+  # /* explanation */ auth_session_validity = ... on the client escaped it with every run green. The
+  # platform root's tests say why these files refuse */ rather than strip block comments.
+  assert {
+    condition     = length(aws_cognito_user_pool_client.app) > 0 && !strcontains(join("\n", [for f in fileset(".", "*.tf") : file(f)]), "*/")
+    error_message = "The apps root holds no /* */ comment: one can end in front of a declaration or an argument on the same line, where no pattern here reads it, and inside one a line can start with #. Write the comment with # (P-02)."
+  }
+
+  assert {
+    condition = length(aws_cognito_user_pool_client.app) > 0 && alltrue([
+      for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", [for f in fileset(".", "*.tf") : file(f)])) :
+      can(regex("^(?:(?:resource|module)\\s|\\s*(?:#|//))", line))
+    ])
+    error_message = "Every resource and module block in the apps root starts its own line. A declaration behind a block comment, /* ... */ resource, is in the plan where no pattern here reads it (P-02)."
+  }
+
+  # And the three blocks are the root's whole configuration only while nothing else can add to the
+  # plan: a module call brings in resources of any type, and Terraform loads *.tf.json beside *.tf
+  # (https://developer.hashicorp.com/terraform/language/files), where no pattern here reads.
+  assert {
+    condition = (
+      length(aws_cognito_user_pool_client.app) > 0
+      && length(fileset(".", "*.tf.json")) == 0
+      && length(regexall("(?m)^module\\s+\"", join("\n", [for f in fileset(".", "*.tf") : file(f)]))) == 0
+    )
+    error_message = "The apps root calls no module and has no .tf.json file: either adds resources that no assertion here reads (P-02)."
   }
 }
 

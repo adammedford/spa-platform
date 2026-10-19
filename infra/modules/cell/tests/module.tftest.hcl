@@ -193,9 +193,11 @@ variables {
 
 # --- The resource set -------------------------------------------------------------------------
 
-# Plan row 1.9 polices the applied plan. This reads the module's own source instead, so a resource
-# type added here fails before an apply exists to police: the allowlist below has to be edited in
-# the same change, which is where the author is made to say what the new type is for.
+# This reads the module's own source, because a plan holds no list of its resources that a test can
+# enumerate, and ADR-0016 makes plan policy an assertion on the configuration. A resource type added
+# here fails until the allowlist below is edited in the same change, which is where the author is
+# made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
+# 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
 # It is also where "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01) is held
 # statically rather than only against a deployed account.
@@ -241,7 +243,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_iam_role",
       "aws_iam_role_policy",
     ])
-    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; plan row 1.9 polices the rest."
+    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; the platform root's tests count the rest (P-01)."
   }
 
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
@@ -822,7 +824,7 @@ run "the_trusted_networks_are_the_load_balancer_s_own_subnets_and_nothing_wider"
       ])
       == toset([for s in aws_subnet.public : s.cidr_block if contains(aws_lb.cell.subnets, s.id)])
     )
-    error_message = "ForwardedHeaders:TrustedNetworks is the CIDR of each subnet the load balancer sits in: stage 1 trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md stage 1, N-09)."
+    error_message = "ForwardedHeaders:TrustedNetworks is the CIDR of each subnet the load balancer sits in: UsePlatformForwardedHeaders trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md, UsePlatformForwardedHeaders; N-09)."
   }
 
   # The anti-widening half. The cell's whole VPC range passes the first assertion's shape only by
@@ -849,7 +851,7 @@ run "the_trusted_networks_are_the_load_balancer_s_own_subnets_and_nothing_wider"
         ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
       ]) == length(aws_lb.cell.subnets)
     )
-    error_message = "Every subnet the load balancer sits in contributes one TrustedNetworks entry; a dropped one would stop stage 1 trusting that availability zone's node."
+    error_message = "Every subnet the load balancer sits in contributes one TrustedNetworks entry; a dropped one would stop UsePlatformForwardedHeaders trusting that availability zone's node."
   }
 }
 
@@ -1006,6 +1008,22 @@ run "the_task_role_holds_no_unrecognised_statement" {
     error_message = "No statement is written as NotAction or NotResource: both grant everything except what they name, which is the opposite of a reviewable role."
   }
 
+  # The document is its statement blocks only while it merges no other document in. Both of these
+  # are "merged together into the exported document", whose statements then override or add to
+  # these (https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/iam_policy_document),
+  # and the mock provider never renders that document, so nothing above reads what they add: an
+  # override_policy_documents entry granting s3:PutObject on registry/* passed all 43 runs. Both
+  # are optional with no default, so unset is null. The deprecated source_json and override_json
+  # need nothing here: the provider refuses either unless it is empty (validation.StringIsEmpty,
+  # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/internal/service/iam/policy_document_data_source.go).
+  assert {
+    condition = (
+      data.aws_iam_policy_document.task.source_policy_documents == null
+      && data.aws_iam_policy_document.task.override_policy_documents == null
+    )
+    error_message = "The task role's document merges in no other policy document: source_policy_documents and override_policy_documents each add or override statements that no assertion here reads."
+  }
+
   # Everything above reads data.aws_iam_policy_document.task, so it is a closed account of the
   # role's grants only while that document is the whole of what the role holds. Three declarations
   # add a grant without passing through it, and each was watched leaving all 25 runs green before
@@ -1019,10 +1037,14 @@ run "the_task_role_holds_no_unrecognised_statement" {
   # allowlist and the no-default check already use for the same reason. A separate
   # aws_iam_role_policy_attachment needs nothing here: the resource-type allowlist does not name
   # that type.
+  #
+  # A name is whatever sits between the quotes, since Terraform accepts capitals and hyphens in one
+  # (tests/network.tftest.hcl cites the rule): with a pattern of lower case and underscores, a third
+  # policy on the task role named "Extra-Grant" passed all 43 runs.
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_iam_role_policy\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_iam_role_policy\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["task", "task_execution"])
@@ -1048,6 +1070,57 @@ run "the_task_role_holds_no_unrecognised_statement" {
   }
 
 
+}
+
+# P-03: "Read on this cell's bucket prefixes and client-secret parameter path, the four ssmmessages
+# permissions, and nothing else. No write to the registry." (docs/plan/04-tests.md). The runs above
+# hold the task role's own policy to exactly that, but a principal's permissions in its own account
+# are the union of what its own policy allows and what a resource policy allows it: "If an action is
+# allowed by an identity-based policy, a resource-based policy, or both, then AWS allows the action."
+# (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html, under
+# "Evaluating identity-based policies with resource-based policies").
+#
+# So the role's own policy is its whole grant only while no resource policy in the cell allows
+# anything. The bucket policy is the one resource policy the cell declares: the resource-type
+# allowlist above admits no repository, key or parameter policy, and the platform root declares no
+# resource of its own (its tests, P-01). An Allow here naming the task role, or every principal,
+# would give the gateway a write to the registry with every run above still green.
+run "the_bucket_policy_allows_nothing_so_the_task_role_s_own_policy_is_its_whole_grant" {
+  command = plan
+
+  # A statement that leaves effect unset is an Allow: "Defaults to Allow"
+  # (https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/iam_policy_document).
+  # Under the mock provider it reads as null, so it fails this as well.
+  assert {
+    condition = (
+      length(data.aws_iam_policy_document.platform_bucket.statement) > 0
+      && alltrue([for s in data.aws_iam_policy_document.platform_bucket.statement : s.effect == "Deny"])
+    )
+    error_message = "Every statement in the bucket policy is a Deny. An Allow grants whoever it names more than their own policy says, and the task role's own policy is P-03's whole account of what the gateway may do."
+  }
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.platform_bucket.statement : s.sid]) == toset([
+      "DenyInsecureTransport",
+      "DenyOutdatedTlsVersions",
+      "DenyReleaseWriteWithoutIfNoneMatch",
+      "DenyReleaseDeleteExceptTeardown",
+    ])
+    error_message = "The bucket policy holds the four refusals storage.tf documents and no other statement: TLS only, TLS 1.2 or later, a release written once, and deleted only by the teardown principals (contracts/s3-layout.md, P-04)."
+  }
+
+  # The statements above are the policy only while the document merges no other document in: an
+  # Allow of s3:PutObject on registry/* to the task role, passed in through source_policy_documents,
+  # left all 43 runs green before this assertion, because the mock provider never renders the merged
+  # policy. The task role's closure above says why unset is null, and why the deprecated JSON forms
+  # need nothing.
+  assert {
+    condition = (
+      data.aws_iam_policy_document.platform_bucket.source_policy_documents == null
+      && data.aws_iam_policy_document.platform_bucket.override_policy_documents == null
+    )
+    error_message = "The bucket policy merges in no other policy document: source_policy_documents and override_policy_documents each add statements, an Allow among them, that neither assertion above reads."
+  }
 }
 
 run "the_execution_role_is_separate_and_holds_only_image_pull_and_log_writes" {

@@ -135,7 +135,8 @@ needs credentials, a state bucket and the first-deployment order in
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come
   from this module's own bucket and variables, and `TrustedNetworks` names only the ALB
-  subnet ranges, so stage 1 trusts the load balancer and nothing wider.
+  subnet ranges, so `UsePlatformForwardedHeaders` trusts the load balancer and nothing
+  wider.
 
 ### The task role is the security object of record
 
@@ -154,6 +155,28 @@ A fourth statement fails a test. So does a wildcard in an action, a `Deny`, a
 it recognises and fails on one it does not, so a widened grant cannot pass by being
 unmentioned. The execution role is separate and holds image pull and log writes only;
 neither role can do the other's job.
+
+A grant can also arrive through a resource policy: in its own account a role may do
+whatever its own policy or a resource policy allows it. The bucket policy is the cell's
+one resource policy, and a test holds it to its four refusals, so an `Allow` there, to
+the task role or to anyone, fails as well. Together these runs are P-03.
+
+## Plan policy
+
+Plan row 1.9's checks read the configuration against a mock provider, because CI holds
+no AWS credentials (ADR-0016). They prove the plan this module produces, never the
+account.
+
+- **P-01, the platform plan allowlist,** is in
+  `infra/envs/poc/platform/tests/root.tftest.hcl`. It holds this module to being the
+  platform root's whole plan, counts every type in that plan against the plan rows'
+  numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
+  allowlist says. This module's own type allowlist, in `tests/module.tftest.hcl`, fails
+  on any of them as well.
+- **P-03, the task role policy,** is the task role's runs above.
+- **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
+  admitting one port between the two groups, and only the task's 443 out naming an
+  address range.
 
 ## The two things the bucket enforces that no code does
 

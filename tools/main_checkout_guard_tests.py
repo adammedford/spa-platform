@@ -300,8 +300,12 @@ class Refused(GuardCase):
             ("true && git reset --hard origin/main", main),
             ("git stash list | head -1 && git stash pop", main),
             ("git \\\n  commit -m 'work'", main),
-            # The form a session writes a commit message in, apostrophe and parenthesis included. zsh,
-            # which the Bash tool runs here, parses it; the bash 3.2 macOS ships does not.
+            # The form a session writes a commit message in, apostrophe and parenthesis included. The
+            # tracked .claude/settings.json has the Bash tool here run /bin/bash, the bash 3.2 macOS ships
+            # (#105; CLAUDE_CODE_SHELL in https://code.claude.com/docs/en/env-vars). That bash commits a
+            # plain message in this form but rejects this one at its apostrophe; zsh takes both. The guard
+            # reads the text before any shell does, and must not trip on the apostrophe as that bash does: a
+            # guard that fails lets the call run.
             ("git commit -m \"$(cat <<'EOF'\nDon't (break) this\nEOF\n)\"", main),
             ('echo "$(git stash)"', main),
             ("echo `git stash`", main),
