@@ -11,6 +11,7 @@ set -u
 
 NEED_DOTNET_MAJOR="10.0"
 NEED_AWSCLI="2.0"
+NEED_PYTHON="3.9"
 HOSTS="app1.spa-poc.test app2.spa-poc.test app3.spa-poc.test"
 
 missing_now=0
@@ -42,11 +43,24 @@ ver_ge() {
 # first_version TEXT: the first dotted number in TEXT, such as 2.37.12.
 first_version() { printf '%s\n' "$1" | sed -n 's/[^0-9]*\([0-9][0-9]*\(\.[0-9][0-9]*\)\{1,3\}\).*/\1/p' | head -n 1; }
 
+# The directory this script sits in, resolved once, here. The files beside the script are read from
+# it: tools/terraform-floor.sh just below, and tools/aws-project.env and tools/aws-project.local.env
+# further down, where the reason it is this directory and not the caller's is given; and
+# .terraform-version is read from the directory above it.
+#
+# CDPATH is cleared because an exported one sends `cd` to another directory of the same name, and
+# `cd` prints it, so every path built from this one would name another file over two lines: bash's
+# manual, cd, https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html. Even
+# CDPATH=. does it, since `cd` prints a directory found through any entry that is not empty. `--`
+# ends each command's options, so a path starting with a hyphen is a path: POSIX utility syntax
+# guideline 10, https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02.
+# The same fix as tools/land.sh's body path (#66); tools/preflight_tests.py has both cases (#96).
+tools_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
 # The Terraform floor's version and where it is installed come from the one file and the one
 # helper that tools/check.sh and CI read them through (#69), so this cannot name a different floor
-# from the one the check runs. Resolved from the script's own directory, for the reason given at
-# tools/aws-project.env below.
-tools_dir="$(cd "$(dirname "$0")" && pwd)"
+# from the one the check runs. The `cd` below is handed an absolute path, which CDPATH is never
+# searched for, so it needs neither guard above.
 . "$tools_dir/terraform-floor.sh"
 floor_file="$(cd "$tools_dir/.." && pwd)/.terraform-version"
 
@@ -59,6 +73,38 @@ if have git; then
   ok "git" "$(first_version "$(git --version 2>/dev/null)")"
 else
   missing "git" "xcode-select --install"
+fi
+
+# Python and the GitHub CLI. tools/land.sh, the one sanctioned merge path, refuses to start without
+# either, and its gh refusal sends the reader here; until #96 this script reported gh as optional
+# and python3 not at all, so the machine land.sh sent a reader to diagnose read "Day one: ready".
+#
+# python3 runs the checks .githooks/pre-push and CI run, their test companions, tools/roadmap.py and
+# land.sh's review record reader, all kept to the 3.9 that macOS's developer tools ship
+# (docs/dependencies.md, D-3). Before those tools are installed macOS still has a python3 on PATH,
+# which reports no version and asks for them, so having one is not enough.
+if have python3; then
+  pyv=$(first_version "$(python3 --version 2>&1)")
+  if [ -n "$pyv" ] && ver_ge "$pyv" "$NEED_PYTHON"; then
+    ok "Python ${NEED_PYTHON} or later" "$pyv"
+  else
+    missing "Python ${NEED_PYTHON} or later" "found: ${pyv:-unknown}. xcode-select --install"
+  fi
+else
+  missing "Python ${NEED_PYTHON} or later" "xcode-select --install"
+fi
+
+# The tracker is GitHub Issues, worked through gh, and every gh call land.sh makes needs a signed-in
+# account, so installed is not enough either. gh auth status exits 1 when an account it knows has a
+# problem: https://cli.github.com/manual/gh_auth_status
+if have gh; then
+  if gh auth status >/dev/null 2>&1; then
+    ok "GitHub CLI" "signed in"
+  else
+    missing "GitHub CLI" "installed, not signed in. gh auth login"
+  fi
+else
+  missing "GitHub CLI" "brew install gh, then gh auth login"
 fi
 
 # .NET SDK
@@ -140,10 +186,11 @@ fi
 # spent an evening on that project's guardrails. Having the values and no expectation to hold them
 # to is what made that possible.
 #
-# Resolved from the script's own directory rather than the caller's. Every other row here is
-# cwd-independent, and a guard that reports "nothing says which project is intended" when run from
-# one directory up is the same silence the incident ran on, printed in a reassuring colour.
-project_env="$(cd "$(dirname "$0")" && pwd)/aws-project.env"
+# Resolved from the script's own directory, tools_dir above, rather than the caller's. Every other
+# row here is cwd-independent, and a guard that reports "nothing says which project is intended"
+# when run from one directory up is the same silence the incident ran on, printed in a reassuring
+# colour.
+project_env="$tools_dir/aws-project.env"
 
 # One key, read the way sourcing the file would read it: last assignment wins, leading whitespace
 # and an optional `export` prefix are accepted, and a trailing comment, trailing whitespace and
@@ -233,7 +280,7 @@ if [ "$aws_ok" -eq 1 ]; then
   # the tracked tree as change request 1.5 asks: tools/aws-project.local.env, git-ignored, one line,
   # AWS_ACCOUNT_ID=<12 digits>. The wizard that runs an apply writes it after the human confirms the
   # project's name in AWS Settings, which is the only place that name is shown.
-  local_env="$(cd "$(dirname "$0")" && pwd)/aws-project.local.env"
+  local_env="$tools_dir/aws-project.local.env"
   want_account=""
   [ -f "$local_env" ] && want_account=$(project_env_get AWS_ACCOUNT_ID "$local_env")
   if [ -z "$want_account" ]; then
@@ -299,17 +346,6 @@ if have lsof; then
   else
     ok "Port 8443" "free"
   fi
-fi
-
-# GitHub CLI, optional
-if have gh; then
-  if gh auth status >/dev/null 2>&1; then
-    ok "GitHub CLI" "signed in  (optional, for the CI of task I-5)"
-  else
-    info "GitHub CLI" "installed, not signed in  (optional)"
-  fi
-else
-  info "GitHub CLI" "not installed  (optional)"
 fi
 
 echo

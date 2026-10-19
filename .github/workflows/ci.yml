@@ -195,10 +195,15 @@ jobs:
         # runs it under 3.2.
         run: python3 -I tools/check_tests.py
 
-      - name: tools/preflight.sh names the Terraform floor and says whether this machine has it
-        # Preflight's floor row tells a person, or an overnight lane, whether the local check will run
-        # the Terraform CI runs, and prints the command that installs it where the check looks (#69).
-        # Its companion runs the real script with a Terraform double and asserts only those rows.
+      - name: tools/preflight.sh holds the AWS credentials to the project its file names, and counts what day one needs
+        # Preflight is where tools/land.sh sends a reader without gh, and its AWS project guard is
+        # what stands between an apply and the wrong project (7a364fe). Its companion runs a
+        # whole-file copy of the script beside crafted env files, with doubles for aws, terraform,
+        # git, dotnet, openssl, gh and python3 and no curl, so no case reaches the network or AWS.
+        # It covers each form of the env file against what `set -a; .` makes of it, the nine guard
+        # cases, the profile's configured Region and the account pin, an exported CDPATH, the gh and
+        # python3 rows (#96), and the Terraform floor's rows (#69). Under bash 5 here; the job below
+        # runs it under 3.2.
         run: python3 -I tools/preflight_tests.py
 
       - name: A landing deletes the branches it finished, and keeps and lists every other
@@ -247,7 +252,7 @@ jobs:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/check_tests.py
 
-      - name: tools/preflight.sh's Terraform rows, under the bash 3.2 macOS ships
+      - name: tools/preflight.sh, under the bash 3.2 macOS ships
         # Preflight is written for the bash 3.2 macOS ships, which is what a person on a Mac runs.
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
