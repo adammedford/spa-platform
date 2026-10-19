@@ -120,4 +120,7 @@ directory under `infra/` that has tests, after `fmt` and `validate`.
 The P-02 run plans the fixtures with `fixtures/onboarding/app3.json` added, as ADR-0016 decision 2
 asks. It fails on a fourth resource block, a module call or a `.tf.json` file, on a definition
 that shares an existing app's `appId`, and on any change the addition makes to an existing app's
-client, branding style or parameter.
+client, branding style or parameter. It compares every argument `main.tf` sets on those three
+blocks with `existing_app_resources` in the test file, and the run before it holds the plan
+without the addition to the same map. That run also fails when `main.tf` sets an argument the map
+does not name, so a new argument is compared from the change that adds it.
