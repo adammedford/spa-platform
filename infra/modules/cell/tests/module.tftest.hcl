@@ -824,7 +824,7 @@ run "the_trusted_networks_are_the_load_balancer_s_own_subnets_and_nothing_wider"
       ])
       == toset([for s in aws_subnet.public : s.cidr_block if contains(aws_lb.cell.subnets, s.id)])
     )
-    error_message = "ForwardedHeaders:TrustedNetworks is the CIDR of each subnet the load balancer sits in: stage 1 trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md stage 1, N-09)."
+    error_message = "ForwardedHeaders:TrustedNetworks is the CIDR of each subnet the load balancer sits in: UsePlatformForwardedHeaders trusts X-Forwarded-For from the load balancer alone (contracts/pipeline.md, UsePlatformForwardedHeaders; N-09)."
   }
 
   # The anti-widening half. The cell's whole VPC range passes the first assertion's shape only by
@@ -851,7 +851,7 @@ run "the_trusted_networks_are_the_load_balancer_s_own_subnets_and_nothing_wider"
         ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
       ]) == length(aws_lb.cell.subnets)
     )
-    error_message = "Every subnet the load balancer sits in contributes one TrustedNetworks entry; a dropped one would stop stage 1 trusting that availability zone's node."
+    error_message = "Every subnet the load balancer sits in contributes one TrustedNetworks entry; a dropped one would stop UsePlatformForwardedHeaders trusting that availability zone's node."
   }
 }
 
