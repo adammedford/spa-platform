@@ -631,6 +631,22 @@ run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_el
     error_message = "Every resource and module block in the platform root and modules/cell opens a block of its own lines. A one-line block carries its source, count or for_each where the patterns that read them never look."
   }
 
+  # Every pattern in this file finds a declaration where it starts a line. `terraform fmt -check`
+  # re-indents a block and fails a comment between its keyword and its labels, but it passes a block
+  # comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "unlisted_probe" {} in
+  # modules/cell passed every run here, a second bucket in a plan held to one. So a line that names a
+  # resource or module block names it at its start, or is a # or // comment. A declaration inside a
+  # block comment that spans lines is read as a declaration, which can only fail a run, never pass one.
+  assert {
+    condition = alltrue([
+      for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", concat(
+        [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+        [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+      ))) : can(regex("^(?:(?:resource|module)\\s|\\s*(?:#|//))", line))
+    ])
+    error_message = "Every resource and module block in the platform root and modules/cell starts its own line. A declaration behind a block comment, /* ... */ resource, is in the plan where no pattern here reads it."
+  }
+
   assert {
     condition = [
       for m in regexall("(?ms)^module\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :

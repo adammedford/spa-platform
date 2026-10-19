@@ -289,6 +289,18 @@ run "a_third_definition_adds_exactly_three_resources" {
     error_message = "The apps root may hold only the three per-definition resources (P-02)."
   }
 
+  # Both patterns here find a declaration where it starts a line, and `terraform fmt -check` passes a
+  # block comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "x" {} passed the
+  # platform root's runs, which share these patterns. So a line that names a resource or module block
+  # names it at its start, or is a # or // comment.
+  assert {
+    condition = length(aws_cognito_user_pool_client.app) > 0 && alltrue([
+      for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", [for f in fileset(".", "*.tf") : file(f)])) :
+      can(regex("^(?:(?:resource|module)\\s|\\s*(?:#|//))", line))
+    ])
+    error_message = "Every resource and module block in the apps root starts its own line. A declaration behind a block comment, /* ... */ resource, is in the plan where no pattern here reads it (P-02)."
+  }
+
   # And the three blocks are the root's whole configuration only while nothing else can add to the
   # plan: a module call brings in resources of any type, and Terraform loads *.tf.json beside *.tf
   # (https://developer.hashicorp.com/terraform/language/files), where no pattern here reads.
