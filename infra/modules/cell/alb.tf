@@ -69,10 +69,13 @@ resource "aws_lb" "cell" {
   # AWS's default. An entry records the URL as the client sent it, and the login
   # callback's URL carries the authorization code and the state value in its query
   # string (T13). ADR-0007's logging rules say a query string is never logged, for
-  # exactly that reason. Delivered to S3, the logs would also need a bucket of their
-  # own: the cell's one bucket holds the registry and the releases
-  # (contracts/s3-layout.md), and P-01 allows no second. Phase 1 runs one log stream
-  # and no ALB access logs (docs/plan/06-phase-2-and-risks.md -> Enterprise gaps).
+  # exactly that reason. T13 and ADR-0007 accept the code appearing "in URLs and
+  # ALB access logs" in Phase 1; with no access_logs block, only the URL half is
+  # live (Q93 in .scratch/overnight/questions-2026-10-15-answered.md, answered yes).
+  # Delivered to S3, the logs would also need a bucket of their own: the cell's one
+  # bucket holds the registry and the releases (contracts/s3-layout.md), and P-01
+  # allows no second. Phase 1 runs one log stream and no ALB access logs
+  # (docs/plan/06-phase-2-and-risks.md -> Enterprise gaps).
   # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
 
   tags = { Name = local.lb_name }

@@ -484,8 +484,8 @@ run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
 # output, which is what a destroyed apps root leaves. Both client ids are then empty, which the
 # module accepts while mock_api_image is empty and refuses once it is set, as
 # a_mock_api_image_with_no_client_ids_is_refused in modules/cell/tests/module.tftest.hcl shows. A
-# missing state is the other half and is not absorbed: the read itself fails the plan, before any
-# expression runs, and a test that overrides the read cannot reach that failure.
+# missing state is the other half and is not absorbed: the read itself fails the plan, before try()
+# runs, and a test that overrides the read cannot reach that failure.
 run "an_apps_root_state_with_no_clients_output_leaves_the_mock_api_s_allowlists_empty" {
   command = plan
 
