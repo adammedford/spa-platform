@@ -18,6 +18,6 @@ Single-context: `GLOSSARY.md` at the root, the numbered decisions indexed by `do
 
 <!-- BEGIN AWS Agent Toolkit rules -->
 
-@docs/agents/aws-rules.md
+`docs/agents/aws-rules.md` holds the new AWS experience's rules (one Region, managed IAM, spend limits), installed by the AWS Agent Toolkit setup, which rewrites it. It is not imported here: a session reads it when its work touches AWS, from the "Where to look" table in `AGENTS.md` (#94). A re-run of that setup may put an `@` import back between these markers; the decision on #94 is to take it out again.
 
 <!-- END AWS Agent Toolkit rules -->

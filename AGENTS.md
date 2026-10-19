@@ -18,6 +18,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |
+| AWS work: the Region, IAM and spend-limit rules of the new AWS experience, before any apply or credential step | `docs/agents/aws-rules.md` |
 
 ## Rules for every task
 
