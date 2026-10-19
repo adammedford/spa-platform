@@ -72,6 +72,10 @@ spikes/g0/real-handler/vendor/ref/
 .claude/*
 !.claude/settings.json
 
+# Python bytecode. A companion that loads a sibling module by path, as tools/land_tests.py loads
+# tools/companion_runner.py, leaves it beside that module under any python3 but the one macOS ships.
+__pycache__/
+
 # macOS and editors
 .DS_Store
 *.swp

@@ -72,11 +72,23 @@ whole sentence, so a rewording is not a test edit), and exactly what the gh doub
 past the merge also asserts what origin holds afterwards, the python3 calls and where each ran, and,
 when the blocks moved, the refresh commit's parent, paths and subject.
 
+**The cases run at the same time** (#107), on the threads of tools/companion_runner.py: one per
+CPU, up to eight, unless SCRIPT_TESTS_JOBS names another number. That rests on each case keeping to
+its own throwaway directory and its own constructed environment. No case changes the working
+directory, os.environ or anything else the process shares, and a new case must not either, but for
+one list: Case.run appends each run's standard error to OBSERVED, which CPython does atomically
+(https://docs.python.org/3/faq/library.html#what-kinds-of-global-value-mutation-are-thread-safe),
+and only the completeness case reads it. That case runs alone, once every other case has finished,
+and reports last. The tools in a case's bin directory are links to wrappers written once for the
+run, because on the Mac this was measured on a newly written file costs about 45 ms more the first
+time it runs; the doubles are still each case's own.
+
 Run: python3 -I tools/land_tests.py
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -91,6 +103,9 @@ import unittest
 from typing import NamedTuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools" / "companion_runner.py")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "land.sh"
 READER = ROOT / "tools" / "review_record.py"
 CLEANUP = ROOT / "tools" / "prune_branches.py"
@@ -348,11 +363,12 @@ class Case:
         for tool in TOOLS:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
-            # A one-line exec of the resolved binary rather than a symbolic link: a git built with
-            # RUNTIME_PREFIX finds its helper programs relative to the path it was started from
+            # A link to a one-line exec of the resolved binary, written once for the run, rather
+            # than a link to the binary itself: a git built with RUNTIME_PREFIX finds its helper
+            # programs relative to the path it was started from
             # (https://github.com/git/git/blob/master/Makefile), and through a link that path
             # would be this directory.
-            self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
+            runner.link_tool(self.bin / tool, os.path.realpath(found))
         if gh:
             self.serve(state=state, base=base, heads=heads, comments=comments, reviews=reviews,
                        view_fails=view_fails, api_fails=api_fails)
@@ -1128,7 +1144,10 @@ class InterpreterTests(LandTestCase):
 
 
 class CompletenessTests(unittest.TestCase):
-    """Runs last (load_tests below): every `die` in land.sh was produced by some case."""
+    """Runs last (load_tests below), and alone once every other case has finished: every `die` in
+    land.sh was produced by some case."""
+
+    runs_after_the_others = True
 
     DIE = re.compile(r'\bdie "((?:[^"\\]|\\.)*)"')
     # Every use of die, whatever follows it: all but the function's own definition. Whole-line
@@ -1176,4 +1195,4 @@ def load_tests(loader, tests, pattern):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    runner.main()
