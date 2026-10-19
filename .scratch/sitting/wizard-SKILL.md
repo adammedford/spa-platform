@@ -28,8 +28,11 @@ and #125 until confirmed; use them anyway), and the tickets this sitting serves.
    with the reason, never a sentence that would read the same on success. Each post ends with the
    Claude Code attribution footer.
 5. **No `Confirm` comment, ever** (ADR-0021 decision 2). **No relabel, unblock or close** until a
-   `Confirm` comment on the run's `Overnight <date>` issue names the question that decided it
-   (ADR-0023 decision 4); where none does, print the write you would make under "Held" and go on.
+   `Confirm` comment on the run's `Overnight <date>` issue covers the question that decided it
+   (ADR-0023 decision 4). A comment that is only the word `Confirm` covers every pre-accepted
+   answer of that run and none that read `Answer: open`, which is the rule the report body states;
+   the `Confirm` of 2026-10-19 on #129 is one such. Where none covers a write, print the write you
+   would make under "Held" and go on.
 6. **The record is `.scratch/sitting/log/<UTC date>.log`** in the main checkout: every command,
    every output, unredacted, mode 600. Nothing goes to `/tmp`.
 7. **Stop and name the cause** when preflight is not ready, the account is not the pin, a plan has
@@ -182,8 +185,9 @@ bucket is empty for the destroy in sitting B). Post the full output on #122 and 
 **A7.** `rm infra/envs/poc/platform/terraform.tfvars.bak`, with approval, and say so on #129's
 thread only if the human wants; it is Q16 there.
 
-**A8, the tracker writes.** For each, print the command and make it only when Stage 0 found a
-`Confirm` naming the question; otherwise list it under "Held":
+**A8, the tracker writes.** For each, print the command and make it when Stage 0 found a
+`Confirm` covering the question (all four below were pre-accepted on #129, which its `Confirm` of
+2026-10-19 covers); otherwise list it under "Held":
 
 - #125: `gh issue close 125 --comment "<## Answer: the apply on 2026-10-18 at 19:17:25Z, the plan
   and outputs in the grill of 2026-10-19, the login above>"` (#125's Q7).
@@ -261,9 +265,10 @@ deployed tier; destroy on confirm.
 
 ## Outside the sittings
 
-- **H1, the `Confirm` on #129.** On request, print a digest table of Q1 to Q63 from the issue's
-  comments (question, recommendation, the ticket it changes, open or pre-accepted). The human
-  writes and posts the comment.
+- **H1, the open questions on #129.** The one-word `Confirm` of 2026-10-19 left Q10, Q11, Q25,
+  Q41 and Q42 to Q63 open. On request, print a digest table of those 25 from the issue's comments
+  (question, recommendation, what it changes). The human writes and posts any comment that names
+  them.
 - **H2, #90.** Print the three pre-checks and the close path (AWS Settings → View all projects →
   the sample project → Close project); after the human reports it closed, `rm` the two local files
   with approval, run preflight, and draft the ADR-0017 clause into the log for the integrator.

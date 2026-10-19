@@ -3,8 +3,10 @@
 **Raised by:** the Phase 2 planning session of 2026-10-19; #125's Q8 (the sitting's record per
 ticket, from captured results), #56's Q9 and Q10 (one read pass, run by a foreground session with
 the human's approval of each command) and #55's Q11 and Q14 (the sitting's order, and the destroy).
-Those answers are pre-accepted on #129 and provisional until confirmed; this spec follows them and
-changes nothing on its own.
+Those answers were confirmed on #129 on 2026-10-19 at 17:39Z, by a comment that is the one word
+`Confirm`: under the report's own rule it covers every pre-accepted answer and none of the
+questions that read `Answer: open`. This spec follows the confirmed answers and changes nothing on
+its own.
 
 ## Problem Statement
 
@@ -40,7 +42,7 @@ Minutes are the planning session's estimates of the human's attention, not wall-
 | A5 | #118 | Step 1: the platform tag query in the selected Region and us-east-1, and `iam list-roles` filtered to the cell's roles, showing the query omits the roles | — | Two reads; the post | 2 |
 | A6 | #122, #92 | P-04 against the applied bucket: `tools/scripts/verify-release-immutability.sh`, one line per case | Decide `--clean-up-as-teardown-role`: yes, so the bucket is empty for Q14's destroy | The run; the post on both tickets; the output kept for `Merge task 1.5`'s body | 5 |
 | A7 | #129 Q16 | Delete `infra/envs/poc/platform/terraform.tfvars.bak` | — | `rm`, with approval | 1 |
-| A8 | #125, #55, #56, #57, #58 | The tracker writes the grills decided: close #125 and #55 with an `## Answer`, relabel #56 `ready-for-agent`, remove #56 as a blocker of #57 and #58 | Confirm on #129 first (ADR-0021); nothing else | Drafts each write; makes it only once the confirmation names the question | 5 |
+| A8 | #125, #55, #56, #57, #58 | The tracker writes the grills decided: close #125 and #55 with an `## Answer`, relabel #56 `ready-for-agent`, remove #56 as a blocker of #57 and #58, remove #125 as a blocker of #55 | — (the `Confirm` of 2026-10-19 covers each) | Shows each write, then makes it | 5 |
 | B0 | #57 | A clean workstation for the tunnel: the Session Manager plugin, the hosts entries, the local authority trusted | Admin prompts for the hosts file and the keychain, if not done | `tools/preflight.sh`; `tools/scripts/certs.sh status` | 5 |
 | B1 | #57 | `tunnel.sh`, then `verify-tunnel.sh /` on the sample image: exits 0 | Watch | The run; the post | 5 |
 | B2 | #55 Q14 | `terraform destroy` of the platform root, keeping the certificate, the identity root and the apps root; then the tag query and `list-roles` again (#118's second data point) | Confirm the destroy plan; the spend call it rests on | The plan, the destroy on confirm, the reads, the post | 10 |
@@ -50,7 +52,7 @@ Minutes are the planning session's estimates of the human's attention, not wall-
 | C3 | #63 | G4: the deployed negative subset, N-26 included. G5: F-07, the third SPA: the apps root's plan shows three resources, `spactl` publishes and adds app 3, the task id and revision are unchanged | Confirm the apps apply; wait | The suites and the reads; the posts | 15, of about 40 wall-clock |
 | C4 | G3, G4, G5 | The gate tags, each after its CI run and after the review debt in `docs/agents/landing-work.md` → "Review debt from before the check" is cleared (five merges, each needing a record from a fresh review session) | Cut each annotated tag | Checks the range's `Reviewed:` lines; drafts the tag message | 10 per gate |
 | C5 | — | After G5: keep the stack for Phase 2's deployed tier at about $30 a month, or destroy it until then | The spend decision | The destroy, on confirm | 2 |
-| H1 | #129 | The `Confirm` comment: Q1 to Q63, with the open ones (Q10, Q11, Q25, Q41, Q42 to Q63) named where accepted and overrides as `Q<n>: <answer>` lines | Read and decide; post it yourself (no session writes one) | A digest table of the 63: the question, the recommendation, the ticket it changes | 30 to 60 |
+| H1 | #129 | The 25 questions the one-word `Confirm` left open: Q10, Q11, Q25, Q41 and the steering proposals Q42 to Q63, among them the glossary terms *Sitting*, *Read-back* and *Sample image* this spec uses, Q42's `contracts/README.md` paragraph, Q25's #61 to #63 edge and Q41's routing of #75 | A second comment naming the ones accepted, overrides as `Q<n>: <answer>` lines; or leave them open on purpose. Nobody but you writes it | A digest of the 25: the question, the recommendation, what it changes | 15 to 30 |
 | H2 | #90 | Close the sample project in AWS Settings after three pre-checks (the account ending 4665, no CloudTrail trail, not paused); then delete the two local files; preflight still ready; the ADR-0017 clause drafted | The console pre-checks and the one irreversible click | The two `rm`s with approval, preflight, the draft | 10 |
 | H3 | #68 | `tools/check.sh --full --both-halves --port 5180` once from `zsh -l` and once from `/bin/bash`, on `main` | Start it | The two runs; the post | 2, of about 30 wall-clock |
 | H4 | #71 | The one-off `tools/prune_branches.py` pass from a checkout at `origin/main` | — | The run; the post | 1 |
@@ -61,8 +63,15 @@ Three sittings, then: **A**, the read pass on the cell as it stands, about an ho
 no apply; **B**, the tunnel on the sample image and the destroy, once #57's scripts have landed,
 about twenty minutes; **C**, the first deployment and the three gate runs, once #58's scripts and
 Docker are in place, about an hour and a half of attention over three or four hours of wall-clock.
-H1 is the largest single block of human-only work and gates A8, because every tracker write the
-grills decided waits on it.
+The `Confirm` of 2026-10-19 covers every pre-accepted answer, so A8's writes may be made in sitting
+A; it names none of the open questions, so the steering proposals among them stay proposals until
+a comment names them (H1), and nothing in `GLOSSARY.md` or the guides moves on them before that.
+
+Owed by the morning run's apply now that the `Confirm` exists, as the tracker read on 2026-10-19
+and to be checked before sitting A rather than taken from here: #125's body rewrite and retitle
+(its Q5) and its removal as #55's blocker (Q6); #56's body rewrite on its Q1 to Q13; the dated note
+on #58 that `deploy.sh` carries the mock API container (#56's Q4); and the ws1 follow-up for the
+replaced-client trap (#125's Q9). None needs the cell or a sitting.
 
 ## Solution
 
@@ -123,8 +132,10 @@ anywhere but `.scratch/sitting/log/`, which `.gitignore` already ignores.
   name; a Cognito client id, a secret parameter value, a session name and anything after `code=`
   are removed outright. Output the wizard cannot redact with confidence is not posted.
 - **The tracker writes** (A8) are gated on a `Confirm` comment on the run's `Overnight <date>`
-  issue that names the question; the wizard reads the comments, and where it finds none it prints
-  the write it would make and moves on.
+  issue that covers the question: a comment that is only `Confirm` covers every pre-accepted
+  answer and no question that read `Answer: open`, which is the rule #129's body states. The wizard
+  reads the comments, and where none covers a write it prints the write it would make and moves
+  on.
 - **The sitting is chosen by state, not by argument:** A when the cell stands and #56's read-back
   is not posted; B when #57's scripts are on `main` and the read-back is; C when #58's are and the
   platform root is destroyed or absent. An argument may force one.
@@ -165,5 +176,6 @@ anywhere but `.scratch/sitting/log/`, which `.gitignore` already ignores.
 
 **What the draft skill rests on that is unverified here:** the exact AWS CLI output shapes of the
 reads in A3 to A5 (written from the AWS CLI reference and #56's grill, not from a run), the
-`verify-tunnel.sh` and `deploy.sh` interfaces (unwritten; #57 and #58 decide them), and whether a
-`Confirm` on #129 exists today. The sandbox this was written in has no AWS session and no Mac.
+`verify-tunnel.sh` and `deploy.sh` interfaces (unwritten; #57 and #58 decide them), and which of
+the morning run's applies have been made since the `Confirm`. The sandbox this was written in has
+no AWS session and no Mac.
