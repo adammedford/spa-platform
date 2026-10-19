@@ -42,8 +42,8 @@ backend.hcl
 
 # The account this platform builds in, one line, written by the AWS-sitting wizard after the human
 # confirms the project's name. Change request 1.5 keeps account ids out of the tracked tree;
-# tools/preflight.sh reads this to tell the real project from the sample one `aws login` can also
-# sign a profile into.
+# tools/preflight.sh reads this to tell the platform project from the sample project `aws login`
+# can also sign a profile into (GLOSSARY.md).
 tools/aws-project.local.env
 *.local.json
 

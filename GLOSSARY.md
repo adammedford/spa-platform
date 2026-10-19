@@ -13,6 +13,15 @@ deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, 
 of every resource name and of the data-protection application name. Phase 1 runs one cell. See
 ADR-0012.
 
+**Platform project** — the AWS project the platform is built in: the one whose account
+`tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
+account does. Not "the account", "the real project", "the right project" or "the project made for
+this work".
+
+**Sample project** — the project the new AWS experience created beside the platform project.
+Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
+default project".
+
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
 a logical boundary inside one.
