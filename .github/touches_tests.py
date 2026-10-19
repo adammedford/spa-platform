@@ -55,6 +55,12 @@ class ClassifierTests(unittest.TestCase):
 
 class WorkflowDecisionTests(unittest.TestCase):
     def decide(self, paths, *, event="push", missing_base=False):
+        """Which jobs run: the decision step's outputs, less the base it resolved."""
+        outputs = self.outputs(paths, event=event, missing_base=missing_base)
+        outputs.pop("base")
+        return outputs
+
+    def outputs(self, paths, *, event="push", missing_base=False):
         # Execute the workflow's real run block, rather than a second copy of its decision logic.
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         step = workflow.split("        id: touches\n", 1)[1].split("\n      - name:", 1)[0]
@@ -119,6 +125,13 @@ class WorkflowDecisionTests(unittest.TestCase):
         trailing = [f"docs/{i:05d}-{'a' * 100}.md" for i in range(3000)]
         self.assertEqual({"build": "true", "terraform": "false"},
                          self.decide(["Directory.Build.props", *trailing]))
+
+    def test_the_base_it_resolved_is_an_output_for_the_steering_check(self):
+        # The steering check's authority rule judges the commits from this base to HEAD (#102), so
+        # the step names the base it diffed against, and nothing when it had none to diff against.
+        self.assertEqual("origin/main", self.outputs(["docs/note.md"], event="pull_request")["base"])
+        self.assertRegex(self.outputs(["docs/note.md"])["base"], r"^[0-9a-f]{40}$")
+        self.assertEqual("", self.outputs(["docs/note.md"], missing_base=True)["base"])
 
     def test_the_workflows_overrides_survive_large_diffs(self):
         trailing = [f"z-docs/{i:05d}-{'a' * 100}.md" for i in range(3000)]

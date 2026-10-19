@@ -48,9 +48,10 @@
 # second box asks for the full mode green on main, and only this makes that run test anything. The
 # hook never passes it, and a lane does not need it: its diff earns its skips.
 #
-# --base names what the branch is judged against, for A-05 and for the halves. The default is the
-# default branch, origin/main, else main: the question is what the branch adds to main. An overnight
-# lane names its fork point instead, so its own commits are judged rather than the night's merges.
+# --base names what the branch is judged against, for A-05, the steering check's authority rule and
+# the halves. The default is the default branch, origin/main, else main: the question is what the
+# branch adds to main. An overnight lane names its fork point instead, so its own commits are
+# judged rather than the night's merges.
 #
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
@@ -232,8 +233,17 @@ fi
 # The issue rule reads every `#NNN` the same files cite and asks GitHub, through gh, whether the
 # number is an issue or pull request here. Without gh, a login or a network it says so and fails
 # nothing, so an offline push is not held up on it; CI asks again with its own token.
+# The authority rule reads commits rather than files: every commit from the base A-05 judges
+# against to HEAD that changes a steering document needs an `Authority:` trailer naming what
+# decided the change (ADR-0023, #102), so it is handed that base. With none, it reads every commit
+# HEAD reaches, so no base is not a skip. Offline it still requires the trailer, and says it could
+# not check what the trailer cites.
 if command -v python3 > /dev/null; then
-  python3 -I .github/steering.py || fail "the steering check failed."
+  if [ -n "$base" ]; then
+    python3 -I .github/steering.py --base "$base" || fail "the steering check failed."
+  else
+    python3 -I .github/steering.py || fail "the steering check failed."
+  fi
 else
   missing python3 steering
 fi

@@ -78,7 +78,9 @@ jobs:
         # meanwhile. The two jobs below read the answer. Every job runs when there is no base to
         # diff against -- a push whose `before` GitHub does not have -- and when the files that make
         # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh, which only the
-        # build job exercises. A decision cannot vouch for a change to itself.
+        # build job exercises. A decision cannot vouch for a change to itself. The base it resolved
+        # is an output too, empty when there was none, for the steering check's authority rule,
+        # which judges the commits from it to HEAD: one place decides the range, not two.
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -91,9 +93,11 @@ jobs:
           esac
           build=true
           terraform=true
+          resolved=""
           if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
             echo "::notice::no base to diff against ($base), so every job runs."
           else
+            resolved="$base"
             changed="$(git diff --name-only "$base"...HEAD)"
             # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
             if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$' > /dev/null; then
@@ -105,6 +109,7 @@ jobs:
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "terraform=$terraform" >> "$GITHUB_OUTPUT"
+          echo "base=$resolved" >> "$GITHUB_OUTPUT"
           echo "build=$build terraform=$terraform"
 
       - name: CI path decisions include build inputs and survive large diffs
@@ -120,7 +125,7 @@ jobs:
           python3 -I .github/shell_parse_tests.py
           python3 -I .github/shell-parse.py
 
-      - name: What a session steers by says what the repository says, and every citation resolves
+      - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
         # let a progress line sit directly under the paragraph forbidding it for two sessions running.
@@ -129,15 +134,25 @@ jobs:
         # which claims that a number resolves to a spec somebody can open; the tickets in each
         # tracker directory, where two files sharing a number leave a citation of it ambiguous; and
         # the issue citations in every tracked file, each of which claims a number GitHub has issued
-        # to an issue or pull request here, which the check asks GitHub about with the token below.
+        # to an issue or pull request here, which the check asks GitHub about with the token below;
+        # and the commits this change adds, each of which, if it changes a steering document, must
+        # name what authorised it in an `Authority:` trailer (ADR-0023, #102). Those are judged from
+        # the base the decision step resolved, or over every commit HEAD reaches when it resolved
+        # none, so a push GitHub has no `before` for is judged rather than skipped.
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         env:
-          # For `gh api`, which the check runs once to list the issue and pull request numbers.
+          # For `gh api`, which the check runs once to list the issue and pull request numbers, and
+          # once per comment an `Authority:` trailer cites.
           GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.touches.outputs.base }}
         run: |
           python3 -I .github/steering_tests.py
-          python3 -I .github/steering.py
+          if [ -n "$BASE" ]; then
+            python3 -I .github/steering.py --base "$BASE"
+          else
+            python3 -I .github/steering.py
+          fi
 
       - name: Plan generation stays disabled until its private pipeline is reviewed
         # A plan's `after` holds the values the apply will write, so the identity root's plan

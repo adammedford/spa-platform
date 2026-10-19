@@ -71,16 +71,40 @@ TRANSCRIPTS below, on PLANNED's terms. With no network, no `gh` or no token the 
 line saying how many citations went unchecked and why, and fails nothing, as the pre-push hook does
 for a missing tool; the line it passes prints how many citations GitHub vouched for.
 
-Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py
+**No steering change without its authority.** The one rule that reads history rather than the
+tree. ADR-0023 decision 3 says a change to a steering document cites its authority in the commit,
+and that this check holds a commit citing none. On the night of 2026-10-18 five commits changed a
+steering document on no confirmed answer -- two glossary entries their tickets did not ask for, a
+lane's pre-accepted decision written into the landing guide, and two reviewers' rewrites of their
+own -- and the night's reviews held none of them: the report found two, and a later review found the
+reviewers' two. Whether a commit cites an authority is mechanical, so it is this check's; whether
+what it cites decides the change stays the reviewer's. A commit is held when it sits between
+`--base` and HEAD, is not a merge, was made from AUTHORITY_SINCE on, and changes a steering
+document other than by adding a change request; it then needs an `Authority:` trailer of one of two
+forms, `#<n>` for the ticket whose acceptance criterion asks for the change, or the URL of the
+comment on this repository that holds a confirmed answer. git's own trailer parser reads it, so an
+`Authority:` line inside the prose is not one. With no `--base` every commit HEAD reaches is read,
+so a caller cannot skip the rule by naming nothing. A merge passes because what it brings in is
+commits, each held on its own; a commit made before the starting point passes because it could not
+have known the rule, and rewording one would mean rewriting a branch that has landed. The citation
+is checked the way the `#NNN` rule checks one, in the same single listing, which also says whether
+a number is an issue or a pull request, and a ticket is an issue; a URL is checked against the
+comment GitHub keeps under its id. Offline, the trailer is still required, and its citations are
+reported as not checked; the line the rule passes prints how many held commits GitHub vouched for.
+
+Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py --base origin/main
 """
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
 import pathlib
 import re
 import subprocess
 import sys
+import typing
 
 FILES = ["AGENTS.md", "CLAUDE.md"]
 
@@ -243,12 +267,15 @@ ISSUE_CITATION = re.compile(r"(?<![\w/&#])#(?P<number>\d{1,4})\b")
 # Where the numbers come from: one listing of the repository's issues. GitHub's REST API "considers
 # every pull request an issue, but not every issue is a pull request", so the pull requests are in
 # the listing and the two forms share one sequence; --paginate follows the pages and --jq keeps
-# one number per line. gh fills {owner}/{repo} from the remote of the directory it runs in, and
-# signs in from its keyring or from GH_TOKEN, which is what CI hands it.
+# one line per number, saying which of the two it is, from the `pull_request` key the API gives a
+# pull request alone. The `#NNN` rule takes either; the authority rule takes an issue only, since
+# a ticket is an issue, and this listing is the one call that can tell them apart. gh fills
+# {owner}/{repo} from the remote of the directory it runs in, and signs in from its keyring or from
+# GH_TOKEN, which is what CI hands it.
 # https://docs.github.com/en/rest/issues/issues#list-repository-issues
 GH_ISSUES = (
     "gh", "api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100",
-    "--jq", ".[].number",
+    "--jq", r'.[] | "\(.number) \(if .pull_request then "pull" else "issue" end)"',
 )
 
 # How long to wait for gh before saying so. The hook runs this check on every push, and a check that
@@ -269,6 +296,76 @@ TRANSCRIPTS = {
     "spikes/g0/token-and-proxy/output-token-and-proxy.txt":
         "the token spike's run; `#N refresh_token` numbers the grants",
 }
+
+# The steering documents, as ADR-0023 decision 2 lists them and GLOSSARY.md's *Steering document*
+# defines them: a file at the repository's root, or anything under a directory, written with its
+# trailing slash. A name is matched whole and only at the root, so `docs/GLOSSARY.md` and
+# `contracts-old/` are not steering documents.
+STEERING_DOCUMENTS = (
+    "GLOSSARY.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "OWNERSHIP.md",
+    "CODING_STANDARDS.md",
+    "docs/agents/",
+    "docs/adr/",
+    "contracts/",
+)
+
+# Where a change request goes. ADR-0023 decision 2: adding one is not a change to a steering
+# document, and AGENTS.md gives it to every workstream as the way to ask for a contract change, so
+# holding it would hold every lane that followed the rules. Only an added file passes: a change
+# request edited or removed afterwards is the integrator deciding it, which is a change to
+# contracts/ like any other.
+CHANGE_REQUESTS = "contracts/changes/"
+
+# Where the authority rule starts. A commit made before it was written could not have known the
+# rule, and rewording one would mean rewriting a branch that has landed. Made is the committer date:
+# an amend or a rebase makes a commit again and keeps its author date, so the author date would let
+# a commit first written before this point carry a steering change added after it. Set just before
+# the commit that adds the rule, which is the first one it holds.
+AUTHORITY_SINCE = datetime.datetime(2026, 10, 19, 10, 28, tzinfo=datetime.timezone.utc)
+
+# The trailer's key. git's own parser reads it, matching the key in any case, so the rule agrees
+# with `git interpret-trailers --parse` and with the %(trailers) a reader of the log sees: a
+# trailer is a `Key: value` line in the group that ends the message after a blank line, and the
+# group counts only when it is all trailers, or holds one git generates or is configured for and is
+# at least a quarter trailers. `Authority:` is neither, so it goes in a group of trailers alone.
+# https://git-scm.com/docs/git-interpret-trailers
+AUTHORITY = "Authority"
+
+# The two forms an authority takes (ADR-0023 decision 3): a ticket, `#<n>`, whose acceptance
+# criterion asks for the change; or the URL of the comment on this repository that holds a
+# confirmed answer, as GitHub links a comment on an issue or on a pull request's conversation.
+# Each is matched whole, so a sentence that merely contains one is neither form.
+ISSUE_AUTHORITY = re.compile(r"#(?P<number>[1-9]\d*)")
+COMMENT_AUTHORITY = re.compile(
+    r"https://github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/[1-9]\d*"
+    r"#issuecomment-(?P<comment>[1-9]\d*)"
+)
+
+# Where a comment is looked up: the endpoint serving an issue comment by its id, which covers a
+# pull request's conversation too, answers 404 for an id this repository has no comment under, and
+# gives the comment's own URL as `html_url`. gh fills {owner}/{repo} as it does for GH_ISSUES, and
+# {comment} is the id.
+# https://docs.github.com/en/rest/issues/comments#get-an-issue-comment
+GH_COMMENT = ("gh", "api", "repos/{owner}/{repo}/issues/comments/{comment}", "--jq", ".html_url")
+
+# What the rule reads of each commit, in one `git log`: the commit, when it was made, its subject,
+# and the values of its Authority: trailers, in fields no subject or trailer value carries.
+LOG_FORMAT = (
+    "%H%x1f%ct%x1f%s%x1f"
+    f"%(trailers:key={AUTHORITY},valueonly,unfold,separator=%x1e)"
+)
+
+
+class Held(typing.NamedTuple):
+    """A commit the authority rule holds, and the authorities it names."""
+
+    sha: str
+    subject: str
+    paths: tuple[str, ...]
+    authorities: tuple[str, ...]
 
 
 def progress_claims(root: pathlib.Path) -> list[str]:
@@ -622,35 +719,77 @@ def issue_citations(root: pathlib.Path) -> tuple[list[tuple[str, int, int]], lis
     return cited, untracked
 
 
-def issued_numbers(root: pathlib.Path) -> tuple[set[int], str]:
-    """The numbers GitHub has issued to this repository's issues and pull requests, or why they
-    could not be read.
+def issued_numbers(root: pathlib.Path) -> tuple[set[int], set[int], str]:
+    """The numbers GitHub has issued to this repository's issues, and to its pull requests, or why
+    they could not be read.
 
     Empty with a reason when gh is not on PATH, is not signed in, cannot reach GitHub or is refused
     by it. The caller prints the reason and fails nothing: a rule that failed every offline push
     would be a rule pushed past with --no-verify within the week, and the next push with a network
     checks what this one could not. Empty with no reason is an answer too -- a repository with no
-    issues and no pull requests -- and every citation in it dangles, which is right. The tests
-    replace this function, so no test reaches GitHub.
+    issues and no pull requests -- and every citation in it dangles, which is right. The cases on
+    the check's rules replace this function, so none of them reaches GitHub; the cases on this
+    function point GH_ISSUES at a stand-in for gh.
     """
     try:
         asked = subprocess.run(
             GH_ISSUES, cwd=root, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT
         )
     except FileNotFoundError:
-        return set(), "gh is not on PATH"
+        return set(), set(), "gh is not on PATH"
     except subprocess.TimeoutExpired:
-        return set(), f"gh did not answer within {GH_TIMEOUT} seconds"
+        return set(), set(), f"gh did not answer within {GH_TIMEOUT} seconds"
     if asked.returncode != 0:
-        # gh's first line of stderr says what went wrong -- `gh: Bad credentials (HTTP 401)`,
-        # `error connecting to api.github.com`, `To get started with GitHub CLI, please run: gh
-        # auth login` -- where the exit code alone would say nothing a reader could act on.
-        said = next((line.strip() for line in asked.stderr.splitlines() if line.strip()), "")
-        return set(), said or f"gh exited {asked.returncode} and said nothing"
+        return set(), set(), first_complaint(asked)
+    issues: set[int] = set()
+    pulls: set[int] = set()
+    for line in asked.stdout.splitlines():
+        if not line.strip():
+            continue
+        number, _, kind = line.strip().partition(" ")
+        if not number.isdigit() or kind not in ("issue", "pull"):
+            return set(), set(), (
+                f"gh answered with something other than numbers: {asked.stdout[:60]!r}"
+            )
+        (pulls if kind == "pull" else issues).add(int(number))
+    return issues, pulls, ""
+
+
+def first_complaint(asked: subprocess.CompletedProcess) -> str:
+    """What gh said went wrong, in its first line of stderr.
+
+    `gh: Bad credentials (HTTP 401)`, `error connecting to api.github.com`, `To get started with
+    GitHub CLI, please run: gh auth login`: each says what a reader can act on, where the exit
+    code alone would say nothing.
+    """
+    said = next((line.strip() for line in asked.stderr.splitlines() if line.strip()), "")
+    return said or f"gh exited {asked.returncode} and said nothing"
+
+
+def comment_url(root: pathlib.Path, comment: str) -> tuple[str | None, str]:
+    """Where GitHub keeps the comment with this id on this repository: its URL; None when this
+    repository has no comment under the id; or, with None, why GitHub could not be asked.
+
+    One call per comment a held commit cites, which is a handful a run and usually none. A 404 is
+    an answer, the one the rule fails on; anything else gh says is a reason the citation went
+    unchecked, as issued_numbers() reports its own. The cases on the check's rules replace this
+    function; the cases on this function point GH_COMMENT at a stand-in for gh.
+    """
+    command = tuple(part.replace("{comment}", comment) for part in GH_COMMENT)
     try:
-        return {int(number) for number in asked.stdout.split()}, ""
-    except ValueError:
-        return set(), f"gh answered with something other than numbers: {asked.stdout[:60]!r}"
+        asked = subprocess.run(
+            command, cwd=root, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT
+        )
+    except FileNotFoundError:
+        return None, "gh is not on PATH"
+    except subprocess.TimeoutExpired:
+        return None, f"gh did not answer within {GH_TIMEOUT} seconds"
+    if asked.returncode != 0:
+        said = first_complaint(asked)
+        # gh's line for an id the repository has no comment under: `gh: Not Found (HTTP 404)`.
+        return (None, "") if "(HTTP 404)" in said else (None, said)
+    kept = asked.stdout.strip()
+    return (kept, "") if kept else (None, "gh answered with no URL for the comment")
 
 
 def dangling_issues(cited: list[tuple[str, int, int]], issued: set[int]) -> list[str]:
@@ -661,6 +800,158 @@ def dangling_issues(cited: list[tuple[str, int, int]], issued: set[int]) -> list
         for relative, line_number, number in cited
         if number not in issued
     ]
+
+
+def git(root: pathlib.Path, *arguments: str) -> subprocess.CompletedProcess:
+    """A git command in the repository, its output read as text whatever bytes a path holds."""
+    return subprocess.run(
+        ("git", *arguments), cwd=root, capture_output=True, encoding="utf-8", errors="replace",
+        check=False,
+    )
+
+
+def resolved(root: pathlib.Path, revision: str) -> str | None:
+    """The commit a revision names, or None when it names none -- a repository with no commit yet
+    has no HEAD, and that is a range holding nothing rather than an error."""
+    found = git(root, "rev-parse", "--verify", "--quiet", "--end-of-options",
+                f"{revision}^{{commit}}")
+    return found.stdout.strip() if found.returncode == 0 else None
+
+
+def is_steering(path: str) -> bool:
+    """Whether a path is a steering document: a STEERING_DOCUMENTS file, or under one of its
+    directories."""
+    return any(
+        path == document or (document.endswith("/") and path.startswith(document))
+        for document in STEERING_DOCUMENTS
+    )
+
+
+def steering_changes(root: pathlib.Path, sha: str) -> list[str]:
+    """The steering documents a commit changes, less any change request it adds.
+
+    Against the commit's parent, or the empty tree for a root commit, which is what --root asks
+    for: a root commit is a change like any other. No rename detection, so a rename is the delete
+    of one path and the add of another, and a change request renamed is a change request removed.
+    NUL-separated, so a path is read as git stores it rather than as git would quote it.
+    """
+    found = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
+                "--root", sha)
+    fields = found.stdout.split("\0")
+    return [
+        path
+        for status, path in zip(fields[0::2], fields[1::2])
+        if is_steering(path) and not (status == "A" and path.startswith(CHANGE_REQUESTS))
+    ]
+
+
+def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
+    """The commits the authority rule holds, newest first: between base and HEAD, or every commit
+    HEAD reaches when no base is named, that are not merges, were made from AUTHORITY_SINCE on, and
+    change a steering document other than by adding a change request.
+
+    The starting point is compared here, commit by commit, and not given to `git log --since`:
+    git's manual says of `--since-as-filter` that it "visits all commits in the range, rather than
+    stopping at the first commit which is older than <date>", which is what `--since` does, so a
+    newer commit behind an older one, as a merge of older work puts it, would go unread.
+    https://git-scm.com/docs/git-log
+    """
+    head = resolved(root, "HEAD")
+    if head is None:
+        return []
+    revisions = f"{base}..{head}" if base else head
+    log = git(root, "log", "-z", "--no-merges", "--no-show-signature", f"--format={LOG_FORMAT}",
+              revisions, "--")
+    if log.returncode != 0:
+        raise SystemExit(f"steering: git log could not read {revisions}: {log.stderr.strip()}")
+    since = AUTHORITY_SINCE.timestamp()
+    held = []
+    for record in log.stdout.split("\0"):
+        if not record:
+            continue
+        sha, made, subject, trailers = record.split("\x1f", 3)
+        if int(made) < since:
+            continue
+        paths = steering_changes(root, sha)
+        if not paths:
+            continue
+        authorities = tuple(value.strip() for value in trailers.split("\x1e") if value.strip())
+        held.append(Held(sha, subject, tuple(paths), authorities))
+    return held
+
+
+def wanted_comments(held: list[Held]) -> list[str]:
+    """The comment ids the held commits cite, each once, for comment_url() to look up."""
+    found = (COMMENT_AUTHORITY.fullmatch(value) for commit in held for value in commit.authorities)
+    return sorted({match.group("comment") for match in found if match})
+
+
+def judged(
+    authority: str,
+    issues: set[int],
+    pulls: set[int],
+    numbers_unread: str,
+    comments: dict[str, tuple[str | None, str]],
+) -> tuple[str, str]:
+    """What one Authority: value comes to: ("vouched", ""), ("refused", why it resolves to
+    nothing), or ("unchecked", why GitHub could not say)."""
+    issue = ISSUE_AUTHORITY.fullmatch(authority)
+    if issue:
+        if numbers_unread:
+            return "unchecked", numbers_unread
+        number = int(issue.group("number"))
+        if number in issues:
+            return "vouched", ""
+        if number in pulls:
+            return "refused", "names a pull request, not an issue"
+        return "refused", "names no issue of this repository"
+    comment = COMMENT_AUTHORITY.fullmatch(authority)
+    if comment:
+        kept, why = comments[comment.group("comment")]
+        if why:
+            return "unchecked", why
+        if kept is None:
+            return "refused", "names no comment on this repository"
+        # GitHub's owner and repository names are case-insensitive, so the URL is compared so.
+        if kept.casefold() != authority.casefold():
+            where = f"is not where GitHub keeps comment {comment.group('comment')}: {kept}"
+            return "refused", where
+        return "vouched", ""
+    return "refused", "is neither #<n> nor the URL of a comment on this repository"
+
+
+def unauthorised(
+    held: list[Held],
+    issues: set[int],
+    pulls: set[int],
+    numbers_unread: str,
+    comments: dict[str, tuple[str | None, str]],
+) -> tuple[list[str], list[str], list[str], int]:
+    """The held commits naming no authority, the authorities that resolve to nothing, why each
+    authority GitHub could not be asked about went unchecked, and how many held commits GitHub
+    vouched for every authority of.
+
+    Every authority a commit names is judged, not the first that resolves: a second trailer citing
+    nothing is a pointer at nothing, which every other rule here fails.
+    """
+    missing, refused, unchecked, vouched = [], [], [], 0
+    for commit in held:
+        named = f'commit {commit.sha[:12]} ("{commit.subject}") changes {", ".join(commit.paths)}'
+        if not commit.authorities:
+            missing.append(f"{named} and carries no {AUTHORITY}: trailer")
+            continue
+        verdicts = [
+            (authority, *judged(authority, issues, pulls, numbers_unread, comments))
+            for authority in commit.authorities
+        ]
+        for authority, verdict, why in verdicts:
+            if verdict == "refused":
+                refused.append(f"{named}, and {AUTHORITY}: {authority} {why}")
+            elif verdict == "unchecked":
+                unchecked.append(why)
+        if all(verdict == "vouched" for _, verdict, _ in verdicts):
+            vouched += 1
+    return missing, refused, unchecked, vouched
 
 
 def report(lines: list[str], headline: str, *advice: str) -> bool:
@@ -682,18 +973,43 @@ def report(lines: list[str], headline: str, *advice: str) -> bool:
     return True
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog=".github/steering.py",
+        description="Check the documents a session steers by, and the commits that change them.",
+    )
+    parser.add_argument(
+        "--base", metavar="REF",
+        help="judge the commits between REF and HEAD, as tools/check.sh and CI name it; without "
+             "it, every commit HEAD reaches",
+    )
+    arguments = parser.parse_args(sys.argv[1:] if argv is None else argv)
     root = pathlib.Path(__file__).resolve().parent.parent
+
+    # A base the caller names must resolve, as tools/check.sh's must: a typo there would otherwise
+    # judge nothing and pass.
+    base = None
+    if arguments.base is not None:
+        base = resolved(root, arguments.base)
+        if base is None:
+            parser.error(f"no commit {arguments.base} to judge the commits against")
 
     claims = progress_claims(root)
     missing, landed = dangling_pointers(root)
     disagreements, unreadable, nowhere, uncompared, compared = freeze_disagreements(root)
-    unresolved, filed, resolved = dangling_tickets(root)
+    unresolved, filed, resolved_tickets = dangling_tickets(root)
     shared, numbered = shared_numbers(root)
     cited, untracked = issue_citations(root)
-    # One lookup per run, and none when nothing cites: a tree with no `#NNN` owes GitHub no call.
-    issued, unchecked = issued_numbers(root) if cited else (set(), "")
-    unissued = [] if unchecked else dangling_issues(cited, issued)
+    held = held_commits(root, base)
+    # One lookup per run, and none when nothing cites: a tree with no `#NNN` and a range with no
+    # `Authority: #<n>` owe GitHub no call.
+    cites_issues = cited or any(
+        ISSUE_AUTHORITY.fullmatch(value) for commit in held for value in commit.authorities
+    )
+    issues, pulls, unchecked = issued_numbers(root) if cites_issues else (set(), set(), "")
+    unissued = [] if unchecked else dangling_issues(cited, issues | pulls)
+    comments = {comment: comment_url(root, comment) for comment in wanted_comments(held)}
+    nameless, refused, unverified, vouched = unauthorised(held, issues, pulls, unchecked, comments)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -780,13 +1096,37 @@ def main() -> int:
             "STEERING FAILED: a TRANSCRIPTS path is not tracked.",
             "Remove it from TRANSCRIPTS in this script, so the list never outlives its entries.",
         ),
+        report(
+            nameless,
+            "STEERING FAILED: a commit changes a steering document and cites no authority.",
+            "ADR-0023 decision 3: the commit names what authorises the change, in an Authority:",
+            "trailer on a line of its own in the message's last paragraph, beside any other",
+            "trailers. Authority: #<n> names the ticket whose acceptance criterion asks for the",
+            "change; Authority: <URL> names the comment on this repository holding a confirmed",
+            "answer. Amend the message to add one; docs/agents/landing-work.md has the forms.",
+            "Adding a change request under contracts/changes/ needs none.",
+        ),
+        report(
+            refused,
+            "STEERING FAILED: an Authority: trailer names no issue and no comment on this "
+            "repository.",
+            "A #<n> names an issue, not a pull request, and a URL names a comment as GitHub links",
+            "it: https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>. Fix the trailer;",
+            "whether what it cites decides the change is the reviewer's call, not this check's.",
+        ),
     ]
 
-    if unchecked:
+    if unchecked and cited:
         # Said whether or not the other rules passed, for the reason the counts are printed: a run
-        # that could not ask GitHub must not look like one that did.
+        # that could not ask GitHub must not look like one that did. Only when the tree cites a
+        # `#NNN`: the lookup may have been for an Authority: trailer alone, said below.
         citations = "citation" if len(cited) == 1 else "citations"
         print(f"steering: {len(cited)} #NNN {citations} not checked: {unchecked}.")
+
+    if unverified:
+        citations = "citation" if len(unverified) == 1 else "citations"
+        print(f"steering: {len(unverified)} {AUTHORITY}: {citations} not checked: "
+              f"{unverified[0]}.")
 
     if any(failures):
         return 1
@@ -795,15 +1135,19 @@ def main() -> int:
     if compared:
         headers = "freeze header" if compared == 1 else "freeze headers"
         summary += f" {INDEX} agrees with the {compared} {headers} it indexes."
-    if resolved:
-        citations = "citation resolves" if resolved == 1 else "citations resolve"
-        summary += f" {resolved} ticket {citations} to a spec."
+    if resolved_tickets:
+        citations = "citation resolves" if resolved_tickets == 1 else "citations resolve"
+        summary += f" {resolved_tickets} ticket {citations} to a spec."
     if numbered:
         tickets = "ticket holds" if numbered == 1 else "tickets each hold"
         summary += f" {numbered} {tickets} a number no other ticket in its tracker shares."
     if cited and not unchecked:
         citations = "citation names" if len(cited) == 1 else "citations name"
         summary += f" {len(cited)} #NNN {citations} an issue or pull request."
+    if vouched:
+        commits = "commit changing" if vouched == 1 else "commits changing"
+        cite = "cites its" if vouched == 1 else "cite their"
+        summary += f" {vouched} {commits} a steering document {cite} authority."
     print(summary)
     return 0
 
