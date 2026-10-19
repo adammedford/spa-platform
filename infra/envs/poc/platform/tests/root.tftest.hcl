@@ -199,6 +199,12 @@ run "the_module_builds_one_listener_and_one_target_group" {
     error_message = "Invalid header fields must be dropped at the load balancer."
   }
 
+  # The plan allowlist further down counts resource types, so it cannot see a block inside aws_lb.
+  assert {
+    condition     = length(aws_lb.cell.access_logs) == 0
+    error_message = "Access logs stay off in Phase 1 (Q8 on #98): an entry records the login callback's query string, authorization code and state included (T13, ADR-0007). modules/cell/alb.tf says why."
+  }
+
   assert {
     condition     = length(aws_lb.cell.subnets) == 2
     error_message = "The load balancer must sit in both of the cell's subnets."
@@ -471,6 +477,31 @@ run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
   assert {
     condition     = !strcontains(jsonencode(local.mock_api_clients), local.app_clients["app3"].clientId)
     error_message = "App 3's client must not reach the mock API's allowlists: admission is the API owner's decision (contracts/upstream-contract.md), and F-07 logs app 3 in and still expects a refusal."
+  }
+}
+
+# What main.tf's try() absorbs (Q4 on #98): an apps root state that exists and carries no clients
+# output, which is what a destroyed apps root leaves. Both client ids are then empty, which the
+# module accepts while mock_api_image is empty and refuses once it is set, as
+# a_mock_api_image_with_no_client_ids_is_refused in modules/cell/tests/module.tftest.hcl shows. A
+# missing state is the other half and is not absorbed: the read itself fails the plan, before any
+# expression runs, and a test that overrides the read cannot reach that failure.
+run "an_apps_root_state_with_no_clients_output_leaves_the_mock_api_s_allowlists_empty" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.apps
+    values = {
+      outputs = {}
+    }
+  }
+
+  assert {
+    condition = local.mock_api_clients == {
+      app1 = ""
+      app2 = ""
+    }
+    error_message = "An apps root state with no clients output must leave both client ids empty, not fail the plan: that is the missing output main.tf's try() absorbs."
   }
 }
 
