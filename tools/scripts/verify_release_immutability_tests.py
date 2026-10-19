@@ -672,8 +672,9 @@ class Case:
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 
-    def run(self, *args: str, env: dict[str, str] | None = None) -> Result:
-        completed = subprocess.run([BASH, str(SCRIPT), *args], cwd=self.dir, env=env or self.env(),
+    def run(self, *args: str, env: dict[str, str] | None = None, script: str = str(SCRIPT),
+            cwd: pathlib.Path | None = None) -> Result:
+        completed = subprocess.run([BASH, script, *args], cwd=cwd or self.dir, env=env or self.env(),
                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
         result = Result(completed)
         printed = result.stdout + result.stderr
@@ -797,6 +798,18 @@ class ExpectedBucketTests(CompanionTestCase):
         self.assertTrue(definitions["appId"]["minLength"] <= len(app_id) <= definitions["appId"]["maxLength"])
         self.assertRegex(release, definitions["release"]["pattern"])
         self.assertTrue(definitions["release"]["minLength"] <= len(release) <= definitions["release"]["maxLength"])
+
+    def test_the_documented_relative_invocation_finds_the_platform_root_with_cdpath_exported(self):
+        # The header's own form, from the repository root. With CDPATH set, cd resolves a relative
+        # path through it and prints where it went, so the root the script captured once held a
+        # second line, and the bucket output was read from nowhere (PR #130's review).
+        for cdpath in (".", str(ROOT), ""):
+            with self.subTest(CDPATH=cdpath):
+                case = Case(self)
+                result = case.run(script=str(SCRIPT.relative_to(ROOT)), cwd=ROOT, env=case.env(CDPATH=cdpath))
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                self.assertEqual({f"-chdir={PLATFORM_ROOT}"}, {call[0] for call in case.terraform_calls()})
+                self.assertTrue(result.verdict().startswith(f"{PROGRAM}: pass:"), result.verdict())
 
     def test_the_bucket_and_repositories_come_from_the_platform_roots_outputs(self):
         case = Case(self)

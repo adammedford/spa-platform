@@ -44,7 +44,11 @@ export AWS_PAGER=""
 # https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
 export AWS_REQUEST_CHECKSUM_CALCULATION="when_required"
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+# CDPATH empty for this cd: with CDPATH exported, cd resolves a relative path through it and prints
+# where it went, so the documented relative invocation captured that line as well as pwd's, and
+# PLATFORM_ROOT carried a newline Terraform could not read (PR #130's review).
+# https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html#index-cd
+REPO_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
 
 # --- plumbing ------------------------------------------------------------------------------------
