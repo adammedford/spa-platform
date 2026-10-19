@@ -17,6 +17,14 @@ git worktree add -b task/<id>-<slug> ../spa-<id> origin/main
 git config core.hooksPath .githooks   # once per clone, not per worktree
 ```
 
+**The main checkout is shared.** Concurrent sessions run in the clone's own working tree, and its
+branch is whichever one a session last left it on, so a commit, rebase or switch made there acts on
+another session's work. A session never moves the main checkout's branch or rewrites its history:
+its own branch lives in its own worktree, made as above. In a Claude Code session started in a
+checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
+before each Bash call, and it refuses the branch-moving git commands in the main checkout and names
+this route (#114). A person's terminal runs no such hook.
+
 ## Build it
 
 Write only inside your owner's paths. `OWNERSHIP.md` lists them, and `.githooks/pre-push` fails a
@@ -73,7 +81,14 @@ being finished, add an `Outstanding:` line saying what it still owes, and an
 branch is deleted when the **task** is done, not when a pull request merges.
 
 **`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
---delete` (#71). A `task/*` branch goes, locally and on `origin`, once every id its name carries
+--delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
+commands that recreate each deleted branch at its old tip:
+`pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
+`git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
+cannot write that file stops deleting, and the last line says it stopped (#115). A command
+recreates its branch while the repository still has the commit it names: a tip `main` does not
+reach, one whose work landed only as patch-equivalents, has no other copy once git's garbage
+collection prunes it. A `task/*` branch goes, locally and on `origin`, once every id its name carries
 reads as landed in `tools/roadmap.py --json`, as a merge subject of the first form above makes it,
 and a split no merge subject names reads as its row; a name whose ids are no plan row, split or
 ticket, left from the archived tracker, claims nothing and is held to the rest of this paragraph
@@ -82,8 +97,9 @@ current tip's work is on `main`, as an ancestor or as patch-equivalent commits w
 carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
 on `origin` since it was checked keeps it there. Everything else is listed with the reason it stays.
 A part-landed row keeps its claim, because the claim is how the next session knows the row is
-taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do and
-deletes nothing; with it, it clears what an earlier landing left, by the same rule.
+taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do,
+deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same
+rule, and when it deletes anything its own last line names that file.
 
 A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
 request open. Merged is not done.

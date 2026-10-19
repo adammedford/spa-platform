@@ -14,5 +14,18 @@
       "Bash(terraform version)",
       "Bash(tools/preflight.sh)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test ! -f \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\" || exec python3 -I \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\""
+          }
+        ]
+      }
+    ]
   }
 }

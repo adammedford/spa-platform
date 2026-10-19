@@ -2,8 +2,9 @@
 #
 # Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
-# the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh and of
-# the branch cleanup land.sh runs, whether every tracked shell script parses, and --
+# the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
+# the branch cleanup land.sh runs and of the main-checkout guard, whether every tracked shell script
+# parses, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
@@ -26,7 +27,8 @@
 # author, one reviewer -- is a permissions model for a team of one.
 #
 # The fourth job runs the shell scripts' test companions and the parse check again on macOS, under
-# the bash 3.2 the scripts target, on every push and pull request; the steps that run them say why.
+# the bash 3.2 the scripts target, and the main-checkout guard's companion on macOS, where the
+# sessions here run the hook, on every push and pull request; the steps that run them say why.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -208,6 +210,16 @@ jobs:
         # merge, which tools/land_tests.py never does, to see the landing delete what it finished.
         run: python3 -I tools/prune_branches_tests.py
 
+      - name: The main-checkout guard refuses branch work in the main checkout, and nothing else
+        # The tracked .claude/settings.json runs tools/main_checkout_guard.py before each Bash call
+        # of a Claude Code session started in a checkout that holds it, and it refuses the
+        # branch-moving git commands in this repository's main checkout, which concurrent sessions
+        # share (#114). A guard that refuses too little lets one session rebase another's branch;
+        # one that refuses too much stops every session's work. Its companion feeds the real hook
+        # each case's tool input against real git in a throwaway repository with a linked
+        # worktree, and runs the settings entry as written.
+        run: python3 -I tools/main_checkout_guard_tests.py
+
   scripts-bash-3-2:
     name: Scripts under bash 3.2
     runs-on: macos-latest
@@ -252,6 +264,13 @@ jobs:
         # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
         # here even though the documents job, under bash 5, passed it.
         run: python3 -I .github/shell-parse.py
+
+      - name: The main-checkout guard, on macOS
+        # The sessions here run the hook on a Mac, through its /bin/sh and the git first on its PATH,
+        # where the documents job runs it on Linux. One way the two differ: the companion's
+        # temporary directory sits behind a symbolic link on macOS (/var is /private/var), and the
+        # guard has to compare the paths git resolves, not the ones a command names.
+        run: python3 -I tools/main_checkout_guard_tests.py
 
   build-and-test:
     name: Build and test
