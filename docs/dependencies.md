@@ -11,7 +11,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | --- | --- | --- | --- | --- |
 | Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
-| GitHub CLI, signed in | 2.102.0 | `brew install gh`, then `gh auth login` | Every landing, and the tracker, which is GitHub Issues | `tools/land.sh` refuses to start without it, and `tools/preflight.sh` counts it as missing until it is signed in (#96) |
+| GitHub CLI, signed in | 2.102.0 | `brew install gh`, then `gh auth login` | Every landing, and the tracker, which is GitHub Issues | `tools/land.sh` refuses to start without gh on PATH, and `tools/preflight.sh` counts gh as missing until it is signed in (#96) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
 | Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for. This is the `terraform` an apply runs |

@@ -30,11 +30,12 @@ and LC_ALL=C. A case that needs another variable sets it on purpose: AWS_PROFILE
 AWS_DEFAULT_REGION, the static keys or CDPATH. Inherited, any of them changes what a row says.
 
 **Nothing reaches the network or AWS.** The bin directory holds the few real tools preflight reads
-its answers with and a double for each tool it asks about: aws, terraform, git, dotnet, openssl, gh
-and python3. It holds no curl, so the nuget.org row checks nothing and says so. Each double records
-its calls and answers only the ones preflight makes; any other call is recorded and exits 97. Every
-run asserts that row, that no double met a call it does not answer, and that preflight wrote
-nothing to standard error, where a file it could not source or a tool missing from PATH would show.
+its answers with and a double for each day-one tool it asks about but curl: aws, terraform, git,
+dotnet, openssl, gh and python3. It holds no curl, so the nuget.org row checks nothing and says so,
+and no tool a later item asks about. Each double records its calls and answers only the ones
+preflight makes; any other call is recorded and exits 97. Every run asserts that row, that no
+double met a call it does not answer, and that preflight wrote nothing to standard error, where a
+file it could not source or a tool missing from PATH would show.
 
 **A ready machine by default.** A case starts from a workstation with every day-one tool, an aws
 double whose profiles include the intended one, configured for the intended Region and signed in to
@@ -261,6 +262,7 @@ class Case:
                  path_terraform: str | None = LATER, floor_terraform: str | None = FLOOR,
                  floor_file: str = FLOOR + "\n", git: str | None = "2.50.1",
                  dotnet: str | None = "10.0.401", aws: str | None = "2.37.12",
+                 profile_region: str = INTENDED_REGION,
                  openssl: str | None = "LibreSSL 3.3.6", gh: str | None = GH_SIGNED_IN,
                  python3: str | None = PYTHON):
         scratch = tempfile.TemporaryDirectory()
@@ -323,7 +325,9 @@ class Case:
                 answering("--list-sdks", f"{dotnet} [/usr/local/share/dotnet/sdk]\n")))
         if aws is not None:
             profiles = self.dir / "aws-profiles"
-            profiles.write_text(f"{INTENDED_PROFILE} {INTENDED_REGION} {ACCOUNT}\n"
+            # The intended profile's configured Region is the case's to change, because the guard
+            # compares it as well as the one this shell resolves to (7a364fe).
+            profiles.write_text(f"{INTENDED_PROFILE} {profile_region} {ACCOUNT}\n"
                                 f"{OTHER_PROFILE} {INTENDED_REGION} {FOREIGN_ACCOUNT}\n")
             write_executable(self.bin / "aws", double(
                 "aws", self.log, AWS_HEADER,
@@ -483,7 +487,12 @@ class OfflineTests(PreflightTestCase):
 class ProjectGuardTests(PreflightTestCase):
     """The nine cases 7a364fe lists, against a whole-file copy of the tracked tools/aws-project.env.
     The intended profile and the documented recipe pass; the other seven fire, each on the row that
-    names what is wrong."""
+    names what is wrong.
+
+    Three more supply what fires the guard's two other comparisons. Every ready case asserts them
+    passing, so without these a deleted comparison stays green: the profile's configured Region,
+    which 7a364fe also requires to agree, and the account tools/aws-project.local.env pins, which is
+    what told the two projects apart on 2026-10-17."""
 
     def assertRefused(self, result: Result, expected_row: str):
         self.assertEqual(1, result.status, result.stdout)
@@ -598,6 +607,42 @@ class ProjectGuardTests(PreflightTestCase):
                                        "AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN"))
         for value in (ACCESS_KEY, SECRET_KEY):
             self.assertNotIn(value, result.stdout + result.stderr, "preflight printed a credential")
+
+    def test_the_intended_profile_configured_for_another_region(self):
+        # 7a364fe compares the Region this shell resolves to, and separately requires the profile's
+        # own to agree, so a shell that has not sourced tools/aws-project.env is caught too. This
+        # shell resolves to the intended Region; only the profile's configured one is another.
+        case = Case(self, profile_region=OTHER_REGION)
+        result = self.preflight(case, env={**INTENDED, "AWS_REGION": INTENDED_REGION})
+        self.assertRefused(result, row("MISSING", "AWS Region",
+                                       f"profile '{INTENDED_PROFILE}' is configured for '{OTHER_REGION}', "
+                                       f"expected '{INTENDED_REGION}', so a shell that has not sourced "
+                                       "tools/aws-project.env would use it. aws configure set region "
+                                       f"{INTENDED_REGION} --profile {INTENDED_PROFILE}"))
+        self.assertMissing(result, 1)
+
+    def test_the_intended_profile_signed_in_to_an_account_the_pin_does_not_name(self):
+        # On 2026-10-17 the same named profile resolved to another project's account while the AWS
+        # project row said ok. The row still says ok here; the account row is what refuses.
+        case = Case(self, local_env=f"AWS_ACCOUNT_ID={FOREIGN_ACCOUNT}\n")
+        result = self.preflight(case, env=INTENDED)
+        self.assertRefused(result, row("MISSING", "AWS account",
+                                       f"signed in to the account ending {ACCOUNT[-4:]}, expected the one "
+                                       f"ending {FOREIGN_ACCOUNT[-4:]}. Open that project's console from "
+                                       f"AWS Settings, then: aws login --profile {INTENDED_PROFILE}"))
+        self.assertIn(self.passing_rows()[1], result.lines)
+        self.assertMissing(result, 1)
+
+    def test_no_account_pinned(self):
+        # tools/aws-project.local.env is git-ignored, so a fresh clone has none, and an account
+        # compared with nothing is missing, not ok.
+        case = Case(self, local_env=None)
+        result = self.preflight(case, env=INTENDED)
+        self.assertRefused(result, row("MISSING", "AWS account",
+                                       "nothing says which project's account is intended. Confirm the "
+                                       "project's name in AWS Settings, then: echo AWS_ACCOUNT_ID=<its "
+                                       "12-digit account id> > tools/aws-project.local.env"))
+        self.assertMissing(result, 1)
 
 
 # The values the crafted files give the two keys, and the Region a shell holds when a case needs
@@ -719,11 +764,12 @@ class ParseTests(PreflightTestCase):
 
 
 class ScriptDirectoryTests(PreflightTestCase):
-    """preflight finds the files beside it through `cd "$(dirname "$0")"`. An exported CDPATH sends
-    that `cd` to another directory of the same name, and `cd` prints the directory it found, so
-    every path built from it names another file over two lines: the defect #66 fixed in
-    tools/land.sh. CDPATH is looked up only for a relative name that does not start with ./ or ../,
-    so the cases start the script as AGENTS.md does, `tools/preflight.sh` from the top level."""
+    """preflight finds the files beside it with a `cd` to `dirname "$0"`. Unless CDPATH is cleared
+    for it, an exported CDPATH sends that `cd` to another directory of the same name, and `cd` prints
+    the directory it found, so every path built from it names another file over two lines: the
+    defect #66 fixed in tools/land.sh. CDPATH is looked up only for a relative name that does not
+    start with ./ or ../, so the cases start the script as AGENTS.md does, `tools/preflight.sh` from
+    the top level."""
 
     def assertFoundItsOwnFiles(self, case: Case, result: Result):
         self.assertReady(result)
