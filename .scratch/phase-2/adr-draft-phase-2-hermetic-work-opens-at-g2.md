@@ -203,14 +203,23 @@ tests run on the stack, as `docs/agents/landing-work.md` → "Gates" requires of
   `src/Platform.Identity` starts before `contracts-v1`, is met: the tag is on `origin/main`.
 - `contracts/README.md` is unchanged; the change requests are its route. Expected under
   `contracts/changes/`, each decided by the integrator: `p2-1-dynamodb-session-store.md` (the
-  `AWSSDK.DynamoDBv2` pin, `Session.DynamoDb` configuration keys, and a fake DynamoDB server as the
-  hermetic proof); `p2-2-data-protection-key-ring.md` (the `Amazon.AspNetCore.DataProtection.SSM`
-  pin and `DataProtection` configuration keys); `p2-3-session-lease-abstraction.md` (a lease type in
+  `AWSSDK.DynamoDBv2` pin, a `Session:TableName` key, a value comparison in the store contract
+  suite, and a fake DynamoDB server as the hermetic proof); `p2-2-data-protection-key-ring.md`
+  (the `Amazon.AspNetCore.DataProtection.SSM` pin, a `DataProtection` section, and which of the
+  six registrations carries the ring); `p2-3-session-lease-abstraction.md` (a lease type in
   `Platform.Abstractions` with its double in `Platform.Testing`, rather than a member on the frozen
-  `ISessionStore`); `p2-5-readiness-reports-registry-revision.md` (the `/readyz` body carries the
-  live revision); `p2-6-pingfederate-profile.md` (`pingfederate` in the `Profile` enum,
-  `PrivateKeyJwt` in `ClientCredentialStyle`, and the `form_post`, pushed-authorization and
-  back-channel-logout decisions).
+  `ISessionStore`); `p2-5-readiness-reports-registry-revision.md` (the `/readyz` body names the
+  process that answered, so a wait can cover every task); `p2-6-pingfederate-profile.md`
+  (`pingfederate` in the `Profile` enum, `PrivateKeyJwt` in `ClientCredentialStyle`, a `POST`
+  callback, and the pushed-authorization, audience, logout and back-channel-logout decisions). Four
+  more are raised against the roadmap's gaps with the same spec issue as their authority, since the
+  tickets that close them are Phase 2's: `mr-2-shut-down-sequence-in-the-pipeline-contract.md`
+  (the start-up and shut-down sequence, with its three numbers),
+  `mr-4-upstream-bounds-named-in-the-contract.md` (prose naming what bounds a slow or busy
+  upstream), `mr-5-dependency-down-catalogue.md` (a table of what the gateway does when a
+  dependency is down, and one `store_unavailable` code) and
+  `mr-8-platform-configuration-validated-at-start-up.md` (validation at start-up, and a smoke test
+  that supplies a configuration).
 - `docs/dependencies.md` and `Directory.Packages.props` gain the pins those requests ask for, on the
   integrator's decision, and nothing before it.
 - The tracker gains the Phase 2 spec issue, its sub-issues and the follow-ups, filed by the human or
@@ -231,7 +240,8 @@ tests run on the stack, as `docs/agents/landing-work.md` → "Gates" requires of
 
 - `git tag --merged origin/main` at `ce9895e`, 2026-10-19: `skeleton-v1`, `g0-mechanism`,
   `contracts-v1`, `g2-local-slice`. The `g2-local-slice` message: F-01 to F-06 and F-08 to F-11
-  hermetic and A-01 to A-05, 1,525 of 1,525 locally, deciding CI run 39028415993; "No AWS apply,
+  hermetic, A-01 to A-04 in CI and A-05 in the pre-push hook with its CI regression tests, 1,525 of
+  1,525 locally, deciding CI run 39028415993; "No AWS apply,
   deployed evidence, or live provider authentication is claimed"; "F-07's deployed half remains for
   G5".
 - `docs/roadmap.md`, generated block: S4 29 of 29; S5 1 of 9, part-landed 1.3, 1.4, 1.5, 1.9 and
