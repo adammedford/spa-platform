@@ -963,9 +963,11 @@ class ADeletionLeavesItsRestoreCommandsInAFile(Case):
 class LandingDeletesWhatItFinished(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
-    The real script, under /bin/bash, as tools/land_tests.py runs it, but past the merge: here the
-    gh double's merge really merges, into the case's origin from a clone standing in for GitHub's
-    side. --unreviewed spares the review records, which tools/land_tests.py covers.
+    The real script, under /bin/bash, as tools/land_tests.py runs it, past a merge that really
+    merges, into the case's origin from a clone standing in for GitHub's side. tools/land_tests.py
+    covers the steps between that merge and the cleanup, and answers the cleanup with a double;
+    these cases run the real one. --unreviewed spares the review records, which tools/land_tests.py
+    covers.
     """
 
     def land_pull_request(self, branch, subject):
