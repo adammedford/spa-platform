@@ -54,11 +54,9 @@ Authority: <URL>    the comment on this repository that holds a confirmed answer
 ```
 
 A pre-accepted answer, a follow-up a night raised, an archived ticket's proposal and a reviewer's
-finding are not authority. A new term or guide sentence that no ticket or confirmed answer asks for
-is proposed under `## Proposed steering changes` in the issue's `## Answer` comment instead.
-`git commit --amend --no-edit --trailer "Authority: #<n>"` adds the trailer to the last commit. git
-reads trailers from the message's last paragraph alone, and an `Authority:` line inside the prose
-is not one.
+finding are not authority. `git commit --amend --no-edit --trailer "Authority: #<n>"` adds the
+trailer to the last commit. git reads trailers from the message's last paragraph alone, and an
+`Authority:` line inside the prose is not one.
 
 `.github/steering.py` holds this, in the pre-push hook and in CI, on every branch (#102). It reads
 each non-merge commit between the base the check judges against and HEAD, made since the starting
