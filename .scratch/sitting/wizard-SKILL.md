@@ -10,8 +10,9 @@ Draft of 2026-10-19, from `.scratch/sitting/spec.md`. Install at `.claude/skills
 
 Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level
 HIGH: explain each step before running it), `tools/aws-project.env`, `GLOSSARY.md` → *Sitting*,
-*Read-back*, *Sample image*, *Platform project*, *Sample project* (some are proposals on #55, #56
-and #125 until confirmed; use them anyway), and the tickets this sitting serves.
+*Read-back*, *Sample image*, *Platform project*, *Sample project* (the first three are #56's Q24,
+confirmed on #129 on 2026-10-19; use them whether or not they have been committed yet), and the
+tickets this sitting serves.
 
 ## Rules that hold in every stage
 

@@ -52,7 +52,7 @@ Minutes are the planning session's estimates of the human's attention, not wall-
 | C3 | #63 | G4: the deployed negative subset, N-26 included. G5: F-07, the third SPA: the apps root's plan shows three resources, `spactl` publishes and adds app 3, the task id and revision are unchanged | Confirm the apps apply; wait | The suites and the reads; the posts | 15, of about 40 wall-clock |
 | C4 | G3, G4, G5 | The gate tags, each after its CI run and after the review debt in `docs/agents/landing-work.md` → "Review debt from before the check" is cleared (five merges, each needing a record from a fresh review session) | Cut each annotated tag | Checks the range's `Reviewed:` lines; drafts the tag message | 10 per gate |
 | C5 | — | After G5: keep the stack for Phase 2's deployed tier at about $30 a month, or destroy it until then | The spend decision | The destroy, on confirm | 2 |
-| H1 | #129 | The 25 questions the one-word `Confirm` left open: Q10, Q11, Q25, Q41 and the steering proposals Q42 to Q63, among them the glossary terms *Sitting*, *Read-back* and *Sample image* this spec uses, Q42's `contracts/README.md` paragraph, Q25's #61 to #63 edge and Q41's routing of #75 | A second comment naming the ones accepted, overrides as `Q<n>: <answer>` lines; or leave them open on purpose. Nobody but you writes it | A digest of the 25: the question, the recommendation, what it changes | 15 to 30 |
+| H1 | #129 | The 25 questions the one-word `Confirm` left open: Q10, Q11, Q25, Q41 and the steering proposals Q42 to Q63, among them Q42's `contracts/README.md` paragraph, Q25's #61 to #63 edge and Q41's routing of #75. (*Sitting*, *Read-back*, *Sample image*, *Platform tag* and *Teardown* are Q24's and Q32's, pre-accepted and so covered.) | A second comment naming the ones accepted, overrides as `Q<n>: <answer>` lines; or leave them open on purpose. Nobody but you writes it | The digest is written: `.scratch/sitting/open-questions-129.md`, each with its recommendation | 15 to 30 |
 | H2 | #90 | Close the sample project in AWS Settings after three pre-checks (the account ending 4665, no CloudTrail trail, not paused); then delete the two local files; preflight still ready; the ADR-0017 clause drafted | The console pre-checks and the one irreversible click | The two `rm`s with approval, preflight, the draft | 10 |
 | H3 | #68 | `tools/check.sh --full --both-halves --port 5180` once from `zsh -l` and once from `/bin/bash`, on `main` | Start it | The two runs; the post | 2, of about 30 wall-clock |
 | H4 | #71 | The one-off `tools/prune_branches.py` pass from a checkout at `origin/main` | — | The run; the post | 1 |
@@ -64,8 +64,9 @@ no apply; **B**, the tunnel on the sample image and the destroy, once #57's scri
 about twenty minutes; **C**, the first deployment and the three gate runs, once #58's scripts and
 Docker are in place, about an hour and a half of attention over three or four hours of wall-clock.
 The `Confirm` of 2026-10-19 covers every pre-accepted answer, so A8's writes may be made in sitting
-A; it names none of the open questions, so the steering proposals among them stay proposals until
-a comment names them (H1), and nothing in `GLOSSARY.md` or the guides moves on them before that.
+A, and the glossary terms of Q24 and Q32 may be committed by a session with an `Authority:` trailer
+naming that comment; it names none of the open questions, so the proposals among them stay
+proposals until a comment names them (H1).
 
 Owed by the morning run's apply now that the `Confirm` exists, as the tracker read on 2026-10-19
 and to be checked before sitting A rather than taken from here: #125's body rewrite and retitle
