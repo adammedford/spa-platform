@@ -583,6 +583,23 @@ run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_el
     error_message = "The platform root declares no resource of its own: its plan is modules/cell's, which the next run holds to the allowlist. A resource here, such as a NAT gateway, a rule on the task's group or a policy on its role, is in the plan with no allowlist reading it."
   }
 
+  # A block written on one line holds one argument, and `terraform fmt -check` passes it as it is.
+  # The module pattern below and the next two runs' meta-argument patterns end a block at a closing
+  # brace in the first column, so they read past a one-line block into the next one, or past the
+  # end. Two such blocks passed every run here: module "nat" { source = "./nat" } at the end of
+  # versions.tf, which put a NAT gateway in this root's plan; and, with the allowlist raised to two
+  # buckets, resource "aws_s3_bucket" "extra" { count = 2 } ahead of the platform bucket in
+  # modules/cell, while the plan held three.
+  assert {
+    condition = alltrue([
+      for header in regexall("(?m)^(?:resource|module)\\s[^\\n]*$", join("\n", concat(
+        [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+        [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+      ))) : endswith(trimspace(header), "{")
+    ])
+    error_message = "Every resource and module block in the platform root and modules/cell opens a block of its own lines. A one-line block carries its source, count or for_each where the patterns that read them never look."
+  }
+
   assert {
     condition = [
       for m in regexall("(?ms)^module\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :

@@ -171,7 +171,7 @@ account.
   platform root's whole plan, counts every type in that plan against the plan rows'
   numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
   allowlist says. This module's own type allowlist, in `tests/module.tftest.hcl`, fails
-  first.
+  on any of them as well.
 - **P-03, the task role policy,** is the task role's runs above.
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an

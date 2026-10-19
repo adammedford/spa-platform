@@ -98,6 +98,22 @@ run "the_identity_root_declares_no_resource_and_calls_the_idp_module_once_and_no
     error_message = "The identity root declares no resource of its own: its plan is modules/idp-cognito's, which the next run holds to plan row 1.1."
   }
 
+  # A block written on one line holds one argument, and `terraform fmt -check` passes it as it is.
+  # The module pattern below and the next run's meta-argument pattern end a block at a closing brace
+  # in the first column, so they read past a one-line block. Two such blocks passed every run here:
+  # module "nat" { source = "./nat" } at the end of versions.tf, which put a NAT gateway in this
+  # root's plan; and resource "random_pet" "extra" { count = 3 } in modules/idp-cognito, beside a map
+  # entry of one.
+  assert {
+    condition = alltrue([
+      for header in regexall("(?m)^(?:resource|module)\\s[^\\n]*$", join("\n", concat(
+        [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+        [for f in fileset("${path.module}/../../../modules/idp-cognito", "*.tf") : file("${path.module}/../../../modules/idp-cognito/${f}")],
+      ))) : endswith(trimspace(header), "{")
+    ])
+    error_message = "Every resource and module block in the identity root and modules/idp-cognito opens a block of its own lines. A one-line block carries its source, count or for_each where the patterns that read them never look."
+  }
+
   assert {
     condition = [
       for m in regexall("(?ms)^module\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :

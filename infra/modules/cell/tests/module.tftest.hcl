@@ -1008,6 +1008,22 @@ run "the_task_role_holds_no_unrecognised_statement" {
     error_message = "No statement is written as NotAction or NotResource: both grant everything except what they name, which is the opposite of a reviewable role."
   }
 
+  # The document is its statement blocks only while it merges no other document in. Both of these
+  # are "merged together into the exported document", whose statements then override or add to
+  # these (https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/iam_policy_document),
+  # and the mock provider never renders that document, so nothing above reads what they add: an
+  # override_policy_documents entry granting s3:PutObject on registry/* passed all 43 runs. Both
+  # are optional with no default, so unset is null. The deprecated source_json and override_json
+  # need nothing here: the provider refuses either unless it is empty (validation.StringIsEmpty,
+  # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/internal/service/iam/policy_document_data_source.go).
+  assert {
+    condition = (
+      data.aws_iam_policy_document.task.source_policy_documents == null
+      && data.aws_iam_policy_document.task.override_policy_documents == null
+    )
+    error_message = "The task role's document merges in no other policy document: source_policy_documents and override_policy_documents each add or override statements that no assertion here reads."
+  }
+
   # Everything above reads data.aws_iam_policy_document.task, so it is a closed account of the
   # role's grants only while that document is the whole of what the role holds. Three declarations
   # add a grant without passing through it, and each was watched leaving all 25 runs green before
@@ -1021,10 +1037,14 @@ run "the_task_role_holds_no_unrecognised_statement" {
   # allowlist and the no-default check already use for the same reason. A separate
   # aws_iam_role_policy_attachment needs nothing here: the resource-type allowlist does not name
   # that type.
+  #
+  # A name is whatever sits between the quotes, since Terraform accepts capitals and hyphens in one
+  # (tests/network.tftest.hcl cites the rule): with a pattern of lower case and underscores, a third
+  # policy on the task role named "Extra-Grant" passed all 43 runs.
   assert {
     condition = toset([
       for m in regexall(
-        "(?m)^resource \"aws_iam_role_policy\" \"([a-z0-9_]+)\"",
+        "(?m)^resource \"aws_iam_role_policy\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["task", "task_execution"])
@@ -1087,6 +1107,19 @@ run "the_bucket_policy_allows_nothing_so_the_task_role_s_own_policy_is_its_whole
       "DenyReleaseDeleteExceptTeardown",
     ])
     error_message = "The bucket policy holds the four refusals storage.tf documents and no other statement: TLS only, TLS 1.2 or later, a release written once, and deleted only by the teardown principals (contracts/s3-layout.md, P-04)."
+  }
+
+  # The statements above are the policy only while the document merges no other document in: an
+  # Allow of s3:PutObject on registry/* to the task role, passed in through source_policy_documents,
+  # left all 43 runs green before this assertion, because the mock provider never renders the merged
+  # policy. The task role's closure above says why unset is null, and why the deprecated JSON forms
+  # need nothing.
+  assert {
+    condition = (
+      data.aws_iam_policy_document.platform_bucket.source_policy_documents == null
+      && data.aws_iam_policy_document.platform_bucket.override_policy_documents == null
+    )
+    error_message = "The bucket policy merges in no other policy document: source_policy_documents and override_policy_documents each add statements, an Allow among them, that neither assertion above reads."
   }
 }
 
