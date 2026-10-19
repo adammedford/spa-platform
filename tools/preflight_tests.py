@@ -36,13 +36,13 @@ its calls and answers only the ones preflight makes; any other call is recorded 
 run asserts that row, that no double met a call it does not answer, and that preflight wrote
 nothing to standard error, where a file it could not source or a tool missing from PATH would show.
 
-**A ready machine by default.** A case starts from a workstation with every day-one tool, the
-intended profile in ~/.aws/config for the intended Region and signed in to the account
-tools/aws-project.local.env pins, and a whole-file copy of the tracked tools/aws-project.env, where
-preflight answers "Day one: ready." and exits 0. Each case takes away or changes the thing it is
-about, so the exit status and the count of missing items can be asserted: a row that printed
-MISSING without counting it would leave "Day one: ready" standing, which is how tools/land.sh's
-pointer to preflight failed until #96.
+**A ready machine by default.** A case starts from a workstation with every day-one tool, an aws
+double whose profiles include the intended one, configured for the intended Region and signed in to
+the account tools/aws-project.local.env pins, and a whole-file copy of the tracked
+tools/aws-project.env, where preflight answers "Day one: ready." and exits 0. Each case takes away
+or changes the thing it is about, so the exit status and the count of missing items can be
+asserted: a missing tool that is reported but not counted leaves "Day one: ready" standing, which
+is how tools/land.sh's pointer to preflight failed until #96, when gh was an `info` row.
 
 **The parse is compared with the shell, not with a copy of it.** tools/aws-project.env documents
 itself as sourceable and preflight reads it with sed, so the two must agree, or the remedy preflight
@@ -121,14 +121,15 @@ OTHER_PROFILE = "another-project"
 NO_SUCH_PROFILE = "no-such-profile"
 OTHER_REGION = "eu-west-1" if INTENDED_REGION != "eu-west-1" else "us-west-2"
 
-# Account ids and keys from the AWS documentation's examples, never a real account's.
+# Account ids from the AWS documentation's examples, never a real account's, and static keys that
+# are canaries: no shape a secret scanner reads as a key, and a value no row may print.
 ACCOUNT = "111122223333"
 FOREIGN_ACCOUNT = "444455556666"
-ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
-SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+ACCESS_KEY = "preflight-tests-access-key-id"
+SECRET_KEY = "preflight-tests-secret-access-key"
 
-# The python3 macOS's developer tools ship, which docs/dependencies.md names as the floor's
-# "offered today": Python 3.9 or later.
+# The python3 that macOS's developer tools ship, which docs/dependencies.md's row "Python 3.9 or
+# later" names as the one offered.
 PYTHON = "3.9.6"
 GH_SIGNED_IN = "signed in"
 GH_SIGNED_OUT = "signed out"
