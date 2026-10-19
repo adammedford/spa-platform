@@ -117,8 +117,19 @@ run "the_identity_root_declares_no_resource_and_calls_the_idp_module_once_and_no
   # Every pattern in this file finds a declaration where it starts a line, and `terraform fmt -check`
   # passes a block comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "x" {}
   # passed the platform root's runs, which share these patterns. So a line that names a resource or
-  # module block names it at its start, or is a # or // comment. A declaration inside a block comment
-  # that spans lines is read as a declaration, which can only fail a run, never pass one.
+  # module block names it at its start, or is a # or // comment.
+  #
+  # That exemption holds only while no /* */ comment exists: inside one a line can start with #, and
+  # /*<newline># rationale */ resource "aws_s3_bucket" "x" {} passed the platform root's runs. The
+  # platform root's tests say why these files refuse */ rather than strip block comments.
+  assert {
+    condition = !strcontains(join("\n", concat(
+      [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+      [for f in fileset("${path.module}/../../../modules/idp-cognito", "*.tf") : file("${path.module}/../../../modules/idp-cognito/${f}")],
+    )), "*/")
+    error_message = "The identity root and modules/idp-cognito hold no /* */ comment: one can end in front of a declaration on the same line, where no pattern here reads it, and inside one a line can start with #. Write the comment with #."
+  }
+
   assert {
     condition = alltrue([
       for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", concat(

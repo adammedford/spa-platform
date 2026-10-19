@@ -635,8 +635,26 @@ run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_el
   # re-indents a block and fails a comment between its keyword and its labels, but it passes a block
   # comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "unlisted_probe" {} in
   # modules/cell passed every run here, a second bucket in a plan held to one. So a line that names a
-  # resource or module block names it at its start, or is a # or // comment. A declaration inside a
-  # block comment that spans lines is read as a declaration, which can only fail a run, never pass one.
+  # resource or module block names it at its start, or is a # or // comment.
+  #
+  # Terraform has three comment forms (https://developer.hashicorp.com/terraform/language/syntax/configuration#comments).
+  # A # or // comment runs to the end of its line, so nothing after one is live; only a /* */ comment
+  # can end in front of live text on its line, and inside one a line can start with #. The exemption
+  # read /*<newline># rationale */ resource "aws_s3_bucket" "unlisted_probe" {} as a comment, and
+  # every run passed with the second bucket. Stripping block comments before matching would mean
+  # lexing strings, heredocs and nested interpolation in RE2, because these files hold /* inside
+  # strings ("${aws_s3_bucket.platform.arn}/*"), and a lexer that misses one form is the next miss.
+  # Every block comment ends in */ (an unterminated one does not parse), so files holding no */ hold
+  # no block comment: write comments with #. A string that needs */ is built so the two characters
+  # are not adjacent in the source, such as "apps/*${"/"}releases".
+  assert {
+    condition = !strcontains(join("\n", concat(
+      [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")],
+      [for f in fileset("${path.module}/../../../modules/cell", "*.tf") : file("${path.module}/../../../modules/cell/${f}")],
+    )), "*/")
+    error_message = "The platform root and modules/cell hold no /* */ comment: one can end in front of a declaration on the same line, where no pattern here reads it, and inside one a line can start with #. Write the comment with #."
+  }
+
   assert {
     condition = alltrue([
       for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", concat(

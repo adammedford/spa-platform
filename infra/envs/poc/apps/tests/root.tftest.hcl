@@ -439,6 +439,17 @@ run "a_third_definition_adds_exactly_three_resources" {
   # block comment in front of the keyword: /* rationale */ resource "aws_s3_bucket" "x" {} passed the
   # platform root's runs, which share these patterns. So a line that names a resource or module block
   # names it at its start, or is a # or // comment.
+  #
+  # That exemption holds only while no /* */ comment exists: inside one a line can start with #, and
+  # /*<newline># rationale */ resource "aws_s3_bucket" "x" {} passed the platform root's runs. The
+  # argument guard in the run before this one reads an argument where it starts a line too, and
+  # /* explanation */ auth_session_validity = ... on the client escaped it with every run green. The
+  # platform root's tests say why these files refuse */ rather than strip block comments.
+  assert {
+    condition     = length(aws_cognito_user_pool_client.app) > 0 && !strcontains(join("\n", [for f in fileset(".", "*.tf") : file(f)]), "*/")
+    error_message = "The apps root holds no /* */ comment: one can end in front of a declaration or an argument on the same line, where no pattern here reads it, and inside one a line can start with #. Write the comment with # (P-02)."
+  }
+
   assert {
     condition = length(aws_cognito_user_pool_client.app) > 0 && alltrue([
       for line in regexall("(?m)^[^\\n]*\\b(?:resource|module)\\s+\"[^\\n]*$", join("\n", [for f in fileset(".", "*.tf") : file(f)])) :
