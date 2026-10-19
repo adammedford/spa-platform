@@ -11,6 +11,7 @@ set -u
 
 NEED_DOTNET_MAJOR="10.0"
 NEED_AWSCLI="2.0"
+NEED_PYTHON="3.9"
 HOSTS="app1.spa-poc.test app2.spa-poc.test app3.spa-poc.test"
 
 missing_now=0
@@ -72,6 +73,38 @@ if have git; then
   ok "git" "$(first_version "$(git --version 2>/dev/null)")"
 else
   missing "git" "xcode-select --install"
+fi
+
+# Python and the GitHub CLI. tools/land.sh, the one sanctioned merge path, refuses to start without
+# either, and its gh refusal sends the reader here; until #96 this script reported gh as optional
+# and python3 not at all, so the machine land.sh sent a reader to diagnose read "Day one: ready".
+#
+# python3 runs the checks .githooks/pre-push and CI run, their test companions, tools/roadmap.py and
+# land.sh's review record reader, all kept to the 3.9 that macOS's developer tools ship
+# (docs/dependencies.md, D-3). Before those tools are installed macOS still has a python3 on PATH,
+# which reports no version and asks for them, so having one is not enough.
+if have python3; then
+  pyv=$(first_version "$(python3 --version 2>&1)")
+  if [ -n "$pyv" ] && ver_ge "$pyv" "$NEED_PYTHON"; then
+    ok "Python ${NEED_PYTHON} or later" "$pyv"
+  else
+    missing "Python ${NEED_PYTHON} or later" "found: ${pyv:-unknown}. xcode-select --install"
+  fi
+else
+  missing "Python ${NEED_PYTHON} or later" "xcode-select --install"
+fi
+
+# The tracker is GitHub Issues, worked through gh, and every gh call land.sh makes needs a signed-in
+# account, so installed is not enough either. gh auth status exits 1 when an account it knows has a
+# problem: https://cli.github.com/manual/gh_auth_status
+if have gh; then
+  if gh auth status >/dev/null 2>&1; then
+    ok "GitHub CLI" "signed in"
+  else
+    missing "GitHub CLI" "installed, not signed in. gh auth login"
+  fi
+else
+  missing "GitHub CLI" "brew install gh, then gh auth login"
 fi
 
 # .NET SDK
@@ -313,17 +346,6 @@ if have lsof; then
   else
     ok "Port 8443" "free"
   fi
-fi
-
-# GitHub CLI, optional
-if have gh; then
-  if gh auth status >/dev/null 2>&1; then
-    ok "GitHub CLI" "signed in  (optional, for the CI of task I-5)"
-  else
-    info "GitHub CLI" "installed, not signed in  (optional)"
-  fi
-else
-  info "GitHub CLI" "not installed  (optional)"
 fi
 
 echo
