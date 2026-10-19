@@ -11,4 +11,12 @@
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 
+  <!-- The registry schema, so ProxyTimeoutCeilingTests proves the proxy applies the maximum the contract
+       states for apis[].timeoutSeconds, read from the contract rather than copied (ADR-0015 decision 3,
+       ADR-0019 decision 4; CODING_STANDARDS.md, "A guard reads the thing it guards"). Read from
+       contracts/, never edited. -->
+  <ItemGroup>
+    <None Include="../../contracts/registry.schema.json" Link="contracts/registry.schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
