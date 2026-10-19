@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Test companion for tools/land.sh: every way it stops before the merge, and what it hands gh.
+"""Test companion for tools/land.sh: every way it stops, what it hands gh at the merge, and what it
+does once the merge is in.
 
-Owner: integrator. Decided in #66 (archived overnight ticket 69, Q1 to Q20); the tool choice is D-3
-in docs/dependencies.md.
+Owner: integrator. Decided in #66 (archived overnight ticket 69, Q1 to Q20), which built it up to
+the merge; the cases past the merge are #97's. The tool choice is D-3 in docs/dependencies.md.
 
 **What runs is the script itself.** Each case runs the tracked file's current bytes, whole, in place,
 through the interface any caller has: its arguments, standard input, the working directory, PATH
@@ -25,33 +26,51 @@ case does. The reason is the route to a real merge: `GH_REPO` exported in a call
 real gh reachable on PATH, would let a case act on a live pull request, and both CI runner images
 carry a real gh. `GIT_DIR` or `CDPATH` inherited would change what git or `cd` does.
 
-**Real git; a double for gh and for python3.** Every git call land.sh makes before its merge works
-offline, so each case builds a bare `origin` and a clone of it in its throwaway directory and lets
-the refusals meet git itself. gh is the one call that leaves the machine, so each case's bin holds a
-strict gh double: it answers the three `pr view` shapes land.sh uses, the two `api` listings of the
-pull request's comments and reviews (from the case's own fixtures), and `pr merge`; it records every
-call's arguments and fails the merge, so no case gets past it. Any other call is recorded and exits
-97, which turns a new gh call in land.sh into a red case instead of an empty answer. land.sh runs
-python3 three times. Before its merge it runs tools/review_record.py beside it, and the double hands
-that call to the real interpreter, so every case reads its records with the real reader (#67). After
-the merge it derives the roadmap and then deletes the branches the merge finished, so the double
-fails any other call; tools/prune_branches_tests.py runs land.sh past a merge for those two. The
-merge body is an argument, so its bytes are in the record of the merge call, and they are what
-expose a wrong path: a body path checked in one directory and read in another reaches gh as other
-bytes or none.
+**Real git; a double for gh and for python3.** Every git call land.sh makes works offline, so each
+case builds a bare `origin` and a clone of it in its throwaway directory and lets the refusals meet
+git itself. gh is the one call that leaves the machine, so each case's bin holds a strict gh double:
+it answers the three `pr view` shapes land.sh uses, the two `api` listings of the pull request's
+comments and reviews (from the case's own fixtures), and `pr merge`, and it records every call's
+arguments. Any other call is recorded and exits 97, which turns a new gh call in land.sh into a red
+case instead of an empty answer. land.sh runs python3 up to three times. Before its merge it runs
+tools/review_record.py beside it, and the double hands that call to the real interpreter, so every
+case reads its records with the real reader (#67). After the merge it derives the roadmap and then,
+for a merge into main only, deletes the branches the merge finished, and the double records each of
+those calls with the directory it ran in. The merge body is an argument, so its bytes are in the
+record of the merge call, and they are what expose a wrong path: a body path checked in one
+directory and read in another reaches gh as other bytes or none.
+
+**Most cases stop at the merge.** Their gh double fails `pr merge`, and their python3 double fails
+the two calls after it, so none of them gets past a merge.
+
+**The cases past the merge (#97)** run the same script with doubles as strict, past a merge that
+goes through. Their gh double makes it as GitHub does: from a clone of the case's origin standing in
+for GitHub's side, it puts a merge commit on the base, with the pinned head as its second parent and
+the subject and body as its message, and pushes it, so land.sh's own `git fetch origin` brings it
+back. The roadmap step runs the real tools/roadmap.py, which the python3 double hands to the real
+interpreter. The case's clone holds copies of the five files it reads, taken from this checkout
+when the case runs, with their generated blocks made current for the case's own history, so a merge
+subject that lands a plan row moves the blocks and one that names no row leaves them. That was
+#97's to decide. The other way was a python3 double that rewrites the two files itself: faster, and
+blind to the plan, but each case would then decide whether the blocks move, so no case could show
+the merge subject moving them, or land.sh deriving them from the tree the merge made. The branch
+cleanup after it is the double's to answer, and it deletes nothing and prints nothing:
+tools/prune_branches_tests.py runs the real cleanup, past a merge of its own.
 
 **No detached housekeeping.** Each repository, clone and bare origin is made with `gc.auto=0` and
 `maintenance.auto=false`. The cases fetch and commit, which is when git may start `gc --auto` or
 `maintenance run --auto` in the background, and a background writer is a cleanup race.
 
-**A refusal is any exit before the merge call**, with or without a `land:` line. Each `die` above
-`gh pr merge` has a case, and the last case to run reads land.sh and fails naming any of them that
-no case produced, or whose message it cannot match to a `land:` line, so a refusal added later
-without a case turns this companion red. Run the whole file: a subset leaves that closing case with
-less to see.
+**Every `die` has a case.** A refusal is any exit before the merge call, with or without a `land:`
+line, or the one `die` after it, when the worktree cannot fast-forward onto the merge. The last case
+to run reads land.sh and fails naming any `die` in it that no case produced, or whose message it
+cannot match to a `land:` line, so a refusal added later without a case turns this companion red.
+Run the whole file: a subset leaves that closing case with less to see.
 
 Each case asserts the exit status, the `land:` line by the fragment that names the refusal (not the
-whole sentence, so a rewording is not a test edit), and exactly what the gh double recorded.
+whole sentence, so a rewording is not a test edit), and exactly what the gh double recorded. A case
+past the merge also asserts what origin holds afterwards, the python3 calls and where each ran, and,
+when the blocks moved, the refresh commit's parent, paths and subject.
 
 Run: python3 -I tools/land_tests.py
 """
@@ -69,16 +88,31 @@ import sys
 import tempfile
 import threading
 import unittest
+from typing import NamedTuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "land.sh"
 READER = ROOT / "tools" / "review_record.py"
+CLEANUP = ROOT / "tools" / "prune_branches.py"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
-# The real tools land.sh runs before its merge, besides gh and python3, which get doubles. Each is
-# reached from the case's bin directory, which is the whole of the case's PATH.
+# The real tools land.sh runs, besides gh and python3, which get doubles. Each is reached from the
+# case's bin directory, which is the whole of the case's PATH.
 TOOLS = ("git", "dirname", "basename", "awk")
+
+# What tools/roadmap.py reads and writes. A case that goes past the merge commits copies of these,
+# taken from this checkout when it runs, so the real roadmap.py derives the blocks from that case's
+# own merge subjects; tools/prune_branches_tests.py builds its cases from the same five.
+ROADMAP_FILES = (
+    "tools/roadmap.py",
+    "README.md",
+    "docs/roadmap.md",
+    "docs/plan/03-workstreams-and-tasks.md",
+    "docs/plan/06-phase-2-and-risks.md",
+)
+# The two files tools/roadmap.py writes, and so the whole of what a refresh commit may carry.
+GENERATED = ["README.md", "docs/roadmap.md"]
 
 PR = "5"
 VIEW_STATE = ["pr", "view", PR, "--json", "state", "--jq", ".state"]
@@ -117,7 +151,7 @@ OBSERVED: list[str] = []
 
 GH_DOUBLE = """#!/bin/bash
 # A double for gh, written by tools/land_tests.py for one case. It answers only the calls
-# tools/land.sh makes up to its merge, in the shapes gh's manual gives them:
+# tools/land.sh makes, none of which comes after its merge, in the shapes gh's manual gives them:
 #
 #   gh pr view <number> --json <field> --jq <expression>     https://cli.github.com/manual/gh_pr_view
 #   gh api <endpoint> --paginate --slurp                     https://cli.github.com/manual/gh_api
@@ -134,6 +168,8 @@ comments={comments}
 reviews={reviews}
 view_fails={view_fails}
 api_fails={api_fails}
+server={server}
+during_merge={during_merge}
 
 n=0
 while [ -e "$log/call-$n" ]; do n=$((n + 1)); done
@@ -143,6 +179,37 @@ unexpected() {{
   : > "$log/unexpected"
   printf 'gh double: unexpected call, recorded as call-%s\\n' "$n" >&2
   exit 97
+}}
+
+# A case that goes past the merge names $server, a clone of its origin standing in for GitHub's
+# side, and the merge then goes through as GitHub makes one: a merge commit on the base, with the
+# subject and the body as its message and the pinned head as its second parent, pushed to origin, so
+# that land.sh's own `git fetch origin` brings it back. GitHub's default merge method merges "using
+# the `--no-ff` option":
+# https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/about-merge-methods-on-github.
+# GitHub refuses a pin that is not the pull request's head, the "OID that the pull request head ref
+# must match to allow merge"
+# (https://docs.github.com/en/graphql/reference/input-objects#mergepullrequestinput), and this
+# refuses one that is not the last of $heads. Every such case passes --subject; without one GitHub
+# titles the commit itself, which this does not imitate. $during_merge runs first, when the case has
+# written it.
+merge_as_github() {{
+  current=""
+  for head in $heads; do current="$head"; done
+  if [ "$1" != "$current" ]; then
+    printf 'gh double: %s is not the head of #%s\\n' "$1" "$pr" >&2
+    exit 1
+  fi
+  if [ -z "$2" ]; then
+    printf 'gh double: a merge that goes through needs --subject here\\n' >&2
+    unexpected
+  fi
+  if [ -x "$during_merge" ]; then "$during_merge" >&2 || exit 1; fi
+  git -C "$server" fetch -q origin || exit 1
+  git -C "$server" checkout -q --detach "origin/$base" || exit 1
+  git -C "$server" merge -q --no-ff -m "$2" -m "$3" "$1" || exit 1
+  git -C "$server" push -q origin "HEAD:refs/heads/$base" || exit 1
+  exit 0
 }}
 
 case "$1" in
@@ -173,11 +240,16 @@ case "$1" in
         exit 0 ;;
       merge)
         [ "$#" -ge 6 ] && [ "$4" = --merge ] && [ "$5" = --match-head-commit ] || unexpected
+        pinned="$6"
         shift 6
-        if [ "$#" -ge 2 ] && [ "$1" = --subject ]; then shift 2; fi
+        subject=""
+        if [ "$#" -ge 2 ] && [ "$1" = --subject ]; then subject="$2"; shift 2; fi
         [ "$#" -eq 2 ] && [ "$1" = --body ] || unexpected
-        printf 'gh double: the merge fails on purpose, so no case goes past it\\n' >&2
-        exit 1 ;;
+        if [ -z "$server" ]; then
+          printf 'gh double: the merge fails on purpose, so this case does not go past it\\n' >&2
+          exit 1
+        fi
+        merge_as_github "$pinned" "$subject" "$2" ;;
       *) unexpected ;;
     esac ;;
   api)
@@ -194,16 +266,39 @@ esac
 """
 
 PYTHON_DOUBLE = """#!/bin/bash
-# A double for python3, written by tools/land_tests.py. Before its merge land.sh runs the review
-# record reader that sits beside it, and that call goes to the real interpreter, so the reader under
-# test is the real one. Its other python3 calls come after the merge, to derive the roadmap and to
-# delete the branches the merge finished, so a case that reaches the line below has gone past a
-# merge that should have failed.
+# A double for python3, written by tools/land_tests.py. land.sh runs python3 up to three times.
+# Before its merge it runs the review record reader beside it, and that call goes to the real
+# interpreter in every case, so the reader under test is the real one. After the merge it derives
+# the roadmap from the repository root and then, for a merge into main only, runs the branch cleanup
+# beside it, and each of those calls is recorded with the directory it ran in. Where the merge
+# fails, both are unexpected: a case that reaches them has gone past a merge that should have
+# stopped it. Where the merge goes through, the roadmap goes to the real interpreter, over the
+# copies of its inputs the case's clone holds, and the cleanup deletes nothing and prints nothing,
+# since tools/prune_branches_tests.py runs the real one.
 if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
-: > {log}/python3-ran
-printf 'python3 double: ran, so land.sh went past its merge\\n' >&2
+n=0
+while [ -e {log}/python3-call-$n ]; do n=$((n + 1)); done
+printf '%s\\0' "$(pwd -P)" "$@" > {log}/python3-call-$n
+if {past_merge}; then
+  if [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = tools/roadmap.py ]; then exec {python} "$@"; fi
+  if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {cleanup} ] && [ "$3" = --delete ]; then exit 0; fi
+fi
+: > {log}/python3-unexpected
+printf 'python3 double: unexpected call, recorded as python3-call-%s\\n' "$n" >&2
 exit 98
 """
+
+
+class Commit(NamedTuple):
+    """A commit as `git log --format=%H%x00%P%x00%B` reads it: its sha, its parents in order, and its
+    message without the newline git ends it with."""
+    sha: str
+    parents: list
+    message: str
+
+    @property
+    def subject(self) -> str:
+        return self.message.split("\n", 1)[0]
 
 
 def bash_version() -> str:
@@ -258,21 +353,11 @@ class Case:
             # (https://github.com/git/git/blob/master/Makefile), and through a link that path
             # would be this directory.
             self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
-        # One page each, as `gh api --paginate --slurp` wraps them (`gh api --help`).
-        listings = {"comments": CLEARS if comments is None else comments, "reviews": reviews or []}
-        for name, entries in listings.items():
-            (self.dir / f"{name}.json").write_text(json.dumps([entries]))
         if gh:
-            self.write_executable("gh", GH_DOUBLE.format(
-                log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
-                base=shlex.quote(base), heads=shlex.quote(" ".join(heads)),
-                comments=shlex.quote(str(self.dir / "comments.json")),
-                reviews=shlex.quote(str(self.dir / "reviews.json")),
-                view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails)))
+            self.serve(state=state, base=base, heads=heads, comments=comments, reviews=reviews,
+                       view_fails=view_fails, api_fails=api_fails)
         if python3:
-            self.write_executable("python3", PYTHON_DOUBLE.format(
-                log=shlex.quote(str(self.log)), reader=shlex.quote(str(READER)),
-                python=shlex.quote(os.path.realpath(sys.executable))))
+            self.write_python3(past_merge=False)
 
         self.origin = self.dir / "origin.git"
         self.work = self.dir / "work"
@@ -292,6 +377,31 @@ class Case:
         path.write_text(text)
         path.chmod(0o755)
 
+    def serve(self, *, state: str = "OPEN", base: str = "main", heads: tuple[str, ...] = (HEAD,),
+              comments: list | None = None, reviews: list | None = None, view_fails: str = "",
+              api_fails: str = "", server: str = ""):
+        """Writes the gh double and the two listings it answers from. Given a `server`, a clone of
+        origin, its merge goes through; without one the merge fails, as every case outside
+        PostMergeTests needs."""
+        # One page each, as `gh api --paginate --slurp` wraps them (`gh api --help`).
+        listings = {"comments": CLEARS if comments is None else comments, "reviews": reviews or []}
+        for name, entries in listings.items():
+            (self.dir / f"{name}.json").write_text(json.dumps([entries]))
+        self.write_executable("gh", GH_DOUBLE.format(
+            log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
+            base=shlex.quote(base), heads=shlex.quote(" ".join(heads)),
+            comments=shlex.quote(str(self.dir / "comments.json")),
+            reviews=shlex.quote(str(self.dir / "reviews.json")),
+            view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails),
+            server=shlex.quote(server), during_merge=shlex.quote(str(self.dir / "during-merge"))))
+
+    def write_python3(self, *, past_merge: bool):
+        """Writes the python3 double, which answers the roadmap and the cleanup only `past_merge`."""
+        self.write_executable("python3", PYTHON_DOUBLE.format(
+            log=shlex.quote(str(self.log)), reader=shlex.quote(str(READER)),
+            python=shlex.quote(os.path.realpath(sys.executable)),
+            past_merge="true" if past_merge else "false", cleanup=shlex.quote(str(CLEANUP))))
+
     def env(self, **extra: str) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_CONFIG_GLOBAL": str(self.gitconfig), "LC_ALL": "C"}
@@ -300,6 +410,10 @@ class Case:
 
     def git(self, *args: str, cwd: pathlib.Path):
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
+
+    def git_out(self, *args: str, cwd: pathlib.Path) -> str:
+        return subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True,
+                              capture_output=True, text=True).stdout
 
     def quiet_housekeeping(self, repository: pathlib.Path):
         self.git("config", "gc.auto", "0", cwd=repository)
@@ -329,13 +443,100 @@ class Case:
         return [path.read_bytes().decode("utf-8", "surrogateescape").split("\0")[:-1]
                 for path in names]
 
+    def python3_calls(self) -> list[list[str]]:
+        """Each python3 call but the reader's: the directory it ran in, then its arguments."""
+        names = sorted(self.log.glob("python3-call-*"),
+                       key=lambda path: int(path.name.rsplit("-", 1)[1]))
+        return [path.read_bytes().decode("utf-8", "surrogateescape").split("\0")[:-1]
+                for path in names]
+
+
+class MergingCase(Case):
+    """A Case whose merge goes through, for what land.sh does after it (#97).
+
+    The clone's history ends in copies of the five files tools/roadmap.py reads, taken from this
+    checkout now, and a commit that makes their generated blocks current for this history, so the
+    blocks move only when the merge lands a plan row. A pull request branch with one commit of its
+    own sits on origin; the gh double reports its tip as the head, and a review record clears it.
+    The double's merge goes through, from `server`, a clone of origin standing in for GitHub's side.
+    The clone sits detached at origin's base, as the worktree land.sh's header asks for does.
+    """
+
+    BRANCH = "change"
+
+    def __init__(self, test: unittest.TestCase, *, base: str = "main"):
+        super().__init__(test, base=base)
+        for name in ROADMAP_FILES:
+            target = self.work / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        self.git("add", *ROADMAP_FILES, cwd=self.work)
+        self.git("commit", "-q", "-m", "Import the roadmap's inputs", cwd=self.work)
+        # The copies carry this checkout's blocks, derived from its own tags and merges, so they
+        # would move on the first derivation whatever merged. Made current here, they move only for
+        # a merge that changes what the roadmap reads.
+        subprocess.run([sys.executable, "-I", "tools/roadmap.py"], cwd=self.work, env=self.env(),
+                       check=True, capture_output=True)
+        self.git("commit", "-q", "--allow-empty", "-am", "Refresh the generated roadmap blocks",
+                 cwd=self.work)
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main", cwd=self.work)
+        if base != "main":
+            self.git("push", "-q", "origin", f"HEAD:refs/heads/{base}", cwd=self.work)
+        self.base_tip = self.worktree_head()
+
+        self.git("checkout", "-q", "-b", self.BRANCH, cwd=self.work)
+        (self.work / "change.txt").write_text("the change under review\n")
+        self.git("add", "change.txt", cwd=self.work)
+        self.git("commit", "-q", "-m", "The change under review", cwd=self.work)
+        self.head = self.worktree_head()
+        self.git("push", "-q", "origin", self.BRANCH, cwd=self.work)
+        self.git("fetch", "-q", "origin", cwd=self.work)
+        self.git("checkout", "-q", "--detach", f"origin/{base}", cwd=self.work)
+
+        self.server = self.dir / "server"
+        self.clone(str(self.origin), self.server)
+        self.serve(base=base, heads=(self.head,), comments=[record_comment(self.head, "merge")],
+                   server=str(self.server))
+        self.write_python3(past_merge=True)
+
+    def during_merge(self, script: str):
+        """Has the gh double run `script` under /bin/sh while it merges, before the merge commit is
+        made: how a case changes something while land.sh waits on gh."""
+        hook = self.dir / "during-merge"
+        hook.write_text(f"#!/bin/sh\n{script}\n")
+        hook.chmod(0o755)
+
+    def on_origin(self, rev: str) -> Commit:
+        sha, parents, message = self.git_out("log", "-1", "--format=%H%x00%P%x00%B", rev,
+                                             cwd=self.origin).split("\0")
+        return Commit(sha, parents.split(), message.rstrip("\n"))
+
+    def origin_refs(self) -> dict[str, str]:
+        """{branch: tip} for every branch origin holds."""
+        listed = self.git_out("for-each-ref", "--format=%(refname:strip=2) %(objectname)",
+                              "refs/heads", cwd=self.origin)
+        return dict(line.split(" ", 1) for line in listed.splitlines())
+
+    def paths(self, sha: str) -> list[str]:
+        """What a commit with one parent changes, against that parent."""
+        return self.git_out("diff-tree", "--no-commit-id", "--name-only", "-r", sha,
+                            cwd=self.origin).splitlines()
+
+    def status(self) -> str:
+        return self.git_out("status", "--porcelain", cwd=self.work).strip()
+
+    def worktree_head(self) -> str:
+        return self.git_out("rev-parse", "HEAD", cwd=self.work).strip()
+
 
 class LandTestCase(unittest.TestCase):
     def assertNoStrayCall(self, case: Case):
-        """No gh call the double does not answer, and no python3, which runs only past the merge."""
+        """No gh call the double does not answer, and no python3 call but the reader's: the others
+        run only once a merge has gone through."""
         self.assertFalse((case.log / "unexpected").exists(),
                          f"land.sh made a gh call the double does not answer: {case.calls()}")
-        self.assertFalse((case.log / "python3-ran").exists(), "land.sh ran python3, past its merge")
+        self.assertEqual([], case.python3_calls(),
+                         "land.sh made a python3 call other than the record reader's")
 
     def assertRefused(self, case: Case, result: Result, fragment: str, calls: list[list[str]]):
         """A refusal: status 1, a `land:` line naming it, and gh asked exactly `calls`."""
@@ -611,7 +812,7 @@ class SilentExitTests(LandTestCase):
 
 class MergeCallTests(LandTestCase):
     """What gh receives at the merge: the exact arguments, the head they pin and the body's bytes.
-    The double fails every merge, so each case also shows that a failed merge stops everything
+    Their double fails every merge, so each case also shows that a failed merge stops everything
     after it."""
 
     BODY = "Verified by tools/land_tests.py.\n\nOutstanding: none — exact bytes, no final newline"
@@ -757,6 +958,134 @@ class MergeCallTests(LandTestCase):
             MERGE + ["--subject", "Merge task 9.9: x", "--body", f"{self.BODY}\n\n{REVIEWED}"])
 
 
+class PostMergeTests(LandTestCase):
+    """What land.sh does once gh has merged (#97): it fetches the merge commit and fast-forwards onto
+    it, derives the roadmap from the tree the merge made, and pushes the refresh as a commit of its
+    own when the blocks moved. Each case runs the real script past a merge that goes through, so it
+    also asserts what origin's base holds afterwards."""
+
+    # A subject that lands a plan row, which moves the generated blocks, and one that names only a
+    # ticket, which tools/roadmap.py reads for --json but counts in no block.
+    LANDS_A_ROW = "Merge task 2.1: the registry"
+    NAMES_NO_ROW = "Merge task issue-97: a ticket's change"
+    BODY = "Verified by tools/land_tests.py."
+
+    def asked(self, case: MergingCase, subject: str, body: str = "") -> list[list[str]]:
+        """Everything gh is asked when a record clears the head and the merge goes through."""
+        trailer = f"Reviewed: {case.head} {RECORD_URL}"
+        return READS_RECORDS + [["pr", "merge", PR, "--merge", "--match-head-commit", case.head,
+                                 "--subject", subject,
+                                 "--body", f"{body}\n\n{trailer}" if body else trailer]]
+
+    def roadmap_call(self, case: MergingCase) -> list[str]:
+        return [str(case.work), "-I", "tools/roadmap.py"]
+
+    def cleanup_call(self, case: MergingCase) -> list[str]:
+        return [str(case.work), "-I", str(CLEANUP), "--delete"]
+
+    def assertMergedOnOrigin(self, case: MergingCase, merge: Commit, subject: str, body: str = ""):
+        """The premise: the double merged as GitHub would, the pinned head onto the base it found,
+        with the subject and body land.sh handed it."""
+        self.assertEqual([case.base_tip, case.head], merge.parents)
+        self.assertEqual(f"{subject}\n\n{self.asked(case, subject, body)[-1][-1]}", merge.message)
+
+    def assertPython3Calls(self, case: MergingCase, calls: list[list[str]]):
+        """gh asked nothing it does not answer, and python3 ran exactly `calls` after the reader."""
+        self.assertFalse((case.log / "unexpected").exists(),
+                         f"land.sh made a gh call the double does not answer: {case.calls()}")
+        self.assertFalse((case.log / "python3-unexpected").exists(),
+                         f"land.sh made a python3 call the double does not answer: "
+                         f"{case.python3_calls()}")
+        self.assertEqual(calls, case.python3_calls())
+
+    def test_blocks_that_moved_are_committed_alone_and_pushed_to_the_base(self):
+        # From the root and from a subdirectory: land.sh moves to the root before it merges, and the
+        # roadmap's relative path names the script only there.
+        for where in (".", "docs"):
+            with self.subTest(cwd=where):
+                case = MergingCase(self)
+                # The body file sits in the worktree, untracked, as a caller's often does: the path
+                # besides the two generated files that a careless `git add` would carry.
+                body = case.work / "body.md"
+                body.write_text(f"{self.BODY}\n")
+                result = case.run(PR, "--subject", self.LANDS_A_ROW, "--body-file", str(body),
+                                  cwd=case.work / where)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertIn(f"land: #{PR} is in and the roadmap says so.", result.stdout)
+                self.assertEqual([], result.land_lines())
+                self.assertEqual(self.asked(case, self.LANDS_A_ROW, self.BODY), case.calls())
+                refresh = case.on_origin("main")
+                self.assertEqual(1, len(refresh.parents), "the refresh is one commit, on the merge")
+                self.assertMergedOnOrigin(case, case.on_origin(refresh.parents[0]),
+                                          self.LANDS_A_ROW, self.BODY)
+                self.assertEqual(GENERATED, case.paths(refresh.sha))
+                self.assertEqual(f"Refresh the generated roadmap blocks after landing #{PR}",
+                                 refresh.subject)
+                self.assertIn("\n\nGenerated by tools/roadmap.py, ", refresh.message)
+                self.assertEqual({"main": refresh.sha, MergingCase.BRANCH: case.head},
+                                 case.origin_refs())
+                # The worktree sits at what it pushed, with the body file still untracked beside it.
+                self.assertEqual(refresh.sha, case.worktree_head())
+                self.assertEqual("?? body.md", case.status())
+                current = subprocess.run([sys.executable, "-I", "tools/roadmap.py", "--check"],
+                                         cwd=case.work, env=case.env(), capture_output=True,
+                                         text=True)
+                self.assertEqual(0, current.returncode, current.stdout)
+                self.assertPython3Calls(case, [self.roadmap_call(case), self.cleanup_call(case)])
+
+    def test_blocks_that_did_not_move_end_the_landing_with_no_commit_and_no_push(self):
+        case = MergingCase(self)
+        result = case.run(PR, "--subject", self.NAMES_NO_ROW)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertIn("land: the generated blocks did not move", result.stdout)
+        self.assertEqual([], result.land_lines())
+        self.assertEqual(self.asked(case, self.NAMES_NO_ROW), case.calls())
+        merge = case.on_origin("main")
+        self.assertMergedOnOrigin(case, merge, self.NAMES_NO_ROW)
+        self.assertEqual({"main": merge.sha, MergingCase.BRANCH: case.head}, case.origin_refs())
+        # Fast-forwarded onto the merge, with nothing committed on top and nothing left changed.
+        self.assertEqual(merge.sha, case.worktree_head())
+        self.assertEqual("", case.status())
+        self.assertPython3Calls(case, [self.roadmap_call(case), self.cleanup_call(case)])
+
+    def test_a_worktree_that_cannot_fast_forward_onto_the_merge_is_refused(self):
+        # A commit made in the landing worktree while gh merges: afterwards the worktree and the
+        # fetched base have each moved where the other has not, so no fast-forward joins them. The
+        # merge is in by then, so the refusal says what to do, and land.sh does nothing more.
+        case = MergingCase(self)
+        made = "Committed in the landing worktree while the merge ran"
+        case.during_merge(f"exec git -C {shlex.quote(str(case.work))} commit -q --allow-empty "
+                          f"-m {shlex.quote(made)}")
+        result = case.run(PR, "--subject", self.LANDS_A_ROW)
+        # assertRefused also finds no python3 call, so neither the roadmap nor the cleanup ran.
+        self.assertRefused(case, result, "could not fast-forward onto origin/main",
+                           self.asked(case, self.LANDS_A_ROW))
+        self.assertTrue(result.stdout.endswith("--- fetching the merge commit for main\n"),
+                        f"land.sh went on after the refusal:\n{result.stdout}")
+        merge = case.on_origin("main")
+        self.assertMergedOnOrigin(case, merge, self.LANDS_A_ROW)
+        self.assertEqual({"main": merge.sha, MergingCase.BRANCH: case.head}, case.origin_refs())
+        # The worktree keeps the commit made during the merge: nothing reset or merged over it.
+        self.assertEqual(f"{case.base_tip}\0{made}\n",
+                         case.git_out("log", "-1", "--format=%P%x00%s", "HEAD", cwd=case.work))
+
+    def test_a_merge_into_another_base_refreshes_that_base_and_runs_no_cleanup(self):
+        # The refresh goes to the base the pull request names. The cleanup follows only a merge into
+        # main, where a landing finishes claim branches and overnight branches.
+        case = MergingCase(self, base="release")
+        result = case.run(PR, "--subject", self.LANDS_A_ROW)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertIn(f"land: #{PR} is in and the roadmap says so.", result.stdout)
+        self.assertEqual(self.asked(case, self.LANDS_A_ROW), case.calls())
+        refresh = case.on_origin("release")
+        self.assertEqual(1, len(refresh.parents), "the refresh is one commit, on the merge")
+        self.assertMergedOnOrigin(case, case.on_origin(refresh.parents[0]), self.LANDS_A_ROW)
+        self.assertEqual(GENERATED, case.paths(refresh.sha))
+        self.assertEqual({"main": case.base_tip, "release": refresh.sha,
+                          MergingCase.BRANCH: case.head}, case.origin_refs())
+        self.assertPython3Calls(case, [self.roadmap_call(case)])
+
+
 class HelpTests(LandTestCase):
     def header(self) -> str:
         """land.sh's comment header, read out of the file now: a guard reads the thing it guards."""
@@ -799,9 +1128,8 @@ class InterpreterTests(LandTestCase):
 
 
 class CompletenessTests(unittest.TestCase):
-    """Runs last (load_tests below): every `die` above the merge call was produced by some case."""
+    """Runs last (load_tests below): every `die` in land.sh was produced by some case."""
 
-    MERGE_CALL = re.compile(r"^\s*gh pr merge\b", re.MULTILINE)
     DIE = re.compile(r'\bdie "((?:[^"\\]|\\.)*)"')
     # Every use of die, whatever follows it: all but the function's own definition. Whole-line
     # comments are dropped first, so prose naming die is not counted as a use.
@@ -815,24 +1143,23 @@ class CompletenessTests(unittest.TestCase):
         return re.compile("^land: " + ".*".join(re.escape(part) for part in literals) + "$",
                           re.MULTILINE)
 
-    def test_every_refusal_above_the_merge_call_has_a_case(self):
-        text = SCRIPT.read_text()
-        merge = self.MERGE_CALL.search(text)
-        self.assertIsNotNone(merge, "land.sh has no `gh pr merge` line to read refusals above")
-        above = self.COMMENT.sub("", text[:merge.start()])
-        messages = self.DIE.findall(above)
-        self.assertTrue(messages, "found no `die` above the merge call; this case would check nothing")
+    def test_every_refusal_has_a_case(self):
+        # The whole script, not only the part above `gh pr merge`: the fast-forward's refusal comes
+        # after the merge, and a refusal added past it would otherwise go unseen too (#97).
+        code = self.COMMENT.sub("", SCRIPT.read_text())
+        messages = self.DIE.findall(code)
+        self.assertTrue(messages, "found no `die` in land.sh; this case would check nothing")
         # A refusal this case cannot read would otherwise pass unseen: a single-quoted message is not
         # found at all, and one with no literal word, such as die "$reason", matches any land: line.
-        unread = [line.strip() for line in above.splitlines()
+        unread = [line.strip() for line in code.splitlines()
                   if len(self.DIE_USE.findall(line)) != len(self.DIE.findall(line))]
         unread += [f'die "{message}"' for message in messages
                    if not re.search(r"\w", "".join(self.VARIABLE.split(message)))]
-        self.assertEqual([], unread, "a `die` above the merge call that this case cannot match to a "
-                                     "land: line; give it a double-quoted message with a literal word")
+        self.assertEqual([], unread, "a `die` in land.sh that this case cannot match to a land: "
+                                     "line; give it a double-quoted message with a literal word")
         seen = "\n".join(OBSERVED)
         missing = [message for message in messages if not self.pattern(message).search(seen)]
-        self.assertEqual([], missing, "a refusal above the merge call that no case produced")
+        self.assertEqual([], missing, "a refusal in land.sh that no case produced")
 
 
 def load_tests(loader, tests, pattern):

@@ -176,14 +176,17 @@ jobs:
         # case of each.
         run: python3 -I tools/review_record_tests.py
 
-      - name: tools/land.sh refuses before it merges, merges only a reviewed head, and hands gh the body its caller named
+      - name: tools/land.sh refuses before it merges, merges only a reviewed head with the body its caller named, and pushes the roadmap's refresh alone
         # tools/land.sh is the one sanctioned merge path, and it once checked a relative body path
         # in one directory and read it from another (2c9962f), which a copy of its parse loop had
         # verified. The companion runs the real script against real git in throwaway repositories,
-        # the real review record reader and a gh double, so no case reaches GitHub or gets past the
-        # merge. Here it runs under the runner's bash 5, which the script's shebang can also pick;
-        # the bash 3.2 job runs it at the other end of that range. The tool choice is D-3 in
-        # docs/dependencies.md.
+        # the real review record reader and a gh double, so no case reaches GitHub. Most cases stop
+        # at the merge, which their double fails. The cases past it (#97) have a double that merges
+        # into the bare origin as GitHub would, and the real tools/roadmap.py, and see the
+        # fast-forward refusal, the exit when the blocks did not move, and the refresh pushed with
+        # nothing else in it. Here it runs under the runner's bash 5, which the script's shebang can
+        # also pick; the bash 3.2 job runs it at the other end of that range. The tool choice is D-3
+        # in docs/dependencies.md.
         run: python3 -I tools/land_tests.py
 
       - name: tools/check.sh runs the hook's checks unchanged, and in full ends on its verdict
@@ -212,7 +215,8 @@ jobs:
         # the roadmap does not call landed, a worktree, commits or a merge resolution main lacks, and
         # a push to origin after the check. Its companion runs the real script against real git in
         # throwaway repositories, with a bare origin and a gh double, and runs tools/land.sh past a
-        # merge, which tools/land_tests.py never does, to see the landing delete what it finished.
+        # merge to see the landing delete what it finished. tools/land_tests.py covers the steps
+        # between that merge and the cleanup, and answers the cleanup with a double.
         run: python3 -I tools/prune_branches_tests.py
 
       - name: The main-checkout guard refuses branch work in the main checkout, and nothing else
@@ -235,7 +239,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: tools/land.sh refuses before it merges, under the bash 3.2 macOS ships
+      - name: tools/land.sh before, at and after its merge, under the bash 3.2 macOS ships
         # The Linux runner has bash 5, so it can never show a failure only 3.2 has: under set -u,
         # 3.2 calls an empty "${array[@]}" an unbound variable where 5 expands it to nothing. The
         # variable makes the companion fail, not skip, when /bin/bash is not 3.2, which is why
@@ -258,9 +262,9 @@ jobs:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/preflight_tests.py
 
-      - name: tools/land.sh past its merge, and the cleanup it runs, under the bash 3.2 macOS ships
-        # The lines land.sh runs after its merge are reached by no other companion, and a landing on
-        # this Mac runs them under 3.2.
+      - name: The cleanup tools/land.sh runs after its merge, under the bash 3.2 macOS ships
+        # tools/land_tests.py answers the cleanup with a double, so only this companion runs the
+        # real one past a merge, and a landing on this Mac runs it under 3.2.
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/prune_branches_tests.py

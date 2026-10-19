@@ -145,8 +145,10 @@ python3, dotnet, terraform and the smoke test, and git is real. `tools/preflight
 the rest (#96), it runs a whole-file copy of the script beside crafted env files, since the script
 reads them from beside itself, with an `aws` double and no `curl` on PATH. The branch cleanup
 `tools/land.sh` runs after its merge, `tools/prune_branches.py`, has `tools/prune_branches_tests.py`
-(#71), also in both jobs: real git with a bare origin, a gh double, and the one set of cases that
-runs `tools/land.sh` past its merge, because that double's merge really merges.
+(#71), also in both jobs: real git with a bare origin, and a gh double whose merge really merges, so
+it runs `tools/land.sh` past its merge to see the cleanup run. `tools/land_tests.py` goes past the
+merge the same way since #97, for the fast-forward, the real `tools/roadmap.py` over copies of the
+five files it reads, and the refresh commit and its push, and answers the cleanup with a double.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
