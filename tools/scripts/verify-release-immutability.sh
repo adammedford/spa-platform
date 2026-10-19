@@ -17,7 +17,8 @@
 # teardown role, which would observe the policy's exception rather than its rule (ADR-0014).
 #
 # Its output is evidence for a merge body in a public repository, so it never prints the account
-# id, the caller's session name or anything S3's error messages say beyond the error code.
+# id, the caller's session name or S3's error messages. Of an error it prints the code, and beside
+# a refusal, denial() below adds the one phrase of S3's message that names the kind of policy.
 #
 # Exit status: 0 when every case is as expected, 1 when any case is not, 2 when it did not start.
 #
