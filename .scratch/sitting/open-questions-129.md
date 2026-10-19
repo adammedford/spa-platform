@@ -8,7 +8,12 @@ session commits them on its own branch with an `Authority:` trailer naming the `
 (https://github.com/adammedford/spa-platform/issues/129#issuecomment-6273385627).
 
 A second comment on #129 that names a question accepts it; an override is a `Q<n>: <answer>` line.
-Nobody but the human writes it (ADR-0021 decision 2).
+
+**Answered on 2026-10-19:** https://github.com/adammedford/spa-platform/issues/129#issuecomment-6278575890
+names all 25, with Q10 no, Q25 A, Q41 (a), Q49 the review's wording and every other one yes, the
+held passages Q52 and Q56 and the three optionals included. It was posted by a session at Adam's
+instruction, with his approval of the call, which ADR-0021 decision 2 reserves to the human; the
+comment says so, and the answers are his. The tables below are the digest it was written from.
 
 ## Recommended yes (18)
 

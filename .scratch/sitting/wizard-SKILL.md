@@ -266,10 +266,11 @@ deployed tier; destroy on confirm.
 
 ## Outside the sittings
 
-- **H1, the open questions on #129.** The one-word `Confirm` of 2026-10-19 left Q10, Q11, Q25,
-  Q41 and Q42 to Q63 open. On request, print a digest table of those 25 from the issue's comments
-  (question, recommendation, what it changes). The human writes and posts any comment that names
-  them.
+- **H1, the open questions on an `Overnight <date>` issue.** A `Confirm` that is the one word
+  covers the pre-accepted answers and none that read `Answer: open`. On request, print a digest
+  table of the open ones from the issue's comments (question, recommendation, what it changes), as
+  `.scratch/sitting/open-questions-129.md` did for #129, whose 25 were answered on 2026-10-19. The
+  human writes and posts any comment that names them, or has a session post it at his word.
 - **H2, #90.** Print the three pre-checks and the close path (AWS Settings → View all projects →
   the sample project → Close project); after the human reports it closed, `rm` the two local files
   with approval, run preflight, and draft the ADR-0017 clause into the log for the integrator.
