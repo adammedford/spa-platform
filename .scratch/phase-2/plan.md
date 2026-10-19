@@ -63,7 +63,7 @@ hand can cut its tickets from it.
 
 | Spec | Body | Plan rows | Tickets |
 | --- | --- | --- | --- |
-| G6 continuity: durable sessions, a shared key ring, one refresh across tasks, registry convergence | `spec-g6-continuity.md` | P2-1, P2-2, P2-3, P2-5; MR-2, MR-9 | 26: H-1, P2-1a to P2-1d, P2-2a to P2-2d, P2-3a to P2-3d, P2-5a to P2-5f, MR-2a to MR-2c, MR-9a to MR-9c |
+| G6 continuity: durable sessions, a shared key ring, one refresh across tasks, registry convergence | `spec-g6-continuity.md` | P2-1, P2-2, P2-3, P2-5; MR-2, MR-9 | 25: H-1, P2-1a to P2-1d, P2-2a to P2-2d, P2-3a to P2-3d, P2-5a to P2-5f, MR-2a to MR-2c, MR-9a to MR-9c |
 | P2-6 PingFederate: a profile and its hermetic stand-in | `spec-p2-6-pingfederate.md` | P2-6 | 7: P2-6a to P2-6g |
 | Follow-ups raised by the G6 spec, no spec of their own | the tables under "The follow-ups" below | MR-4, MR-5, MR-8; P2-7 and P2-9's C# | 9: MR-4a, MR-4b, MR-5a to MR-5c, MR-8a, P2-7a, P2-7b, P2-9a |
 
@@ -142,8 +142,8 @@ gives itself under `contracts/README.md` → "What may land between gates"; the 
 
 | Request | Asks for | Lands | Blocks |
 | --- | --- | --- | --- |
-| `p2-1-dynamodb-session-store.md` | The `AWSSDK.DynamoDBv2` 4.0.108 pin; `Session:TableName` with an `if`/`then`; a `docs/dependencies.md` row; the store contract suite's first assertion compared by value; where the fake lives | A widening and a test fix, between gates; the `if`/`then` read as a widening in effect | P2-1a, and through it P2-1b, P2-3b, MR-9b |
-| `p2-2-data-protection-key-ring.md` | The `Amazon.AspNetCore.DataProtection.SSM` 4.0.3 pin; a closed `DataProtection` section; which registration carries the ring (`AddPlatformHosting` recommended); a dependencies row | A widening, between gates | P2-2a, P2-2c |
+| `p2-1-dynamodb-session-store.md` | The `AWSSDK.DynamoDBv2` 4.0.108 pin; an optional `Session:TableName`; a `docs/dependencies.md` row; the store contract suite's first assertion compared by value; where the fake lives | The property and the test fix are a widening and land between gates; the `if`/`then` that would require the name under `dynamodb` narrows the schema and waits for the next gate, so the code refuses a missing name until then | P2-1a, and through it P2-1b, P2-3b, MR-9b |
+| `p2-2-data-protection-key-ring.md` | The `Amazon.AspNetCore.DataProtection.SSM` 4.0.3 pin; a closed `DataProtection` section with no required member; which registration carries the ring (`AddPlatformHosting` recommended); a dependencies row | A widening, between gates; a required member, or an `if`/`then` tying the section to `dynamodb`, would narrow and waits for the next gate, so the code refuses the section without a prefix until then | P2-2a, P2-2c |
 | `p2-3-session-lease-abstraction.md` | `ISessionLeases` and `SessionLease` in `Platform.Abstractions`, `InMemorySessionLeases` and a contract suite in `Platform.Testing`, two names in the surface test | A new type that changes no signature, between gates | P2-3a, and through it P2-3b, P2-3c, P2-6g |
 | `p2-5-readiness-reports-registry-revision.md` | `/readyz` carries `instance` in `contracts/pipeline.md`; no package | Prose and an added member, between gates | P2-5a, P2-5b, and through them P2-5d, P2-5e |
 | `p2-6-pingfederate-profile.md` | `pingfederate` in the `Profile` enum; `PrivateKeyJwt`; `Issuers:{name}:ClientAssertion`; `POST` on `/signin-oidc`; the cookie table's `SameSite` prose; an ADR amendment; the back-channel decision; a second CI run of the suites | Widenings and prose, between gates; the back-channel rule id waits for a gate | P2-6b, and through it P2-6c, P2-6d, P2-6e |
@@ -164,14 +164,15 @@ applied anywhere.
 3. **Where the fake DynamoDB server lives.** Recommend `tests/Platform.Identity.Tests`; it moves to
    `src/Platform.Testing` only if the composed suite must run over the real store, which decision 1
    avoids (`p2-1`, item 5).
-4. **`Session:TableName`'s requirement: schema `if`/`then` or code.** Recommend both, the
-   `if`/`then` read as a widening in effect; if read as a narrowing, the property alone and the code
-   refuses a missing name until G6 (`p2-1`, item 2).
+4. **`Session:TableName`'s requirement: code now, schema `if`/`then` at the next gate.** The
+   `if`/`then` narrows what validates today, so it waits for a gate under `contracts/README.md`;
+   the optional property lands now and the store refuses a missing name until then (`p2-1`, item 2).
 5. **The store contract suite's first assertion.** Change it to a value comparison in the same
    decision as the pin; it blocks P2-1a regardless (`p2-1`, item 4).
 6. **The application name.** `spa-platform-{cell}`, fixed in the P2-2 decision.
-7. **`DataProtection` required under `dynamodb`.** The code refuses the combination at start-up and
-   the schema carries the same `if`/`then` under decision 4's reading.
+7. **`DataProtection` required under `dynamodb`.** The code refuses the combination at start-up;
+   the schema's `if`/`then` saying the same is a narrowing and waits for the next gate, as decision
+   4's does.
 8. **MR-9's rule as an ADR, not a request** (MR-9a). `SessionRecord` stays frozen; the item carries
    `format`.
 9. **P-01 and P-03 at G6.** An amendment to ADR-0016 recording the G6 allowlist (one table, one key,

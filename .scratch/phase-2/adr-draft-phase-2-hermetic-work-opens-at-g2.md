@@ -5,12 +5,12 @@
   spec issue (to be filed).
 - **Date:** 2026-10-19
 - **Deciders:** integrator
-- **Plan ref:** `docs/plan/01-plan.md` → Gates, G5's "Unblocks: Phase 2", and the sentence under the
-  table that adds G6, G7 and G8; `docs/plan/06-phase-2-and-risks.md` → the package table, P2-1 to
-  P2-10, with its "Accepted when" column; `docs/roadmap.md` → S8 to S10; tasks 6.2, 6.5 and 6.9,
-  whose rows already split a hermetic half from a deployed one; ADR-0004, ADR-0011 and ADR-0012,
-  which each name what Phase 2 changes behind a seam Phase 1 built. `docs/plan/` is a frozen export;
-  this ADR records how its one sentence on Phase 2 is read.
+- **Plan ref:** `docs/plan/01-plan.md` → Gates, G5's "Unblocks: Phase 2", and the sentence under
+  the table that adds G6, G7 and G8; `docs/plan/06-phase-2-and-risks.md` → the package table,
+  P2-1 to P2-10, with its "Accepted when" column; `docs/roadmap.md` → S8 to S10; tasks 6.2, 6.5
+  and 6.9, whose rows already split a hermetic half from a deployed one; ADR-0004, ADR-0011 and
+  ADR-0012, which each name what Phase 2 changes behind a seam Phase 1 built. `docs/plan/` is a
+  frozen export; this ADR records how its one sentence on Phase 2 is read.
 
 ## Context
 
@@ -165,7 +165,8 @@ tests run on the stack, as `docs/agents/landing-work.md` → "Gates" requires of
   with a sitting in each. The plan's Phase 1 practice is already the split this ADR names.
 - **Close G3 to G5 without their deployed runs.** Fastest: the hermetic evidence exists, and the
   tags could be cut this week. Rejected because a gate tag is permanent
-  (`docs/agents/landing-work.md` → "Gates"; ADR-0022's context records `contracts-v1` still pointing
+  (`docs/agents/landing-work.md` → "Gates"; ADR-0022's context records `contracts-v1` still
+  pointing
   at sentences corrected on `main` 34 and 71 minutes after the tag), and the three gates are Phase
   1's claim: "hardened" is defined as the negative suite refused "in both tiers", and G3's exit test
   is F-01 to F-06 and F-08 deployed with P-01 to P-06. A tag cut on hermetic evidence would say

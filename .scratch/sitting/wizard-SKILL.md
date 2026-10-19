@@ -22,8 +22,10 @@ tickets this sitting serves.
    the plan or the case list was shown.** An apply whose plan destroys or replaces anything stops
    the sitting; the human reads the plan and decides outside the wizard.
 3. **Nothing secret is printed or posted:** no authorization code, no client secret, no session
-   name, no client id, no ARN, no account id beyond its last four digits. Redact every post with
-   the function below; if a line cannot be redacted with confidence, leave it out and say so.
+   name, no client id, no ARN, no account id beyond its last four digits. One exception, to the
+   terminal only: A2 prints the login URL, which carries the client id, because the human has to
+   open it; it goes into the log and never into a post. Redact every post with the function below;
+   if a line cannot be redacted with confidence, leave it out and say so.
 4. **Evidence goes to the ticket it serves**, as a comment headed by the stage, carrying the
    command, its exit code and its key lines. A failed or skipped stage posts "failed" or "not run"
    with the reason, never a sentence that would read the same on success. Each post ends with the
@@ -37,7 +39,8 @@ tickets this sitting serves.
 6. **The record is `.scratch/sitting/log/<UTC date>.log`** in the main checkout: every command,
    every output, unredacted, mode 600. Nothing goes to `/tmp`.
 7. **Stop and name the cause** when preflight is not ready, the account is not the pin, a plan has
-   destroys or replaces, a stage's exit code is not what its ticket expects, or AWS answers
+   destroys or replaces, a stage's exit code or a read's values are not what its ticket expects (an
+   exit of 0 reporting an unhealthy target or another image is a failed stage), or AWS answers
    `AccessDenied` where it did not before (ask about the spend limit: AWS Settings → Billing, per
    `docs/agents/aws-rules.md`).
 8. **Run from the main checkout on `main`, up to date with `origin/main`**, so the scripts are the
@@ -54,7 +57,8 @@ reviewer would; the function catches shapes, not meaning.
 
 ## Stage 0: where things stand
 
-Run every time, before choosing a sitting.
+Ask first whether this is a `--dry-run` (list every command, run nothing, post nothing), so the
+answer governs Stage 0 too. Then run every time, before choosing a sitting.
 
 ```bash
 set -a; . tools/aws-project.env; set +a
@@ -76,7 +80,7 @@ Then say which sitting applies and list its stages with the minutes from the spe
 - If the service is absent in A: the sitting becomes the platform root's re-apply on the sample
   image (A-alt below) before the read pass.
 
-Ask the human which to run, and whether `--dry-run` (list every command, run nothing, post nothing).
+Ask the human which to run.
 
 ## Sitting A: the read pass
 
@@ -114,16 +118,20 @@ aws elbv2 describe-listeners --load-balancer-arn "$LB" \
 aws elbv2 describe-rules --listener-arn "$(aws elbv2 describe-listeners --load-balancer-arn "$LB" --query 'Listeners[0].ListenerArn' --output text)" --query 'length(Rules)'
 aws elbv2 describe-target-groups --load-balancer-arn "$LB" \
   --query 'TargetGroups[].{type:TargetType,protocol:Protocol,port:Port,path:HealthCheckPath}'
-aws acm list-certificates --query "CertificateSummaryList[?DomainName=='*.spa-poc.test'].{status:Status,type:Type}"
+LISTENER_CERT=$(aws elbv2 describe-listeners --load-balancer-arn "$LB" --query 'Listeners[0].Certificates[0].CertificateArn' --output text)
+IMPORTED_CERT=$(aws acm list-certificates --query "CertificateSummaryList[?DomainName=='*.spa-poc.test' && Type=='IMPORTED' && Status=='ISSUED'].CertificateArn | [0]" --output text)
+if [ -n "$LISTENER_CERT" ] && [ "$LISTENER_CERT" != "None" ] && [ "$LISTENER_CERT" = "$IMPORTED_CERT" ]; then echo "certificate: match"; else echo "certificate: MISMATCH"; fi
 ```
 
 If the load balancer's name differs, find it by the `Platform` tag: the A5 `get-resources` call
 with `--resource-type-filters elasticloadbalancing:loadbalancer`. Expect: `internal`, both
 attributes `true`, one listener on 443 HTTPS with one certificate and one `forward`, one rule (the
-default), the target group `ip`, `HTTP`, 8080, path `/`, the certificate `ISSUED` and `IMPORTED`.
-Post on #55 under "Read-back, Q12", with the listener's certificate shown as a count and the ARNs
-removed. Then, under "Held" unless #98's Q13 is confirmed (it is): close
-#55 with an `## Answer` comment saying the apply was recorded on 2026-10-18, the plan and the
+default), the target group `ip`, `HTTP`, 8080, path `/`, and `certificate: match`: the listener's
+certificate ARN equals the imported, issued `*.spa-poc.test` certificate's, compared in the shell so
+that the post carries the one word and no ARN. A count and a separate listing cannot show the
+attachment; the comparison can. Post on #55 under "Read-back, Q12", with the ARNs removed. Then,
+under "Held" unless #98's Q13 is confirmed (it is): close #55 with an `## Answer` comment saying
+the apply was recorded on 2026-10-18, the plan and the
 read-back are above, and task 1.6b checks it end to end.
 
 **A4, #56, Q6 to Q8's read-back.** Names from the module: cluster `spa-poc`, service `gateway`,
@@ -186,17 +194,22 @@ bucket is empty for the destroy in sitting B). Post the full output on #122 and 
 **A7.** `rm infra/envs/poc/platform/terraform.tfvars.bak`, with approval, and say so on #129's
 thread only if the human wants; it is Q16 there.
 
-**A8, the tracker writes.** For each, print the command and make it when Stage 0 found a
-`Confirm` covering the question (all four below were pre-accepted on #129, which its `Confirm` of
-2026-10-19 covers); otherwise list it under "Held":
+**A8, the tracker writes.** Each rests on two things: a `Confirm` covering the question (all four
+below were pre-accepted on #129, which its `Confirm` of 2026-10-19 covers), and the evidence of the
+stage it rests on having held. Print the command, then make the write only when both hold;
+otherwise list it under "Held" with the reason, confirmation or evidence:
 
 - #125: `gh issue close 125 --comment "<## Answer: the apply on 2026-10-18 at 19:17:25Z, the plan
-  and outputs in the grill of 2026-10-19, the login above>"` (#125's Q7).
-- #55: the close under A3 (#98's Q13, confirmed).
+  and outputs in the grill of 2026-10-19, the login above>"` (#125's Q7), only when A2's login
+  reached `?code=`.
+- #55: the close under A3 (#98's Q13, confirmed), only when every A3 read matched what Q12 expects,
+  `certificate: match` included.
 - #56: `gh issue edit 56 --remove-label ready-for-human --add-label ready-for-agent` (#56's Q11),
-  and the blocker removals for #57 and #58 (#56's Q12) through the dependencies API, as
-  `docs/agents/issue-tracker.md` → Blocking shows.
-- #125 as #55's blocker (#125's Q6).
+  and the blocker removals for #57 and #58 (#56's Q12: "once every read holds") through the
+  dependencies API, as `docs/agents/issue-tracker.md` → Blocking shows, only when every A4 read
+  matched what Q6 to Q8 expect. A differing read is posted as it is, and #56 stays as it was.
+- #125 as #55's blocker (#125's Q6): on the confirmation alone, since the dependency it modelled,
+  the apps root's state, has held since 2026-10-18.
 
 End sitting A by printing: what was posted where, what is held, that the stack stays up until
 sitting B (#55's Q14) at about $1 a day, and the one thing the human still owes by hand (nothing,

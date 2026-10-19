@@ -82,14 +82,17 @@ The decisions are the ADR draft's six and the change requests' recommendations, 
 integrator before the ticket that needs it opens. In the order the tickets need them:
 
 1. **`p2-2-data-protection-key-ring.md`.** Pin `Amazon.AspNetCore.DataProtection.SSM` 4.0.3 (no KMS
-   package: Parameter Store encrypts on the server); a closed `DataProtection` section with
-   `ParameterPrefix` and an optional `KmsKeyId`; the ring registered in `AddPlatformHosting`
+   package: Parameter Store encrypts on the server); a closed `DataProtection` section whose
+   members, `ParameterPrefix` and `KmsKeyId`, are optional in the schema, since a required member
+   would narrow what the open root accepts today and wait for a gate, with the code refusing the
+   section without a prefix; the ring registered in `AddPlatformHosting`
    (workstream 2), because hosting owns `Platform:Cell`, the SSM client and the Parameter Store
    stub, and the ring serves three consumers in two workstreams; the application name
    `spa-platform-{cell}`, fixed so a test can assert it against `Platform:Cell`.
 2. **`p2-1-dynamodb-session-store.md`.** Pin `AWSSDK.DynamoDBv2` 4.0.108; an optional
-   `Session:TableName` with an `if`/`then` making it required under `dynamodb`, read as a widening
-   in effect because no `dynamodb` document can run today; the store contract suite's first
+   `Session:TableName`, a widening that lands between gates, while the `if`/`then` that would make
+   it required under `dynamodb` narrows the schema and waits for the next gate, so the store's
+   `FromConfiguration` refuses a missing name until then; the store contract suite's first
    assertion compares by value, since `ReadOnlyMemory<byte>` equality is reference equality and a
    serializing store can never pass it as written; the fake DynamoDB server lives in
    `tests/Platform.Identity.Tests` and speaks the JSON 1.0 protocol for exactly the five operations
@@ -145,8 +148,8 @@ integrator before the ticket that needs it opens. In the order the tickets need 
 - Back-channel logout and a session index by subject: decided with P2-6 (its change request, item
   7) and built after G6.
 - Removing `clientSecretRef` under `private_key_jwt`: P2-6's later request.
-- Dropping `Session:MaxSessions` from `required` under `dynamodb`: a narrowing, which waits for a
-  gate; the DynamoDB store ignores it.
+- Dropping `Session:MaxSessions` from `required`: a widening the integrator may land between
+  gates; not asked, since the memory store needs it and the DynamoDB store ignores it.
 - The gate tag `g6-continuity`: cut only after the deployed tier runs on the stack.
 
 ## Further Notes
@@ -168,7 +171,7 @@ acceptance text is the ticket body's checklist; each box is a behaviour a test c
 | P2-2c Key, prefix, role | ws1-infra | `infra/` | The ring's parameter prefix, task-role `ssm:PutParameter` and `GetParametersByPath` on it, the KMS grant through Systems Manager for the cell's key, `DataProtection__*` through the module, P-03 test widened | One line, as asked | P2-2a; the ADR-0016 amendment | needs AWS |
 | P2-2d Accepted by another task | ws6-verification | `tests/e2e` | A browser-suite row in the shape of 6.5 (#61) against two tasks | [ ] A cookie issued by one task is accepted by the other. [ ] A login started on one task completes on the other | P2-2a, P2-2c, P2-4, #63 | needs AWS |
 | P2-3a `ISessionLeases` | integrator | `src/Platform.Abstractions`, `src/Platform.Testing`, `tests/Platform.Abstractions.Tests` | The lease type and `SessionLease`, `InMemorySessionLeases` over `TimeProvider`, `SessionLeaseContract`, the surface test's two new names | [ ] The contract suite passes against the double: a free key is taken, a held key refused, a released key taken, an expired lease taken over, a stale release ignored, two keys independent. [ ] `PublicSurfaceTests` lists both names | the decision on `p2-3-session-lease-abstraction.md` | hermetic |
-| P2-3b One refresh per session across tasks | ws3-identity | `src/Platform.Identity`, `tests/Platform.Identity.Tests` | `AccessTokenSource` takes the lease under the in-process gate before the provider call; losers re-read until the version moves or the lease expires; `DynamoDbSessionStore` implements `ISessionLeases` on the session item with `leaseUntil` and `leaseToken` and a fenced release; two `IdentityGateway`s over one store and one lease table | [ ] Twenty-five calls to each of two hosts on a due token: the test provider, grace window at zero, counts one grant and no refusal; all fifty succeed; the record holds one rotated token (mutation: two lease tables give two grants and one refusal). [ ] A logout through one host makes the next request on the other 401 `session_ended`. [ ] The lease against the fake: a second acquire is refused by the fake's condition, an expired lease is taken over, a stale release changes nothing. [ ] Every existing `AccessTokenSourceTests` row still passes | P2-3a, P2-1a | hermetic |
+| P2-3b One refresh per session across tasks | ws3-identity | `src/Platform.Identity`, `tests/Platform.Identity.Tests` | `AccessTokenSource` takes the lease under the in-process gate before the provider call; losers re-read until the version moves or the lease expires; `DynamoDbSessionStore` implements `ISessionLeases` on the session item with `leaseUntil` and `leaseToken` and a fenced release; two `IdentityGateway`s over one store and one lease table | [ ] Twenty-five calls to each of two hosts on a due token: the test provider, grace window at zero, counts one grant and no refusal; all fifty succeed; the record holds one rotated token (mutation: two lease tables give two grants and one refusal). [ ] A logout through one host makes the next request on the other 401 `unauthenticated`, the session being gone rather than refused on a refresh. [ ] The lease against the fake: a second acquire is refused by the fake's condition, an expired lease is taken over, a stale release changes nothing. [ ] Every existing `AccessTokenSourceTests` row still passes | P2-3a, P2-1a | hermetic |
 | P2-3c The composed two-gateway proof | ws6-verification | `tests/Gateway.TestHarness`, `tests/Gateway.IntegrationTests`, `tests/Gateway.SecurityTests` | H-1's harness sharing one `InMemorySessionLeases` as well | [ ] P2-3's two sentences, composed, over the doubles: fifty calls across the two hosts cause one grant and no refusal; a session ended on one gateway is refused on the other. [ ] The negative half as a row of the negative suite (#60) | H-1, P2-3a, P2-3b | hermetic |
 | P2-3d Two real tasks | ws6-verification | `tests/e2e` | The G6 deployed run's fifty calls split across two tasks, and the logout row | [ ] As the plan words it, against Cognito with its 10-second grace | P2-3b, P2-1c, P2-4, #63 | needs AWS |
 | P2-5a `/readyz` names its instance | ws2-hosting | `src/Platform.Hosting`, `tests/Platform.Hosting.Tests` | The `instance` member: the ECS task id read once at start-up from the task metadata endpoint when `ECS_CONTAINER_METADATA_URI_V4` is set, else a per-process id; `/healthz` unchanged | [ ] `/readyz` 200 carries `revision` and `instance`; with the metadata variable pointing at a stub, `instance` is the stub's task id; without it, two hosts in one process report different ids. [ ] `spactl`'s reader and the composed suites pass unchanged | `p2-5-readiness-reports-registry-revision.md` | hermetic |
