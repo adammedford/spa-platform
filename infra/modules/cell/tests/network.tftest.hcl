@@ -14,7 +14,8 @@
 #
 # What it does not prove is the deployed half of P-06, that a connection from outside to the task's
 # public address on the gateway's port times out. That needs the applied cell and runs at G3 (task
-# 6.9). Rules declared outside this module, in the platform root, are row 1.9's root allowlist.
+# 6.9). No rule can be declared outside this module: the platform root declares no resource of its
+# own, which its tests hold (P-01).
 #
 # Its own file, rather than more runs in module.tftest.hcl, so the plan-time ids below are this
 # file's alone: an override applies to every run in its file, and that file's mock apply run sets

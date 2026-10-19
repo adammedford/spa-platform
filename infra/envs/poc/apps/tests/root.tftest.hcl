@@ -217,9 +217,11 @@ run "tags_are_the_ones_the_contract_names" {
   }
 }
 
-# P-02: onboarding a third definition adds one client, one branding style and one parameter.
-# The run reads fixtures/onboarding/app3.json itself; every resource in the root is one of the
-# three per-definition maps, so their keys are the whole plan.
+# P-02: "A new app adds one Cognito client, one branding style and one parameter, nothing else"
+# (docs/plan/04-tests.md). ADR-0016 decision 2 makes it a comparison of configuration plans: the
+# fixture definitions, which every run above plans, then the same with one more, asserting exactly
+# what is added and that the existing apps are unchanged. The run reads
+# fixtures/onboarding/app3.json itself.
 run "a_third_definition_adds_exactly_three_resources" {
   command = plan
 
@@ -239,11 +241,45 @@ run "a_third_definition_adds_exactly_three_resources" {
     error_message = "A third definition adds exactly its client, branding style and parameter (P-02)."
   }
 
+  # One of each per definition file. merge() keeps the last of two definitions that share an appId
+  # across the directories, so a second file naming app2 would change app2's client rather than add
+  # one, with the keys above still matching.
+  assert {
+    condition = alltrue([
+      for n in [
+        length(aws_cognito_user_pool_client.app),
+        length(aws_cognito_managed_login_branding.app),
+        length(aws_ssm_parameter.client_secret),
+      ] : n == length(flatten([for dir in var.definition_dirs : fileset(dir, "*.json")]))
+    ])
+    error_message = "The root plans one client, one branding style and one parameter per definition file in definition_dirs. Fewer means two files share an appId, and the later one has replaced an existing app's definition (P-02)."
+  }
+
+  # "Unchanged existing ones" (ADR-0016 decision 2). A run reads only an earlier run's outputs, never
+  # its plan, so this holds each existing app's resources to what its own definition gives, in the
+  # plan that adds the third: the values the runs above check in the plan without it.
+  assert {
+    condition = alltrue([
+      for id, app in var.fixture_apps : (
+        aws_cognito_user_pool_client.app[id].name == "spa-platform-${var.cell}-${id}"
+        && aws_cognito_user_pool_client.app[id].user_pool_id == data.terraform_remote_state.idp.outputs.user_pool_id
+        && toset(aws_cognito_user_pool_client.app[id].callback_urls) == toset(["https://${app.host}/signin-oidc"])
+        && toset(aws_cognito_user_pool_client.app[id].logout_urls) == toset(["https://${app.host}/"])
+        && toset(aws_cognito_user_pool_client.app[id].allowed_oauth_scopes) == toset(app.oauth.scopes)
+        && aws_cognito_managed_login_branding.app[id].user_pool_id == data.terraform_remote_state.idp.outputs.user_pool_id
+        && aws_ssm_parameter.client_secret[id].name == "/spa-platform/${var.cell}/apps/${id}/client-secret"
+      )
+    ])
+    error_message = "Onboarding a definition leaves every existing app's client, branding style and parameter as its own definition gives them (ADR-0016 decision 2, P-02)."
+  }
+
   # The keys above are the whole plan only while the root's resources are those three maps: a
-  # fourth resource block, in any file of the root, fails here.
+  # fourth resource block, in any file of the root, fails here. A name is whatever sits between the
+  # quotes, since Terraform accepts capitals and hyphens in one; a pattern of lower case and
+  # underscores missed resource "aws_ssm_parameter" "Extra-Secret" with every run green.
   assert {
     condition = length(aws_cognito_user_pool_client.app) > 0 && toset(regexall(
-      "(?m)^resource \"([a-z0-9_]+)\" \"([a-z0-9_]+)\"",
+      "(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"",
       join("\n", [for f in fileset(".", "*.tf") : file(f)])
       )) == toset([
       ["aws_cognito_user_pool_client", "app"],
@@ -251,6 +287,18 @@ run "a_third_definition_adds_exactly_three_resources" {
       ["aws_ssm_parameter", "client_secret"],
     ])
     error_message = "The apps root may hold only the three per-definition resources (P-02)."
+  }
+
+  # And the three blocks are the root's whole configuration only while nothing else can add to the
+  # plan: a module call brings in resources of any type, and Terraform loads *.tf.json beside *.tf
+  # (https://developer.hashicorp.com/terraform/language/files), where no pattern here reads.
+  assert {
+    condition = (
+      length(aws_cognito_user_pool_client.app) > 0
+      && length(fileset(".", "*.tf.json")) == 0
+      && length(regexall("(?m)^module\\s+\"", join("\n", [for f in fileset(".", "*.tf") : file(f)]))) == 0
+    )
+    error_message = "The apps root calls no module and has no .tf.json file: either adds resources that no assertion here reads (P-02)."
   }
 }
 

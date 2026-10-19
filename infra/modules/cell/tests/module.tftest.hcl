@@ -193,9 +193,11 @@ variables {
 
 # --- The resource set -------------------------------------------------------------------------
 
-# Plan row 1.9 polices the applied plan. This reads the module's own source instead, so a resource
-# type added here fails before an apply exists to police: the allowlist below has to be edited in
-# the same change, which is where the author is made to say what the new type is for.
+# This reads the module's own source, because a plan holds no list of its resources that a test can
+# enumerate, and ADR-0016 makes plan policy an assertion on the configuration. A resource type added
+# here fails until the allowlist below is edited in the same change, which is where the author is
+# made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
+# 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
 # It is also where "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01) is held
 # statically rather than only against a deployed account.
@@ -241,7 +243,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_iam_role",
       "aws_iam_role_policy",
     ])
-    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; plan row 1.9 polices the rest."
+    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; the platform root's tests count the rest (P-01)."
   }
 
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
@@ -1048,6 +1050,44 @@ run "the_task_role_holds_no_unrecognised_statement" {
   }
 
 
+}
+
+# P-03: "Read on this cell's bucket prefixes and client-secret parameter path, the four ssmmessages
+# permissions, and nothing else. No write to the registry." (docs/plan/04-tests.md). The runs above
+# hold the task role's own policy to exactly that, but a principal's permissions in its own account
+# are the union of what its own policy allows and what a resource policy allows it: "If an action is
+# allowed by an identity-based policy, a resource-based policy, or both, then AWS allows the action."
+# (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html, under
+# "Evaluating identity-based policies with resource-based policies").
+#
+# So the role's own policy is its whole grant only while no resource policy in the cell allows
+# anything. The bucket policy is the one resource policy the cell declares: the resource-type
+# allowlist above admits no repository, key or parameter policy, and the platform root declares no
+# resource of its own (its tests, P-01). An Allow here naming the task role, or every principal,
+# would give the gateway a write to the registry with every run above still green.
+run "the_bucket_policy_allows_nothing_so_the_task_role_s_own_policy_is_its_whole_grant" {
+  command = plan
+
+  # A statement that leaves effect unset is an Allow: "Defaults to Allow"
+  # (https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/iam_policy_document).
+  # Under the mock provider it reads as null, so it fails this as well.
+  assert {
+    condition = (
+      length(data.aws_iam_policy_document.platform_bucket.statement) > 0
+      && alltrue([for s in data.aws_iam_policy_document.platform_bucket.statement : s.effect == "Deny"])
+    )
+    error_message = "Every statement in the bucket policy is a Deny. An Allow grants whoever it names more than their own policy says, and the task role's own policy is P-03's whole account of what the gateway may do."
+  }
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.platform_bucket.statement : s.sid]) == toset([
+      "DenyInsecureTransport",
+      "DenyOutdatedTlsVersions",
+      "DenyReleaseWriteWithoutIfNoneMatch",
+      "DenyReleaseDeleteExceptTeardown",
+    ])
+    error_message = "The bucket policy holds the four refusals storage.tf documents and no other statement: TLS only, TLS 1.2 or later, a release written once, and deleted only by the teardown principals (contracts/s3-layout.md, P-04)."
+  }
 }
 
 run "the_execution_role_is_separate_and_holds_only_image_pull_and_log_writes" {

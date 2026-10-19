@@ -150,8 +150,9 @@ Named principals (a deployer's role, a runner elsewhere) go in
 The permissions are read-only and listed in `ci-role.tf`, one statement per thing
 a plan reads: the state, the network and load balancer, the compute, the platform
 bucket, the identity provider, the imported certificate, the platform's roles and
-policies by name, and Parameter Store under this cell's path. Task 1.9 asserts on
-permissions, so a statement added here should fail review before it fails a test.
+policies by name, and Parameter Store under this cell's path. No test reads these
+permissions but the bucket statement's, so a statement added here has to fail
+review.
 
 Two choices in that policy are worth knowing about.
 

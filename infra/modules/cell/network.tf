@@ -5,8 +5,9 @@
 # What is deliberately absent is as much of the design as what is here. There is no
 # NAT gateway, no bastion and no database: the task sends 443 out from a public
 # address. The resource-type allowlist in tests/module.tftest.hcl fails on any of
-# the three (the static half of P-01), and tests/network.tftest.hcl fails on any
-# ingress rule beyond the two below.
+# the three, P-01 in the platform root's tests fails on them whatever that
+# allowlist says, and tests/network.tftest.hcl fails on any ingress rule beyond
+# the two below.
 
 data "aws_availability_zones" "available" {
   state = "available"
