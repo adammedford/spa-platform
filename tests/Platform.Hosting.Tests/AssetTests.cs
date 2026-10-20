@@ -326,11 +326,12 @@ public sealed class AssetTests
     }
 
     /// <summary>
-    /// A refusal is logged under its rule id (docs/plan/02-contracts.md, Errors: "Tests assert on both
-    /// the code and the rule id"), and the line carries the rule id only, never the client's path. The
-    /// canary in each path is what a line that logged the path would contain. Only the platform's own
-    /// categories are held to that: ASP.NET Core's request-start line carries the URL at Information,
-    /// and which framework lines the gateway keeps is workstream 6's to configure (Platform.Telemetry).
+    /// A refusal is logged under its rule id (docs/plan/02-contracts.md, Request gate: "Tests assert on
+    /// both the code and the rule id"), and the line carries the rule id only, never the client's path.
+    /// The canary in each path is what a line that logged the path would contain. Only the platform's
+    /// own categories are held to that: ASP.NET Core's request-start line carries the URL at
+    /// Information, and which framework lines the gateway keeps is workstream 6's to configure
+    /// (Platform.Telemetry).
     /// </summary>
     [Theory]
     [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request", "path.invalid")]
