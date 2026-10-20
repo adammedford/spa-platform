@@ -9,7 +9,12 @@
 # at G3.
 #
 #   tools/scripts/verify-release-immutability.sh                              # the cases
-#   tools/scripts/verify-release-immutability.sh --clean-up-as-teardown-role  # and then remove the probe
+#   tools/scripts/verify-release-immutability.sh --clean-up-as-teardown-role  # the cases, then the clean-up
+#
+# Every run writes a fresh probe, so a bare run leaves its probe in the bucket. The clean-up form
+# removes every version and delete marker under apps/p04-probe/, its own run's and any an earlier
+# run left, and names each one it removed; so the two runs above, in that order, leave nothing
+# under apps/p04-probe/ (#184). It needs no bare run before it.
 #
 # Run it as the operator's own session, the principal spactl writes as: the spa-platform profile,
 # with tools/aws-project.env sourced. A Deny in a bucket policy applies to administrators too, so
@@ -68,8 +73,9 @@ usage() {
 
 Options
   --clean-up-as-teardown-role  After every case is recorded, assume the teardown role in a
-                               separate session, show that it cannot write, and delete the probe's
-                               versions. Off by default, so P-04 alone never acts as that role.
+                               separate session, show that it cannot write, and delete every
+                               version and delete marker under apps/p04-probe/, an earlier run's
+                               included. Off by default, so P-04 alone never acts as that role.
   --cell NAME                  The cell whose teardown role the clean-up assumes, as
                                spa-platform-<cell>-teardown. Default: \$SPA_CELL, else poc.
   -h, --help                   This text.
@@ -332,6 +338,8 @@ ECR_MOCK_API="$(output ecr_mock_api)" || ECR_MOCK_API=""
 
 RELEASE="$(date -u +%Y%m%dT%H%M%SZ)"
 PROBE_PREFIX="apps/p04-probe/releases/${RELEASE}/"
+# Every probe any run wrote, which the clean-up removes. The slash bounds it to this one appId.
+SWEEP_PREFIX="apps/p04-probe/"
 KEY="${PROBE_PREFIX}index.html"
 BODY="${WORK}/index.html"
 printf '<!doctype html>\n<title>P-04 probe</title>\n' > "$BODY"
@@ -510,17 +518,20 @@ done
 # With it, the run proves for cents what ADR-0014 says would otherwise surface only at teardown: that
 # the operator can assume the role, and that the policy's exception names the role's ARN. The role
 # holds the delete and no write, which is what stops it replacing a release, so its write is a case.
-# It deletes this run's release prefix and nothing else; a probe an earlier run left is teardown.sh's.
+# It deletes every version and delete marker under apps/p04-probe/, this run's and any an earlier run
+# left, and nothing outside it. A probe sits under an appId no registry entry names, so it is never a
+# release, and the delete under apps/ is the one ADR-0014 item 6 grants this role. Sweeping only
+# this run's prefix left a bare run's probe behind, which blocks the platform root's destroy (#184).
 #
 # The name is derived from the cell and the ARN is the one IAM returns for it (ADR-0014 item 2).
 
 if [ "$CLEAN_UP" -eq 1 ]; then
-  note "P-04 and the read-backs are recorded: ${CASES} cases, ${FAILED} not as expected. Removing the probe as the teardown role."
+  note "P-04 and the read-backs are recorded: ${CASES} cases, ${FAILED} not as expected. Removing every probe under ${SWEEP_PREFIX} as the teardown role."
   ROLE="spa-platform-${CELL}-teardown"
   ASSUMED="the teardown role ${ROLE} is assumed in a separate session"
   CANNOT_WRITE="the teardown role cannot write: a PUT with If-None-Match: * to a new key gets 403"
-  DELETES="the teardown role deletes the probe's versions"
-  NOTHING_LEFT="nothing is left under the probe's release prefix"
+  LISTED="the teardown role lists the versions under ${SWEEP_PREFIX}"
+  NOTHING_LEFT="nothing is left under ${SWEEP_PREFIX}"
 
   role_arn=""
   aws_call iam get-role --role-name "$ROLE" --query Role.Arn
@@ -547,7 +558,7 @@ if [ "$CLEAN_UP" -eq 1 ]; then
 
   if [ -z "$TEARDOWN_TOKEN" ]; then
     not_run "$CANNOT_WRITE" "the teardown role was not assumed"
-    not_run "$DELETES" "the teardown role was not assumed"
+    not_run "$LISTED" "the teardown role was not assumed"
     not_run "$NOTHING_LEFT" "the teardown role was not assumed"
   else
     SESSION="teardown"
@@ -555,21 +566,22 @@ if [ "$CLEAN_UP" -eq 1 ]; then
       --content-type text/html --if-none-match '*'
     record "$CANNOT_WRITE" AccessDenied "$OUTCOME"
 
-    # Every version and delete marker under this run's prefix, the role's own write included if it
-    # was wrongly allowed one. Read from a copy, because each delete below rewrites $OUT.
-    aws_call s3api list-object-versions --bucket "$BUCKET" --prefix "$PROBE_PREFIX" \
+    # Every version and delete marker under the probes' appId: this run's, the role's own write
+    # included if it was wrongly allowed one, and any an earlier run left. Read from a copy, because
+    # each delete below rewrites $OUT.
+    aws_call s3api list-object-versions --bucket "$BUCKET" --prefix "$SWEEP_PREFIX" \
       --query '[Versions, DeleteMarkers][].[Key, VersionId]'
     if [ "$OUTCOME" != "success" ]; then
-      record "$DELETES" success "$OUTCOME"
+      record "$LISTED" success "$OUTCOME"
     else
       cat "$OUT" > "${WORK}/versions"
       tab="$(printf '\t')"
       while IFS="$tab" read -r key version; do
         [ -n "$key" ] || continue
         case "$key" in
-          "$PROBE_PREFIX"*) ;;
+          "$SWEEP_PREFIX"*) ;;
           *)
-            not_run "the teardown role deletes ${key}" "it is outside the probe's release prefix"
+            not_run "the teardown role deletes ${key}" "it is outside ${SWEEP_PREFIX}"
             continue
             ;;
         esac
@@ -578,7 +590,7 @@ if [ "$CLEAN_UP" -eq 1 ]; then
       done < "${WORK}/versions"
     fi
 
-    aws_call s3api list-object-versions --bucket "$BUCKET" --prefix "$PROBE_PREFIX" \
+    aws_call s3api list-object-versions --bucket "$BUCKET" --prefix "$SWEEP_PREFIX" \
       --query '[length(Versions || `[]`), length(DeleteMarkers || `[]`)]'
     if [ "$OUTCOME" = "success" ]; then
       versions=""

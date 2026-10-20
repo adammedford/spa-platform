@@ -114,12 +114,15 @@ READ_BACKS = (
     (REPOSITORIES[1], "IMMUTABLE"),
 )
 # Behind the flag, after every case above is recorded (#98's Q29): the role is assumed in a
-# separate session, cannot write, deletes the probe's one version, and leaves nothing behind.
+# separate session, cannot write, deletes the probe's one version, and leaves nothing under the
+# probes' appId, this run's probe or any other (#184).
+SWEEP_PREFIX = "apps/p04-probe/"
+NOTHING_LEFT = f"nothing is left under {SWEEP_PREFIX}"
 CLEAN_UP_CASES = (
     (f"{TEARDOWN_ROLE} is assumed in a separate session", "succeeded"),
     ("teardown role cannot write", "403 AccessDenied"),
     ("teardown role deletes version", "succeeded"),
-    ("nothing is left under the probe's release prefix", "0 versions, 0 delete markers"),
+    (NOTHING_LEFT, "0 versions, 0 delete markers"),
 )
 FLAG = "--clean-up-as-teardown-role"
 
@@ -924,17 +927,20 @@ class UnexpectedBucketTests(CompanionTestCase):
 
 class CleanUpTests(CompanionTestCase):
     """--clean-up-as-teardown-role: after the cases, the teardown role, in a session of its own,
-    cannot write and deletes this run's probe and nothing else (#98's Q29)."""
+    cannot write and deletes every probe under apps/p04-probe/, an earlier run's included, and
+    nothing else (#98's Q29; #184)."""
 
     def probe_prefix(self, reading: str = CLOCK[0]) -> str:
         return f"apps/p04-probe/releases/{reading}/"
 
-    def assertTeardownTouchedOnlyTheProbe(self, case: Case):
+    def assertTeardownTouchedOnlyTheProbes(self, case: Case):
         for call in case.aws_calls():
             if call["as"] == "teardown":
                 self.assertIn(call["command"], ("put-object", "list-object-versions", "delete-object"))
                 where = call["options"].get("key", call["options"].get("prefix"))
-                self.assertTrue(where.startswith(self.probe_prefix()), call)
+                self.assertTrue(where.startswith(SWEEP_PREFIX), call)
+                if call["command"] == "put-object":
+                    self.assertTrue(where.startswith(self.probe_prefix()), call)
 
     def test_the_role_cannot_write_and_deletes_the_probe_leaving_nothing(self):
         case = Case(self)
@@ -944,7 +950,7 @@ class CleanUpTests(CompanionTestCase):
         self.assertCases(result, P04_CASES + READ_BACKS + CLEAN_UP_CASES)
         self.assertTrue(result.verdict().startswith(f"{PROGRAM}: pass:"), result.verdict())
         self.assertEqual({}, case.load_world()["objects"], "the probe was left behind")
-        self.assertTeardownTouchedOnlyTheProbe(case)
+        self.assertTeardownTouchedOnlyTheProbes(case)
         # The ARN assumed is the one IAM returns for the derived name, not an assembled string.
         calls = case.aws_calls()
         assumed = [call for call in calls if call.get("command") == "assume-role"]
@@ -953,15 +959,17 @@ class CleanUpTests(CompanionTestCase):
         self.assertEqual([TEARDOWN_ROLE],
                          [call["options"]["role-name"] for call in calls if call.get("command") == "get-role"])
 
-    def test_it_deletes_under_this_runs_release_prefix_and_nowhere_else(self):
+    def test_it_deletes_under_the_probes_appid_and_nowhere_else(self):
+        # A release of a registered app, and an appId that only begins like the probes': the slash
+        # in apps/p04-probe/ bounds the sweep.
         world = default_world()
-        kept = ("apps/app1/releases/2026-10-10.1/index.html", f"{self.probe_prefix('20261018T000000Z')}index.html")
+        kept = ("apps/app1/releases/2026-10-10.1/index.html", "apps/p04-probe2/releases/20261018T000000Z/index.html")
         for number, key in enumerate(kept):
             world["objects"][key] = [{"id": f"kept{number}", "etag": '"0"', "marker": False}]
         case = Case(self, world=world)
         self.assertEqual(0, case.run(FLAG).status)
         self.assertEqual(set(kept), set(case.load_world()["objects"]))
-        self.assertTeardownTouchedOnlyTheProbe(case)
+        self.assertTeardownTouchedOnlyTheProbes(case)
 
     def test_a_role_that_may_write_fails_and_what_it_wrote_is_removed(self):
         world = default_world()
@@ -972,7 +980,7 @@ class CleanUpTests(CompanionTestCase):
         self.assertEqual("FAIL", self.line_of(result, "teardown role cannot write")[1])
         deleted = [line for status, line in result.cases() if "teardown role deletes version" in line]
         self.assertEqual(2, len(deleted), result.stdout)
-        self.assertEqual("pass", self.line_of(result, "nothing is left under the probe's release prefix")[1])
+        self.assertEqual("pass", self.line_of(result, NOTHING_LEFT)[1])
         self.assertEqual({}, case.load_world()["objects"])
 
     def test_a_policy_whose_exception_names_another_principal_fails_the_clean_up(self):
@@ -984,9 +992,9 @@ class CleanUpTests(CompanionTestCase):
         result = case.run(FLAG)
         self.assertEqual(1, result.status, result.stdout)
         self.assertCases(result, P04_CASES + READ_BACKS + CLEAN_UP_CASES, failing=(
-            "teardown role deletes version", "nothing is left under the probe's release prefix"))
+            "teardown role deletes version", NOTHING_LEFT))
         self.assertIn("got 1 version, 0 delete markers",
-                      self.line_of(result, "nothing is left under the probe's release prefix")[2])
+                      self.line_of(result, NOTHING_LEFT)[2])
         self.assertEqual([f"{self.probe_prefix()}index.html"], list(case.load_world()["objects"]))
 
     def test_a_role_the_operator_cannot_assume_runs_no_clean_up_case(self):
@@ -996,11 +1004,60 @@ class CleanUpTests(CompanionTestCase):
         result = case.run(FLAG)
         self.assertEqual(1, result.status, result.stdout)
         self.assertIn("403 AccessDenied", self.line_of(result, "is assumed in a separate session")[2])
-        for fragment in ("teardown role cannot write", "teardown role deletes", "nothing is left"):
+        for fragment in ("teardown role cannot write", "teardown role lists the versions", NOTHING_LEFT):
             index, status, line = self.line_of(result, fragment)
             self.assertEqual("FAIL", status)
             self.assertIn("not run, because", line)
         self.assertEqual({"operator"}, {call["as"] for call in case.aws_calls()})
+
+    def test_a_bare_run_then_the_clean_up_leaves_nothing_under_apps(self):
+        # #184: each run writes a fresh probe, so the bare run's is still there when the clean-up
+        # form starts. The bucket must be empty for the platform root's destroy (#55's Q14).
+        case = Case(self)
+        self.assertEqual(0, case.run().status)
+        result = case.run(FLAG)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual([], [key for key in case.load_world()["objects"] if key.startswith("apps/")])
+        deleted = [line for status, line in result.cases() if "teardown role deletes version" in line]
+        self.assertEqual(2, len(deleted), result.stdout)
+        for reading in CLOCK:
+            self.assertEqual(1, len([line for line in deleted if self.probe_prefix(reading) in line]), result.stdout)
+
+    def test_a_leftover_from_an_earlier_run_is_removed_and_named_one_line_each(self):
+        # What an earlier run can leave under the probes' appId: its probe, from a bare run or a
+        # clean-up that was refused, and a delete marker, from a run against a bucket without the
+        # delete rule. Each removal is a line of its own naming the version and its key (#184).
+        world = default_world()
+        leftover = f"{self.probe_prefix('20261018T000000Z')}index.html"
+        marked = f"{self.probe_prefix('20261017T000000Z')}index.html"
+        world["objects"][leftover] = [{"id": "old-version", "etag": '"0"', "marker": False}]
+        world["objects"][marked] = [{"id": "old-marker", "etag": "", "marker": True}]
+        case = Case(self, world=world)
+        result = case.run(FLAG)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual({}, case.load_world()["objects"], "a leftover was left behind")
+        for version, key in (("old-version", leftover), ("old-marker", marked),
+                             ("v0001", f"{self.probe_prefix()}index.html")):
+            index, status, line = self.line_of(result, f"deletes version {version} of {key}")
+            self.assertEqual("pass", status, line)
+        self.assertEqual(3, len([line for status, line in result.cases() if "teardown role deletes version" in line]))
+        self.assertIn("0 versions, 0 delete markers", self.line_of(result, NOTHING_LEFT)[2])
+        self.assertTeardownTouchedOnlyTheProbes(case)
+
+    def test_the_headers_documented_sequence_leaves_nothing_under_apps(self):
+        # The header's own invocations, read from the script, run in its order from the repository
+        # root, against a bucket that holds no release: what sitting B's destroy finds (#184).
+        invocations = re.findall(r"^#   (tools/scripts/verify-release-immutability\.sh)([^#]*)#", SCRIPT.read_text(),
+                                 re.MULTILINE)
+        self.assertEqual([[], [FLAG]], [shlex.split(arguments) for _, arguments in invocations])
+        case = Case(self)
+        for script, arguments in invocations:
+            result = case.run(*shlex.split(arguments), script=script, cwd=ROOT)
+            self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual([], [key for key in case.load_world()["objects"] if key.startswith("apps/")])
 
     def test_the_cell_names_the_role(self):
         case = Case(self)
@@ -1018,7 +1075,7 @@ class CleanUpTests(CompanionTestCase):
         case = Case(self, world=world)
         result = case.run(FLAG)
         self.assertEqual(1, result.status, result.stdout)
-        self.assertEqual("pass", self.line_of(result, "nothing is left under the probe's release prefix")[1])
+        self.assertEqual("pass", self.line_of(result, NOTHING_LEFT)[1])
         self.assertEqual({}, case.load_world()["objects"])
 
 
