@@ -82,12 +82,14 @@ stages a feature they write rather than replace.
 ## Landing or holding
 
 Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
-`/code-review`, and its findings are answered before merge. No pull request is exempt by what it
-touches or where it came from: workstream and integrator work, a tracker-only or docs-only change, a
-generated one and an overnight run's integration branch each need a review of their exact head. A
-lane merged into an integration branch is covered by the review of the pull request that brings that
-branch to `main`, which also covers what no lane review saw: the integration merges, the reviewer's
-own fix commits and the roadmap refresh. The human's reading is the decision to land, not a review.
+`/code-review`, and its findings are answered before merge. The session that posts the record is a
+top-level one that launched, dispatched and wrote nothing under review. No pull request is exempt by
+what it touches or where it came from: workstream and integrator work, a tracker-only or docs-only
+change, a generated one and an overnight run's integration branch each need a review of their exact
+head. A lane merged into an integration branch is covered by the review of the pull request that
+brings that branch to `main`, which also covers what no lane review saw: the integration merges, the
+reviewer's own fix commits and the roadmap refresh. The human's reading is the decision to land, not
+a review.
 
 Merge when nothing found is a defect: the spec is met, no assertion is unfailable on the thing it
 claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the

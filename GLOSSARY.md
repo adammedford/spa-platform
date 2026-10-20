@@ -161,8 +161,9 @@ composition root, `docs/adr/`, `docs/plan/`, CI and package versions. A role tha
 play, not a person.
 
 **Agent session** — one agent conversation working in the repository, and the unit in which review
-independence is counted. One workstream, or the integrator, may be many agent sessions. _Avoid_:
-bare "session" wherever the gateway's sessions (session record, session key) could be meant.
+independence is counted. A sub-agent belongs to the session that dispatched it. One workstream, or
+the integrator, may be many agent sessions. _Avoid_: bare "session" wherever the gateway's sessions
+(session record, session key) could be meant.
 
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
