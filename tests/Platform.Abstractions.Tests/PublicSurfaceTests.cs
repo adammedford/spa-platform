@@ -40,7 +40,9 @@ public sealed class PublicSurfaceTests
         "IssuerDefinition",
         "OAuthDefinition",
         "PlatformPolicy",
+        "Problems",
         "RegistrySnapshot",
+        "Rejection",
         "RuleIds",
         "SchemeNames",
         "SessionRecord",
@@ -57,6 +59,7 @@ public sealed class PublicSurfaceTests
     [Fact]
     public void The_public_surface_is_exactly_what_the_contract_names()
     {
+        // Mutation (#160): drop "Problems" or "Rejection" from Contracted, and this fails, 1 of 108 each.
         Assert.Equal(Contracted, PublicTypes().Select(Name).Order().ToArray());
     }
 
