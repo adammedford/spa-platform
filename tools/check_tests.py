@@ -213,11 +213,11 @@ class Case:
     """One throwaway directory: a bare origin, a clone of it on a branch named `task`, and a bin
     directory holding the doubles and a way to each real tool, which is the case's whole PATH."""
 
-    def __init__(self, test: unittest.TestCase, *, change: str | None = None,
+    def __init__(self, test: unittest.TestCase, *, change: str | tuple[str, ...] | None = None,
                  fails_on: dict[str, str] | None = None, missing: tuple[str, ...] = (),
                  email: str = "check-tests@users.noreply.github.com", origin: bool = True,
                  path_terraform: str = FLOOR, floor_terraform: str | None = None,
-                 floor_file: str | None = None):
+                 floor_file: str | None = None, extra: dict[str, str] | None = None):
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
         self.dir = pathlib.Path(scratch.name).resolve()
@@ -262,6 +262,7 @@ class Case:
         files = dict(FILES)
         if floor_file is not None:
             files[".terraform-version"] = floor_file
+        files.update(extra or {})
         for name, text in files.items():
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,20 +275,20 @@ class Case:
 
         # The check files the script reaches from the top level: the real classifier and the real
         # script, linked, and a double for the smoke test. Left untracked, so no diff includes them.
-        (self.work / ".github").mkdir()
+        (self.work / ".github").mkdir(exist_ok=True)
         (self.work / ".github" / "touches.sh").symlink_to(TOUCHES)
-        (self.work / "tools").mkdir()
+        (self.work / "tools").mkdir(exist_ok=True)
         (self.work / "tools" / "check.sh").symlink_to(SCRIPT)
         (self.work / "tools" / "terraform-floor.sh").symlink_to(FLOOR_HELPER)
         self.write_executable(self.work / "tools" / "smoke.sh",
                               self.double("smoke", fails_on.get("smoke", ""), "yes"))
 
-        if change:
-            path = self.work / change
+        for name in (change,) if isinstance(change, str) else change or ():
+            path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(path.read_text() + "changed\n" if path.exists() else "new\n")
-            self.git("add", change, cwd=self.work)
-            self.git("commit", "-q", "-m", f"Change {change}", cwd=self.work)
+            self.git("add", name, cwd=self.work)
+            self.git("commit", "-q", "-m", f"Change {name}", cwd=self.work)
 
     def double(self, name: str, fails_on: str, loud: str, reports: str = "") -> str:
         return DOUBLE.format(log=shlex.quote(str(self.log)), name=shlex.quote(name),
@@ -751,6 +752,169 @@ class FloorFileTests(CheckTestCase):
         # The step runs first, in the same job as the install.
         job = workflow.split("\n  terraform:\n", 1)[1]
         self.assertLess(job.index(f"id: {self.STEP_ID}"), job.index("uses: hashicorp/setup-terraform@"))
+
+
+# Scripts and their test companions, for CompanionTests: one of each shape the repository has. A
+# script's companion is `<its name, extension dropped and hyphens as underscores>_tests.py` beside
+# it, as tools/land.sh's is tools/land_tests.py and .github/path-ownership.py's is
+# .github/path_ownership_tests.py, or its named test file `<its name>-tests.py`, as
+# .github/plan-secrecy.py's is .github/plan-secrecy-tests.py. tools/check_tests.py is here so a case
+# can show it never runs.
+SCRIPTS = {
+    "tools/thing.sh": "# a script\n",
+    "tools/thing_tests.py": "# its companion\n",
+    "tools/other.py": "# another\n",
+    "tools/other_tests.py": "# its companion\n",
+    ".github/gizmo.py": "# a check\n",
+    ".github/gizmo_tests.py": "# its companion\n",
+    ".github/two-words.py": "# a hyphenated check\n",
+    ".github/two_words_tests.py": "# its companion\n",
+    ".github/named.py": "# a check with a named test file\n",
+    ".github/named-tests.py": "# its named test file\n",
+    "tools/scripts/deep.sh": "# a script a level down\n",
+    "tools/scripts/deep_tests.py": "# its companion\n",
+    "tools/lonely.sh": "# a script with no companion\n",
+    "tools/check_tests.py": "# the check's own companion\n",
+}
+
+
+def companion(path: str) -> list[str]:
+    """The call that runs the companion at `path`."""
+    return ["python3", "-I", path]
+
+
+def companions_run(case: Case) -> list[list[str]]:
+    """The calls of the case that ran a test companion, in order."""
+    return [call for call in case.calls() if call[0] == "python3" and re.search(r"[_-]tests\.py$", call[-1])]
+
+
+class CompanionTests(CheckTestCase):
+    """#134: under --full, the test companion of each script a change touches in tools/ or .github/
+    runs, and its failure fails the verdict; an untouched script's companion does not run; and
+    tools/check_tests.py, which runs this check, never does."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def test_a_touched_scripts_companion_runs_and_the_verdict_names_it(self):
+        case = Case(self, extra=SCRIPTS, change="tools/thing.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        # Only the touched script's: every other companion here belongs to an untouched script.
+        self.assertEqual(PYTHON_CHECKS + [companion("tools/thing_tests.py")], case.calls())
+        self.assertEqual(f"check: pass: {FULL_RAN}, the test companion tools/thing_tests.py.",
+                         result.last_line(result.stdout))
+
+    def test_each_shape_of_script_reaches_its_own_companion(self):
+        for change, expected in (
+            ("tools/other.py", "tools/other_tests.py"),
+            (".github/gizmo.py", ".github/gizmo_tests.py"),
+            (".github/two-words.py", ".github/two_words_tests.py"),
+            (".github/named.py", ".github/named-tests.py"),
+            ("tools/scripts/deep.sh", "tools/scripts/deep_tests.py"),
+            # A change to the companion alone runs it too.
+            ("tools/thing_tests.py", "tools/thing_tests.py"),
+            (".github/named-tests.py", ".github/named-tests.py"),
+        ):
+            with self.subTest(change=change):
+                case = Case(self, extra=SCRIPTS, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual(PYTHON_CHECKS + [companion(expected)], case.calls())
+                self.assertEqual(f"check: pass: {FULL_RAN}, the test companion {expected}.",
+                                 result.last_line(result.stdout))
+
+    def test_a_companion_that_fails_fails_the_verdict(self):
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", "tools/other.py"),
+                    fails_on={"python3": "tools/other_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the test companion tools/other_tests.py failed.",
+                         result.last_line(result.stderr))
+        # Stopped at the first failure, in the companions' order.
+        self.assertEqual(PYTHON_CHECKS + [companion("tools/other_tests.py")], case.calls())
+
+    def test_several_touched_scripts_run_each_companion_once(self):
+        case = Case(self, extra=SCRIPTS,
+                    change=("tools/thing.sh", "tools/thing_tests.py", ".github/gizmo.py"))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
+                                          companion("tools/thing_tests.py")], case.calls())
+        self.assertEqual(f"check: pass: {FULL_RAN}, the test companions .github/gizmo_tests.py, "
+                         "tools/thing_tests.py.", result.last_line(result.stdout))
+
+    def test_no_companion_runs_for_a_change_that_touches_no_script_with_one(self):
+        for change in ("docs/notes.md", "tools/lonely.sh", "src/App/App.cs", "infra/roots/a/main.tf"):
+            with self.subTest(change=change):
+                case = Case(self, extra=SCRIPTS, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], companions_run(case))
+                self.assertIn("check: test companions skipped: no script with one in tools/ or "
+                              ".github/ changed.", result.stdout.splitlines())
+                self.assertNotIn("test companion", result.last_line(result.stdout))
+
+    def test_the_checks_own_companion_never_runs_from_the_check(self):
+        # It runs this script, so the check running it would recurse; it stays CI's.
+        for mode in ((), ("--both-halves",)):
+            with self.subTest(mode=mode or "the diff's"):
+                case = Case(self, extra=SCRIPTS, change="tools/check_tests.py")
+                result = self.full(case, *mode)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertNotIn(companion("tools/check_tests.py"), case.calls())
+                # Said, so a green line on a change to the check does not read as having tested it.
+                self.assertIn("check: tools/check_tests.py not run: it runs this check, so CI runs it.",
+                              result.stdout.splitlines())
+                self.assertTrue(result.last_line(result.stdout).endswith(
+                    ", but not tools/check_tests.py, which is CI's."), result.stdout)
+        case = Case(self, extra=SCRIPTS, change="tools/check_tests.py")
+        self.assertIn("check: test companions skipped: no other script with one in tools/ or .github/ "
+                      "changed.", self.full(case).stdout.splitlines())
+
+    def test_the_hook_runs_no_companion(self):
+        # The hook's checks are unchanged (#68); the companions are the full check's and CI's.
+        case = Case(self, extra=SCRIPTS, change="tools/thing.sh")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertLines([HOOK_BUILD_SKIPPED, HOOK_TERRAFORM_SKIPPED, f"pre-push: {HOOK_RAN} pass."],
+                         result.stdout)
+
+    def test_both_halves_runs_every_companion_but_the_checks_own(self):
+        # --both-halves promises a run with no skips, which on main's empty diff is its point.
+        case = Case(self, extra=SCRIPTS)
+        result = self.full(case, "--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        expected = [".github/gizmo_tests.py", ".github/named-tests.py", ".github/two_words_tests.py",
+                    "tools/other_tests.py", "tools/scripts/deep_tests.py", "tools/thing_tests.py"]
+        self.assertEqual([companion(path) for path in expected],
+                         companions_run(case))
+        self.assertNotIn("skipped", result.stdout)
+        self.assertTrue(result.last_line(result.stdout).endswith(
+            ", the test companions " + ", ".join(expected) + ", but not tools/check_tests.py, which is CI's."))
+
+    def test_every_companion_in_the_repository_is_reached_from_its_script(self):
+        # The repository's own layout, in stand-ins: every tracked file beside a real companion,
+        # empty. A change to every one that is not a companion must run every real companion, or a
+        # companion is named so that a change to its script would never run it.
+        tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", "tools", ".github"],
+                                 capture_output=True, text=True, check=True).stdout.split()
+        real = [path for path in tracked if re.search(r"[_-]tests\.py$", path)]
+        self.assertIn("tools/land_tests.py", real)
+        folders = {path.rsplit("/", 1)[0] for path in real}
+        # The files Case links to the real ones, which a case must not change; .github/touches.sh is
+        # the only one with a companion, and its rule is tools/land.sh's.
+        linked = {".github/touches.sh", "tools/check.sh", "tools/terraform-floor.sh", "tools/smoke.sh"}
+        beside = [path for path in tracked
+                  if path.rsplit("/", 1)[0] in folders and path not in linked]
+        scripts = tuple(path for path in beside if path not in real)
+        case = Case(self, extra={path: "" for path in beside}, change=scripts)
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"})
+        self.assertEqual([companion(path) for path in expected],
+                         companions_run(case))
 
 
 class InterpreterTests(CheckTestCase):
