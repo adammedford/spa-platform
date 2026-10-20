@@ -77,11 +77,12 @@ public sealed class RejectionTableTests
     /// Why by hand: #159's change request decided the column lands between gates
     /// (contracts/changes/issue-160-rejection-table.md, "Landing it between gates"), but committing a
     /// frozen contract's table is the integrator's act and it is not in contracts/request-gate.md
-    /// yet. #160 says to pair by hand until it lands, and to say so here. These cells are the change
-    /// request's column verbatim, <c>—</c> included. Once the column is in the contract, this list
-    /// goes and the test below reads <see cref="ContractTables.ParseRuleCodes"/> over
-    /// <see cref="ContractTables.RequestGate"/> instead, the parser the planted-table tests already
-    /// prove.
+    /// yet. #160 provides a hand pairing only for #159 holding the column for G3's tag; #159 decided
+    /// otherwise, but with the column uncommitted this pairs by hand as that case would, and says so
+    /// here as #160 asks. These cells are the change request's column verbatim, <c>—</c> included.
+    /// Once the column is in the contract, this list goes and the test below reads
+    /// <see cref="ContractTables.ParseRuleCodes"/> over <see cref="ContractTables.RequestGate"/>
+    /// instead, the parser the planted-table tests already prove.
     /// </summary>
     private static readonly (string Rule, string Code)[] CodeColumn =
     [
