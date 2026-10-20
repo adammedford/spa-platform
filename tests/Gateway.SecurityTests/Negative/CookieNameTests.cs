@@ -52,9 +52,12 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
     /// <summary>
     /// The platform cookie names, from the Cookies table of the browser contract, with a suffix
     /// substituted for the wildcard the login-state cookies carry. Read from the contract, so a
-    /// cookie the platform adds later is covered without this file changing.
+    /// cookie the platform adds later is covered without this file changing. Read on access, not in
+    /// this type's initialiser, as e09bb51 did for <c>SignedIn</c>: a Cookies table that no longer
+    /// parses then fails the tests that read a name with the reader's message naming the file and the
+    /// section, not every test in this class with a type-initialisation error (#153, box 4).
     /// </summary>
-    private static readonly ImmutableArray<string> Names =
+    private static ImmutableArray<string> Names =>
         [.. Contract.PlatformCookieNames.Select(name => name.Replace(".*", ".abc123", StringComparison.Ordinal))];
 
     public static TheoryData<string> PlatformCookieNames => new(Names);
