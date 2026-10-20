@@ -5,8 +5,9 @@
 
   <!-- The rule-id rule reads its ids from RuleIds.All rather than parsing contracts/request-gate.md a
        second time: RuleIdsTests in tests/Platform.Abstractions.Tests holds All to that table. A-01 to
-       A-04 read the solution's project files, not this project's own references, so this one trips
-       none of them (#154). -->
+       A-04 read this project file too, as they read every project the solution lists, but it is the
+       subject of none of them: it is not the gateway, the mock API or a workstream project, and
+       Platform.Abstractions references no package A-04 restricts (#154). -->
   <ItemGroup>
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>

@@ -11,12 +11,12 @@ namespace Gateway.ArchitectureTests;
 /// reason <see cref="ReferenceRules"/> gives: <see cref="RuleIdLiteralTests"/> feeds it sources that
 /// break it, so the live assertion in <see cref="ArchitectureTests"/> is known to be able to fail.</para>
 ///
-/// <para>It matches the quoted form wherever it appears, comments included, as the per-owner copies
-/// of this scan in the Identity, Proxy and Security test projects do. A rule id named in prose is
-/// written in a <c>&lt;c&gt;</c> element and is not quoted, so the doc comments that explain a
-/// refusal do not trip it. The caller passes source projects only: a test project keeps its literals
-/// deliberately, because an assertion that named the constant would share one symbol with the stage
-/// under test, and a wrong-but-consistent id would pass.</para>
+/// <para>It matches the quoted form wherever it appears, comments included: the behaviour of the
+/// per-owner scans in the Identity, Proxy and Security test projects that it replaces. A rule id
+/// named in prose is written in a <c>&lt;c&gt;</c> element and is not quoted, so the doc comments
+/// that explain a refusal do not trip it. The caller passes source projects only: a test project
+/// keeps its literals deliberately, because an assertion that named the constant would share one
+/// symbol with the stage under test, and a wrong-but-consistent id would pass.</para>
 /// </summary>
 public static class RuleIdLiterals
 {
