@@ -83,7 +83,10 @@ internal static class Bff
     {
         AppDefinition app = Pinned(context, "MapPlatformBff");
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (session.Succeeded && context.Features.Get<SessionKeyFeature>()?.Key is { } key)
+
+        // A dead cookie is not refused here: the browser is still signed out of the provider and its
+        // cookies still cleared, so the request ends in no rejection and carries no rule id.
+        if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
             await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(app, key);
         }
@@ -102,14 +105,13 @@ internal static class Bff
 
     /// <summary>
     /// The record of the session this request authenticated with, when it is this app's and this client's.
-    /// A cookie that resolved to no session is noted under <c>auth.session</c>.
+    /// A cookie that resolved to no session is noted under <c>auth.session</c>, by <see cref="AppSessions.KeyOf"/>.
     /// </summary>
     private static async Task<SessionRecord?> SessionOfAsync(HttpContext context, AppDefinition app)
     {
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (!session.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
+        if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session) is not { } key)
         {
-            NoteDeadSession(context, session);
             return null;
         }
 
@@ -136,7 +138,8 @@ internal static class Bff
     /// cookie as no result, which is not a rejection and leaves the rule unset
     /// (CookieAuthenticationHandler.ReadCookieTicket:
     /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs). Null-conditional, because
-    /// a component test runs without the telemetry stage.
+    /// a component test runs without the telemetry stage. Called from <see cref="AppSessions.KeyOf"/> and
+    /// nowhere else, so the note has one call site (#141, S3).
     /// </summary>
     internal static void NoteDeadSession(HttpContext context, AuthenticateResult session)
     {

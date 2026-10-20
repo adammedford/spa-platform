@@ -35,8 +35,8 @@ internal sealed partial class SessionEnd(
         using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
 
         // A record that is gone, or is not this app's and this client's, is owned by no lease and left
-        // alone: the cookie manager removes only a session the app owns (AppBoundTicketStore.RemoveAsync),
-        // and so does this. The revocation is the end's action, so the removal runs whatever it did.
+        // alone: the cookie handler's sign-out removes only a session the app owns (AppSessions.RemoveAsync,
+        // through the ticket store), and so does this. The revocation is the end's action, so the removal runs whatever it did.
         await lease.EndAsync(async record =>
         {
             string? refreshToken = TicketSerializer.Default.Deserialize(record.Ticket.ToArray())?

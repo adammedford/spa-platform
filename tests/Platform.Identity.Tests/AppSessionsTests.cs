@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -189,6 +192,132 @@ public sealed class AppSessionsTests
 
         Assert.Equal(0, sessions.ActiveGates);
     }
+
+    [Fact]
+    public async Task OpenAsync_issues_a_new_key_on_a_request_that_presented_one_and_records_its_reference()
+    {
+        // N-18 (T12, ADR-0004): a login over a planted session never carries the new identity under the
+        // planted key, and the request line names the session it was given. Mutation: have OpenAsync
+        // return the key already on the request's channel when there is one instead of creating, or skip
+        // its session_ref write; the distinct-key or the reference assertion fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        string planted = await store.CreateAsync(Record(App1, subject: "mallory"), Ct);
+        (HttpContext request, SettableRequestTelemetryFeature line) = Request();
+        Assert.NotNull(await sessions.ResolveAsync(request, App1, planted, Ct));
+
+        string key = await sessions.OpenAsync(request, Record(App1), Ct);
+        string another = await sessions.OpenAsync(Request().Context, Record(App1), Ct);
+
+        Assert.NotEqual(planted, key);
+        Assert.NotEqual(key, another);
+        Assert.Equal(Record(App1), await store.GetAsync(key, Ct));
+        Assert.Equal("mallory", (await store.GetAsync(planted, Ct))!.Subject);
+        Assert.Equal(SessionRef.Of(key), line.SessionRef);
+        Assert.Equal(key, sessions.KeyOf(request, Succeeded()));
+    }
+
+    [Fact]
+    public async Task ResolveAsync_references_a_foreign_or_absent_key_and_resolves_no_session_from_it()
+    {
+        // N-02, N-22, task 3.8: a cookie naming another app's or another client's session, or one that is
+        // gone, resolves to no key a caller could act on; its reference still reaches the request line, so
+        // the auth.session rejection correlates with the session it named (SessionIsolationTests).
+        // Mutation: put the key on the channel before the ownership read rather than after it; KeyOf hands
+        // back the foreign key, and this fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        string otherApp = await store.CreateAsync(Record(TestApps.Entry("app2")), Ct);
+        string otherClient = await store.CreateAsync(Record(App1, clientId: "client-before-rotation"), Ct);
+
+        foreach (string key in new[] { otherApp, otherClient, "no-such-key" })
+        {
+            (HttpContext request, SettableRequestTelemetryFeature line) = Request();
+
+            Assert.Null(await sessions.ResolveAsync(request, App1, key, Ct));
+
+            Assert.Equal(SessionRef.Of(key), line.SessionRef);
+            Assert.Null(sessions.KeyOf(request, Succeeded()));
+        }
+    }
+
+    [Fact]
+    public async Task RemoveAsync_removes_an_owned_record_leaves_a_foreign_one_and_can_be_called_again()
+    {
+        // The ungated owned-remove the cookie handler reaches through the ticket store (#141, Q12): its
+        // sign-out after a gated end finds nothing and does nothing, and a foreign key is never removed
+        // (N-02, N-22). Mutation: drop the ownership check (remove by key whatever the record is);
+        // another app's and another client's sessions are removed, and this fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        string own = await store.CreateAsync(Record(App1), Ct);
+        string otherApp = await store.CreateAsync(Record(TestApps.Entry("app2")), Ct);
+        string otherClient = await store.CreateAsync(Record(App1, clientId: "client-before-rotation"), Ct);
+
+        await sessions.RemoveAsync(App1, own, Ct);
+        await sessions.RemoveAsync(App1, own, Ct);
+        await sessions.RemoveAsync(App1, otherApp, Ct);
+        await sessions.RemoveAsync(App1, otherClient, Ct);
+
+        Assert.Null(await store.GetAsync(own, Ct));
+        Assert.NotNull(await store.GetAsync(otherApp, Ct));
+        Assert.NotNull(await store.GetAsync(otherClient, Ct));
+    }
+
+    [Fact]
+    public async Task RemoveAsync_does_not_wait_for_a_lease_held_on_the_same_key()
+    {
+        // Ungated by necessity: the token source ends a session and then signs out while it still holds
+        // the lease, and the sign-out's remove reaches this member; the gate is not re-entrant, so a
+        // gated remove there would wait on itself (#141, Q12). Mutation: enter the gate in RemoveAsync;
+        // the remove waits on the held lease, the deadline passes, and this fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        string key = await store.CreateAsync(Record(App1), Ct);
+        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+
+        await sessions.RemoveAsync(App1, key, Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        Assert.Null(await store.GetAsync(key, Ct));
+    }
+
+    [Fact]
+    public async Task The_session_key_leaves_the_module_only_as_its_reference()
+    {
+        // N-16, contracts/telemetry.md: the session key is on the never-logged list, and what the module
+        // leaves for the request line is SessionRef.Of(key), on the sign-in, on a request presenting a
+        // live session and on one presenting a dead one. The module never logs, so the request line is
+        // the only line it reaches. Mutation: write the key in place of SessionRef.Of(key) in the
+        // module's one session_ref write; the search finds the key, and this fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        (HttpContext signIn, SettableRequestTelemetryFeature signInLine) = Request();
+        string key = await sessions.OpenAsync(signIn, Record(App1), Ct);
+        (HttpContext live, SettableRequestTelemetryFeature liveLine) = Request();
+        await sessions.ResolveAsync(live, App1, key, Ct);
+        await store.RemoveAsync(key, Ct);
+        (HttpContext dead, SettableRequestTelemetryFeature deadLine) = Request();
+        await sessions.ResolveAsync(dead, App1, key, Ct);
+        sessions.KeyOf(dead, AuthenticateResult.Fail("Unprotect ticket failed"));
+
+        foreach (SettableRequestTelemetryFeature line in new[] { signInLine, liveLine, deadLine })
+        {
+            Assert.Equal(SessionRef.Of(key), line.SessionRef);
+            Assert.All([line.SessionRef, line.Rule], value => Assert.DoesNotContain(key, value ?? "", StringComparison.Ordinal));
+        }
+    }
+
+    private static (HttpContext Context, SettableRequestTelemetryFeature Line) Request()
+    {
+        DefaultHttpContext context = new();
+        SettableRequestTelemetryFeature line = new();
+        context.Features.Set<IRequestTelemetryFeature>(line);
+        return (context, line);
+    }
+
+    /// <summary>What the cookie handler answers for a cookie it read and accepted.</summary>
+    private static AuthenticateResult Succeeded() =>
+        AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity("test")), "test"));
 
     private static SessionRecord Record(AppDefinition app, long version = 1, string subject = "alice", string? clientId = null) =>
         new(app.AppId, clientId ?? app.OAuth.ClientId, subject,
