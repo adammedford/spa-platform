@@ -5,12 +5,13 @@ namespace Platform.Identity.Tests;
 
 /// <summary>
 /// An <see cref="ISessionStore"/> that passes every call to the Platform.Testing store and remembers
-/// the keys it handed out, so a test can count the sessions a login created and read one back through
-/// the store's own interface.
+/// the keys it handed out and the removals it was asked for, so a test can count the sessions a login
+/// created, read one back through the store's own interface and see what a removal ended.
 /// </summary>
 internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
 {
     private readonly ConcurrentQueue<string> created = new();
+    private readonly ConcurrentQueue<(string Key, SessionRecord? Held)> removed = new();
 
     /// <summary>Every key <see cref="CreateAsync"/> returned, oldest first, whether or not it was since removed.</summary>
     public IReadOnlyList<string> Created => [.. created];
@@ -43,7 +44,18 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
     public Task<bool> ReplaceAsync(string key, SessionRecord record, long expectedVersion, CancellationToken ct) =>
         inner.ReplaceAsync(key, record, expectedVersion, ct);
 
-    public Task RemoveAsync(string key, CancellationToken ct) => inner.RemoveAsync(key, ct);
+    /// <summary>
+    /// Every removal that reached the store, oldest first, with the record the store held under the key
+    /// as the removal arrived (null when it held none): what a session held when it was ended, so a test
+    /// can order a removal against a write made under the session gate.
+    /// </summary>
+    public IReadOnlyList<(string Key, SessionRecord? Held)> Removed => [.. removed];
+
+    public async Task RemoveAsync(string key, CancellationToken ct)
+    {
+        removed.Enqueue((key, await inner.GetAsync(key, ct)));
+        await inner.RemoveAsync(key, ct);
+    }
 
     public Task RemoveAppAsync(string appId, CancellationToken ct) => inner.RemoveAppAsync(appId, ct);
 
