@@ -13,8 +13,9 @@
 #   - the name resolved to the loopback address, so the request went into the tunnel and not
 #     somewhere else (the hosts-file line certs.sh names);
 #   - TLS validated against this workstation's own trust store: no -k, no CA file of its own, no
-#     curlrc (-q) and no CA bundle from the environment, so a pass means the local authority
-#     certs.sh trusts is the one that signed what the ALB presented;
+#     curlrc (-q) and no CA bundle from the environment, so a pass means what the ALB presented
+#     chains to an authority this workstation trusts. For a name under .test, which RFC 6761
+#     reserves, that is the local authority certs.sh trusts; the check does not pin it;
 #   - the answer was 200, with no redirect followed and no proxy in the way.
 # A failure says which of those broke, and a connection the tunnel accepted but nothing answered
 # reads as a dead session (risk 15 in docs/plan/06-phase-2-and-risks.md).

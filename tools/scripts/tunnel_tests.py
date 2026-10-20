@@ -198,6 +198,8 @@ def gateway_of(entry: dict) -> dict | None:
 
 
 def answer(world: dict, service: str, command: str, options: dict):
+    if command in world.get("errors", {}):
+        raise ServiceError(*world["errors"][command])
     if command == "describe-load-balancers":
         if options.get("query") != LB_QUERY:
             raise Unexpected(f"--query {options.get('query')!r}")
@@ -543,6 +545,19 @@ class TunnelRefusesBeforeASession(CompanionTestCase):
         world["load_balancers"][LB_NAME]["Scheme"] = "internet-facing"
         self.refused(Case(self, world=world), 1, "not internal")
 
+    def test_an_access_denial_names_its_code_and_never_the_principal(self):
+        # An access denial's message names the caller's ARN, which carries the account id: "User:
+        # arn:aws:iam::123456789012:user/mateojackson is not authorized to perform: ...",
+        # https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html
+        # This is the case where the universal that no output names the account can fail.
+        world = default_world()
+        world["errors"] = {"list-tasks": [
+            "AccessDeniedException",
+            f"User: arn:aws:sts::{ACCOUNT}:assumed-role/spa-platform-operator/operator is not authorized to "
+            f"perform: ecs:ListTasks on resource: arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/* "
+            "because no identity-based policy allows the ecs:ListTasks action"]}
+        self.refused(Case(self, world=world), 1, "AccessDeniedException")
+
     def test_no_cluster(self):
         world = default_world()
         world["clusters"] = {}
@@ -643,6 +658,12 @@ class VerifyTunnelChecksTheHealthPathOverTrustedTls(CompanionTestCase):
         argv = self.curl_argv(case)
         self.assertEqual("*", argv[argv.index("--noproxy") + 1])
 
+    def test_it_never_falls_back_to_plain_http(self):
+        case = Case(self)
+        case.run(VERIFY, "/healthz")
+        argv = self.curl_argv(case)
+        self.assertEqual("=https", argv[argv.index("--proto") + 1])
+
     def test_it_follows_no_redirect(self):
         case = Case(self)
         case.run(VERIFY, "/healthz")
@@ -680,6 +701,12 @@ class VerifyTunnelFailsAndSaysWhy(CompanionTestCase):
     def test_a_status_other_than_200(self):
         self.failed({"status": 0, "http_code": 404, "remote_ip": "127.0.0.1", "ssl_verify_result": 0},
                     "answered 404")
+
+    def test_a_verification_result_other_than_0(self):
+        # curl reports the TLS library's verification result beside its own exit status; a pass
+        # needs both. https://curl.se/docs/manpage.html#-w
+        self.failed({"status": 0, "http_code": 200, "remote_ip": "127.0.0.1", "ssl_verify_result": 20},
+                    "TLS verification reported 20")
 
     def test_a_request_that_did_not_go_through_the_tunnel(self):
         self.failed({"status": 0, "http_code": 200, "remote_ip": "10.0.0.7", "ssl_verify_result": 0},
