@@ -24,11 +24,13 @@ internal sealed class GatewayFactory : WebApplicationFactory<GatewayApp::Program
 {
     private readonly IReadOnlyDictionary<string, string?> settings;
     private readonly Action<IServiceCollection> services;
+    private readonly DirectoryInfo contentRoot;
 
     public GatewayFactory(IReadOnlyDictionary<string, string?> settings, Action<IServiceCollection> services)
     {
         this.settings = settings;
         this.services = services;
+        contentRoot = CopyOfTheGatewaySettings();
 
         // A real listener on a loopback port the system picks.
         UseKestrel(options => options.Listen(IPAddress.Loopback, 0));
@@ -52,9 +54,9 @@ internal sealed class GatewayFactory : WebApplicationFactory<GatewayApp::Program
         // has in a cell, such as scope validation and the developer exception page.
         builder.UseEnvironment("Production");
 
-        // The gateway project's own directory, so its appsettings.json is the one read, as the published
-        // gateway reads the copy beside it.
-        builder.UseContentRoot(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Gateway"));
+        // A directory holding a copy of the gateway project's own settings files, so its appsettings.json
+        // is the one read, as the published gateway reads the copy beside it (see CopyOfTheGatewaySettings).
+        builder.UseContentRoot(contentRoot.FullName);
 
         // UseSetting rather than ConfigureAppConfiguration: settings given this way are in the
         // configuration when Program.cs runs its Add* entry points, some of which read configuration
@@ -66,5 +68,48 @@ internal sealed class GatewayFactory : WebApplicationFactory<GatewayApp::Program
 
         // After Program.cs has registered everything, so a replacement wins over a TryAdd and an Add alike.
         builder.ConfigureTestServices(services);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        // DisposeAsync ends here too, after the host has stopped, so nothing still holds a file open.
+        base.Dispose(disposing);
+        if (disposing && contentRoot.Exists)
+        {
+            contentRoot.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A new temporary directory holding a copy of every <c>appsettings*.json</c> in <c>src/Gateway</c>,
+    /// for the gateway's host to use as its content root (issues #75 and #138).
+    ///
+    /// <para>Not <c>src/Gateway</c> itself. The host reads <c>appsettings.json</c> through a
+    /// <c>PhysicalFileProvider</c> rooted at the content root
+    /// (https://learn.microsoft.com/dotnet/api/microsoft.extensions.configuration.fileconfigurationsource.resolvefileprovider),
+    /// and that provider's default <c>ExclusionFilters.Sensitive</c> skips hidden files
+    /// (https://learn.microsoft.com/dotnet/api/microsoft.extensions.fileproviders.physical.exclusionfilters).
+    /// macOS flags every file under <c>.claude/worktrees/</c> hidden, and the file is optional to the
+    /// host, so there the gateway started without its logging levels and nothing said so.</para>
+    ///
+    /// <para>The copy is written from the file's bytes, not with <c>File.Copy</c>. On macOS
+    /// <c>File.Copy</c> tries <c>clonefile</c> first
+    /// (https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/IO/FileSystem.TryCloneFile.OSX.cs),
+    /// and a clone carries the source's attributes (clonefile(2)), so the copy stays hidden: on .NET 10
+    /// in the review of #138, <c>File.Copy</c> of a hidden file gave a hidden file.</para>
+    ///
+    /// <para>The host still reads the settings itself, through its own provider and in its own
+    /// precedence, so a test that reads a setting from the file proves the gateway read it.</para>
+    /// </summary>
+    private static DirectoryInfo CopyOfTheGatewaySettings()
+    {
+        string source = Path.Combine(FixtureFiles.RepositoryRoot, "src", "Gateway");
+        DirectoryInfo copy = Directory.CreateTempSubdirectory("gateway-content-root-");
+        foreach (string file in Directory.EnumerateFiles(source, "appsettings*.json"))
+        {
+            File.WriteAllBytes(Path.Combine(copy.FullName, Path.GetFileName(file)), File.ReadAllBytes(file));
+        }
+
+        return copy;
     }
 }
