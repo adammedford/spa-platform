@@ -1042,8 +1042,7 @@ def unauthorised(
                 refused.append(f"{named}, and {AUTHORITY}: {authority} {why}")
             elif verdict == "unchecked":
                 unchecked.append(why)
-        settled = answered or not commit.decides
-        if settled and all(verdict == "vouched" for _, verdict, _ in verdicts):
+        if all(verdict == "vouched" for _, verdict, _ in verdicts):
             vouched += 1
     return missing, refused, unchecked, vouched, undecided
 
