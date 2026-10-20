@@ -152,15 +152,18 @@ internal static class Bff
     /// (S-B7), or not decryptable at all. The cookie handler reports each as a failure, and reports no
     /// cookie as no result, which is not a rejection and leaves the rule unset
     /// (CookieAuthenticationHandler.ReadCookieTicket:
-    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs). Null-conditional, because
-    /// a component test runs without the telemetry stage. Called from <see cref="AppSessions.KeyOf"/> and
-    /// nowhere else, so the note has one call site (#141, S3).
+    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
+    ///
+    /// That decision reads the framework's authentication result, so it stays here; the note is
+    /// <see cref="Rejection.Note"/>'s, which writes no response, since the challenge or the 401 that
+    /// follows is another writer's (#142, Q11). Called from <see cref="AppSessions.KeyOf"/> and nowhere
+    /// else, so the project's one <c>auth.session</c> note has one call site (#141, S3).
     /// </summary>
     internal static void NoteDeadSession(HttpContext context, AuthenticateResult session)
     {
         if (session.Failure is not null)
         {
-            context.Features.Get<IRequestTelemetryFeature>()?.Rule = RuleIds.AuthSession;
+            Rejection.Note(context, RuleIds.AuthSession);
         }
     }
 

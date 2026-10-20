@@ -151,7 +151,8 @@ internal sealed class AppSessions(ISessionStore store)
     /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
     ///
     /// A cookie that resolved to no session is noted here, and only here, under <c>auth.session</c>
-    /// (<see cref="Bff.NoteDeadSession"/>), so the note has one call site (#141, S3).
+    /// (<see cref="Bff.NoteDeadSession"/>, through <see cref="Rejection.Note"/>), so the note has one
+    /// call site (#141, S3).
     /// </summary>
     /// <param name="authenticated">This request's authentication of the pinned app's cookie scheme.</param>
     /// <param name="refusesDeadSession">
