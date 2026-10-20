@@ -1,6 +1,7 @@
 using System.Globalization;
 using Duende.AccessTokenManagement;
 using Duende.AccessTokenManagement.OpenIdConnect;
+using Duende.IdentityModel;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -115,7 +116,7 @@ internal sealed partial class AccessTokenSource(
             return await StoreAsync(app, key, lease, record, ticket, token);
         }
 
-        if (error != "invalid_grant")
+        if (error != OidcConstants.TokenErrors.InvalidGrant)
         {
             lease.Finish(new RefreshOutcome.Unavailable());
             RefreshFailed(logger, app.AppId, SessionRef.Of(key), error!);
@@ -241,12 +242,18 @@ internal sealed partial class AccessTokenSource(
     /// carry a credential, so only known categories reach the warning (contracts/telemetry.md, N-16),
     /// <c>invalid_grant</c> among them because it alone ends a session (ADR-0005). Unknown text becomes
     /// <c>refresh_failed</c>.
+    ///
+    /// The OAuth error names are the library's constants, not literals: RFC 6749's vocabulary is the
+    /// library's to spell, and one of them, <c>invalid_request</c>, is also a problem code in
+    /// contracts/http-contract.md -> Errors, which no workstream project spells (#142, #158).
     /// </summary>
     private static string SafeError(string? error) => error switch
     {
-        "invalid_grant" or "invalid_client" or "invalid_request" or "invalid_scope"
-            or "unauthorized_client" or "unsupported_grant_type" or "server_error"
-            or "temporarily_unavailable" or "deadline_exceeded" or "unreachable" => error,
+        OidcConstants.TokenErrors.InvalidGrant or OidcConstants.TokenErrors.InvalidClient
+            or OidcConstants.TokenErrors.InvalidRequest or OidcConstants.TokenErrors.InvalidScope
+            or OidcConstants.TokenErrors.UnauthorizedClient or OidcConstants.TokenErrors.UnsupportedGrantType
+            or OidcConstants.AuthorizeErrors.ServerError or OidcConstants.AuthorizeErrors.TemporarilyUnavailable
+            or "deadline_exceeded" or "unreachable" => error,
         _ => "refresh_failed",
     };
 

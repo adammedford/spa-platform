@@ -478,6 +478,34 @@ public sealed class AccessTokenSourceTests
         Assert.DoesNotContain(canary, warning, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("invalid_client")]
+    [InlineData("invalid_request")]
+    [InlineData("invalid_scope")]
+    [InlineData("unauthorized_client")]
+    [InlineData("unsupported_grant_type")]
+    [InlineData("server_error")]
+    [InlineData("temporarily_unavailable")]
+    public async Task A_known_OAuth_error_reaches_the_warning_as_itself(string error)
+    {
+        // The other half of the test above: an error RFC 6749 names, other than invalid_grant, is a
+        // fixed category the warning may carry as it is (sections 4.1.2.1 and 5.2), and the session is
+        // kept, as for any refresh that did not end in invalid_grant (ADR-0005).
+        CapturingLoggerProvider logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        using HttpClient backchannel = new(new ErrorAnswer(error));
+        gateway.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(SchemeNames.Oidc(App1.AppId)).Backchannel = backchannel;
+
+        IdentityGateway.Answer failure = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal((503, "idp_unavailable"), (failure.Status, failure.Body));
+        string warning = Assert.Single(SourceLines(logs));
+        Assert.Contains($"({error})", warning, StringComparison.Ordinal);
+    }
+
     private sealed class ErrorAnswer(string error) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
