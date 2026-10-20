@@ -399,8 +399,9 @@ fi
 #
 # A change to tools/ or .github/ touches neither half, so without this a green full check on it
 # would have run none of its code: on 2026-10-19, 7 of the 12 merged tickets were such changes, and
-# their reviewers ran the companions by hand (#134). CI's Documents job runs the companions whatever
-# the diff; this runs those the diff earns, as the halves are gated.
+# their reviewers ran the companions by hand (#134). CI runs a fixed list of companions whatever the
+# diff, and none of them is under tools/scripts/ (.github/workflows/ci.yml); this runs those the
+# diff earns, as the halves are gated.
 #
 # A script's companion is the file beside it named `<name>_tests.py`, its name with the extension
 # dropped and hyphens as underscores (tools/land.sh's is tools/land_tests.py, and
