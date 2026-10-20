@@ -114,7 +114,8 @@ def run(args: list[str], root: pathlib.Path) -> str:
 
 
 def listing(root: pathlib.Path, label: str) -> list[dict]:
-    """The open issues carrying a label, as gh lists them, every page of them."""
+    """The open issues carrying a label, as gh lists them: at most 500, the limit the collect
+    step's own calls name, where gh would stop at 30 unless told."""
     out = run(["gh", "issue", "list", "--state", "open", "--label", label, "--limit", "500",
                "--json", FIELDS], root)
     return json.loads(out or "[]")
@@ -148,8 +149,6 @@ def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
             number = int(raw["number"])
             if number in found:
                 continue
-            blocked = raw.get("blockedBy") or []
-            nodes = blocked.get("nodes", []) if isinstance(blocked, dict) else blocked
             summary = raw.get("subIssuesSummary") or {}
             found[number] = Issue(
                 number=number,
@@ -158,8 +157,10 @@ def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
                 label=label,
                 assigned=bool(raw.get("assignees")),
                 url=raw.get("url") or REPO_URL.format(raw["number"]),
-                blockers=tuple(int(node["number"]) for node in nodes
-                               if str(node.get("state", "OPEN")).upper() == "OPEN"),
+                # gh gives blockedBy as {"nodes": [...], "totalCount": n}, each node with its
+                # state; a listing in any other shape is refused as unreadable, not read as free.
+                blockers=tuple(int(node["number"]) for node in raw["blockedBy"]["nodes"]
+                               if node["state"] == "OPEN"),
                 sub_issues=int(summary.get("total", 0) or 0),
             )
     return list(found.values())
@@ -327,27 +328,29 @@ def main(argv: list[str] | None = None) -> int:
     root = pathlib.Path(__file__).resolve().parent.parent
     saved = pathlib.Path(arguments.saved) if arguments.saved else None
 
+    def kept(name: str) -> str | None:
+        """A saved file's text, or None when no DIR was given or DIR holds no such file."""
+        if saved is None or not (saved / name).exists():
+            return None
+        return (saved / name).read_text()
+
     try:
         listings = {}
         for label in LABELS:
-            if saved is not None:
-                path = saved / f"{label}.json"
-                listings[label] = json.loads(path.read_text()) if path.exists() else []
+            text = kept(f"{label}.json")
+            if text is not None:
+                listings[label] = json.loads(text)
             else:
-                listings[label] = listing(root, label)
-        if saved is not None and (saved / "branches.txt").exists():
-            branch_names = (saved / "branches.txt").read_text().split()
-        else:
-            branch_names = branches(root)
-        if saved is not None and (saved / "roadmap.json").exists():
-            road = json.loads((saved / "roadmap.json").read_text())
-        else:
-            road = roadmap(root)
+                listings[label] = [] if saved is not None else listing(root, label)
+        text = kept("branches.txt")
+        branch_names = text.split() if text is not None else branches(root)
+        text = kept("roadmap.json")
+        road = json.loads(text) if text is not None else roadmap(root)
         answer = resolve(listings, branch_names, road)
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1
-    except (json.JSONDecodeError, OSError, KeyError, ValueError) as error:
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as error:
         print(f"overnight_collect: no tickets printed: could not read the input: {error}",
               file=sys.stderr)
         return 1

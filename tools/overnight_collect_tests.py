@@ -329,6 +329,25 @@ class ThroughGh(unittest.TestCase):
         self.assertFalse(self.log.exists(), "gh was asked although the listings were given")
         self.assertEqual("claimed", json.loads(out)["tickets"][0]["status"])
 
+    def test_a_listing_in_another_shape_is_refused_rather_than_read_as_unblocked(self):
+        """gh gives blockedBy as nodes, each with its state. A listing that does not is unreadable,
+        and reading it as no blocker would give a blocked ticket a lane."""
+        saved = pathlib.Path(self.tmp.name) / "saved"
+        saved.mkdir()
+        (saved / "roadmap.json").write_text(json.dumps(ROAD))
+        for shape, blocked in (("a list", [{"number": 9, "state": "OPEN"}]),
+                               ("no state", {"nodes": [{"number": 9}]}), ("absent", None)):
+            with self.subTest(shape=shape):
+                raw = issue(1, body())
+                if blocked is None:
+                    del raw["blockedBy"]
+                else:
+                    raw["blockedBy"] = blocked
+                (saved / "ready-for-agent.json").write_text(json.dumps([raw]))
+                code, out, err = self.run_main("--json", "--from", str(saved))
+                self.assertEqual((1, ""), (code, out))
+                self.assertIn("could not read the input", err)
+
 
 class BranchesThroughGit(unittest.TestCase):
     """branches() against real git: a throwaway clone of a bare origin, in an environment that
