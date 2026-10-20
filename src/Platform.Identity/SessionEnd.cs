@@ -13,7 +13,7 @@ namespace Platform.Identity;
 /// decision 4): attempt to revoke the session's refresh token, then remove the session whatever the
 /// provider said.
 ///
-/// Under the session's gate (<see cref="SessionGates"/>), so a refresh in flight finishes first and the
+/// Under the session's gate (<see cref="AppSessions"/>), so a refresh in flight finishes first and the
 /// token revoked is the one the record holds now, which may be newer than the one this request's ticket
 /// carried. The revocation is made with the token library's parts (see <see cref="RevokeAsync"/>) in the
 /// credential style of the app's issuer, the style Cognito's revocation endpoint insists on (C-2.19, C-2.21), for the app's own
@@ -22,8 +22,7 @@ namespace Platform.Identity;
 /// logged by outcome only; the token itself reaches no log line.
 /// </summary>
 internal sealed partial class SessionEnd(
-    ISessionStore sessions,
-    SessionGates gates,
+    AppSessions sessions,
     IOpenIdConnectConfigurationService configurations,
     CredentialStyles styles,
     AccessTokenSourceOptions options,
@@ -33,29 +32,18 @@ internal sealed partial class SessionEnd(
 
     public async Task EndAsync(AppDefinition app, string key)
     {
-        using SessionGates.Lease lease = await gates.EnterAsync(key);
+        using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
 
-        // A record that is gone, or is not this app's and this client's, is left alone: the cookie
-        // manager removes only a session the app owns (AppBoundTicketStore.RemoveAsync), and so does this.
-        if (await sessions.GetAsync(key, CancellationToken.None) is not { } record
-            || !string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
-            || !string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        try
+        // A record that is gone, or is not this app's and this client's, is owned by no lease and left
+        // alone: the cookie manager removes only a session the app owns (AppBoundTicketStore.RemoveAsync),
+        // and so does this. The revocation is the end's action, so the removal runs whatever it did.
+        await lease.EndAsync(async record =>
         {
             string? refreshToken = TicketSerializer.Default.Deserialize(record.Ticket.ToArray())?
                 .Properties.GetTokenValue(RefreshTokenName);
             string outcome = refreshToken is { Length: > 0 } ? await RevokeAsync(app, refreshToken) : "no_refresh_token";
             Revocation(logger, app.AppId, SessionRef.Of(key), outcome);
-        }
-        finally
-        {
-            // Removed here, under the gate, so a token call queued behind this one finds no session.
-            await sessions.RemoveAsync(key, CancellationToken.None);
-        }
+        });
     }
 
     /// <summary>

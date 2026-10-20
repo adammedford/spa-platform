@@ -100,7 +100,7 @@ public static class PlatformIdentityExtensions
         services.AddOpenIdConnectAccessTokenManagement(o => o.ChallengeScheme = Scheme.Parse(ProfileTokenEndpoints.SentinelScheme));
         Type endpointType = ProfileTokenEndpoints.RegisteredEndpointType(services);
         services.TryAddSingleton(sp => new ProfileTokenEndpoints(sp, endpointType));
-        services.TryAddSingleton<SessionGates>();
+        services.TryAddSingleton<AppSessions>();
         services.TryAddSingleton<AccessTokenSourceOptions>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<CredentialStyles>();

@@ -12,11 +12,13 @@ namespace Platform.Identity;
 /// The access token for this request's session, refreshed when it is within a minute of expiry
 /// (plan row 3.8, ADR-0005, ADR-0017).
 ///
-/// The gateway owns the orchestration and the library owns the protocol. Under the session's gate
-/// (<see cref="SessionGates"/>) this reads the session from the store, not from the ticket the request
-/// authenticated with, decides whether a refresh is due, asks the library's endpoint for it, and writes
-/// the new tokens back into the same record (T-D1, T-D2). The record keeps its key and its expiry, so
-/// the cookie issued at login still identifies it, and no cookie is issued on the way (S-E2, T-B9).
+/// The gateway owns the orchestration and the library owns the protocol. Under the session's gate this
+/// takes the session from the store, not from the ticket the request authenticated with, decides whether
+/// a refresh is due, asks the library's endpoint for it, and writes the new tokens back into the same
+/// record (T-D1, T-D2). <see cref="AppSessions"/> enters the gate, checks the record is this app's and
+/// this client's, makes the versioned write and the removal; every decision, and every line logged
+/// about one, stays here. The record keeps its key and its expiry, so the cookie issued at login still
+/// identifies it, and no cookie is issued on the way (S-E2, T-B9).
 ///
 /// Four rules from the gate runs hold here:
 /// <list type="bullet">
@@ -37,8 +39,7 @@ namespace Platform.Identity;
 /// </list>
 /// </summary>
 internal sealed partial class AccessTokenSource(
-    ISessionStore sessions,
-    SessionGates gates,
+    AppSessions sessions,
     ProfileTokenEndpoints endpoints,
     CredentialStyles styles,
     AccessTokenSourceOptions options,
@@ -77,7 +78,7 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
-        using SessionGates.Lease lease = await gates.EnterAsync(key);
+        using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
 
         switch (lease.WhileWaiting)
         {
@@ -87,7 +88,7 @@ internal sealed partial class AccessTokenSource(
                 return new AccessTokenResult.SessionEnded();
         }
 
-        if (await OwnedAsync(app, key) is not { } record)
+        if (lease.Owned is not { } record)
         {
             return new AccessTokenResult.Unauthenticated();
         }
@@ -102,7 +103,7 @@ internal sealed partial class AccessTokenSource(
         if (ticket.Properties.GetTokenValue(RefreshTokenName) is not { Length: > 0 } refreshToken)
         {
             // Nothing to refresh with, so the session can never yield a token again.
-            await EndAsync(context, app, key);
+            await EndAsync(context, app, lease);
             lease.Finish(new RefreshOutcome.Ended());
             return new AccessTokenResult.SessionEnded();
         }
@@ -113,7 +114,7 @@ internal sealed partial class AccessTokenSource(
         {
             lease.Finish(new RefreshOutcome.Refreshed());
             Refreshed(logger, app.AppId, SessionRef.Of(key));
-            return await StoreAsync(app, key, record, ticket, token);
+            return await StoreAsync(app, key, lease, record, ticket, token);
         }
 
         if (error != "invalid_grant")
@@ -125,7 +126,7 @@ internal sealed partial class AccessTokenSource(
 
         // Refused. Another writer may have refreshed the session in between, so it rotated the refresh
         // token this call presented: then the record holds its successor, and its access token is good.
-        if (await OwnedAsync(app, key) is { } reread
+        if (await sessions.ReadAsync(app, key, CancellationToken.None) is { } reread
             && Deserialize(reread).Properties is var current
             && current.GetTokenValue(RefreshTokenName) is { Length: > 0 } newer
             && !string.Equals(newer, refreshToken, StringComparison.Ordinal)
@@ -135,7 +136,7 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Token(newerAccess);
         }
 
-        await EndAsync(context, app, key);
+        await EndAsync(context, app, lease);
         lease.Finish(new RefreshOutcome.Ended());
         Ended(logger, app.AppId, SessionRef.Of(key));
         return new AccessTokenResult.SessionEnded();
@@ -179,7 +180,7 @@ internal sealed partial class AccessTokenSource(
     /// when the provider rotated it, and the ID token only when the answer carried one (T-B13).
     /// </summary>
     private async Task<AccessTokenResult> StoreAsync(
-        AppDefinition app, string key, SessionRecord record, AuthenticationTicket ticket, UserToken token)
+        AppDefinition app, string key, AppSessions.Lease lease, SessionRecord record, AuthenticationTicket ticket, UserToken token)
     {
         string access = token.AccessToken.ToString();
         Dictionary<string, string> tokens = ticket.Properties.GetTokens()
@@ -199,14 +200,14 @@ internal sealed partial class AccessTokenSource(
         ticket.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
 
         SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
-        if (await sessions.ReplaceAsync(key, next, record.Version, CancellationToken.None))
+        if (await lease.ReplaceAsync(next))
         {
             return new AccessTokenResult.Token(access);
         }
 
         // A concurrent writer won the versioned replace (T-D2). Return its persisted token rather
         // than this response's unpersisted token; a removed or rebound session authenticates nobody.
-        if (await OwnedAsync(app, key) is not { } winner)
+        if (await sessions.ReadAsync(app, key, CancellationToken.None) is not { } winner)
         {
             return new AccessTokenResult.Unauthenticated();
         }
@@ -228,22 +229,14 @@ internal sealed partial class AccessTokenSource(
     /// cancellation, so a waiter can trust what it reads; the sign-out then expires the browser's cookie,
     /// unless the browser has already gone.
     /// </summary>
-    private async Task EndAsync(HttpContext context, AppDefinition app, string key)
+    private static async Task EndAsync(HttpContext context, AppDefinition app, AppSessions.Lease lease)
     {
-        await sessions.RemoveAsync(key, CancellationToken.None);
+        await lease.EndAsync();
         if (!context.RequestAborted.IsCancellationRequested && !context.Response.HasStarted)
         {
             await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
         }
     }
-
-    /// <summary>The record under the key, when it is still this app's and this client's (task 3.3, task 3.6).</summary>
-    private async Task<SessionRecord?> OwnedAsync(AppDefinition app, string key) =>
-        await sessions.GetAsync(key, CancellationToken.None) is { } record
-        && string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
-        && string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal)
-            ? record
-            : null;
 
     /// <summary>
     /// The provider's error as a fixed category. An OAuth error value is provider-controlled text that can

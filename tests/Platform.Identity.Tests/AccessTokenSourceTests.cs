@@ -164,7 +164,7 @@ public sealed class AccessTokenSourceTests
         Assert.True(grant.Ok);
         Assert.All(answers, a => Assert.Equal((200, grant.AccessToken), (a.Status, a.Body)));
         Assert.Equal(grant.RefreshTokenIssued, await StoredTokenAsync(gateway, "refresh_token"));
-        Assert.Equal(0, gateway.Services.GetRequiredService<SessionGates>().Count);
+        Assert.Equal(0, gateway.Services.GetRequiredService<AppSessions>().ActiveGates);
     }
 
     [Fact]
