@@ -1,5 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Reference rules, A-01 to A-04. Owner: workstream 6. -->
+  <!-- Reference rules, A-01 to A-04, and the rule that no workstream project spells a rule id as a
+       literal. Owner: workstream 6. -->
+
+  <!-- The rule-id rule reads its ids from RuleIds.All rather than parsing contracts/request-gate.md a
+       second time: RuleIdsTests in tests/Platform.Abstractions.Tests holds All to that table. A-01 to
+       A-04 read the solution's project files, not this project's own references, so this one trips
+       none of them (#154). -->
+  <ItemGroup>
+    <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+  </ItemGroup>
 
 </Project>
