@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Test companion for tools/scripts/deploy.sh. Owner: workstream 1.
+
+Task 1.7 (#58): "Deployment builds and pushes by digest, refuses to start a gateway against an empty
+registry, applies, waits for steady state, then asserts the running digest." The doubles, the world
+they share and the universal every run holds (no output names the account id) are
+tools/scripts/cell_doubles.py's; its docstring says what a case can and cannot show.
+
+Run: python3 -I tools/scripts/deploy_tests.py
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import sys
+
+_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
+cell = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cell)
+
+import unittest  # noqa: E402
+
+SCRIPT = "deploy.sh"
+
+
+def seeded_world() -> dict:
+    """After seed.sh: the two fixture apps in the live registry."""
+    world = cell.default_world()
+    world["registry"] = {"schemaVersion": 1, "revision": 2,
+                         "apps": [{"appId": "app1", "release": "r1"}, {"appId": "app2", "release": "r1"}]}
+    world["objects"] = [{"Key": "registry/registry.json", "VersionId": "r2"}]
+    return world
+
+
+def setUpModule():
+    cell.bash_banner("deploy_tests")
+
+
+class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
+    """docs/plan/05-infrastructure-and-cost.md, First deployment, step 5, and Deployment and rollback:
+    "deploy.sh builds, pushes, applies the new digest and checks that the running task has it"."""
+
+    def deployed(self, world: dict | None = None):
+        case = cell.Case(self, outputs=True, world=world or seeded_world())
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        return case, result
+
+    def test_both_images_are_built_for_arm64_from_the_repository_root_and_pushed(self):
+        case, _ = self.deployed()
+        builds = [call for call in case.calls("docker") if call["argv"][:2] == ["buildx", "build"]]
+        self.assertEqual(2, len(builds))
+        for call, dockerfile, repository in ((builds[0], "src/Gateway/Dockerfile", cell.ECR_GATEWAY),
+                                             (builds[1], "fixtures/MockApi/Dockerfile", cell.ECR_MOCK_API)):
+            argv = call["argv"]
+            self.assertEqual("linux/arm64", argv[argv.index("--platform") + 1])
+            self.assertEqual(str(case.repo / dockerfile), argv[argv.index("--file") + 1])
+            self.assertIn("--push", argv)
+            self.assertEqual(str(case.repo), argv[-1])
+            self.assertTrue(call["tag"].startswith(repository + ":"), call["tag"])
+            # One manifest, so the digest pushed is the digest a task reports.
+            self.assertIn("--provenance=false", argv)
+            self.assertIn("--sbom=false", argv)
+
+    def test_the_apply_names_each_image_by_the_digest_ecr_holds_and_the_health_path_is_readyz(self):
+        case, _ = self.deployed()
+        world = case.load()
+        gateway_tag = next(c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_GATEWAY))
+        mock_tag = next(c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_MOCK_API))
+        # The digest is ECR's, read back by tag, not one the script made up or took from Docker.
+        gateway = f"{cell.ECR_GATEWAY}@{world['repositories'][cell.GATEWAY_REPOSITORY][gateway_tag.rpartition(':')[2]]}"
+        mock = f"{cell.ECR_MOCK_API}@{world['repositories'][cell.MOCK_API_REPOSITORY][mock_tag.rpartition(':')[2]]}"
+        applies = [c for c in case.calls("terraform") if c.get("command") == "apply"]
+        self.assertEqual(1, len(applies))
+        self.assertEqual({"gateway_image": gateway, "mock_api_image": mock, "health_check_path": "/readyz"},
+                         applies[0]["vars"])
+        self.assertEqual("platform", applies[0]["root"])
+
+    def test_the_saved_plan_is_what_is_applied(self):
+        case, _ = self.deployed()
+        terraform = [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")]
+        self.assertEqual(["plan", "apply"], [c["command"] for c in terraform])
+        plan_file = next(t for t in terraform[0]["argv"] if t.startswith("-out="))[len("-out="):]
+        self.assertEqual(plan_file, terraform[1]["argv"][-1])
+        # Outside the tree: a plan holds the values its apply writes (change request 1.1).
+        self.assertFalse(pathlib.Path(plan_file).resolve().is_relative_to(case.repo)
+                         if hasattr(pathlib.Path, "is_relative_to") else str(plan_file).startswith(str(case.repo)))
+
+    def test_every_later_apply_passes_the_same_digests_back(self):
+        case, _ = self.deployed()
+        applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
+        tfvars = (case.repo / "infra/envs/poc/platform/images.auto.tfvars").read_text()
+        self.assertIn(f'gateway_image     = "{applied["gateway_image"]}"', tfvars)
+        self.assertIn(f'mock_api_image    = "{applied["mock_api_image"]}"', tfvars)
+        self.assertIn('health_check_path = "/readyz"', tfvars)
+
+    def test_it_waits_for_a_steady_service_after_the_apply(self):
+        case, result = self.deployed()
+        order = [c.get("command") for c in case.calls() if c.get("command") in ("apply", "ecs wait services-stable")]
+        self.assertEqual(["apply", "ecs wait services-stable"], order)
+        wait = case.aws("ecs wait services-stable")[0]["options"]
+        self.assertEqual(cell.CLUSTER, wait["cluster"])
+        self.assertEqual([cell.SERVICE], wait["services"])
+        self.assertIn("pass:", result.stdout)
+
+    def test_it_reads_no_terraform_state_but_the_outputs_it_writes_after_the_apply(self):
+        # contracts/infra-outputs.schema.json: the scripts read outputs.json, and none of them reads
+        # Terraform state; Q49 on #129 excepts teardown.sh alone of these four. Review of #58.
+        case, _ = self.deployed()
+        terraform = case.calls("terraform")
+        outputs = [c for c in terraform if c.get("command") == "output"]
+        self.assertEqual([], [c for c in outputs if "-raw" in c["argv"]])
+        apply = next(index for index, c in enumerate(terraform) if c.get("command") == "apply")
+        self.assertEqual(3, len(outputs))
+        self.assertTrue(all(terraform.index(c) > apply for c in outputs), "an output was read before the apply")
+
+    def test_it_writes_the_outputs_document_with_the_running_image(self):
+        case, _ = self.deployed()
+        document = json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())
+        schema = json.loads((cell.ROOT / "contracts/infra-outputs.schema.json").read_text())
+        self.assertEqual(sorted(schema["required"]), sorted(document))
+        applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
+        self.assertEqual(applied["gateway_image"], document["gatewayImage"])
+
+    def test_the_login_password_goes_to_docker_on_standard_input(self):
+        case, _ = self.deployed()
+        login = next(c for c in case.calls("docker") if c["argv"][:1] == ["login"])
+        self.assertTrue(login["password_on_stdin"])
+        self.assertEqual(["login", "--username", "AWS", "--password-stdin", cell.REGISTRY_HOST], login["argv"])
+        for call in case.calls():
+            self.assertNotIn(cell.PASSWORD, json.dumps(call["argv"]))
+
+    def test_two_deployments_push_two_tags(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        self.assertEqual(0, case.run(SCRIPT).status)
+        second = case.run(SCRIPT)
+        self.assertEqual(0, second.status, second.output)
+        tags = [c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_GATEWAY)]
+        self.assertEqual(2, len(set(tags)))
+
+
+class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
+    """contracts/README.md: "Deployment refuses to start a gateway against an empty registry (task
+    1.7)". Before anything is built: nothing reaches Docker or Terraform's plan."""
+
+    def refused(self, world: dict, fragment: str):
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn(fragment, result.stderr)
+        self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")])
+        self.assertNoUnexpectedCall(case)
+        return case
+
+    def test_a_registry_with_no_app(self):
+        world = seeded_world()
+        world["registry"]["apps"] = []
+        self.refused(world, "holds no app")
+
+    def test_no_registry_at_all(self):
+        world = cell.default_world()
+        self.refused(world, "Run tools/scripts/seed.sh first")
+
+    def test_it_reads_the_bucket_and_key_the_gateway_reads(self):
+        world = seeded_world()
+        case = self.refused_or_passed(world)
+        get = case.aws("s3api get-object")[0]["options"]
+        environment = dict(world["task_definitions"][f"{cell.FAMILY}:1"]["containers"][cell.GATEWAY]["environment"])
+        self.assertEqual(environment["Registry__Bucket"], get["bucket"])
+        self.assertEqual(environment["Registry__Key"], get["key"])
+
+    def refused_or_passed(self, world: dict):
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        return case
+
+
+class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
+    """Stable is not deployed. Each way the running service can differ from the apply is exit 1."""
+
+    def failed(self, world: dict, fragment: str):
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn(fragment, result.stderr)
+        self.assertNoUnexpectedCall(case)
+        self.assertNotIn("pass:", result.stdout)
+        return case
+
+    def test_the_circuit_breaker_rolled_it_back(self):
+        world = seeded_world()
+        world["faults"]["circuit_breaker"] = True
+        self.failed(world, "rolled it back")
+
+    def test_a_running_task_with_another_digest(self):
+        world = seeded_world()
+        world["faults"]["running_digest"] = "sha256:" + "e" * 64
+        self.failed(world, "is not the applied gateway")
+
+    def test_the_service_never_stable(self):
+        world = seeded_world()
+        world["faults"]["wait"] = True
+        self.failed(world, "did not become stable")
+
+    def test_a_rollout_that_did_not_complete(self):
+        world = seeded_world()
+        world["faults"]["rollout"] = "FAILED"
+        self.failed(world, "rollout is FAILED")
+
+    def test_an_unhealthy_target(self):
+        world = seeded_world()
+        world["target_group"]["states"] = ["unhealthy"]
+        self.failed(world, "targets are: unhealthy")
+
+    def test_a_failed_apply_records_no_images_and_waits_for_nothing(self):
+        world = seeded_world()
+        world["faults"]["apply"] = True
+        case = self.failed(world, "apply failed")
+        self.assertFalse((case.repo / "infra/envs/poc/platform/images.auto.tfvars").exists())
+        self.assertEqual([], case.aws("ecs wait services-stable"))
+
+    def test_a_failed_build_applies_nothing(self):
+        world = seeded_world()
+        world["faults"]["build"] = True
+        case = self.failed(world, "building src/Gateway/Dockerfile failed")
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")])
+
+
+class DeployRefusesToStart(cell.CompanionTestCase):
+    def refused(self, case, fragment: str, env=None):
+        result = case.run(SCRIPT, env=env)
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn(fragment, result.stderr)
+        self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+
+    def test_without_docker(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        case.remove("docker")
+        self.refused(case, "brew install --cask docker-desktop")
+
+    def test_without_a_region(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        self.refused(case, "no Region", env=case.env(AWS_REGION=None, AWS_DEFAULT_REGION=None))
+        self.assertEqual([], case.calls("aws"))
+
+    def test_as_the_teardown_role(self):
+        world = seeded_world()
+        world["caller"] = f"arn:aws:sts::{cell.ACCOUNT}:assumed-role/{cell.TEARDOWN_ROLE}/someone"
+        self.refused(cell.Case(self, outputs=True, world=world), "teardown role")
+
+    def test_without_the_outputs_document(self):
+        # contracts/infra-outputs.schema.json: the scripts read outputs.json and none of them reads
+        # Terraform state, teardown.sh excepted (Q49 on #129). Review of #58.
+        case = cell.Case(self, world=seeded_world())
+        self.refused(case, "Run tools/scripts/seed.sh first")
+        self.assertEqual([], case.calls("terraform"))
+
+    def test_an_outputs_document_for_another_region(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        path = case.repo / "infra/envs/poc/outputs.json"
+        document = json.loads(path.read_text())
+        document["region"] = "us-west-2"
+        path.write_text(json.dumps(document))
+        self.refused(case, f"gives no ecrGateway for {cell.REGION}")
+        self.assertEqual([], case.calls("terraform"))
+
+
+if __name__ == "__main__":
+    sys.exit(cell.main("deploy_tests"))
