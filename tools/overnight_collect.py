@@ -21,8 +21,9 @@ The rules, as the collect step states them:
   with sub-issues is a spec, listed under "parents", and never a ticket. An issue whose body has a
   `**Session:** foreground` line is worked in a foreground session, listed under "foreground".
 - id: the `**Plan row:** X` value when it is a plan row id, else `issue-<number>`.
-- owner: the first role the `**Owner:**` line names, mapped to OWNERSHIP.md's roles; an I-* row is
-  the integrator's.
+- owner: the first role the `**Owner:**` line names, by its place in the line, mapped to
+  OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
+  they land in their own pull requests.
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
 - status, in this order: ready-for-human; needs-triage; claimed (an assignee, or a `task/<id>-`
   branch on a row not landed); ready-for-agent when every open blocker is itself a ready-for-agent
@@ -71,7 +72,7 @@ ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
 
 # The roles of OWNERSHIP.md, each with the ways an Owner line names it. The first role the line
 # names is the owner, so "ws1-infra, run by the human" is workstream 1's and "integrator (anyone may
-# write a change request)" the integrator's.
+# write a change request)" the integrator's. The order here is no ranking: a line is read by place.
 ROLES = (
     ("ws1-infra", r"\bws1\b|\bworkstream 1\b|^1 aws\b|\baws and iac\b"),
     ("ws2-hosting", r"\bws2\b|\bworkstream 2\b|^2 hosting\b|\bhosting and registry\b"),
@@ -171,17 +172,29 @@ def ticket_id(issue: Issue) -> str:
     return token if PLAN_ID.match(token) else f"issue-{issue.number}"
 
 
-def owner_of(issue: Issue, tid: str) -> str:
-    if tid.startswith("I-"):
-        return "integrator"
+def owner_of(issue: Issue, tid: str) -> tuple[str, list[str]]:
+    """The ticket's owner, and the other roles its Owner line names, in the line's order. The owner
+    is the first role named, or the integrator for an I-* row or a line naming none."""
     line = OWNER.search(issue.body)
     value = line.group("value").strip().lower() if line else ""
-    first = None
+    places = []
     for role, pattern in ROLES:
         found = re.search(pattern, value)
-        if found and (first is None or found.start() < first[0]):
-            first = (found.start(), role)
-    return first[1] if first else "integrator"
+        if found:
+            places.append((found.start(), role))
+    named = [role for _, role in sorted(places)]
+    owner = "integrator" if tid.startswith("I-") or not named else named[0]
+    return owner, [role for role in named if role != owner]
+
+
+def others_land_apart(others: list[str]) -> str:
+    """What "why" adds for the other owners an Owner line names, as the collect step says it."""
+    if not others:
+        return ""
+    if len(others) == 1:
+        return f"; {others[0]}, also named as an owner, lands in its own pull request"
+    return (f"; {', '.join(others[:-1])} and {others[-1]}, also named as owners, land in their "
+            "own pull requests")
 
 
 def open_boxes(body: str) -> int:
@@ -281,11 +294,13 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     resolved = []
     for n, issue in enumerate(sorted(tickets, key=order), start=1):
         tid = id_of[issue.number]
+        owner, others = owner_of(issue, tid)
         resolved.append({
             "n": n, "id": tid, "slug": slug_of(issue.title, tid), "issue": issue.number,
             "url": issue.url, "title": issue.title, "status": status[issue.number],
-            "owner": owner_of(issue, tid), "blockedBy": [blocker_id(b) for b in issue.blockers],
-            "why": why[issue.number], "openBoxes": open_boxes(issue.body),
+            "owner": owner, "blockedBy": [blocker_id(b) for b in issue.blockers],
+            "why": why[issue.number] + others_land_apart(others),
+            "openBoxes": open_boxes(issue.body),
         })
     return {
         "tickets": resolved,

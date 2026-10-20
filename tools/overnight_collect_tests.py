@@ -128,6 +128,32 @@ class Rules(unittest.TestCase):
     def test_an_integrator_row_is_the_integrators_whatever_the_owner_line_says(self):
         found = by_issue(resolved(agent=[issue(7, body("I-7", owner="ws2-hosting"))]))[7]
         self.assertEqual("integrator", found["owner"])
+        self.assertIn("ws2-hosting, also named as an owner, lands in its own pull request",
+                      found["why"])
+
+    def test_why_names_the_other_owners_the_owner_line_names(self):
+        """The collect step: when the Owner line names several, the first owns the ticket and
+        "why" says the others land in their own pull requests. #75's line is the first case."""
+        for line, owner, others in (
+            ("workstream 2 (`tests/Platform.Registry.Tests`), workstream 6 (`tests/Gateway.*`)",
+             "ws2-hosting", "; ws6-verification, also named as an owner, lands in its own pull "
+                            "request"),
+            ("workstream 4, then workstream 2, then the integrator", "ws4-proxy",
+             "; ws2-hosting and integrator, also named as owners, land in their own pull "
+             "requests"),
+        ):
+            with self.subTest(line=line):
+                found = by_issue(resolved(agent=[issue(7, body(owner=line))]))[7]
+                self.assertEqual(owner, found["owner"])
+                self.assertEqual("ready-for-agent with no open blocker" + others, found["why"])
+
+    def test_why_names_no_other_owner_when_the_line_names_one_role_however_often(self):
+        """#159's line names the integrator twice; #90's names one workstream and a person."""
+        for line in ("integrator (anyone may write a change request; the integrator decides it)",
+                     "ws1-infra, run by the human"):
+            with self.subTest(line=line):
+                found = by_issue(resolved(agent=[issue(7, body(owner=line))]))[7]
+                self.assertEqual("ready-for-agent with no open blocker", found["why"])
 
     def test_the_status_takes_the_first_rule_that_fires(self):
         answer = by_issue(resolved(
