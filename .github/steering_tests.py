@@ -78,6 +78,15 @@ SINCE = steering.AUTHORITY_SINCE
 BEFORE = SINCE - datetime.timedelta(days=1)
 AFTER = SINCE + datetime.timedelta(hours=1)
 
+# Either side of the decision rule's starting point, read from the module the same way.
+DECIDED_AFTER = steering.DECIDED_SINCE + datetime.timedelta(hours=1)
+DECIDED_BEFORE = steering.DECIDED_SINCE - datetime.timedelta(hours=1)
+
+# A change request as every one under contracts/changes/ writes its Status, open and decided.
+OPEN_REQUEST = "# A change request\n\n- **Raised by:** a lane\n- **Status:** open\n"
+DECIDED_REQUEST = ("# A change request\n\n- **Raised by:** a lane\n"
+                   "- **Status:** decided, 2026-10-20. See the Decision section below.\n")
+
 # One file in each place ADR-0023 decision 2 names as a steering document, typed here rather than
 # read from the module: the case holding the module's list to the ADR is a separate one.
 STEERING_EXAMPLES = (
@@ -248,6 +257,13 @@ def holds(sha: str, subject: str, *paths: str) -> str:
     """The line the authority rule prints for a commit that names no authority."""
     return (f'commit {sha[:12]} ("{subject}") changes {", ".join(paths)} and carries no '
             "Authority: trailer")
+
+
+def undecides(sha: str, subject: str, path: str, *authorities: str) -> str:
+    """The line the decision rule prints for a commit that sets a change request to decided on no
+    confirmed answer's URL."""
+    return (f'commit {sha[:12]} ("{subject}") changes {path}, sets {path} to decided, and cites '
+            f"no confirmed answer: Authority: {', '.join(authorities)}")
 
 
 def refuses(sha: str, subject: str, paths: tuple[str, ...], authority: str, why: str) -> str:
@@ -1600,6 +1616,93 @@ class SteeringTests(unittest.TestCase):
                 code, out = self.check("--base", base)
                 self.assertEqual(1, code, out)
                 self.assertIn(holds(sha, subject, request), out)
+
+    def test_a_change_request_added_as_decided_on_a_ticket_alone_is_held(self):
+        """#187: 9f56729 and 37af894 added their requests already decided, each citing its own
+        ticket, whose acceptance asked the lane to record the decision. That is a lane deciding;
+        ADR-0021 decision 4 wants a confirmed answer, so the ticket alone is held."""
+        self.github(143)
+        base = self.baseline()
+        request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
+        self.write(request, DECIDED_REQUEST)
+        subject = "Task issue-143: the change request, decided"
+        sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn("STEERING FAILED: a commit sets a change request to decided on no confirmed "
+                      "answer.", out)
+        self.assertIn(undecides(sha, subject, request, "#143"), out)
+
+    def test_a_change_request_added_as_decided_with_no_trailer_is_held(self):
+        """No trailer at all is the authority rule's failure, as for any steering change."""
+        base = self.baseline()
+        request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
+        self.write(request, DECIDED_REQUEST)
+        subject = "The change request, decided on nothing"
+        sha = self.commit(message(subject), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(holds(sha, subject, request), out)
+
+    def test_a_change_request_added_as_decided_on_a_confirmed_answer_passes(self):
+        """The comment holding the human's answer is what decides a request."""
+        self.comments({COMMENT_ID: COMMENT})
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-145-a-request.md", DECIDED_REQUEST)
+        self.commit(message("The change request, decided as Adam confirmed", COMMENT),
+                    made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_a_change_request_edited_from_open_to_decided_on_a_ticket_alone_is_held(self):
+        """Deciding by an edit is the same decision as deciding by an add."""
+        self.github(159)
+        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
+        self.write(request, OPEN_REQUEST)
+        base = self.baseline()
+        self.write(request, DECIDED_REQUEST)
+        subject = "The change request, decided"
+        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(undecides(sha, subject, request, "#159"), out)
+
+    def test_a_decided_change_request_edited_again_on_a_ticket_passes(self):
+        """06fe6aa's shape: a review fixing the prose of a request already decided decides nothing
+        new, so the ticket asking for the fix is enough, as for any steering edit."""
+        self.github(159)
+        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
+        self.write(request, DECIDED_REQUEST)
+        base = self.baseline()
+        self.append(request, "The reason, said better.")
+        self.commit(message("Review: the decision's reason", "#159"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_change_request_added_open_or_with_no_status_passes_after_the_rule(self):
+        """Asking stays free: an open request, or one with no Status line, needs no trailer."""
+        for name, text in (("open", OPEN_REQUEST), ("bare", "# A change request\n")):
+            with self.subTest(request=name):
+                base = self.git("rev-parse", "HEAD") if name == "bare" else self.baseline()
+                self.write(f"{steering.CHANGE_REQUESTS}issue-1-{name}.md", text)
+                self.commit(message(f"Ask for a contract change, {name}"), made=DECIDED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(0, code, out)
+                self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_change_request_added_as_decided_before_the_rule_passes(self):
+        """A commit made before DECIDED_SINCE could not have known the rule: 9f56729 and 37af894
+        stay as they landed."""
+        self.github(143)
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-145-a-request.md", DECIDED_REQUEST)
+        self.commit(message("Task issue-143: the change request, decided", "#143"),
+                    made=DECIDED_BEFORE)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
 
     def test_offline_a_steering_commit_naming_no_authority_still_fails(self):
         """The trailer's presence needs no network, so no network is no excuse for its absence.

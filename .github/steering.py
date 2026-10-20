@@ -80,7 +80,7 @@ own -- and the night's reviews held none of them: the report found two, and a la
 reviewers' two. Whether a commit cites an authority is mechanical, so it is this check's; whether
 what it cites decides the change stays the reviewer's. A commit is held when it sits between
 `--base` and HEAD, is not a merge, was made from AUTHORITY_SINCE on, and changes a steering
-document other than by adding a change request; it then needs an `Authority:` trailer of one of two
+document other than by adding an open change request; it then needs an `Authority:` trailer of one of two
 forms, `#<n>` for the ticket whose acceptance criterion asks for the change, or the URL of the
 comment on this repository that holds a confirmed answer. git's own trailer parser reads it, so an
 `Authority:` line inside the prose is not one. With no `--base` every commit HEAD reaches is read,
@@ -316,8 +316,23 @@ STEERING_DOCUMENTS = (
 # document, and AGENTS.md gives it to every workstream as the way to ask for a contract change, so
 # holding it would hold every lane that followed the rules. Only an added file passes: a change
 # request edited or removed afterwards is the integrator deciding it, which is a change to
-# contracts/ like any other.
+# contracts/ like any other. An added request that already says it is decided is a decision too,
+# and is held by the rule below (#187).
 CHANGE_REQUESTS = "contracts/changes/"
+
+# A change request's Status line, as every request under CHANGE_REQUESTS writes it:
+# `- **Status:** open`, or `- **Status:** decided, <date>. <prose>`. The first word is the state.
+# A request with no Status line counts as open: nothing in it claims a decision.
+STATUS = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?\*\*Status:\*\*[ \t]*(?P<state>[A-Za-z]+)")
+
+# Where the decision rule starts (#187). A commit that sets a change request's Status to decided,
+# by adding it so or by editing it to say so, is the integrator deciding it, and ADR-0021 decision 4
+# says a change request's status line is committed on a confirmed answer. So its Authority: trailer
+# must be the URL of the comment holding that answer; a `#<n>` alone is held, because a ticket's
+# acceptance criterion asking a lane to record a decision is a lane deciding, which is what
+# 9f56729 and 37af894 did on the night of 2026-10-19. Made is the committer date, as for
+# AUTHORITY_SINCE, and set just before the commit that adds the rule.
+DECIDED_SINCE = datetime.datetime(2026, 10, 20, 14, 10, tzinfo=datetime.timezone.utc)
 
 # Where the authority rule starts. A commit made before it was written could not have known the
 # rule, and rewording one would mean rewriting a branch that has landed. Made is the committer date:
@@ -360,12 +375,14 @@ LOG_FORMAT = (
 
 
 class Held(typing.NamedTuple):
-    """A commit the authority rule holds, and the authorities it names."""
+    """A commit the authority rule holds, the authorities it names, and the change requests it
+    sets to decided, which need a confirmed answer's URL among those authorities."""
 
     sha: str
     subject: str
     paths: tuple[str, ...]
     authorities: tuple[str, ...]
+    decides: tuple[str, ...] = ()
 
 
 def progress_claims(root: pathlib.Path) -> list[str]:
@@ -845,10 +862,36 @@ def steering_changes(root: pathlib.Path, sha: str) -> list[str]:
     ]
 
 
+def state_at(root: pathlib.Path, revision: str, path: str) -> str | None:
+    """The first word of a change request's Status line at a revision, lower-cased: "open",
+    "decided", or None when the file is absent there. A file with no Status line reads "open"."""
+    shown = git(root, "show", f"{revision}:{path}")
+    if shown.returncode != 0:
+        return None
+    found = STATUS.search(shown.stdout)
+    return found.group("state").lower() if found else "open"
+
+
+def decided_requests(root: pathlib.Path, sha: str) -> list[str]:
+    """The change requests a commit sets to decided: added saying so, or edited from open (or from
+    absent) to say so. A request already decided and edited again decides nothing new."""
+    found = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
+                "--root", sha)
+    fields = found.stdout.split("\0")
+    return [
+        path
+        for status, path in zip(fields[0::2], fields[1::2])
+        if status in ("A", "M") and path.startswith(CHANGE_REQUESTS) and path.endswith(".md")
+        and state_at(root, sha, path) == "decided"
+        and state_at(root, f"{sha}^", path) != "decided"
+    ]
+
+
 def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
     """The commits the authority rule holds, newest first: between base and HEAD, or every commit
     HEAD reaches when no base is named, that are not merges, were made from AUTHORITY_SINCE on, and
-    change a steering document other than by adding a change request.
+    change a steering document other than by adding an open change request. From DECIDED_SINCE on,
+    a commit that sets a change request to decided is held too, adding it or not.
 
     The starting point is compared here, commit by commit, and not given to `git log --since`:
     git's manual says of `--since-as-filter` that it "visits all commits in the range, rather than
@@ -865,6 +908,7 @@ def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
     if log.returncode != 0:
         raise SystemExit(f"steering: git log could not read {revisions}: {log.stderr.strip()}")
     since = AUTHORITY_SINCE.timestamp()
+    decided_since = DECIDED_SINCE.timestamp()
     held = []
     for record in log.stdout.split("\0"):
         if not record:
@@ -873,10 +917,12 @@ def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
         if int(made) < since:
             continue
         paths = steering_changes(root, sha)
-        if not paths:
+        decides = decided_requests(root, sha) if int(made) >= decided_since else []
+        if not paths and not decides:
             continue
         authorities = tuple(value.strip() for value in trailers.split("\x1e") if value.strip())
-        held.append(Held(sha, subject, tuple(paths), authorities))
+        named = tuple(paths) + tuple(path for path in decides if path not in paths)
+        held.append(Held(sha, subject, named, authorities, tuple(decides)))
     return held
 
 
@@ -926,20 +972,27 @@ def unauthorised(
     pulls: set[int],
     numbers_unread: str,
     comments: dict[str, tuple[str | None, str]],
-) -> tuple[list[str], list[str], list[str], int]:
+) -> tuple[list[str], list[str], list[str], int, list[str]]:
     """The held commits naming no authority, the authorities that resolve to nothing, why each
-    authority GitHub could not be asked about went unchecked, and how many held commits GitHub
-    vouched for every authority of.
+    authority GitHub could not be asked about went unchecked, how many held commits GitHub
+    vouched for every authority of, and the commits that decide a change request on no confirmed
+    answer's URL.
 
     Every authority a commit names is judged, not the first that resolves: a second trailer citing
     nothing is a pointer at nothing, which every other rule here fails.
     """
-    missing, refused, unchecked, vouched = [], [], [], 0
+    missing, refused, unchecked, vouched, undecided = [], [], [], 0, []
     for commit in held:
         named = f'commit {commit.sha[:12]} ("{commit.subject}") changes {", ".join(commit.paths)}'
         if not commit.authorities:
             missing.append(f"{named} and carries no {AUTHORITY}: trailer")
             continue
+        answered = any(COMMENT_AUTHORITY.fullmatch(value) for value in commit.authorities)
+        if commit.decides and not answered:
+            undecided.append(
+                f"{named}, sets {', '.join(commit.decides)} to decided, and cites no confirmed "
+                f"answer: {AUTHORITY}: {', '.join(commit.authorities)}"
+            )
         verdicts = [
             (authority, *judged(authority, issues, pulls, numbers_unread, comments))
             for authority in commit.authorities
@@ -949,9 +1002,10 @@ def unauthorised(
                 refused.append(f"{named}, and {AUTHORITY}: {authority} {why}")
             elif verdict == "unchecked":
                 unchecked.append(why)
-        if all(verdict == "vouched" for _, verdict, _ in verdicts):
+        settled = answered or not commit.decides
+        if settled and all(verdict == "vouched" for _, verdict, _ in verdicts):
             vouched += 1
-    return missing, refused, unchecked, vouched
+    return missing, refused, unchecked, vouched, undecided
 
 
 def report(lines: list[str], headline: str, *advice: str) -> bool:
@@ -1009,7 +1063,9 @@ def main(argv: list[str] | None = None) -> int:
     issues, pulls, unchecked = issued_numbers(root) if cites_issues else (set(), set(), "")
     unissued = [] if unchecked else dangling_issues(cited, issues | pulls)
     comments = {comment: comment_url(root, comment) for comment in wanted_comments(held)}
-    nameless, refused, unverified, vouched = unauthorised(held, issues, pulls, unchecked, comments)
+    nameless, refused, unverified, vouched, undecided = unauthorised(
+        held, issues, pulls, unchecked, comments
+    )
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -1104,7 +1160,16 @@ def main(argv: list[str] | None = None) -> int:
             "trailers. Authority: #<n> names the ticket whose acceptance criterion asks for the",
             "change; Authority: <URL> names the comment on this repository holding a confirmed",
             "answer. Amend the message to add one; docs/agents/landing-work.md has the forms.",
-            "Adding a change request under contracts/changes/ needs none.",
+            "Adding an open change request under contracts/changes/ needs none.",
+        ),
+        report(
+            undecided,
+            "STEERING FAILED: a commit sets a change request to decided on no confirmed answer.",
+            "ADR-0021 decision 4: a change request's status line is committed on a confirmed",
+            "answer, so the commit that says decided names the comment holding it, in an",
+            "Authority: <URL> trailer. A #<n> alone does not decide a request: a ticket asking a",
+            "lane to record a decision is a lane deciding. Leave the Status open and stop, or",
+            "cite the human's answer.",
         ),
         report(
             refused,
