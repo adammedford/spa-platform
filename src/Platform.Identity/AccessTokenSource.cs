@@ -68,13 +68,11 @@ internal sealed partial class AccessTokenSource(
 
         // The authentication middleware has authenticated this scheme already; the handler answers
         // again from what it read. A cookie for no session, another app's session, an expired one or
-        // none at all leaves no session key behind.
+        // none at all resolves to no session key. KeyOf notes a dead cookie as it answers, because the
+        // proxy only receives Unauthenticated and cannot recover the distinction (telemetry.md).
         AuthenticateResult authenticated = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (!authenticated.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
+        if (sessions.KeyOf(context, authenticated) is not { } key)
         {
-            // Authentication distinguishes a dead cookie from no cookie. Record that distinction
-            // here; the proxy only receives Unauthenticated and cannot recover it (telemetry.md).
-            Bff.NoteDeadSession(context, authenticated);
             return new AccessTokenResult.Unauthenticated();
         }
 

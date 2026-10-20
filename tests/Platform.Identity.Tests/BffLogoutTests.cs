@@ -71,6 +71,28 @@ public sealed class BffLogoutTests
     }
 
     [Fact]
+    public async Task Logout_with_a_cookie_for_no_session_still_leaves_through_the_provider_and_carries_no_rule_id()
+    {
+        // contracts/http-contract.md: a request with no session is still signed out of the provider and
+        // still clears its cookies, so it ends in no rejection, and contracts/telemetry.md has the rule id
+        // written only by the stage that ends the request with one; its session_ref still names the
+        // session the cookie named. Mutation: let logout's KeyOf call note a dead cookie as the refusing
+        // callers' do (drop refusesDeadSession: false); the logout carries auth.session, and this fails.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], stubProfile: false);
+        IdentityGateway.Login login = await gateway.LoginAsync(App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        await gateway.SendAsync(App1, "/bff/logout", login.Jar, "POST");
+
+        IdentityGateway.Answer again = await gateway.SendAsync(App1, "/bff/logout", login.Jar, "POST");
+
+        Assert.Equal(302, again.Status);
+        Assert.Equal(gateway.Idp.EndSessionEndpoint, new Uri(again.Location).GetLeftPart(UriPartial.Path));
+        Assert.True(Expired(again, login.Callback.SessionCookie.Name.Value!));
+        Assert.Null(again.Rule);
+        Assert.Equal(SessionRef.Of(key), again.SessionRef);
+    }
+
+    [Fact]
     public async Task Logout_revokes_the_refresh_token_the_session_holds_now_after_a_refresh_rotated_it()
     {
         // The record is read under the session's gate, not the ticket this request authenticated with.

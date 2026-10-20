@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
 using Platform.Abstractions;
 
 namespace Platform.Identity;
@@ -8,6 +10,13 @@ namespace Platform.Identity;
 /// once (task 3.3, task 3.6), the versioned replace and the end that removes whatever its action did
 /// (ADR-0017 decision 4). <see cref="AccessTokenSource"/> and <see cref="SessionEnd"/> keep the decisions
 /// and the outcome lines; this module never logs.
+///
+/// It also opens a session, holds the request's session key and writes <c>session_ref</c>, all for
+/// <see cref="AppBoundTicketStore"/>, the cookie handler's adapter: <see cref="OpenAsync"/>,
+/// <see cref="ResolveAsync"/> and <see cref="RemoveAsync"/> are that adapter's door, and stay off the
+/// session gate because the framework calls them (#141). Apart from <see cref="OpenAsync"/>'s answer,
+/// which the cookie handler puts in the cookie, the request's key leaves the module only through
+/// <see cref="KeyOf"/>, and toward a log only as <see cref="SessionRef.Of"/>'s result (N-16).
 ///
 /// One refresh at a time per session (ADR-0017 decision 1, ADR-0005's reserve design, T-D1 to T-D10).
 /// Cognito granted a refresh token replayed 2.0 seconds inside its grace window and then refused the
@@ -76,6 +85,95 @@ internal sealed class AppSessions(ISessionStore store)
     public async Task<SessionRecord?> ReadAsync(AppDefinition app, string sessionKey, CancellationToken cancellationToken) =>
         OwnedBy(app, await store.GetAsync(sessionKey, cancellationToken));
 
+    /// <summary>
+    /// A new session under a new key, which this request now carries: the cookie handler's sign-in on
+    /// the callback (<see cref="AppBoundTicketStore"/>). The store's create gives every session its own
+    /// key, so a login over a planted cookie never carries the new identity under the planted key (N-18,
+    /// R-D6). It takes the request's token: a fresh key races nothing, and the browser is present.
+    /// </summary>
+    public async Task<string> OpenAsync(HttpContext httpContext, SessionRecord record, CancellationToken cancellationToken)
+    {
+        string key = await store.CreateAsync(record, cancellationToken);
+        Reference(httpContext, key);
+        httpContext.Features.Set(new KeyChannel(key));
+        return key;
+    }
+
+    /// <summary>
+    /// The cookie handler's read of the session its cookie names, on every pinned request that presents
+    /// one: <see cref="ReadAsync"/>, with the request told which session it resolved to. The key is
+    /// referenced on the request whether or not it resolves, so an <c>auth.session</c> rejection still
+    /// correlates with the session it named; it is put on the channel <see cref="KeyOf"/> reads only when
+    /// the session is <paramref name="app"/>'s (task 3.8). Ungated on purpose: the framework makes this
+    /// read on every request, and one that waited behind a refresh of up to the provider deadline would
+    /// serialise every request on a session behind it (#141).
+    /// </summary>
+    public async Task<SessionRecord?> ResolveAsync(
+        HttpContext httpContext, AppDefinition app, string sessionKey, CancellationToken cancellationToken)
+    {
+        Reference(httpContext, sessionKey);
+        if (await ReadAsync(app, sessionKey, cancellationToken) is not { } record)
+        {
+            return null;
+        }
+
+        httpContext.Features.Set(new KeyChannel(sessionKey));
+        return record;
+    }
+
+    /// <summary>
+    /// Removes the session when it is <paramref name="app"/>'s and its client's, and leaves a foreign or
+    /// absent one alone, so a second call does nothing. The cookie handler's removals reach this through
+    /// the ticket store: its sign-out after a gated end on the refresh and logout paths and after the
+    /// re-login discard, which finds the record already gone, and its own removal of a ticket it read and
+    /// found expired (#141, Q12).
+    ///
+    /// Ungated by necessity, and so the exception to "every end runs under the session gate" is this
+    /// writer, the framework's cookie handler: the gate is not re-entrant, and the token source ends a
+    /// session and then signs out while it still holds the lease, so a gated remove reached through that
+    /// sign-out would wait on itself. It takes the caller's token, which is the request's.
+    /// </summary>
+    public async Task RemoveAsync(AppDefinition app, string sessionKey, CancellationToken cancellationToken)
+    {
+        if (await ReadAsync(app, sessionKey, cancellationToken) is not null)
+        {
+            await store.RemoveAsync(sessionKey, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The key of the session this request's cookie authenticated with, or null. Null unless
+    /// <paramref name="authenticated"/> succeeded: the cookie handler resolves the ticket through the
+    /// ticket store, which is where the key reaches the request, and then removes the session and fails
+    /// authentication when the ticket has expired, so the channel alone would hand back the key of a
+    /// session the handler has just refused
+    /// (CookieAuthenticationHandler.ReadCookieTicket:
+    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
+    ///
+    /// A cookie that resolved to no session is noted here, and only here, under <c>auth.session</c>
+    /// (<see cref="Bff.NoteDeadSession"/>), so the note has one call site (#141, S3).
+    /// </summary>
+    /// <param name="authenticated">This request's authentication of the pinned app's cookie scheme.</param>
+    /// <param name="refusesDeadSession">
+    /// False for a caller that answers a dead cookie with something other than a rejection, as
+    /// <c>/bff/logout</c> does: contracts/telemetry.md has the rule id written only by the stage that ends
+    /// the request with a rejection, and <c>security.rejections</c> counts what it writes.
+    /// </param>
+    public string? KeyOf(HttpContext httpContext, AuthenticateResult authenticated, bool refusesDeadSession = true)
+    {
+        if (authenticated.Succeeded && httpContext.Features.Get<KeyChannel>()?.Key is { } key)
+        {
+            return key;
+        }
+
+        if (refusesDeadSession)
+        {
+            Bff.NoteDeadSession(httpContext, authenticated);
+        }
+
+        return null;
+    }
+
     /// <summary>The number of gates held or waited for: the bound on the table, for a test.</summary>
     internal int ActiveGates
     {
@@ -99,6 +197,15 @@ internal sealed class AppSessions(ISessionStore store)
             ? record
             : null;
 
+    /// <summary>
+    /// The request's <c>session_ref</c> (contracts/telemetry.md), written here and nowhere else: the key
+    /// this request presented or was given. The key is on that contract's never-logged list, so only
+    /// <see cref="SessionRef.Of"/>'s result leaves this module (N-16). Null-conditional, because a
+    /// component test runs without the telemetry stage.
+    /// </summary>
+    private static void Reference(HttpContext httpContext, string sessionKey) =>
+        httpContext.Features.Get<IRequestTelemetryFeature>()?.SessionRef = SessionRef.Of(sessionKey);
+
     private void Leave(string sessionKey, Gate gate)
     {
         gate.Semaphore.Release();
@@ -109,6 +216,21 @@ internal sealed class AppSessions(ISessionStore store)
                 gates.Remove(sessionKey);
             }
         }
+    }
+
+    /// <summary>
+    /// The key of the session this request resolved to or was given, left on the request by
+    /// <see cref="OpenAsync"/> and <see cref="ResolveAsync"/> and read only by <see cref="KeyOf"/>. The
+    /// cookie handler keeps the key to itself once the stored ticket has replaced the cookie's, so this is
+    /// how the token source and logout find the record to re-read under the gate (task 3.8). Private to
+    /// the module, so no other code can read the key or plant one, and kept out of any string a log or an
+    /// exception could carry.
+    /// </summary>
+    private sealed class KeyChannel(string key)
+    {
+        public string Key { get; } = key;
+
+        public override string ToString() => nameof(KeyChannel);
     }
 
     internal sealed class Gate
