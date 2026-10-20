@@ -323,8 +323,9 @@ internal sealed partial class RequestGate(ILogger logger)
     {
         LogRejected(logger, RuleIds.GateMethod);
 
-        // RFC 9110 section 15.5.6: a 405 carries Allow, here the methods this path takes. The one entry
-        // that ends a 405 is the one that sets it (#142, Q13).
+        // RFC 9110 section 15.5.6: a 405 carries Allow, here the methods this path takes.
+        // Rejection.EndMethodAsync sets it, and it is the only entry Rejection ends gate.method
+        // through: Rejection.EndAsync refuses that id (#142, Q13).
         return Rejection.EndMethodAsync(context, allowed);
     }
 
