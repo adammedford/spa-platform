@@ -79,6 +79,15 @@ class SeedPublishesTheFixturesAndWritesTheFirstRegistry(cell.CompanionTestCase):
         self.assertEqual(world["roots"]["platform"]["bucket"], document["bucket"])
         self.assertEqual(world["roots"]["idp"]["issuer"], document["issuer"])
 
+    def test_it_writes_the_outputs_document_from_the_roots_and_then_reads_only_it(self):
+        # contracts/infra-outputs.schema.json: the scripts read outputs.json, and none of them reads
+        # Terraform state; Q49 on #129 excepts teardown.sh alone of these four. Writing the document
+        # is the one terraform output seed.sh runs. Review of #58.
+        case, _ = self.seeded()
+        outputs = [c for c in case.calls("terraform") if c.get("command") == "output"]
+        self.assertEqual(["apps", "idp", "platform"], sorted(c["root"] for c in outputs))
+        self.assertTrue(all("-json" in c["argv"] for c in outputs), outputs)
+
     def test_the_registry_is_bounded_by_the_configuration_the_gateway_runs_with(self):
         case, _ = self.seeded()
         config = next(c for c in case.calls("dotnet") if c["spactl"][:2] == ["app", "add"])["config"]

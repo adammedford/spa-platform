@@ -43,7 +43,7 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
     "deploy.sh builds, pushes, applies the new digest and checks that the running task has it"."""
 
     def deployed(self, world: dict | None = None):
-        case = cell.Case(self, world=world or seeded_world())
+        case = cell.Case(self, outputs=True, world=world or seeded_world())
         result = case.run(SCRIPT)
         self.assertEqual(0, result.status, result.output)
         self.assertNoUnexpectedCall(case)
@@ -106,6 +106,17 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertEqual([cell.SERVICE], wait["services"])
         self.assertIn("pass:", result.stdout)
 
+    def test_it_reads_no_terraform_state_but_the_outputs_it_writes_after_the_apply(self):
+        # contracts/infra-outputs.schema.json: the scripts read outputs.json, and none of them reads
+        # Terraform state; Q49 on #129 excepts teardown.sh alone of these four. Review of #58.
+        case, _ = self.deployed()
+        terraform = case.calls("terraform")
+        outputs = [c for c in terraform if c.get("command") == "output"]
+        self.assertEqual([], [c for c in outputs if "-raw" in c["argv"]])
+        apply = next(index for index, c in enumerate(terraform) if c.get("command") == "apply")
+        self.assertEqual(3, len(outputs))
+        self.assertTrue(all(terraform.index(c) > apply for c in outputs), "an output was read before the apply")
+
     def test_it_writes_the_outputs_document_with_the_running_image(self):
         case, _ = self.deployed()
         document = json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())
@@ -123,7 +134,7 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
             self.assertNotIn(cell.PASSWORD, json.dumps(call["argv"]))
 
     def test_two_deployments_push_two_tags(self):
-        case = cell.Case(self, world=seeded_world())
+        case = cell.Case(self, outputs=True, world=seeded_world())
         self.assertEqual(0, case.run(SCRIPT).status)
         second = case.run(SCRIPT)
         self.assertEqual(0, second.status, second.output)
@@ -136,7 +147,7 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
     1.7)". Before anything is built: nothing reaches Docker or Terraform's plan."""
 
     def refused(self, world: dict, fragment: str):
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT)
         self.assertEqual(1, result.status, result.output)
         self.assertIn(fragment, result.stderr)
@@ -163,7 +174,7 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
         self.assertEqual(environment["Registry__Key"], get["key"])
 
     def refused_or_passed(self, world: dict):
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT)
         self.assertEqual(0, result.status, result.output)
         return case
@@ -173,7 +184,7 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
     """Stable is not deployed. Each way the running service can differ from the apply is exit 1."""
 
     def failed(self, world: dict, fragment: str):
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT)
         self.assertEqual(1, result.status, result.output)
         self.assertIn(fragment, result.stderr)
@@ -228,24 +239,35 @@ class DeployRefusesToStart(cell.CompanionTestCase):
         self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
 
     def test_without_docker(self):
-        case = cell.Case(self, world=seeded_world())
+        case = cell.Case(self, outputs=True, world=seeded_world())
         case.remove("docker")
         self.refused(case, "brew install --cask docker-desktop")
 
     def test_without_a_region(self):
-        case = cell.Case(self, world=seeded_world())
+        case = cell.Case(self, outputs=True, world=seeded_world())
         self.refused(case, "no Region", env=case.env(AWS_REGION=None, AWS_DEFAULT_REGION=None))
         self.assertEqual([], case.calls("aws"))
 
     def test_as_the_teardown_role(self):
         world = seeded_world()
         world["caller"] = f"arn:aws:sts::{cell.ACCOUNT}:assumed-role/{cell.TEARDOWN_ROLE}/someone"
-        self.refused(cell.Case(self, world=world), "teardown role")
+        self.refused(cell.Case(self, outputs=True, world=world), "teardown role")
 
-    def test_a_platform_root_with_no_state(self):
-        world = seeded_world()
-        world["roots"]["platform"] = None
-        self.refused(cell.Case(self, world=world), "terraform init -backend-config=backend.hcl")
+    def test_without_the_outputs_document(self):
+        # contracts/infra-outputs.schema.json: the scripts read outputs.json and none of them reads
+        # Terraform state, teardown.sh excepted (Q49 on #129). Review of #58.
+        case = cell.Case(self, world=seeded_world())
+        self.refused(case, "Run tools/scripts/seed.sh first")
+        self.assertEqual([], case.calls("terraform"))
+
+    def test_an_outputs_document_for_another_region(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        path = case.repo / "infra/envs/poc/outputs.json"
+        document = json.loads(path.read_text())
+        document["region"] = "us-west-2"
+        path.write_text(json.dumps(document))
+        self.refused(case, f"gives no ecrGateway for {cell.REGION}")
+        self.assertEqual([], case.calls("terraform"))
 
 
 if __name__ == "__main__":

@@ -147,6 +147,24 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         self.assertEqual(sorted([f"Key=Platform,Values={PLATFORM_VALUE}", f"Key=Cell,Values={CELL}"]),
                          sorted(lookup["options"]["tag-filters"]))
 
+    def test_a_certificate_acm_still_counts_in_use_is_retried_until_it_lets_go(self):
+        # The listener's association outlives it for a while, and the AWS provider retries this
+        # error on its own certificate deletes (terraform-provider-aws v6.68.0,
+        # internal/service/acm/certificate.go). Review of #58.
+        world = deployed_world()
+        world["faults"]["certificate_in_use"] = 3
+        case, result = self.torn_down(world)
+        outcomes = [c["outcome"] for c in case.aws("acm delete-certificate")]
+        self.assertEqual(["ResourceInUseException"] * 3 + ["success"], outcomes)
+        self.assertIn("pass:", result.stdout)
+
+    def test_a_certificate_already_deleted_counts_as_deleted(self):
+        world = deployed_world()
+        world["faults"]["certificate_gone"] = True
+        case, result = self.torn_down(world)
+        self.assertEqual(["ResourceNotFoundException"], [c["outcome"] for c in case.aws("acm delete-certificate")])
+        self.assertIn("deleted already", result.stdout)
+
     def test_the_cell_s_inactive_task_definitions_are_deleted_and_no_other_cell_s(self):
         case, _ = self.torn_down()
         deleted = [name for call in case.aws("ecs delete-task-definitions")
@@ -192,6 +210,18 @@ class TeardownFails(cell.CompanionTestCase):
         self.assertIn("log-group:/spa-platform/poc/stray", result.stderr)
         self.assertIn("<account>", result.stderr)
         self.assertNotIn("pass:", result.stdout)
+
+    def test_a_certificate_in_use_past_the_wait_fails_and_says_so(self):
+        world = deployed_world()
+        world["faults"]["certificate_in_use"] = 1000
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=case.env(SPA_TEARDOWN_TAG_WAIT="2", SPA_TEARDOWN_TAG_POLL="0",
+                                                        SPA_TEARDOWN_CERT_WAIT="3"))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("still in use after 3 seconds", result.stderr)
+        self.assertEqual(4, len(case.aws("acm delete-certificate")))
+        self.assertNotIn("pass:", result.stdout)
+        self.assertNoUnexpectedCall(case)
 
     def test_a_failed_destroy_stops_before_the_next_root(self):
         world = deployed_world()

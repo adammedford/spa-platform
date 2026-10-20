@@ -12,6 +12,7 @@ Run: python3 -I tools/scripts/rollback_tests.py
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -63,7 +64,7 @@ def setUpModule():
 class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
 
     def rolled_back(self, world: dict, *args: str):
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT, *args)
         self.assertEqual(0, result.status, result.output)
         self.assertNoUnexpectedCall(case)
@@ -82,6 +83,10 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         self.assertIn("pass:", result.stdout)
         tfvars = (case.repo / "infra/envs/poc/platform/images.auto.tfvars").read_text()
         self.assertIn(f'gateway_image     = "{A}"', tfvars)
+        # The cell's names are the outputs document's, never state's (contracts/infra-outputs.schema.json;
+        # Q49 on #129 excepts teardown.sh alone). Review of #58.
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "output" and "-raw" in c["argv"]])
+        self.assertEqual(A, json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())["gatewayImage"])
 
     def test_a_revision_with_the_running_image_is_passed_over(self):
         world = deployed_twice()
@@ -97,7 +102,7 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         world = deployed_twice()
         world["task_definitions"][f"{cell.FAMILY}:2"]["status"] = "DELETE_IN_PROGRESS"
         world["task_definitions"][f"{cell.FAMILY}:0"] = definition(A, MOCK_A)  # never read: below 1
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT)
         # Revision 1 is the sample image, so with 2 gone there is nothing to roll back to.
         self.assertEqual(1, result.status, result.output)
@@ -116,7 +121,7 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
 
 class RollbackRefuses(cell.CompanionTestCase):
     def refused(self, world: dict, fragment: str, *args: str, status: int = 1):
-        case = cell.Case(self, world=world)
+        case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT, *args)
         self.assertEqual(status, result.status, result.output)
         self.assertIn(fragment, result.stderr)

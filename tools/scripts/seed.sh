@@ -111,9 +111,11 @@ spactl_shown() {
 
 # --- 1 and 2 ---------------------------------------------------------------------------------------
 
+# Written from the three roots, then read back like any other reader of it: the scripts read the
+# outputs document, never Terraform state (contracts/infra-outputs.schema.json).
 write_outputs
-CLUSTER="$(platform_output ecs_cluster)"
-SERVICE="$(platform_output ecs_service)"
+CLUSTER="$(outputs_field ecsCluster)"
+SERVICE="$(outputs_field ecsService)"
 read_service
 read_platform_config
 CONFIG="${WORK}/platform-config.json"

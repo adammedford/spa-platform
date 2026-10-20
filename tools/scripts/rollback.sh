@@ -22,15 +22,18 @@
 # holds, since the task could not pull it.
 #
 # Then it does what deploy.sh does after its push: it plans and applies infra/envs/poc/platform with
-# both images and the health check on /readyz, records them in images.auto.tfvars there, waits for
-# a stable service, asserts the running digest and the target's health, and writes
-# infra/envs/poc/outputs.json.
+# both images and the health check on /readyz, records them in images.auto.tfvars there, writes
+# infra/envs/poc/outputs.json, waits for a stable service, and asserts the running digest and the
+# target's health.
+#
+# The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
+# Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced. It needs the AWS CLI, Terraform and python3. It never prints the account id.
 #
 # Exit status: 0 when the previous gateway runs steady and healthy; 1 when there is none to go back
-# to, or a step failed; 2 when it did not start.
+# to, or a step failed; 2 when it did not start (no outputs document among the reasons).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -86,9 +89,10 @@ trap 'exit 130' INT TERM
 need_terraform
 cell_start
 
-ECR_GATEWAY="$(platform_output ecr_gateway)"
-CLUSTER="$(platform_output ecs_cluster)"
-SERVICE="$(platform_output ecs_service)"
+# From the outputs document, never from state (contracts/infra-outputs.schema.json).
+ECR_GATEWAY="$(outputs_field ecrGateway)"
+CLUSTER="$(outputs_field ecsCluster)"
+SERVICE="$(outputs_field ecsService)"
 
 read_service
 CURRENT="$(revision_of "$TASK_DEFINITION")"
@@ -150,5 +154,4 @@ note "rolling back to ${FAMILY}:${TARGET}, gateway ${TARGET_IMAGE##*@}"
 
 apply_images "$TARGET_IMAGE" "$MOCK_API_IMAGE"
 wait_and_assert "$TARGET_IMAGE"
-write_outputs
 note "pass: the gateway ${TARGET_IMAGE##*@} of ${FAMILY}:${TARGET} runs steady in ${CLUSTER} and answers ${READY_PATH}"

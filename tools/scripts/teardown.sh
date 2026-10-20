@@ -21,8 +21,9 @@
 #   2. terraform destroy in infra/envs/poc/platform, then apps, then idp. images.auto.tfvars, which
 #      deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
 #      sample image again.
-#   3. The certificate certs.sh imported, found by its Platform and Cell tags, once no listener holds
-#      it; and the cell's inactive task definitions, which keep their tags until deleted.
+#   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
+#      still counts it in use after the listener went; and the cell's inactive task definitions,
+#      which keep their tags until deleted.
 #   4. The tagging API is asked for every resource whose Platform tag is exactly spa-platform
 #      (contracts/resource-tags.md), until it answers none or the wait runs out. The bootstrap root's
 #      three resources carry spa-platform-bootstrap and do not answer; they, and the state bucket,
@@ -56,6 +57,9 @@ PLATFORM_TAG_VALUE="spa-platform"
 # "Retries for a few minutes": five, every thirty seconds, unless the environment says otherwise.
 TAG_WAIT_SECONDS="${SPA_TEARDOWN_TAG_WAIT:-300}"
 TAG_POLL_SECONDS="${SPA_TEARDOWN_TAG_POLL:-30}"
+# How long the certificate's delete retries while ACM still counts it in use, polling as the tag
+# query does. Twenty minutes, the AWS provider's own bound for the same wait (step 3).
+CERT_WAIT_SECONDS="${SPA_TEARDOWN_CERT_WAIT:-1200}"
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -70,7 +74,9 @@ Options
 
 Environment
   SPA_TEARDOWN_TAG_WAIT   Seconds the tag query retries for. Default 300.
-  SPA_TEARDOWN_TAG_POLL   Seconds between its attempts. Default 30.
+  SPA_TEARDOWN_TAG_POLL   Seconds between its attempts, and the certificate delete's. Default 30.
+  SPA_TEARDOWN_CERT_WAIT  Seconds the certificate delete retries while ACM says it is in use.
+                          Default 1200.
 EOF
 }
 
@@ -96,9 +102,9 @@ done
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac
-for value in "$TAG_WAIT_SECONDS" "$TAG_POLL_SECONDS"; do
+for value in "$TAG_WAIT_SECONDS" "$TAG_POLL_SECONDS" "$CERT_WAIT_SECONDS"; do
   case "$value" in
-    '' | *[!0-9]*) refuse "SPA_TEARDOWN_TAG_WAIT and SPA_TEARDOWN_TAG_POLL are whole seconds: got '${value}'" ;;
+    '' | *[!0-9]*) refuse "SPA_TEARDOWN_TAG_WAIT, SPA_TEARDOWN_TAG_POLL and SPA_TEARDOWN_CERT_WAIT are whole seconds: got '${value}'" ;;
   esac
 done
 
@@ -130,7 +136,7 @@ assume_teardown_role() {
   credentials="$(aws --region "$REGION" --output text sts assume-role --role-arn "$(printed)" \
     --role-session-name "teardown-$(date -u +%Y%m%dT%H%M%SZ)" \
     --query 'Credentials.[AccessKeyId, SecretAccessKey, SessionToken]' 2> "$ERR")" ||
-    fail "could not assume the teardown role ${role}: $(awk 'match($0, /An error occurred \([^)]*\)/) { print substr($0, RSTART + 19, RLENGTH - 20); exit }' "$ERR")"
+    fail "could not assume the teardown role ${role}: $(error_code)"
   set -f
   # shellcheck disable=SC2086
   set -- $credentials
@@ -210,16 +216,44 @@ destroy "$IDP_ROOT"
 # --- 3. what Terraform leaves -----------------------------------------------------------------------
 
 # certs.sh tags the certificate in the call that imports it (contracts/resource-tags.md). The
-# listener that held it went with the platform root, so ACM now deletes it.
+# listener that held it went with the platform root, but ACM can go on counting the certificate in
+# use for a while after, and refuses the delete with ResourceInUseException until it stops. The AWS
+# provider retries exactly that error on its own certificate deletes, for up to twenty minutes
+# (terraform-provider-aws v6.68.0, internal/service/acm/certificate.go, resourceCertificateDelete
+# and certificateCrossServicePropagationTimeout), so this does too. A certificate already gone,
+# ResourceNotFoundException, is one the tagging API still listed: it counts as deleted.
 # https://docs.aws.amazon.com/acm/latest/APIReference/API_DeleteCertificate.html
+delete_certificate() {
+  local arn="$1" waited=0
+  while :; do
+    aws_call acm delete-certificate --certificate-arn "$arn"
+    case "$OUTCOME" in
+      success)
+        note "deleted the certificate ${arn##*/}"
+        return 0
+        ;;
+      ResourceNotFoundException)
+        note "the certificate ${arn##*/} was deleted already"
+        return 0
+        ;;
+      ResourceInUseException)
+        [ "$waited" -lt "$CERT_WAIT_SECONDS" ] ||
+          fail "the certificate ${arn##*/} was still in use after ${CERT_WAIT_SECONDS} seconds. Read which resource holds it in the ACM console, then run teardown.sh --yes again."
+        sleep "$TAG_POLL_SECONDS"
+        waited=$((waited + TAG_POLL_SECONDS))
+        [ "$TAG_POLL_SECONDS" -gt 0 ] || waited=$((waited + 1))
+        ;;
+      *) fail "could not delete the certificate ${arn##*/}: ${OUTCOME}" ;;
+    esac
+  done
+}
+
 aws_read "the cell's imported certificates" resourcegroupstaggingapi get-resources \
   --resource-type-filters acm:certificate \
   --tag-filters "Key=${PLATFORM_TAG_KEY},Values=${PLATFORM_TAG_VALUE}" "Key=Cell,Values=${CELL}" \
   --query 'ResourceTagMappingList[].ResourceARN'
 for arn in $(tr '\t' ' ' < "$OUT"); do
-  aws_call acm delete-certificate --certificate-arn "$arn"
-  [ "$OUTCOME" = "success" ] || fail "could not delete the certificate ${arn##*/}: ${OUTCOME}"
-  note "deleted the certificate ${arn##*/}"
+  delete_certificate "$arn"
 done
 
 # A replaced or destroyed revision is deregistered, INACTIVE, and keeps its tags until it is deleted.

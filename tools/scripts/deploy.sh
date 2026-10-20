@@ -19,10 +19,13 @@
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
-#   4. It waits for the service to be stable, then asserts the primary deployment completed on the
-#      applied task definition, every running task's gateway container has the pushed digest, and
-#      the target is healthy on /readyz.
-#   5. It writes infra/envs/poc/outputs.json from the three roots' outputs.
+#   4. It writes infra/envs/poc/outputs.json from the three roots' outputs.
+#   5. It waits for the service to be stable, then asserts the primary deployment completed on the
+#      applied task definition, every running task's gateway container has the pushed digest, the
+#      target is healthy on /readyz, and the outputs document names the applied gateway.
+#
+# The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
+# Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
@@ -32,7 +35,7 @@
 # and Terraform's output pass through a filter that replaces it.
 #
 # Exit status: 0 when the applied gateway runs steady and healthy; 1 when a step failed; 2 when it
-# did not start (a usage error, a missing tool, no Region, no credentials, a root not initialised).
+# did not start (a usage error, a missing tool, no Region, no credentials, no outputs document).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -73,10 +76,11 @@ need_tool docker "brew install --cask docker-desktop (decision D-2, docs/depende
 docker buildx version > /dev/null 2>&1 || refuse "docker buildx does not answer. Start Docker Desktop."
 cell_start
 
-ECR_GATEWAY="$(platform_output ecr_gateway)"
-ECR_MOCK_API="$(platform_output ecr_mock_api)"
-CLUSTER="$(platform_output ecs_cluster)"
-SERVICE="$(platform_output ecs_service)"
+# From the outputs document seed.sh wrote, never from state (contracts/infra-outputs.schema.json).
+ECR_GATEWAY="$(outputs_field ecrGateway)"
+ECR_MOCK_API="$(outputs_field ecrMockApi)"
+CLUSTER="$(outputs_field ecsCluster)"
+SERVICE="$(outputs_field ecsService)"
 
 # --- 1. the registry -------------------------------------------------------------------------------
 #
@@ -153,5 +157,4 @@ note "pushed the gateway as ${GATEWAY_IMAGE##*@} and the mock API as ${MOCK_API_
 
 apply_images "$GATEWAY_IMAGE" "$MOCK_API_IMAGE"
 wait_and_assert "$GATEWAY_IMAGE"
-write_outputs
 note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER} and answers ${READY_PATH}"

@@ -9,6 +9,10 @@ one file back.
     cell_documents.py outputs <region> <idp.json> <apps.json> <platform.json> <out>
         infra/envs/poc/outputs.json, contracts/infra-outputs.schema.json's document, from the three
         roots' `terraform output -json`. Written whole or not at all.
+    cell_documents.py field <outputs.json> <field> <region>
+        One field of that document, for a script that reads it: the contract's own description says
+        the scripts read it and none of them reads Terraform state, teardown.sh excepted (change
+        request 1.5a, decision 2; Q49 on #129). Refused when the document is for another Region.
     cell_documents.py config <environment.tsv> <platform-config.schema.json>
         The platform configuration the gateway container runs with, in the JSON form of
         contracts/platform-config.schema.json, from its task definition's environment.
@@ -107,6 +111,24 @@ def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
         if os.path.exists(temporary):
             os.unlink(temporary)
         raise
+    return 0
+
+
+def field(path: str, name: str, region: str) -> int:
+    try:
+        document = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the outputs document is not JSON")
+    if not isinstance(document, dict):
+        raise Refused("the outputs document is not an object")
+    # The document is rewritten after every apply, so a stale one names this checkout's last cell;
+    # one for another Region would aim every call of the script where they cannot reach.
+    if document.get("region") != region:
+        raise Refused("the outputs document is not for AWS_REGION: source tools/aws-project.env, or run seed.sh again")
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise Refused(f"the outputs document has no {name}")
+    print(value)
     return 0
 
 
@@ -221,7 +243,7 @@ def release(directory: str) -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "config": (config, 2), "apps": (apps, 1), "release": (release, 1)}
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "config": (config, 2), "apps": (apps, 1), "release": (release, 1)}
 
 
 def main(argv: list[str]) -> int:

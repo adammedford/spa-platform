@@ -138,12 +138,17 @@ run_aws() {
   fi
 }
 
+# The error code in the CLI's standard error, $ERR, or nothing.
+error_code() {
+  awk 'match($0, /An error occurred \([^)]*\)/) { print substr($0, RSTART + 19, RLENGTH - 20); exit }' "$ERR"
+}
+
 aws_call() {
   if run_aws "$@" > "$OUT" 2> "$ERR"; then
     OUTCOME="success"
     return 0
   fi
-  OUTCOME="$(awk 'match($0, /An error occurred \([^)]*\)/) { print substr($0, RSTART + 19, RLENGTH - 20); exit }' "$ERR")"
+  OUTCOME="$(error_code)"
   [ -n "$OUTCOME" ] || OUTCOME="no answer from AWS"
   return 0
 }
@@ -165,18 +170,12 @@ need_terraform() { need_tool terraform "brew install hashicorp/tap/terraform"; }
 
 root_name() { printf '%s' "${1#"${REPO_ROOT}"/}"; }
 
-# One output of a root, raw, or nothing when the root has none: never initialised, never applied,
-# or destroyed.
+# One output of a root, raw, from its state, or nothing when the root has none: never initialised,
+# never applied, or destroyed. teardown.sh's alone: contracts/infra-outputs.schema.json says the
+# scripts read outputs.json and none of them reads Terraform state, and the one exception among
+# these four is teardown.sh's (change request 1.5a, decision 2; Q49 on #129, confirmed).
 tf_output() {
   terraform -chdir="$1" output -no-color -raw "$2" 2> "$ERR" || true
-}
-
-# A platform root output a script cannot run without.
-platform_output() {
-  local value
-  value="$(tf_output "$PLATFORM_ROOT" "$1")"
-  [ -n "$value" ] || refuse "the platform root has no $1 output. Run terraform init -backend-config=backend.hcl in $(root_name "$PLATFORM_ROOT"), and apply it first."
-  printf '%s' "$value"
 }
 
 # Terraform's own output, through the redaction: a plan names the bucket, the repositories and the
@@ -190,6 +189,16 @@ terraform_shown() {
 # --- the cell's documents --------------------------------------------------------------------------
 
 documents() { python3 -I "$DOCUMENTS" "$@"; }
+
+# A field of infra/envs/poc/outputs.json that a script cannot run without, in the contract's names
+# (contracts/infra-outputs.schema.json). seed.sh writes the document first, and deploy.sh and
+# rollback.sh rewrite it after their apply, so a script that reads it reads the last apply's.
+outputs_field() {
+  [ -f "$OUTPUTS_FILE" ] ||
+    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the three roots."
+  documents field "$OUTPUTS_FILE" "$1" "$REGION" ||
+    refuse "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the three roots."
+}
 
 # infra/envs/poc/outputs.json, from the three roots' outputs. After every apply.
 write_outputs() {
@@ -269,6 +278,9 @@ apply_images() {
     printf 'health_check_path = "%s"\n' "$READY_PATH"
   } > "$IMAGES_TFVARS"
   note "recorded the applied images in $(root_name "$IMAGES_TFVARS")"
+  # The infrastructure outputs are written after every apply (contracts/infra-outputs.schema.json),
+  # whatever the wait and the assertions find next.
+  write_outputs
 }
 
 # Wait for a steady service, then assert that what runs is what was applied: $1 the gateway image
@@ -336,8 +348,10 @@ wait_and_assert() {
       fail "the target group's targets are: ${states}." ;;
   esac
 
+  # The image every reader of the outputs document is told runs, which apply_images rewrote from
+  # the platform root's gateway_image output.
   local recorded
-  recorded="$(tf_output "$PLATFORM_ROOT" gateway_image)"
-  [ "$recorded" = "$gateway" ] || fail "the platform root's gateway_image output is $(redact "$recorded"), not the image applied."
+  recorded="$(outputs_field gatewayImage)"
+  [ "$recorded" = "$gateway" ] || fail "the outputs document's gatewayImage is $(redact "$recorded"), not the image applied."
   note "steady: task definition $(revision_of "$definition") runs gateway ${digest}, healthy on ${READY_PATH}"
 }

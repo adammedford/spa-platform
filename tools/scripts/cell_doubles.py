@@ -360,6 +360,16 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         return found
     if command == "acm delete-certificate":
         arn = options["certificate-arn"]
+        # ACM counts a certificate in use for a while after the listener that held it is deleted:
+        # the AWS provider retries this error on its own deletes (terraform-provider-aws v6.68.0,
+        # internal/service/acm/certificate.go).
+        in_use = world["faults"].get("certificate_in_use", 0)
+        if in_use:
+            world["faults"]["certificate_in_use"] = in_use - 1
+            raise ServiceError("ResourceInUseException", "DeleteCertificate")
+        if not any(entry["arn"] == arn for entry in world["tagged"]) or world["faults"].get("certificate_gone"):
+            world["tagged"] = [entry for entry in world["tagged"] if entry["arn"] != arn]
+            raise ServiceError("ResourceNotFoundException", "DeleteCertificate")
         world["tagged"] = [entry for entry in world["tagged"] if entry["arn"] != arn]
         return None
     if command == "ecs list-task-definitions":
@@ -650,6 +660,7 @@ DOUBLES = {"aws": aws_double, "terraform": terraform_double, "docker": docker_do
 if __name__ == "__main__" and sys.argv[1:2] == ["--double"]:
     sys.exit(DOUBLES[sys.argv[2]](sys.argv[4:], pathlib.Path(sys.argv[3])))
 
+import importlib.util  # noqa: E402
 import shlex  # noqa: E402 -- below the doubles, which start once per call
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
@@ -672,7 +683,7 @@ class Case:
     its own, a bin holding the doubles and a way to each real tool, which is the case's whole PATH,
     and the world beside them."""
 
-    def __init__(self, test: unittest.TestCase, *, world: dict | None = None):
+    def __init__(self, test: unittest.TestCase, *, world: dict | None = None, outputs: bool = False):
         self.test = test
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
@@ -701,6 +712,26 @@ class Case:
                 f"{shlex.quote(str(self.dir))} \"$@\"\n"))
         self.world = world if world is not None else default_world()
         self.save()
+        if outputs:
+            self.write_outputs()
+
+    def write_outputs(self):
+        """infra/envs/poc/outputs.json as seed.sh leaves it, from the world's roots, by the real
+        assembler in cell_documents.py: deploy.sh and rollback.sh read the cell's names from it and
+        never from state (contracts/infra-outputs.schema.json). Nothing is written while a root has
+        no state, as seed.sh could not have written it then."""
+        roots = self.world["roots"]
+        if not all(roots.get(name) for name in ("idp", "apps", "platform")):
+            return
+        spec = importlib.util.spec_from_file_location("cell_documents", SCRIPTS / "cell_documents.py")
+        documents = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(documents)
+        paths = []
+        for name in ("idp", "apps", "platform"):
+            path = self.dir / f"{name}-outputs.json"
+            path.write_text(json.dumps({key: {"value": value} for key, value in roots[name].items()}))
+            paths.append(str(path))
+        documents.outputs(self.world["region"], *paths, str(self.repo / "infra/envs/poc/outputs.json"))
 
     def write_executable(self, name: str, content: str):
         path = self.bin / name
