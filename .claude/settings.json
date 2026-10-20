@@ -12,6 +12,7 @@
       "Bash(dotnet --version)",
       "Bash(git merge-base *)",
       "Bash(git check-ignore *)",
+      "Bash(git rm tests/*)",
       "Bash(terraform validate)",
       "Bash(terraform fmt *)",
       "Bash(terraform version)",

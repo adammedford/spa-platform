@@ -33,8 +33,10 @@ not mean to, or it needs an integrator path.
 
 **Needing an integrator path** — a contract, a package version, a new project, anything in
 `src/Platform.Abstractions` — means writing `contracts/changes/<task-id>-<slug>.md` describing what
-you need and why. Anyone may add one; the check exempts that directory. Then merge what you have,
-say in the merge body that the request is open, and stop the task. The integrator decides and edits.
+you need and why. Anyone may add one; the check exempts that directory, except a request added or
+edited to say its Status is decided, which needs a confirmed answer as its authority (ADR-0021
+decision 4). Then merge what you have, say in the merge body that the request is open, and stop the
+task. The integrator decides and edits.
 
 Needing *another workstream's* path means something has gone wrong: A-03 says a workstream project
 references `Platform.Abstractions` and no other workstream's project, so a real need for another
@@ -63,8 +65,10 @@ each non-merge commit between the base the check judges against and HEAD, made s
 point the script records, and fails one that changes a steering document with no `Authority:`
 trailer, a `#<n>` that names no issue (a pull request's number included), or a URL that is not a
 comment on this repository, naming the commit and the paths. A merge needs no trailer, and neither
-does a commit that only adds a change request under `contracts/changes/`; editing or removing one
-does. Whether what the trailer cites decides the change is the reviewer's call, not the check's.
+does a commit that only adds an open change request under `contracts/changes/`; editing or removing
+one does, and a commit that sets a request's Status to decided needs a trailer that is the URL of a
+confirmed answer, never a bare `#<n>`. Whether what the trailer cites decides the change is the
+reviewer's call, not the check's.
 
 ## Land it
 
@@ -112,6 +116,10 @@ input for the confirmation it asks when no `--subject` is given. If the row land
 being finished, add an `Outstanding:` line saying what it still owes, and an
 `Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
 branch is deleted when the **task** is done, not when a pull request merges.
+
+In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
+box that asks for something in the merge body is met there, and the landing body cites those merges
+by sha rather than copying them.
 
 **`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
 --delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
