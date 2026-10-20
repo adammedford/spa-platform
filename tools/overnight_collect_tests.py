@@ -136,6 +136,27 @@ class Rules(unittest.TestCase):
         self.assertEqual("ready-for-human", answer[5]["status"])  # the label beats the assignee
         self.assertEqual("needs-triage", answer[6]["status"])
 
+    def test_an_issue_with_two_triage_labels_is_one_ticket_with_the_first_label_in_order(self):
+        """A human relabelling by hand can leave two of the three labels on one issue, which then
+        comes back in two listings. It is one ticket, its status the label the order puts first:
+        ready-for-human, then needs-triage, then ready-for-agent."""
+        for listed, expected in (
+            ({"agent": [issue(5, body())], "human": [issue(5, body())]}, "ready-for-human"),
+            ({"agent": [issue(5, body())], "triage": [issue(5, body())]}, "needs-triage"),
+            ({"human": [issue(5, body())], "triage": [issue(5, body())]}, "ready-for-human"),
+            ({"agent": [issue(5, body())], "human": [issue(5, body())],
+              "triage": [issue(5, body())]}, "ready-for-human"),
+        ):
+            with self.subTest(labels=sorted(listed)):
+                answer = resolved(**listed)
+                self.assertEqual([(5, expected)],
+                                 [(t["issue"], t["status"]) for t in answer["tickets"]])
+
+    def test_a_spec_with_two_triage_labels_is_one_parent(self):
+        answer = resolved(agent=[issue(139, "", subs=2)], human=[issue(139, "", subs=2)])
+        self.assertEqual([(139, "ready-for-human")],
+                         [(p["issue"], p["label"]) for p in answer["parents"]])
+
     def test_blocked_settles_however_long_the_chain(self):
         """10 waits on 11, 11 on 12, and 12 is a human's: listed first, 10 is judged before 11
         is demoted, so a single pass would leave it ready."""

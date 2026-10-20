@@ -27,7 +27,8 @@ The rules, as the collect step states them:
 - status, in this order: ready-for-human; needs-triage; claimed (an assignee, or a `task/<id>-`
   branch on a row not landed); ready-for-agent when every open blocker is itself a ready-for-agent
   ticket tonight; blocked otherwise. The last two depend on each other, so they are settled by
-  repeating until nothing changes.
+  repeating until nothing changes. An issue carrying two of the labels is one ticket, under the
+  label this order puts first.
 - openBoxes: the `- [ ]` lines in the body, or -1 when it has no checkbox at all.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
@@ -50,6 +51,11 @@ import sys
 import typing
 
 LABELS = ("ready-for-agent", "ready-for-human", "needs-triage")
+
+# The labels in the order the collect step's status rule reads them. A human relabelling by hand can
+# leave two of them on one issue, which then comes back in two listings: it is one ticket, under the
+# label this order puts first.
+PRECEDENCE = ("ready-for-human", "needs-triage", "ready-for-agent")
 FIELDS = "number,title,body,labels,assignees,url,blockedBy,subIssuesSummary"
 REPO_URL = "https://github.com/adammedford/spa-platform/issues/{}"
 
@@ -134,14 +140,18 @@ def roadmap(root: pathlib.Path) -> dict:
 # --- resolving: pure functions over what was read ------------------------------------------------
 
 def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
-    found = []
-    for label in LABELS:
+    """Each listed issue once, by number, under the first of its labels in PRECEDENCE."""
+    found: dict[int, Issue] = {}
+    for label in PRECEDENCE:
         for raw in listings.get(label, []):
+            number = int(raw["number"])
+            if number in found:
+                continue
             blocked = raw.get("blockedBy") or []
             nodes = blocked.get("nodes", []) if isinstance(blocked, dict) else blocked
             summary = raw.get("subIssuesSummary") or {}
-            found.append(Issue(
-                number=int(raw["number"]),
+            found[number] = Issue(
+                number=number,
                 title=raw.get("title", ""),
                 body=raw.get("body") or "",
                 label=label,
@@ -150,8 +160,8 @@ def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
                 blockers=tuple(int(node["number"]) for node in nodes
                                if str(node.get("state", "OPEN")).upper() == "OPEN"),
                 sub_issues=int(summary.get("total", 0) or 0),
-            ))
-    return found
+            )
+    return list(found.values())
 
 
 def ticket_id(issue: Issue) -> str:
