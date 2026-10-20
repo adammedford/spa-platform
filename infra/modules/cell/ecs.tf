@@ -272,9 +272,18 @@ resource "aws_ecs_service" "gateway" {
     rollback = true
   }
 
-  # The gateway answers /readyz 200 only once a registry snapshot is live (contracts/pipeline.md),
-  # which is one poll interval after the task starts. Without a grace period the first health check
-  # can fail before the first poll and take a good deployment down with it.
+  # The gateway answers /readyz 200 only once a registry snapshot is live (contracts/pipeline.md).
+  # RegistryPoller reads the registry from S3 once at start-up and only then waits a poll interval,
+  # so readiness follows that first read. The grace period keeps the scheduler from acting on an
+  # unhealthy target for 60 s after the task starts: time for process start and that first read.
+  # The target group (alb.tf) sets no interval or thresholds, so the provider's defaults hold:
+  # interval 30 s, healthy and unhealthy thresholds 3. A new target is healthy on one pass and
+  # unhealthy after three failures, (3 - 1) x 30 s after its first check (#171's reading: the guide
+  # makes no exception for a target still in its initial checks, but does not say so outright), so
+  # /readyz must answer 200 to the third check, first check + 60 s: that is the real bound, and a
+  # slow image pull eats into it if the first check comes before the container starts (#171).
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html
+  # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/lb_target_group.html.markdown
   health_check_grace_period_seconds = 60
 
   network_configuration {
