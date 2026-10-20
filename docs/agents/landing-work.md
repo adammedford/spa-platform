@@ -117,6 +117,10 @@ being finished, add an `Outstanding:` line saying what it still owes, and an
 `Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
 branch is deleted when the **task** is done, not when a pull request merges.
 
+In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
+box that asks for something in the merge body is met there, and the landing body cites those merges
+by sha rather than copying them.
+
 **`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
 --delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
 commands that recreate each deleted branch at its old tip:
