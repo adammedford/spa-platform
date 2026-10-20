@@ -144,8 +144,8 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
             .Select(field => field.Name)
             .Where(name => name != "category");
 
-        Assert.Equal(ContractText.LogFields, written);
-        Assert.Contains(TheCall.Line.GetProperty("route").GetString(), ContractText.RouteValues);
+        Assert.Equal(Contract.LogFields, written);
+        Assert.Contains(TheCall.Line.GetProperty("route").GetString(), Contract.RouteValues);
         Assert.Equal("information", TheCall.Line.GetProperty("level").GetString());
         Assert.Equal(200, TheCall.Line.GetProperty("status").GetInt32());
 
@@ -176,8 +176,8 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
             .Where(name => name.StartsWith("Platform.", StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal);
 
-        Assert.All(platformSpans, name => Assert.Contains(name, ContractText.PlatformInstrumentNames));
-        Assert.All(platformMeters, name => Assert.Contains(name, ContractText.PlatformInstrumentNames));
+        Assert.All(platformSpans, name => Assert.Contains(name, FixtureFiles.PlatformInstrumentNames));
+        Assert.All(platformMeters, name => Assert.Contains(name, FixtureFiles.PlatformInstrumentNames));
 
         // CODING_STANDARDS.md -> "An assertion must be able to fail", second shape: the span line
         // above is vacuous today. Nothing in the tree creates an ActivitySource, so every span here
@@ -185,7 +185,7 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         // platform's prefix; the line starts biting when a workstream adds one. The meter line is
         // the half with data, and the mechanism both rest on is checked against an input that breaks
         // it: a name under the platform's prefix that is no project under src/ is not accepted.
-        Assert.DoesNotContain("Platform.NotAProject", ContractText.PlatformInstrumentNames);
+        Assert.DoesNotContain("Platform.NotAProject", FixtureFiles.PlatformInstrumentNames);
 
         // And the subscription is not vacuous: the platform's own counter did arrive, under a name the
         // contract's metric list holds, and the proxy's span came from the source named beside them.
@@ -193,8 +193,8 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         // asserted: that the counter arrived at all, and arrived from a platform project, is.
         IEnumerable<Metric> requests = TheCall.Telemetry.Metrics.Where(metric => metric.Name == "gateway.requests");
         Assert.NotEmpty(requests);
-        Assert.Contains("gateway.requests", ContractText.MetricNames);
-        Assert.All(requests, metric => Assert.Contains(metric.MeterName, ContractText.PlatformInstrumentNames));
+        Assert.Contains("gateway.requests", Contract.MetricNames);
+        Assert.All(requests, metric => Assert.Contains(metric.MeterName, FixtureFiles.PlatformInstrumentNames));
         Assert.Equal("Yarp.ReverseProxy", TheCall.ProxySpan.Source.Name);
     }
 

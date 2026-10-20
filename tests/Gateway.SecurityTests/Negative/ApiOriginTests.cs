@@ -158,7 +158,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
             RequestOptions.With(("Origin", Harness.App("app1").Origin.GetLeftPart(UriPartial.Authority))),
             Suite.Ct);
 
-        Contract.ErrorRow noSession = Contract.Error("No session");
+        Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         Assert.Equal((HttpStatusCode)noSession.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{noSession.Code}\"", response.Body, StringComparison.Ordinal);
         Assert.Null(await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
@@ -263,7 +263,7 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
 
     private static async Task AssertRefusedAsync(GatewayHarness harness, BrowserResponse response, int before, string rule)
     {
-        Contract.ErrorRow expected = Contract.Error("The request gate refused the request");
+        Contract.ErrorRow expected = Contract.Error("origin_rejected");
         Assert.Equal(expected.Status, (int)response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);

@@ -138,7 +138,7 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
     /// <summary>The shell gate's answer to a request the gate admitted with no session: 401 <c>unauthenticated</c>, under <paramref name="rule"/>.</summary>
     private async Task AssertRefusedForNoSessionAsync(RawResponse response, int before, string? rule)
     {
-        Contract.ErrorRow expected = Contract.Error("No session");
+        Contract.ErrorRow expected = Contract.Error("unauthenticated");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
         Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
@@ -146,7 +146,7 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
 
     private async Task AssertRefusedAsync(RawResponse response, int before)
     {
-        Contract.ErrorRow expected = Contract.Error("a cookie name imitates a platform cookie");
+        Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);

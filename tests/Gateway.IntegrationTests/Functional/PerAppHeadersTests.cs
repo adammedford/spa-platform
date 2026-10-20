@@ -16,7 +16,7 @@ namespace Gateway.IntegrationTests.Functional;
 /// would not show tenancy: the claim is that app 2's entry changes app 2's policy and nothing of
 /// app 1's. The expected policy is the baseline in <c>contracts/http-contract.md</c> plus the
 /// additions in <c>fixtures/apps/app2.json</c>, both read from those files
-/// (<see cref="ContractText"/>).</para>
+/// (<see cref="Contract"/>).</para>
 ///
 /// <para>These requests isolate the HTTP contract named above. Session establishment and
 /// preservation require separate acceptance evidence; a successful response here proves only the
@@ -53,7 +53,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
 
         // app1's entry carries no csp, so its policy is the contract's baseline exactly. app2's adds
         // data: to img-src, which is the fixture's own value, read from the fixture.
-        string baseline = ContractText.BaselineCsp(IssuerBrowserOrigin);
+        string baseline = Contract.BaselineCsp(IssuerBrowserOrigin);
         string app2Addition = FixtureFiles.AppDefinition("app2")["csp"]!["img-src"]!.AsArray().Single()!.GetValue<string>();
 
         Assert.Equal(baseline, one.Header("Content-Security-Policy"));
@@ -70,8 +70,8 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         BrowserResponse one = await browser.NavigateAsync(Harness.App("app1").Url("/"), ct: Ct);
         BrowserResponse two = await browser.NavigateAsync(Harness.App("app2").Url("/"), ct: Ct);
 
-        ImmutableArray<KeyValuePair<string, string>> first = ContractText.Directives(one.Header("Content-Security-Policy")!);
-        ImmutableArray<KeyValuePair<string, string>> second = ContractText.Directives(two.Header("Content-Security-Policy")!);
+        ImmutableArray<KeyValuePair<string, string>> first = Contract.Directives(one.Header("Content-Security-Policy")!);
+        ImmutableArray<KeyValuePair<string, string>> second = Contract.Directives(two.Header("Content-Security-Policy")!);
 
         // The contrast itself: the same directives in the same order, differing in exactly those the
         // entries differ in, and in no other.
@@ -93,8 +93,8 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         // others". The policy the browser receives therefore names exactly the baseline's directives,
         // whatever an entry asked for.
         Assert.Equal(
-            ContractText.Directives(ContractText.BaselineCspTemplate).Select(directive => directive.Key),
-            ContractText.Directives(served.Header("Content-Security-Policy")!).Select(directive => directive.Key));
+            Contract.Directives(Contract.BaselineCspTemplate).Select(directive => directive.Key),
+            Contract.Directives(served.Header("Content-Security-Policy")!).Select(directive => directive.Key));
     }
 
     [Fact]
@@ -109,13 +109,13 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
         Assert.Equal(HttpStatusCode.OK, two.StatusCode);
         foreach (BrowserResponse response in (BrowserResponse[])[one, two])
         {
-            foreach ((string name, string value) in ContractText.FixedResponseHeaders)
+            foreach ((string name, string value) in Contract.FixedResponseHeaders)
             {
                 Assert.Equal(value, response.Header(name));
             }
 
             Assert.DoesNotContain(response.Headers.Keys, name =>
-                name.StartsWith(ContractText.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
+                name.StartsWith(Contract.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -162,7 +162,7 @@ public sealed class PerAppHeadersTests(PerAppHeadersTests.Cell cell) : IClassFix
 
         Dictionary<string, string> one = Additions(left);
         Dictionary<string, string> two = Additions(right);
-        return ContractText.Directives(ContractText.BaselineCspTemplate)
+        return Contract.Directives(Contract.BaselineCspTemplate)
             .Select(directive => directive.Key)
             .Where(directive => one.GetValueOrDefault(directive) != two.GetValueOrDefault(directive));
     }

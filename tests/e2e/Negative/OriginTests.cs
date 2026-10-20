@@ -98,15 +98,15 @@ public sealed class OriginTests
 
     private static void AssertOriginRejected(Exchange exchange)
     {
-        Assert.Equal(403, exchange.Status);
-        Assert.Contains($"\"code\":\"{Contract.Error("request gate refused").Code}\"", exchange.BodyText, StringComparison.Ordinal);
+        Assert.Equal(Contract.Error("origin_rejected").Status, exchange.Status);
+        Assert.Contains($"\"code\":\"{Contract.Error("origin_rejected").Code}\"", exchange.BodyText, StringComparison.Ordinal);
         Assert.DoesNotContain(exchange.Headers, header => header.Key.StartsWith(Contract.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static async Task AssertOriginRejectedAsync(HttpResponseMessage response)
     {
-        Assert.Equal(403, (int)response.StatusCode);
-        Assert.Contains($"\"code\":\"{Contract.Error("request gate refused").Code}\"", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        Assert.Equal(Contract.Error("origin_rejected").Status, (int)response.StatusCode);
+        Assert.Contains($"\"code\":\"{Contract.Error("origin_rejected").Code}\"", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
         Assert.DoesNotContain(response.Headers.Concat(response.Content.Headers), header => header.Key.StartsWith(Contract.ForbiddenHeaderPrefix, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -75,7 +75,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
 
         BrowserResponse response = await browser.GetAsync("/api/nosuch/thing", ct: Suite.Ct);
 
-        Contract.ErrorRow expected = Contract.Error("The app lists no upstream under that name");
+        Contract.ErrorRow expected = Contract.Error("unknown_api");
         Assert.Equal(expected.Status, (int)response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);
@@ -154,7 +154,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
             Harness.GatewayAddress, "GET", target, Harness.App("app1").Host,
             [("Sec-Fetch-Site", FetchMetadata.SameOrigin)], Suite.Ct);
 
-        Contract.ErrorRow expected = Contract.Error("The path failed normalisation");
+        Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
 
@@ -219,12 +219,12 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
 
         int before = await Observed.SettledCountAsync(harness, Suite.Ct);
         BrowserResponse unlisted = await browser.GetAsync("/api/nosuch/thing", ct: Suite.Ct);
-        Contract.ErrorRow unknown = Contract.Error("The app lists no upstream under that name");
+        Contract.ErrorRow unknown = Contract.Error("unknown_api");
         Assert.Equal(unknown.Status, (int)unlisted.StatusCode);
         Assert.Contains($"\"code\":\"{unknown.Code}\"", unlisted.Body, StringComparison.Ordinal);
         Assert.Equal(RuleIds.ApiUnknown, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
 
-        Contract.ErrorRow invalid = Contract.Error("The path failed normalisation");
+        Contract.ErrorRow invalid = Contract.Error("invalid_request");
         foreach (string target in Escapes)
         {
             before = await Observed.SettledCountAsync(harness, Suite.Ct);

@@ -104,7 +104,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
         RawResponse response = await Send(method, target);
 
-        Contract.ErrorRow expected = Contract.Error("The path does not accept the method");
+        Contract.ErrorRow expected = Contract.Error("method_not_allowed");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
 
@@ -153,7 +153,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
         RawResponse response = await Send(method, "/index.html");
 
-        Contract.ErrorRow expected = Contract.Error("The path does not accept the method");
+        Contract.ErrorRow expected = Contract.Error("method_not_allowed");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
 

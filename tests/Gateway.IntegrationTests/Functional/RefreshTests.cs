@@ -127,7 +127,7 @@ public sealed class RefreshTests
     public async Task A_provider_outage_on_refresh_is_503_idp_unavailable_and_the_session_survives_to_the_call_after_recovery(int outage)
     {
         // The case contracts/http-contract.md -> Errors names, with the status and the code its row gives.
-        ContractText.ErrorRow unavailable = ContractText.Error("could not be reached to refresh the token");
+        Contract.ErrorRow unavailable = Contract.Error("idp_unavailable");
 
         await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();

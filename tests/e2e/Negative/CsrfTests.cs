@@ -14,7 +14,8 @@ namespace Gateway.E2ETests.Negative;
 /// </summary>
 public sealed class CsrfTests
 {
-    private static readonly string Header = Contract.CsrfHeaderName;
+    /// <summary>Read on access, not in the type initialiser, so a broken table fails with the reader's own message (#153).</summary>
+    private static string Header => Contract.CsrfHeaderName;
 
     [Fact]
     public async Task N06_an_unsafe_call_without_the_sessions_own_token_is_403_csrf_failed_each_way()
@@ -70,8 +71,8 @@ public sealed class CsrfTests
     {
         int mark = stack.RequestLines.Count;
         FetchResult refused = await profile.FetchAsync("/api/orders/echo", "POST", token is null ? null : Headers(token), "{}");
-        Assert.Equal(403, refused.Status);
-        Assert.Equal(Contract.Error("antiforgery token was missing or wrong").Code, refused.Code);
+        Assert.Equal(Contract.Error("csrf_failed").Status, refused.Status);
+        Assert.Equal(Contract.Error("csrf_failed").Code, refused.Code);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.CsrfToken);
     }
 

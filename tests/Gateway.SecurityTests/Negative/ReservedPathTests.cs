@@ -81,7 +81,7 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
         BrowserResponse post = await browser.SubmitFormAsync(
             "/signout-oidc", [new("iss", harness.Idp.Issuer), new("sid", "anything")], options: SignedIn.Manual, ct: Suite.Ct);
 
-        Contract.ErrorRow expected = Contract.Error("a reserved path that is switched off");
+        Contract.ErrorRow expected = Contract.Error("not_found");
         foreach (BrowserResponse response in (BrowserResponse[])[get, post])
         {
             Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
@@ -102,7 +102,7 @@ public sealed class ReservedPathTests(ReservedPathTests.Cell cell) : IClassFixtu
 
     private async Task AssertReservedAsync(BrowserResponse response, int before)
     {
-        Contract.ErrorRow expected = Contract.Error("a reserved path that is switched off");
+        Contract.ErrorRow expected = Contract.Error("not_found");
         Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);
