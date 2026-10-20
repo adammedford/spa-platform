@@ -59,7 +59,9 @@ public sealed class AppSessionsTests
     public async Task ReplaceAsync_wins_when_nobody_wrote_in_between()
     {
         // The other half of the versioned replace, so the test above cannot pass by refusing everything.
-        // Mutation: return false unconditionally; this fails.
+        // Mutation: return false unconditionally; this fails. The second write is versioned at the first
+        // write's version, so a constant expected version (the ticket's mutation; any constant, the
+        // version the lease read included) cannot win both writes, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1, version: 1), Ct);
@@ -69,6 +71,10 @@ public sealed class AppSessionsTests
         Assert.True(await lease.ReplaceAsync(next));
         Assert.Equal(next, await store.GetAsync(key, Ct));
         Assert.Equal(next, lease.Owned);
+
+        SessionRecord after = next with { Version = 3, Subject = "rotated again" };
+        Assert.True(await lease.ReplaceAsync(after));
+        Assert.Equal(after, await store.GetAsync(key, Ct));
     }
 
     [Fact]
