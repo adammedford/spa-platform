@@ -29,11 +29,16 @@ internal static class SignedIn
     /// <summary>Follow no redirect, so a test sees each hop of a login.</summary>
     public static readonly RequestOptions Manual = new() { Redirect = RedirectMode.Manual };
 
-    /// <summary>The session cookie's name, from the Cookies table of the browser contract.</summary>
-    public static string SessionCookieName { get; } = Contract.PlatformCookie("-session");
+    /// <summary>
+    /// The session cookie's name, from the Cookies table of the browser contract. Read on access, not
+    /// in this type's initialiser: a Cookies table that no longer parses then fails the tests that read
+    /// a cookie with the reader's message naming the file and the section, not every caller of
+    /// <see cref="Manual"/> with a type-initialisation error naming this class (#153).
+    /// </summary>
+    public static string SessionCookieName => Contract.PlatformCookie("-session");
 
-    /// <summary>The antiforgery cookie's name, from the same table.</summary>
-    public static string CsrfCookieName { get; } = Contract.PlatformCookie("-csrf");
+    /// <summary>The antiforgery cookie's name, from the same table, read on access for the same reason.</summary>
+    public static string CsrfCookieName => Contract.PlatformCookie("-csrf");
 
     /// <summary>
     /// Puts the browser on a page of the app without starting a login: <c>/healthz</c> answers on any
