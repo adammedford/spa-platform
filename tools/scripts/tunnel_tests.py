@@ -260,6 +260,9 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
             sys.stdout.write("\nStarting session with SessionId: operator-0123456789abcdef0\n"
                              f"Port {json.loads(options['parameters'])['localPortNumber'][0]} opened for sessionId "
                              "operator-0123456789abcdef0.\nWaiting for connections...\n")
+            # A line on the session's stderr in no shape the CLI's errors take, for the one case that
+            # holds tunnel.sh's filter to what it does with such a line.
+            sys.stderr.write(world.get("start_session_stderr", ""))
             status = world["start_session_status"]
         else:
             sys.stdout.write(text(value))
@@ -506,6 +509,40 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         case = Case(self, world=world)
         result = case.run(TUNNEL, "--local-port", str(free_port()))
         self.assertEqual(255, result.status, result.output)
+
+    def test_a_session_denied_names_its_code_and_never_the_principal(self):
+        # StartSession's denial is the CLI's own, printed after tunnel.sh has handed over to it, and
+        # its message names the caller's ARN as the list-tasks denial below does: "User:
+        # arn:aws:iam::123456789012:user/mateojackson is not authorized to perform: ...",
+        # https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html
+        # Case.run holds the account-id universal; this is the case where the session's stderr can
+        # fail it.
+        world = default_world()
+        world["errors"] = {"start-session": [
+            "AccessDeniedException",
+            f"User: arn:aws:sts::{ACCOUNT}:assumed-role/spa-platform-operator/operator is not authorized to "
+            f"perform: ssm:StartSession on resource: arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/"
+            "0123456789abcdef0123456789abcdef because no identity-based policy allows the ssm:StartSession action"]}
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        # The CLI's status for a service error (`aws help return-codes`), passed on.
+        self.assertEqual(254, result.status, result.output)
+        self.assertEqual(1, len(case.start_sessions()), result.output)
+        self.assertIn("AccessDeniedException", result.stderr)
+
+    def test_any_other_line_on_the_session_s_stderr_reaches_it_with_the_account_masked(self):
+        # Not a line the CLI or the plugin is known to print: whatever else reaches the session's
+        # stderr is passed on, so the operator still reads it, with any twelve-digit run masked.
+        world = default_world()
+        world["start_session_stderr"] = (
+            f"plugin: a warning about arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/0123456789abcdef0123456789abcdef\n")
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn(f"plugin: a warning about arn:aws:ecs:{REGION}:", result.stderr)
+        self.assertIn(f":task/{CLUSTER}/0123456789abcdef0123456789abcdef", result.stderr)
+        # And the session's stdout, the plugin's progress, is not filtered at all.
+        self.assertIn("Waiting for connections...", result.stdout)
 
 
 class TunnelRefusesBeforeASession(CompanionTestCase):

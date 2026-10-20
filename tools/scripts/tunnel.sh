@@ -22,11 +22,14 @@
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced. It needs the AWS CLI v2 and the Session Manager plugin.
 #
-# It never prints the account id: of a task it names only the id, never the ARN.
+# It never prints the account id: of a task it names only the id, never the ARN. The session's own
+# stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code
+# alone, and any other line with every twelve-digit run masked.
 #
-# Exit status: the session's, once it has started; 1 when the cell has no load balancer or no task
-# a session can reach; 2 when it did not start (a usage error, a missing tool, no Region, or the
-# local port already held).
+# Exit status: the AWS CLI's once the session is handed to it, 254 when StartSession itself is
+# refused (`aws help return-codes`); 1 when the cell has no load balancer or no task a session can
+# reach; 2 when it did not start (a usage error, a missing tool, no Region, or the local port
+# already held).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -233,10 +236,37 @@ note "through task ${TARGET_TASK}, container ${CONTAINER}, of ${SERVICE} in ${CL
 note "check it from another terminal: tools/scripts/verify-tunnel.sh / (the sample image) or /healthz (the gateway)"
 note "Ctrl-C ends the session"
 
+# The session's stderr, a line at a time as it arrives. The CLI prints a refused StartSession as
+# aws_read's reads fail, and its message names the caller's ARN, which carries the account id
+# ("User: arn:aws:sts::<account>:assumed-role/... is not authorized to perform: ssm:StartSession",
+# https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html), so that line
+# becomes its code, as aws_read's does. Any other line, the plugin's own among them, is passed on
+# with every twelve-digit run masked, which an account id always is. It ignores Ctrl-C, which goes
+# to the whole foreground group: the plugin prints its last lines after it, and the filter ends
+# when they do, at end of input. Written out rather than as {12}, which not every awk reads.
+session_errors() {
+  trap '' INT
+  awk -v program="$PROGRAM" -v what="the session through task ${TARGET_TASK}" '
+    match($0, /An error occurred \([^)]*\)/) {
+      print program ": " what ": " substr($0, RSTART + 19, RLENGTH - 20)
+      fflush()
+      next
+    }
+    {
+      gsub(/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/, "<account id>")
+      print
+      fflush()
+    }'
+}
+
 rm -rf "$WORK"
 WORK=""
 trap - EXIT
+# Still exec, so the session is this process: stdin and stdout stay the terminal's, Ctrl-C and a
+# signal reach the CLI and the plugin as they did, and the exit status is the CLI's. Only stderr is
+# routed, through a process substitution, which bash 3.2 has.
+# https://www.gnu.org/software/bash/manual/html_node/Process-Substitution.html
 exec aws --region "$REGION" ssm start-session \
   --target "$TARGET" \
   --document-name AWS-StartPortForwardingSessionToRemoteHost \
-  --parameters "$PARAMETERS"
+  --parameters "$PARAMETERS" 2> >(session_errors >&2)
