@@ -92,10 +92,14 @@ internal sealed class GatewayFactory : WebApplicationFactory<GatewayApp::Program
     /// macOS flags every file under <c>.claude/worktrees/</c> hidden, and the file is optional to the
     /// host, so there the gateway started without its logging levels and nothing said so.</para>
     ///
-    /// <para>The copy is written from the file's bytes, not with <c>File.Copy</c>, which on macOS may
-    /// clone the file and keep its flags. The host still reads the settings itself, through its own
-    /// provider and in its own precedence, so a test that reads a setting from the file proves the
-    /// gateway read it.</para>
+    /// <para>The copy is written from the file's bytes, not with <c>File.Copy</c>. On macOS
+    /// <c>File.Copy</c> tries <c>clonefile</c> first
+    /// (https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/IO/FileSystem.TryCloneFile.OSX.cs),
+    /// and a clone carries the source's attributes (clonefile(2)), so the copy stays hidden: on .NET 10
+    /// in the review of #138, <c>File.Copy</c> of a hidden file gave a hidden file.</para>
+    ///
+    /// <para>The host still reads the settings itself, through its own provider and in its own
+    /// precedence, so a test that reads a setting from the file proves the gateway read it.</para>
     /// </summary>
     private static DirectoryInfo CopyOfTheGatewaySettings()
     {
