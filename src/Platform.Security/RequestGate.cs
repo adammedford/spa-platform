@@ -69,12 +69,12 @@ internal sealed partial class RequestGate(ILogger logger)
 
         if (!PathIsNormal(context))
         {
-            return EndAsync(context, RuleIds.PathInvalid);
+            return RejectAsync(context, RuleIds.PathInvalid);
         }
 
         if (CookieNameImitatesPlatformCookie(request.Headers.Cookie))
         {
-            return EndAsync(context, RuleIds.GateCookieName);
+            return RejectAsync(context, RuleIds.GateCookieName);
         }
 
         Row row = Classify(request.Path);
@@ -83,39 +83,39 @@ internal sealed partial class RequestGate(ILogger logger)
             case Row.Reserved:
                 // /signout-oidc: the framework's remote sign-out is switched off (threat T18, N-27), and
                 // a /bff path that is none of the three endpoints is the platform's, not the SPA's.
-                return EndAsync(context, RuleIds.PathReserved);
+                return RejectAsync(context, RuleIds.PathReserved);
 
             case Row.Callback:
-                return MethodIs(context, HttpMethods.Get) ? next(context) : EndMethodAsync(context, HttpMethods.Get);
+                return MethodIs(context, HttpMethods.Get) ? next(context) : RejectMethodAsync(context, HttpMethods.Get);
 
             case Row.Asset:
                 return MethodIs(context, HttpMethods.Get) || MethodIs(context, HttpMethods.Head)
                     ? next(context)
-                    : EndMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
+                    : RejectMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
         }
 
         // /api and /bff: same-origin browser requests only.
         if (!FetchSiteAllowed(request.Headers["Sec-Fetch-Site"], allowNone: row == Row.BffLogin))
         {
-            return EndAsync(context, RuleIds.GateFetchSite);
+            return RejectAsync(context, RuleIds.GateFetchSite);
         }
 
         if (!OriginAllowed(request.Headers.Origin, AppOrigin(request, app.App), required: row == Row.BffLogout))
         {
-            return EndAsync(context, RuleIds.GateOrigin);
+            return RejectAsync(context, RuleIds.GateOrigin);
         }
 
         switch (row)
         {
             case Row.BffSession when !MethodIs(context, HttpMethods.Get):
             case Row.BffLogin when !MethodIs(context, HttpMethods.Get):
-                return EndMethodAsync(context, HttpMethods.Get);
+                return RejectMethodAsync(context, HttpMethods.Get);
 
             case Row.BffLogout when !MethodIs(context, HttpMethods.Post):
-                return EndMethodAsync(context, HttpMethods.Post);
+                return RejectMethodAsync(context, HttpMethods.Post);
 
             case Row.BffLogin when !IsDocumentNavigation(request.Headers):
-                return EndAsync(context, RuleIds.GateNavigation);
+                return RejectAsync(context, RuleIds.GateNavigation);
         }
 
         // /api takes every method the allowlist in UsePlatformForwardedHeaders lets through.
@@ -319,7 +319,7 @@ internal sealed partial class RequestGate(ILogger logger)
     private static bool MethodIs(HttpContext context, string method) =>
         string.Equals(context.Request.Method, method, StringComparison.Ordinal);
 
-    private Task EndMethodAsync(HttpContext context, params string[] allowed)
+    private Task RejectMethodAsync(HttpContext context, params string[] allowed)
     {
         LogRejected(logger, RuleIds.GateMethod);
 
@@ -328,7 +328,7 @@ internal sealed partial class RequestGate(ILogger logger)
         return Rejection.EndMethodAsync(context, allowed);
     }
 
-    private Task EndAsync(HttpContext context, string rule)
+    private Task RejectAsync(HttpContext context, string rule)
     {
         // The rule id only. Nothing the client sent goes in the line: the path can carry a code, and
         // a cookie name is the client's to choose (contracts/telemetry.md -> Never logged).

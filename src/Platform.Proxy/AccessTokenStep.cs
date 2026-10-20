@@ -41,11 +41,11 @@ internal static class AccessTokenStep
                     break;
 
                 // Answers, not rejections: each names its code alone and Problems.WriteAsync takes the
-                // status from contracts/http-contract.md -> Errors (#142, Q7). Neither writes a rule id. The 401 for a live
-                // session that yields no token is deliberately not a rejection (contracts/telemetry.md ->
-                // "How `rule` and `session_ref` reach the request line"), and auth.session turns on
-                // whether a cookie was presented (contracts/request-gate.md), which Unauthenticated does
-                // not say, so the step has nothing to write it from.
+                // status from contracts/http-contract.md -> Errors (#142, Q7). Neither writes a rule
+                // id. The 401 for a live session that yields no token is deliberately not a rejection
+                // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"),
+                // and auth.session turns on whether a cookie was presented (contracts/request-gate.md),
+                // which Unauthenticated does not say, so the step has nothing to write it from.
                 case AccessTokenResult.SessionEnded:
                     await Problems.WriteAsync(context, Problems.SessionEnded);
                     break;
