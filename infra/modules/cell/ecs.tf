@@ -278,9 +278,10 @@ resource "aws_ecs_service" "gateway" {
   # unhealthy target for 60 s after the task starts: time for process start and that first read.
   # The target group (alb.tf) sets no interval or thresholds, so the provider's defaults hold:
   # interval 30 s, healthy and unhealthy thresholds 3. A new target is healthy on one pass and
-  # unhealthy after three failures, (3 - 1) x 30 s after its first check, so /readyz must answer
-  # the third check, first check + 60 s: that is the real bound, and a slow image pull eats into it
-  # if the first check comes before the container starts (#171).
+  # unhealthy after three failures, (3 - 1) x 30 s after its first check (#171's reading: the guide
+  # makes no exception for a target still in its initial checks, but does not say so outright), so
+  # /readyz must answer 200 to the third check, first check + 60 s: that is the real bound, and a
+  # slow image pull eats into it if the first check comes before the container starts (#171).
   # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html
   # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/lb_target_group.html.markdown
   health_check_grace_period_seconds = 60
