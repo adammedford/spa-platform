@@ -256,8 +256,9 @@ jobs:
         # The overnight run's lanes are built from what tools/overnight_collect.py resolves (#187):
         # ids, owners, open blockers, status, open boxes and order, with a spec listed as a parent
         # and two tickets sharing an id refused rather than one overwriting the other. Its companion
-        # proves each rule on hand-built listings, and the read through a gh double on PATH in an
-        # environment that inherits nothing, so no case reaches a real repository.
+        # has a case for each rule, on hand-built listings. It reads GitHub through a gh double on
+        # PATH in an environment that inherits nothing, so no case reaches a real repository, and
+        # reads the task branches, local and on origin, from real git in a throwaway clone.
         run: python3 -I tools/overnight_collect_tests.py
 
   scripts-bash-3-2:

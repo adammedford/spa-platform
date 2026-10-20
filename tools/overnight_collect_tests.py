@@ -3,10 +3,15 @@
 
 Run: python3 -I tools/overnight_collect_tests.py
 
-Each rule the collect step states has a case, as do the two #187 added: a spec is a parent and never a
-ticket, and two tickets with one id refuse. The read from GitHub goes through a fake `gh` on PATH,
-in an environment that inherits nothing, so no case reaches a real repository even where a real gh
-is installed and GH_REPO is set.
+Each rule the collect step states has a case, as do the ones #187 added: a spec is a parent and never
+a ticket, two tickets with one id refuse, and an issue carrying two of the labels is one ticket.
+
+The script reads three things, and the cases reach each differently. The read from GitHub goes
+through a fake `gh` on PATH, in an environment that inherits nothing, so no case reaches a real
+repository even where a real gh is installed and GH_REPO is set. The read of the task branches runs
+against real git, in a throwaway clone of a bare origin. The roadmap read alone is replaced outright:
+every case gives its answer as ROAD, because that answer is `tools/roadmap.py --json`, which
+tools/roadmap_tests.py holds.
 """
 from __future__ import annotations
 
@@ -16,7 +21,9 @@ import io
 import json
 import os
 import pathlib
+import shutil
 import stat
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -110,6 +117,9 @@ class Rules(unittest.TestCase):
             ("workstream 6 (`tests/Gateway.*`)", "ws6-verification"),
             ("integrator (anyone may write a change request)", "integrator"),
             ("workstream 4, then the integrator", "ws4-proxy"), ("someone", "integrator"),
+            # By position in the line, not by the order the roles are listed in ROLES.
+            ("integrator, then workstream 4", "integrator"),
+            ("workstream 6, then workstream 2", "ws6-verification"),
         ):
             with self.subTest(line=line):
                 found = by_issue(resolved(agent=[issue(7, body(owner=line))]))[7]["owner"]
@@ -292,6 +302,56 @@ class ThroughGh(unittest.TestCase):
         self.assertEqual(0, code, err)
         self.assertFalse(self.log.exists(), "gh was asked although the listings were given")
         self.assertEqual("claimed", json.loads(out)["tickets"][0]["status"])
+
+
+class BranchesThroughGit(unittest.TestCase):
+    """branches() against real git: a throwaway clone of a bare origin, in an environment that
+    inherits nothing, as tools/prune_branches_tests.py builds one. A claim is a `task/<id>-` branch,
+    local or on origin, so a branch that exists only on origin claims its row as much as a local
+    one does."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="overnight-collect-")
+        self.addCleanup(scratch.cleanup)
+        base = pathlib.Path(scratch.name).resolve()
+        found = shutil.which("git")
+        self.assertIsNotNone(found, "git is not on PATH, and branches() reads it")
+        (base / "bin").mkdir()
+        (base / "bin" / "git").symlink_to(found)
+        (base / "home").mkdir()
+        config = base / "gitconfig"
+        config.write_text("[user]\n\tname = Case\n\temail = case@example.invalid\n"
+                          "[init]\n\tdefaultBranch = main\n"
+                          "[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+        self.env = {"PATH": str(base / "bin"), "HOME": str(base / "home"),
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config), "LC_ALL": "C"}
+        self.origin, self.work = base / "origin.git", base / "work"
+        self.git("init", "-q", "--bare", str(self.origin), cwd=base)
+        self.git("clone", "-q", str(self.origin), str(self.work), cwd=base)
+        self.git("commit", "-q", "--allow-empty", "-m", "The first commit")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")
+
+    def git(self, *args: str, cwd: pathlib.Path | None = None) -> str:
+        done = subprocess.run(["git", *args], cwd=cwd or self.work, env=self.env,
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(0, done.returncode, f"git {' '.join(args)}: {done.stderr}")
+        return done.stdout.strip()
+
+    def test_a_task_branch_local_or_only_on_origin_is_read_and_nothing_else(self):
+        self.git("branch", "task/1.7-only-local")
+        # Pushed, then deleted locally: what remains is origin's, as the push left it.
+        self.git("branch", "task/1.6b-only-on-origin")
+        self.git("push", "-q", "origin", "task/1.6b-only-on-origin")
+        self.git("branch", "-D", "task/1.6b-only-on-origin")
+        self.git("branch", "integrator/not-a-claim")
+        self.git("push", "-q", "origin", "integrator/not-a-claim")
+        self.assertEqual("", self.git("branch", "--list", "task/1.6b-only-on-origin"))
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            found = collect.branches(self.work)
+        self.assertEqual(["task/1.6b-only-on-origin", "task/1.7-only-local"], sorted(found))
+        # And the name it gives is one the claim rule reads.
+        answer = by_issue(resolved(agent=[issue(1, body("1.6b"))], branches=found))
+        self.assertEqual("claimed", answer[1]["status"])
 
 
 if __name__ == "__main__":
