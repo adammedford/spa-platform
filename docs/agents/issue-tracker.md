@@ -44,6 +44,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open --limit 500`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- **Research findings**: `docs/research/<slug>.md` on a `research/<slug>` branch, pushed and never merged, linked from the ticket's resolution comment. `docs/research/` is integrator-owned by the `*` rule, so a docs-only branch passes the pre-push check. A research brief states the environment facts the agent cannot change (no Docker engine, a connector that failed) so the finding says what was executed and what was read.
 
 ## This repository's additions
 
