@@ -100,8 +100,11 @@ public static class Rejection
     /// Ends the request under <see cref="RuleIds.GateMethod"/> with <c>Allow</c> set to the methods
     /// the path accepts, joined. <c>Allow</c> is the caller's knowledge (the request gate names the
     /// path's methods, the method allowlist all seven, the asset endpoint <c>GET, HEAD</c>), and this
-    /// is the one entry that ends a 405, so a 405 cannot leave without the header RFC 9110 section
-    /// 15.5.6 requires.
+    /// is the one entry through which this type ends a 405: <see cref="EndAsync"/> refuses
+    /// <see cref="RuleIds.GateMethod"/>, so a 405 this type writes cannot leave without the header RFC
+    /// 9110 section 15.5.6 requires. The guarantee is this type's, not the problem writer's:
+    /// <see cref="Problems.WriteAsync"/> given <see cref="Problems.MethodNotAllowed"/> writes a 405 with
+    /// no <c>Allow</c>.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// No method is given, or one is empty, before anything is written.
