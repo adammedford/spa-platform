@@ -70,7 +70,7 @@ public sealed class CsrfTests
     {
         int mark = stack.RequestLines.Count;
         FetchResult refused = await profile.FetchAsync("/api/orders/echo", "POST", token is null ? null : Headers(token), "{}");
-        Assert.Equal(403, refused.Status);
+        Assert.Equal(Contract.Error("csrf_failed").Status, refused.Status);
         Assert.Equal(Contract.Error("csrf_failed").Code, refused.Code);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.CsrfToken);
     }

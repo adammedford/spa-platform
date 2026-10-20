@@ -30,7 +30,7 @@ public sealed class SessionTests
         foreach (string path in new[] { "/api/reports/whoami", "/bff/session" })
         {
             FetchResult refused = await profile.FetchAsync(path);
-            Assert.Equal(401, refused.Status);
+            Assert.Equal(Contract.Error("unauthenticated").Status, refused.Status);
             Assert.Equal(Contract.Error("unauthenticated").Code, refused.Code);
         }
 
@@ -62,7 +62,7 @@ public sealed class SessionTests
             FetchResult answer = await profile.FetchAsync(path);
 
             // redirect: "manual" would show a redirect as an opaque response with status 0.
-            Assert.Equal(401, answer.Status);
+            Assert.Equal(Contract.Error("unauthenticated").Status, answer.Status);
             Assert.Equal("basic", answer.Type);
             Assert.Equal("application/problem+json", answer.ContentType);
             Assert.Equal(Contract.Error("unauthenticated").Code, answer.Code);
