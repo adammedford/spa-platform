@@ -5,7 +5,7 @@ namespace Platform.Hosting.Tests;
 
 /// <summary>
 /// Every log line the host writes, rendered, with its category. The asset endpoint's refusals are
-/// logged under a rule id and never with the path (contracts/request-gate.md, Rule ids: "Tests assert
+/// logged under a rule id and never with the path (docs/plan/02-contracts.md, Errors: "Tests assert
 /// on both the code and the rule id"), and a test can only hold it to that by reading the lines.
 /// </summary>
 internal sealed class RecordingLoggerProvider : ILoggerProvider
