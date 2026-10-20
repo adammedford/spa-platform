@@ -163,8 +163,8 @@ public sealed class TestIdpEndSessionTests
     [Fact]
     public async Task A_client_registered_with_two_post_logout_uris_is_returned_to_either()
     {
-        // Each identity profile returns to a different URI (ADR-0011): the standard profile to the signed-out
-        // callback, the Cognito profile to the app's root. One client registered once must accept both.
+        // Each identity profile (ADR-0011) returns to a different URI: the standard profile to the signed-out
+        // callback (R-C6), the Cognito profile to the app's root (R-C7). One client registered once must accept both.
         const string SignedOut = "https://app3.spa-poc.test:8443/signout-callback-oidc";
         const string Root = "https://app3.spa-poc.test:8443/";
         await using var harness = await IdpHarness.StartAsync();

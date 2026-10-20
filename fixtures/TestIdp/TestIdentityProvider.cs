@@ -153,9 +153,9 @@ public sealed class TestIdentityProvider : IAsyncDisposable
     }
 
     /// <summary>
-    /// Registers a client with one redirect URI and several post-logout URIs. Each identity profile returns to a
-    /// different one (ADR-0011): the standard profile to the signed-out callback, the Cognito profile to the
-    /// app's root, so a client that serves both registers both here, once.
+    /// Registers a client with one redirect URI and several post-logout URIs. Each identity profile (ADR-0011)
+    /// returns to a different one: the standard profile to the signed-out callback (R-C6), the Cognito profile to
+    /// the app's root (R-C7), so a client that serves both registers both here, once.
     /// </summary>
     public TestIdpClient AddClient(string clientId, string secret, string redirectUri, IEnumerable<string> postLogoutUris)
     {
