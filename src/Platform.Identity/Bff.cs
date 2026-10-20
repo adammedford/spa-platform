@@ -41,7 +41,8 @@ internal static class Bff
 
         if (await SessionOfAsync(context, app) is not { } record)
         {
-            await Problems.WriteAsync(context, StatusCodes.Status401Unauthorized, Problems.Unauthenticated);
+            // An answer for no cookie, a rejection for a dead one, which KeyOf has noted; one body.
+            await Problems.WriteAsync(context, Problems.Unauthenticated);
             return;
         }
 

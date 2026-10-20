@@ -55,7 +55,7 @@ internal static class AuthenticationEvents
                 // writes the body and no rule id.
                 context.HandleResponse();
                 WithdrawLoginState(context);
-                await Problems.WriteAsync(context.HttpContext, StatusCodes.Status401Unauthorized, Problems.Unauthenticated);
+                await Problems.WriteAsync(context.HttpContext, Problems.Unauthenticated);
                 return;
             }
 
