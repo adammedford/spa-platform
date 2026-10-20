@@ -31,7 +31,7 @@ public sealed class SessionTests
         {
             FetchResult refused = await profile.FetchAsync(path);
             Assert.Equal(401, refused.Status);
-            Assert.Equal(Contract.Error("No session").Code, refused.Code);
+            Assert.Equal(Contract.Error("unauthenticated").Code, refused.Code);
         }
 
         // A navigation is challenged afresh: to the provider, for app 2's own client. The load balancer
@@ -65,7 +65,7 @@ public sealed class SessionTests
             Assert.Equal(401, answer.Status);
             Assert.Equal("basic", answer.Type);
             Assert.Equal("application/problem+json", answer.ContentType);
-            Assert.Equal(Contract.Error("No session").Code, answer.Code);
+            Assert.Equal(Contract.Error("unauthenticated").Code, answer.Code);
         }
     }
 

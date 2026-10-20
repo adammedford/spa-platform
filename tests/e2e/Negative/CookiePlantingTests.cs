@@ -56,7 +56,7 @@ public sealed class CookiePlantingTests
             using HttpResponseMessage answer = await stack.SendRawAsync(request);
 
             Assert.Equal(400, (int)answer.StatusCode);
-            Assert.Contains($"\"code\":\"{Contract.Error("imitates a platform cookie").Code}\"",
+            Assert.Contains($"\"code\":\"{Contract.Error("invalid_request").Code}\"",
                 await answer.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
             await stack.AssertRuleLoggedAsync(mark, RuleIds.GateCookieName);
         }

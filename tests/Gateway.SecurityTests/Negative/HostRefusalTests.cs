@@ -99,7 +99,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
         // An app answered, not host resolution: the request carries no session, so the app's shell
         // gate refuses the fetch with 401 (ADR-0008), and UsePlatformSecurityHeaders puts the policy of
         // the app host resolution pinned on that answer as on any other.
-        Contract.ErrorRow noSession = Contract.Error("No session");
+        Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         Assert.Equal(noSession.Status, answered.StatusCode);
         Assert.Contains($"\"code\":\"{noSession.Code}\"", RawBody.Text(answered), StringComparison.Ordinal);
 
@@ -139,7 +139,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
 
     private async Task AssertHostRefusedAsync(RawResponse response, int before)
     {
-        Contract.ErrorRow expected = Contract.Error("Unknown host");
+        Contract.ErrorRow expected = Contract.Error("not_found");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);

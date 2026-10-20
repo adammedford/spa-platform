@@ -102,7 +102,7 @@ public sealed class AssetPathTests : IAsyncLifetime
 
         // The row allows 400 or 404; the gate's normalisation rule gives the 400 and the contract's
         // code for it, both read from the Errors table rather than written down.
-        Contract.ErrorRow expected = Contract.Error("The path failed normalisation");
+        Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
         Assert.Equal(RuleIds.PathInvalid, await Observed.RuleOfOneRequestAsync(harness, lines, Suite.Ct));
@@ -141,7 +141,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         Assert.Contains(GatewayHarness.RegistryKey, recorder.Reads.Skip(allReadsBefore));
 
         RawResponse rejected = await Get("/assets%2f..%2findex.html");
-        Assert.Equal(Contract.Error("The path failed normalisation").Status, rejected.StatusCode);
+        Assert.Equal(Contract.Error("invalid_request").Status, rejected.StatusCode);
         Assert.Empty(recorder.RequestsSince(requestReadsBefore));
 
         // Positive control: request reads still reach the observer; ignoring all reads is not a fix.

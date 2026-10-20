@@ -130,9 +130,10 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         // refuses before authentication runs (contracts/request-gate.md).
         BrowserResponse sibling = await browser.GetAsync(Harness.App("app1").Url("/api/orders/whoami").ToString(), ct: Ct);
 
+        Contract.ErrorRow refused = Contract.Error("origin_rejected");
         Assert.Equal(FetchMetadata.SameSite, sibling.Sent("Sec-Fetch-Site"));
-        Assert.Equal(HttpStatusCode.Forbidden, sibling.StatusCode);
-        Assert.Contains("origin_rejected", sibling.Body);
+        Assert.Equal(refused.Status, (int)sibling.StatusCode);
+        Assert.Contains(refused.Code, sibling.Body);
     }
 
     [Fact]

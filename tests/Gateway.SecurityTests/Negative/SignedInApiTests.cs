@@ -126,7 +126,7 @@ public sealed class SignedInApiTests
         BrowserResponse api = await browser.GetAsync("/api/orders/whoami", SignedIn.Manual, Suite.Ct);
         BrowserResponse session = await browser.GetAsync("/bff/session", SignedIn.Manual, Suite.Ct);
 
-        Contract.ErrorRow expected = Contract.Error("No session");
+        Contract.ErrorRow expected = Contract.Error("unauthenticated");
         foreach (BrowserResponse response in (BrowserResponse[])[api, session])
         {
             Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
