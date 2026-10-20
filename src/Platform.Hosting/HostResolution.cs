@@ -25,22 +25,17 @@ internal static class HostResolution
         if (!snapshot.ByHost.TryGetValue(authority, out AppDefinition? app)
             || !string.Equals(app.Host, authority, StringComparison.Ordinal))
         {
-            // The rejection says which rule fired, on the one request line UsePlatformTelemetry
-            // writes after the pipeline returns, and in security.rejections counted from the same
-            // field (contracts/telemetry.md -> "How rule and session_ref reach the request line").
-            // Null-conditional because this project's own test project runs without
-            // UsePlatformTelemetry, and because UsePlatformTelemetry is the only installer: a
-            // missing feature must cost nothing.
-            //
-            // No Warning line of this stage's own. An unknown host is the cheapest traffic anyone can
-            // send, so a line each would let a stranger flood the log; the request line and the
-            // counter record it once (contracts/changes/6.4-request-telemetry-feature.md).
-            context.Features.Get<IRequestTelemetryFeature>()?.Rule = RuleIds.HostUnknown;
-
             // Before routing, so no endpoint and no authentication handler runs for a host the registry
-            // does not name: the callback path included (S-A3). The body names nothing about the
-            // request (contracts/http-contract.md, Errors: not_found for an unknown host).
-            return Problems.WriteAsync(context, StatusCodes.Status404NotFound, Problems.NotFound);
+            // does not name: the callback path included (S-A3). The module notes the rule for the one
+            // request line UsePlatformTelemetry writes and for security.rejections (contracts/
+            // telemetry.md -> "How rule and session_ref reach the request line"), and writes the
+            // id's problem body, which names nothing about the request.
+            //
+            // No Warning line, on purpose: the module never logs, and this stage writes none of its
+            // own. An unknown host is the cheapest traffic anyone can send, so a line each would let
+            // a stranger flood the log; the request line and the counter record it once
+            // (contracts/changes/6.4-request-telemetry-feature.md).
+            return Rejection.EndAsync(context, RuleIds.HostUnknown);
         }
 
         context.Features.Set<IAppFeature>(new AppFeature(app, snapshot));
