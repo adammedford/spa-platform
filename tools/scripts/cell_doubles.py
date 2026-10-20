@@ -425,8 +425,21 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
         record["outcome"] = "waiter failed"
         status = int(stop.code)
     log(case, record)
-    (case / "world.json").write_text(json.dumps(world, indent=1))
+    save_world(case, world)
     return status
+
+
+def save_world(case: pathlib.Path, world: dict):
+    """Writes world.json whole, by rename. Two doubles can run at once: deploy.sh pipes the aws double
+    into the docker double for the ECR login, and each reads world.json as it starts and writes it as
+    it ends. Written in place, a reader could open it between the truncation and the write and fail
+    to parse it; a rename replaces the file in one step, so a reader sees the old world or the new one
+    (os.replace: https://docs.python.org/3/library/os.html#os.replace). Neither double changes the
+    world on those two calls, so the later rename loses no write. The staged name is the writer's own,
+    so two writers never share one."""
+    staged = case / f"world.json.{os.getpid()}"
+    staged.write_text(json.dumps(world, indent=1))
+    os.replace(staged, case / "world.json")
 
 
 def log(case: pathlib.Path, record: dict):
@@ -513,7 +526,7 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
         status = 97
     record["status"] = status
     log(case, record)
-    (case / "world.json").write_text(json.dumps(world, indent=1))
+    save_world(case, world)
     return status
 
 
@@ -600,7 +613,7 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         status = 97
     record["status"] = status
     log(case, record)
-    (case / "world.json").write_text(json.dumps(world, indent=1))
+    save_world(case, world)
     return status
 
 
@@ -651,7 +664,7 @@ def spactl_double(argv: list[str], case: pathlib.Path) -> int:
         status = 97
     record["status"] = status
     log(case, record)
-    (case / "world.json").write_text(json.dumps(world, indent=1))
+    save_world(case, world)
     return status
 
 
@@ -742,7 +755,7 @@ class Case:
         (self.bin / name).unlink()
 
     def save(self):
-        (self.dir / "world.json").write_text(json.dumps(self.world, indent=1))
+        save_world(self.dir, self.world)
 
     def load(self) -> dict:
         return json.loads((self.dir / "world.json").read_text())

@@ -340,13 +340,17 @@ wait_and_assert() {
   [ "$(printed)" = "$READY_PATH" ] || fail "the target group checks $(printed), not ${READY_PATH}."
   aws_read "the target group's targets" elbv2 describe-target-health --target-group-arn "$group" \
     --query 'TargetHealthDescriptions[].TargetHealth.State'
-  local states
+  # Every target healthy, and nothing else: a list of the bad states would pass one it left out.
+  # TargetHealth's State is initial, healthy, unhealthy, unhealthy.draining, unused, draining or
+  # unavailable, https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetHealth.html
+  local states state
   states="$(tr '\t' ' ' < "$OUT" | awk '{$1 = $1; print}')"
-  case " ${states} " in
-    "  ") fail "the target group has no target." ;;
-    *" initial "* | *" unhealthy "* | *" draining "* | *" unused "* | *" unavailable "*)
-      fail "the target group's targets are: ${states}." ;;
-  esac
+  [ -n "$states" ] || fail "the target group has no target."
+  # Word splitting on purpose: one state per word, and no state holds a space.
+  # shellcheck disable=SC2086
+  for state in $states; do
+    [ "$state" = "healthy" ] || fail "the target group's targets are: ${states}."
+  done
 
   # The image every reader of the outputs document is told runs, which apply_images rewrote from
   # the platform root's gateway_image output.

@@ -217,6 +217,15 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         world["target_group"]["states"] = ["unhealthy"]
         self.failed(world, "targets are: unhealthy")
 
+    def test_a_target_in_a_state_other_than_healthy(self):
+        # unhealthy.draining is in TargetHealth's State enum and was in no list of bad states, so a
+        # deploy whose target was in it exited 0 (the review of PR #186, S2). One healthy target
+        # beside it does not make the group healthy.
+        # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetHealth.html
+        world = seeded_world()
+        world["target_group"]["states"] = ["healthy", "unhealthy.draining"]
+        self.failed(world, "targets are: healthy unhealthy.draining")
+
     def test_a_failed_apply_records_no_images_and_waits_for_nothing(self):
         world = seeded_world()
         world["faults"]["apply"] = True
