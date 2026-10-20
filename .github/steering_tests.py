@@ -259,11 +259,32 @@ def holds(sha: str, subject: str, *paths: str) -> str:
             "Authority: trailer")
 
 
-def undecides(sha: str, subject: str, path: str, *authorities: str) -> str:
-    """The line the decision rule prints for a commit that sets a change request to decided on no
-    confirmed answer's URL."""
-    return (f'commit {sha[:12]} ("{subject}") changes {path}, sets {path} to decided, and cites '
+def undecides(sha: str, subject: str, path: str, *authorities: str,
+              state: str = "decided") -> str:
+    """The line the decision rule prints for a commit that sets a change request to a decision on
+    no confirmed answer's URL."""
+    return (f'commit {sha[:12]} ("{subject}") changes {path}, sets {path} to {state}, and cites '
             f"no confirmed answer: Authority: {', '.join(authorities)}")
+
+
+def unreadable(sha: str, subject: str, path: str) -> str:
+    """The line the decision rule prints for a change request whose Status it cannot read."""
+    return f'commit {sha[:12]} ("{subject}") leaves {path} with a Status this check cannot read'
+
+
+UNREADABLE_HEADLINE = "STEERING FAILED: a change request's Status cannot be read."
+
+# Status lines in shapes no change request has used, each of which a writer could reach for, and
+# none of which STATUS reads. #188's review found each read as open, so each decided request passed.
+OTHER_SHAPES = (
+    ("bold label, colon outside", "**Status**: decided, 2026-10-20."),
+    ("plain list item", "- Status: decided, 2026-10-20."),
+    ("numbered item", "1. **Status:** decided, 2026-10-20."),
+    ("italic state", "- **Status:** _decided_, 2026-10-20."),
+    ("table row", "| Field | Value |\n| --- | --- |\n| Status | decided |"),
+    ("heading", "## Status\n\nDecided, 2026-10-20."),
+    ("lower case", "- **status:** decided, 2026-10-20."),
+)
 
 
 def refuses(sha: str, subject: str, paths: tuple[str, ...], authority: str, why: str) -> str:
@@ -1700,6 +1721,89 @@ class SteeringTests(unittest.TestCase):
         self.write(f"{steering.CHANGE_REQUESTS}issue-145-a-request.md", DECIDED_REQUEST)
         self.commit(message("Task issue-143: the change request, decided", "#143"),
                     made=DECIDED_BEFORE)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_change_request_with_its_status_in_another_shape_is_held_as_unreadable(self):
+        """#188's review: a Status line in any other shape read as open, so a decided request in
+        it passed with no trailer. Now the check says it cannot read it, naming the path, and does
+        not also ask for a trailer an open request would not need."""
+        base = self.baseline()
+        for number, (shape, line) in enumerate(OTHER_SHAPES, start=1):
+            with self.subTest(shape=shape):
+                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
+                self.write(request, f"# A change request\n\n- **Raised by:** a lane\n{line}\n")
+                subject = f"A change request, its Status as a {shape}"
+                sha = self.commit(message(subject), made=DECIDED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(UNREADABLE_HEADLINE, out)
+                self.assertIn(unreadable(sha, subject, request), out)
+                self.assertNotIn("carries no Authority: trailer", out)
+                base = sha
+
+    def test_an_unreadable_status_is_held_whatever_the_authority_cites(self):
+        """A confirmed answer's URL settles a decision, not a Status nobody can read."""
+        self.comments({COMMENT_ID: COMMENT})
+        base = self.baseline()
+        request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
+        self.write(request, "# A change request\n\n- **Status:** _decided_, 2026-10-20.\n")
+        subject = "The change request, decided as Adam confirmed"
+        sha = self.commit(message(subject, COMMENT), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(unreadable(sha, subject, request), out)
+
+    def test_an_open_request_edited_into_another_shape_is_held_as_unreadable(self):
+        """An edit that moves the Status out of the two shapes is held too, and the edit's own
+        authority is still judged as any steering edit's is."""
+        self.github(159)
+        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
+        self.write(request, OPEN_REQUEST)
+        base = self.baseline()
+        self.write(request, "# A change request\n\n- **Raised by:** a lane\n**Status**: decided\n")
+        subject = "The change request, decided in a new shape"
+        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(unreadable(sha, subject, request), out)
+        self.assertNotIn("a commit sets a change request to decided", out)
+
+    def test_a_change_request_naming_any_state_but_open_is_a_decision(self):
+        """`accepted` decides a request as surely as `decided`: held on a ticket alone, passed on a
+        confirmed answer's URL."""
+        self.github(143)
+        self.comments({COMMENT_ID: COMMENT})
+        base = self.baseline()
+        for number, state in enumerate(("accepted", "rejected"), start=1):
+            with self.subTest(state=state):
+                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
+                self.write(request, f"# A change request\n\n- **Status:** {state}, 2026-10-20.\n")
+                subject = f"Task issue-143: the change request, {state}"
+                sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: a commit sets a change request to decided on no "
+                              "confirmed answer.", out)
+                self.assertIn(undecides(sha, subject, request, "#143", state=state), out)
+                self.git("reset", "--quiet", "--hard", base)
+        self.write(f"{steering.CHANGE_REQUESTS}issue-3-a-request.md",
+                   "# A change request\n\n- **Status:** accepted, 2026-10-20.\n")
+        self.commit(message("The change request, accepted as Adam confirmed", COMMENT),
+                    made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
+    def test_a_change_request_whose_prose_mentions_a_status_but_labels_none_is_open(self):
+        """A word in a sentence or an identifier is no Status line: issue-160's request carries
+        `int Status` and `StatusOf` in its prose, under a Status line of its own."""
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-1-a-request.md",
+                   "# A change request\n\nThe gateway answers 401, a status `StatusOf` maps.\n"
+                   "- `ImmutableArray<(int Status, string Code)> Rows`: the table's rows.\n"
+                   "Status codes stay as they are.\n")
+        self.commit(message("Ask for a contract change"), made=DECIDED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertNotIn("STEERING FAILED", out)
