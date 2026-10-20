@@ -47,12 +47,17 @@ internal static class AuthenticationEvents
             {
                 // ADR-0008: an unauthenticated fetch gets 401, never a redirect. A redirect to the
                 // provider is useless to a fetch: it cannot follow it cross-origin, and an SPA reads
-                // 401 as "navigate to /bff/login" (assumption A3). Two cases reach this writer. A fetch
-                // that presented no cookie is an answer, not a rejection, and carries no rule id. A
-                // fetch whose cookie resolved to no session is a rejection under auth.session, which
+                // 401 as "navigate to /bff/login" (assumption A3). In the composed gateway two cases
+                // reach this writer, both the shell gate's challenge: UsePlatformRequestGate refuses a
+                // /bff/login that is not a navigation under gate.navigation, read as IsNavigation reads
+                // one, so /bff/login's own challenge never raises this event for a fetch. A fetch that
+                // presented no cookie is an answer, not a rejection, and carries no rule id. A fetch
+                // whose cookie resolved to no session is a rejection under auth.session, which
                 // AppSessions.KeyOf noted when the shell gate asked it, before the challenge that
-                // raised this event (contracts/changes/issue-160-rejection-table.md). Either way this
-                // writes the body and no rule id.
+                // raised this event (contracts/changes/issue-160-rejection-table.md). Without that
+                // gate, as on this project's own test host, a fetch to /bff/login reaches here too,
+                // after any session it carried was discarded. Every way, this writes the body and no
+                // rule id.
                 context.HandleResponse();
                 WithdrawLoginState(context);
                 await Problems.WriteAsync(context.HttpContext, Problems.Unauthenticated);
