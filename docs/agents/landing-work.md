@@ -33,8 +33,10 @@ not mean to, or it needs an integrator path.
 
 **Needing an integrator path** — a contract, a package version, a new project, anything in
 `src/Platform.Abstractions` — means writing `contracts/changes/<task-id>-<slug>.md` describing what
-you need and why. Anyone may add one; the check exempts that directory. Then merge what you have,
-say in the merge body that the request is open, and stop the task. The integrator decides and edits.
+you need and why. Anyone may add one; the check exempts that directory, except a request added or
+edited to say its Status is decided, which needs a confirmed answer as its authority (ADR-0021
+decision 4). Then merge what you have, say in the merge body that the request is open, and stop the
+task. The integrator decides and edits.
 
 Needing *another workstream's* path means something has gone wrong: A-03 says a workstream project
 references `Platform.Abstractions` and no other workstream's project, so a real need for another
@@ -63,8 +65,10 @@ each non-merge commit between the base the check judges against and HEAD, made s
 point the script records, and fails one that changes a steering document with no `Authority:`
 trailer, a `#<n>` that names no issue (a pull request's number included), or a URL that is not a
 comment on this repository, naming the commit and the paths. A merge needs no trailer, and neither
-does a commit that only adds a change request under `contracts/changes/`; editing or removing one
-does. Whether what the trailer cites decides the change is the reviewer's call, not the check's.
+does a commit that only adds an open change request under `contracts/changes/`; editing or removing
+one does, and a commit that sets a request's Status to decided needs a trailer that is the URL of a
+confirmed answer, never a bare `#<n>`. Whether what the trailer cites decides the change is the
+reviewer's call, not the check's.
 
 ## Land it
 
