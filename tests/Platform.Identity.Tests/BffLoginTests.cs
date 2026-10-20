@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.DependencyInjection;
 using Platform.Abstractions;
 using Platform.Testing;
+using TestIdp;
 
 namespace Platform.Identity.Tests;
 
@@ -106,6 +109,67 @@ public sealed class BffLoginTests
     }
 
     [Fact]
+    public async Task A_relogin_discard_waits_behind_a_refresh_in_flight_on_the_same_session()
+    {
+        // #166: the discard runs under the session gate (AppSessions.EndAsync, #141 Q9), so a refresh in
+        // flight on the session finishes and stores its rotated tokens before the session is removed, and
+        // the challenge follows the removal. A bare sign-out also removes the session, through the ticket
+        // store, so "the session is gone" cannot tell the two apart; the record the removal found can.
+        // The provider holds the refresh for 500 ms (its token delay, as the parallel-calls test uses),
+        // and the re-login is sent once the refresh holds the gate. Mutation: discard outside the gate
+        // (drop the EnterAsync and EndAsync block from Bff.LoginAsync, leaving the sign-out to remove);
+        // the removal lands while the refresh holds the lease, finds the login's refresh token, and this
+        // fails.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromSeconds(30);
+        IdentityGateway.Login first = await gateway.LoginAsync(App1);
+        gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(5);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        gateway.Idp.Faults.TokenDelay = TimeSpan.FromMilliseconds(500);
+        AppSessions sessions = gateway.Services.GetRequiredService<AppSessions>();
+
+        Task<IdentityGateway.Answer> refresh = Task.Run(
+            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, first.Jar), TestContext.Current.CancellationToken);
+        await HeldAsync(sessions, refresh);
+        IdentityGateway.Answer login = await gateway.SendAsync(App1, "/bff/login?returnUrl=/", first.Jar, headers: IdentityGateway.Navigation);
+        IReadOnlyList<(string Key, SessionRecord? Held)> removedByTheChallenge = gateway.Sessions.Removed;
+        IdentityGateway.Answer refreshed = await refresh;
+
+        TokenGrant grant = Assert.Single(gateway.Idp.RefreshGrants);
+        Assert.True(grant.Ok);
+        (string removedKey, SessionRecord? held) = Assert.Single(removedByTheChallenge);
+        Assert.Equal(key, removedKey);
+        Assert.Equal(grant.RefreshTokenIssued, RefreshTokenOf(Assert.IsType<SessionRecord>(held)));
+        Assert.Equal((200, grant.AccessToken), (refreshed.Status, refreshed.Body));
+        Assert.Equal(302, login.Status);
+        Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, login.Location, StringComparison.Ordinal);
+        Assert.Null(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
+        Assert.Contains(login.Cookies, c =>
+            c.Name == first.Callback.SessionCookie.Name && c.Expires is { } expires && expires < DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task A_relogin_over_a_cookie_for_no_session_still_challenges_and_is_noted_under_auth_session()
+    {
+        // #166: a cookie that resolves to no session for this app is auth.session (contracts/request-gate.md),
+        // noted by AppSessions.KeyOf as the shell gate's challenge notes it; the login still goes to the
+        // provider, and nothing is removed, since there is nothing to discard. Mutation: pass
+        // refusesDeadSession: false to the login's KeyOf call; the rule stays null and this fails.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        IdentityGateway.Login first = await gateway.LoginAsync(App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        await gateway.Sessions.RemoveAsync(key, TestContext.Current.CancellationToken);
+
+        IdentityGateway.Answer login = await gateway.SendAsync(App1, "/bff/login?returnUrl=/", first.Jar, headers: IdentityGateway.Navigation);
+
+        Assert.Equal(302, login.Status);
+        Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, login.Location, StringComparison.Ordinal);
+        Assert.Equal("auth.session", login.Rule);
+        Assert.Equal(SessionRef.Of(key), login.SessionRef);
+        Assert.Single(gateway.Sessions.Removed);
+    }
+
+    [Fact]
     public async Task Its_response_bodies_hold_no_token()
     {
         // N-23 for /bff/login: the challenge and the callback it leads to.
@@ -115,4 +179,21 @@ public sealed class BffLoginTests
 
         TokenSearch.AssertNoTokens(gateway.Idp, login.Challenge.Body + login.Callback.Body);
     }
+
+    /// <summary>
+    /// Returns once <paramref name="sessions"/> has a gate held, which the due token's refresh takes
+    /// before it reads the session and asks the provider, or fails if the refresh ends first.
+    /// </summary>
+    private static async Task HeldAsync(AppSessions sessions, Task refresh)
+    {
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
+        while (sessions.ActiveGates == 0)
+        {
+            Assert.False(refresh.IsCompleted, "The refresh ended before it was seen holding the session's gate.");
+            await Task.Delay(TimeSpan.FromMilliseconds(5), deadline.Token);
+        }
+    }
+
+    private static string? RefreshTokenOf(SessionRecord record) =>
+        TicketSerializer.Default.Deserialize(record.Ticket.ToArray())?.Properties.GetTokenValue("refresh_token");
 }
