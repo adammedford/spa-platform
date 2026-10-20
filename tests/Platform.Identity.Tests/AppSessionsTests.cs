@@ -42,9 +42,12 @@ public sealed class AppSessionsTests
     public async Task ReplaceAsync_writes_only_over_the_version_the_lease_read()
     {
         // T-D2: another gateway task sharing the store writes the session between this lease's read and
-        // its write. The stale write must lose and leave the winner. Mutation: take the expected version
-        // from a fresh read of the store instead of from Owned, which makes the write unversioned; the
-        // stale replace succeeds over the winner, and this fails.
+        // its write, arranged here as a direct store write between EnterAsync and ReplaceAsync: the race
+        // the token source's tests once placed by counting store reads (#167). The stale write must lose
+        // and leave the winner. Mutation: take the expected version from a fresh read of the store
+        // instead of from Owned, which makes the write unversioned; the stale replace succeeds over the
+        // winner, and this fails. A loss changes nothing on the lease either. Mutation: set Owned to the
+        // record offered before the store answers; the lease claims a write that lost, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1, version: 1), Ct);
@@ -54,8 +57,9 @@ public sealed class AppSessionsTests
         SessionRecord winner = Record(App1, version: 2, subject: "winner");
         Assert.True(await store.ReplaceAsync(key, winner, expectedVersion: 1, Ct));
 
-        Assert.False(await lease.ReplaceAsync(owned with { Version = 2 }));
+        Assert.False(await lease.ReplaceAsync(owned with { Version = 2, Subject = "stale" }));
         Assert.Equal(winner, await store.GetAsync(key, Ct));
+        Assert.Equal(owned, lease.Owned);
     }
 
     [Fact]
