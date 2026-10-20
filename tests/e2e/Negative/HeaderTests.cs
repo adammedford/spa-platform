@@ -48,7 +48,7 @@ public sealed class HeaderTests
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
-        Assert.Equal(404, (await profile.FetchAsync("/api/unlisted/x")).Status);
+        Assert.Equal(Contract.Error("unknown_api").Status, (await profile.FetchAsync("/api/unlisted/x")).Status);
 
         Exchange[] four =
         [

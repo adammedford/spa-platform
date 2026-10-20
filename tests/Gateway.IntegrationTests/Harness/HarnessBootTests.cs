@@ -103,8 +103,9 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
         Assert.StartsWith(Harness.Idp.AuthorizeEndpoint + "?", known.Header("Location"), StringComparison.Ordinal);
 
-        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, wrongPort.StatusCode);
+        Contract.ErrorRow unknownHost = Contract.Error("not_found");
+        Assert.Equal(unknownHost.Status, (int)unknown.StatusCode);
+        Assert.Equal(unknownHost.Status, (int)wrongPort.StatusCode);
     }
 
     [Fact]
@@ -113,7 +114,7 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         RawResponse unknown = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", "/", "evil.example", ct: Ct);
         RawResponse health = await RawHttp.SendAsync(Harness.GatewayAddress, "GET", "/healthz", "evil.example", ct: Ct);
 
-        Assert.Equal(404, unknown.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, unknown.StatusCode);
         Assert.Equal(200, health.StatusCode);
     }
 

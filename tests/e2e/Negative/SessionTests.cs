@@ -77,14 +77,16 @@ public sealed class SessionTests
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
 
+        // A reserved path that is switched off: the Errors row the request gate's path.reserved names.
+        Contract.ErrorRow reserved = Contract.Error("not_found");
         IResponse? get = await profile.Page.GotoAsync(app.Url("/signout-oidc").ToString());
-        Assert.Equal(404, get?.Status);
+        Assert.Equal(reserved.Status, get?.Status);
 
         // A form post, as a page would send the framework's remote sign-out.
         await profile.Page.SetContentAsync($"<form method=\"post\" action=\"{app.Url("/signout-oidc")}\"><button>go</button></form>");
         IResponse post = await profile.Page.RunAndWaitForResponseAsync(
             () => profile.Page.ClickAsync("button"), response => response.Url == app.Url("/signout-oidc").ToString());
-        Assert.Equal(404, post.Status);
+        Assert.Equal(reserved.Status, post.Status);
         Assert.Equal("POST", post.Request.Method);
 
         await profile.Page.GotoAsync(app.Url("/").ToString());
