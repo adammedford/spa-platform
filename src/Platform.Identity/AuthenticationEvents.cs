@@ -47,11 +47,15 @@ internal static class AuthenticationEvents
             {
                 // ADR-0008: an unauthenticated fetch gets 401, never a redirect. A redirect to the
                 // provider is useless to a fetch: it cannot follow it cross-origin, and an SPA reads
-                // 401 as "navigate to /bff/login" (assumption A3). Not a rejection, so no rule id:
-                // like task 4.2's 401, it reports the session's state rather than a broken rule.
+                // 401 as "navigate to /bff/login" (assumption A3). Two cases reach this writer. A fetch
+                // that presented no cookie is an answer, not a rejection, and carries no rule id. A
+                // fetch whose cookie resolved to no session is a rejection under auth.session, which
+                // AppSessions.KeyOf noted when the shell gate asked it, before the challenge that
+                // raised this event (contracts/changes/issue-160-rejection-table.md). Either way this
+                // writes the body and no rule id.
                 context.HandleResponse();
                 WithdrawLoginState(context);
-                await Problems.WriteAsync(context.HttpContext, StatusCodes.Status401Unauthorized, Problems.Unauthenticated);
+                await Problems.WriteAsync(context.HttpContext, Problems.Unauthenticated);
                 return;
             }
 
@@ -66,7 +70,8 @@ internal static class AuthenticationEvents
         events.OnRemoteFailure = async context =>
         {
             context.HandleResponse();
-            context.HttpContext.Features.Get<IRequestTelemetryFeature>()?.Rule = RuleIds.AuthCallback;
+            // The page below ends the response, so the rule is only noted (#142, Q11).
+            Rejection.Note(context.HttpContext, RuleIds.AuthCallback);
             HttpResponse response = context.Response;
             response.StatusCode = StatusCodes.Status400BadRequest;
             response.ContentType = "text/html; charset=utf-8";
