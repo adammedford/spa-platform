@@ -33,6 +33,11 @@ public sealed record TestIdpClient(string ClientId, string Secret, IReadOnlySet<
     public static TestIdpClient Create(string clientId, string secret, string redirectUri, string postLogoutUri)
         => new(clientId, secret, new HashSet<string>(StringComparer.Ordinal) { redirectUri },
             new HashSet<string>(StringComparer.Ordinal) { postLogoutUri });
+
+    /// <summary>A client with one redirect URI and several post-logout URIs, compared ordinally as the one-URI form is.</summary>
+    public static TestIdpClient Create(string clientId, string secret, string redirectUri, IEnumerable<string> postLogoutUris)
+        => new(clientId, secret, new HashSet<string>(StringComparer.Ordinal) { redirectUri },
+            new HashSet<string>(postLogoutUris, StringComparer.Ordinal));
 }
 
 /// <summary>One answered request at the authorize endpoint. It holds no <c>state</c> and no code.</summary>

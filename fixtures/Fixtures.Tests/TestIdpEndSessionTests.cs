@@ -161,6 +161,42 @@ public sealed class TestIdpEndSessionTests
     }
 
     [Fact]
+    public async Task A_client_registered_with_two_post_logout_uris_is_returned_to_either()
+    {
+        // Each identity profile returns to a different URI (ADR-0011): the standard profile to the signed-out
+        // callback, the Cognito profile to the app's root. One client registered once must accept both.
+        const string SignedOut = "https://app3.spa-poc.test:8443/signout-callback-oidc";
+        const string Root = "https://app3.spa-poc.test:8443/";
+        await using var harness = await IdpHarness.StartAsync();
+        harness.Idp.AddClient("client-3", "secret-3", "https://app3.spa-poc.test:8443/signin-oidc", [SignedOut, Root]);
+
+        using var standard = await harness.EndSessionAsync(new Dictionary<string, string?>
+        {
+            ["client_id"] = "client-3",
+            ["post_logout_redirect_uri"] = SignedOut,
+        });
+        using var cognito = await harness.CognitoLogoutAsync(new Dictionary<string, string?>
+        {
+            ["client_id"] = "client-3",
+            ["logout_uri"] = Root,
+        });
+        using var unregistered = await harness.EndSessionAsync(new Dictionary<string, string?>
+        {
+            ["client_id"] = "client-3",
+            ["post_logout_redirect_uri"] = "https://app3.spa-poc.test:8443/elsewhere",
+        });
+
+        Assert.Equal(HttpStatusCode.Redirect, standard.StatusCode);
+        Assert.Equal(SignedOut, standard.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.Redirect, cognito.StatusCode);
+        Assert.Equal(Root, cognito.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.BadRequest, unregistered.StatusCode);
+        Assert.Equal(
+            new[] { "ok", "ok", "unregistered_post_logout_redirect_uri" },
+            harness.Idp.Logouts.Select(l => l.Outcome));
+    }
+
+    [Fact]
     public async Task Both_logout_endpoints_answer_whichever_style_discovery_advertises()
     {
         await using var harness = await IdpHarness.StartAsync();

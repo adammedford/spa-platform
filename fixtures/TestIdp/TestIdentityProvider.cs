@@ -152,6 +152,18 @@ public sealed class TestIdentityProvider : IAsyncDisposable
         return client;
     }
 
+    /// <summary>
+    /// Registers a client with one redirect URI and several post-logout URIs. Each identity profile returns to a
+    /// different one (ADR-0011): the standard profile to the signed-out callback, the Cognito profile to the
+    /// app's root, so a client that serves both registers both here, once.
+    /// </summary>
+    public TestIdpClient AddClient(string clientId, string secret, string redirectUri, IEnumerable<string> postLogoutUris)
+    {
+        var client = TestIdpClient.Create(clientId, secret, redirectUri, postLogoutUris);
+        AddClient(client);
+        return client;
+    }
+
     /// <summary>Removes a client. Its refresh tokens stop being redeemable.</summary>
     public bool RemoveClient(string clientId) => _clients.TryRemove(clientId, out _);
 
