@@ -133,14 +133,12 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
         // signed-in user, so no anonymous pair exists to pass.
         if (!await tokens.IsValidAsync(context))
         {
-            Refused(logger, Rule);
+            LogRejected(logger, Rule);
 
-            // Task 4.3a: the same constant on UsePlatformTelemetry's request line, null-conditionally
-            // because this project's own tests run without UsePlatformTelemetry (contracts/telemetry.md
-            // -> "How `rule` and `session_ref` reach the request line").
-            context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
-
-            await Problems.WriteAsync(context, StatusCodes.Status403Forbidden, "csrf_failed");
+            // Task 4.3a: the same constant on UsePlatformTelemetry's request line
+            // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"), then
+            // the id's problem body, both through Rejection (#142; #162).
+            await Rejection.EndAsync(context, Rule);
             return;
         }
 
@@ -153,5 +151,5 @@ internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logge
 
     // The rule id only. Nothing the client sent goes in the line (contracts/telemetry.md -> Never logged).
     [LoggerMessage(Level = LogLevel.Warning, Message = "Antiforgery refused the request. rule={Rule}")]
-    private static partial void Refused(ILogger logger, string rule);
+    private static partial void LogRejected(ILogger logger, string rule);
 }

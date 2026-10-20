@@ -8,7 +8,8 @@ namespace Platform.Security;
 
 /// <summary>
 /// <c>UsePlatformRequestGate</c>, the request gate: <c>contracts/request-gate.md</c>, one rule id
-/// per refusal, with the status and code from <c>contracts/http-contract.md</c> -> Errors. The ids come
+/// per rejection. Each logs the gate's own Warning line and ends through <see cref="Rejection"/>, which
+/// gives the id the status and code the contracts' two tables fix (#142; #162). The ids come
 /// from <see cref="RuleIds"/>, which holds that contract's table so that no owner keeps a copy of its
 /// own (ADR-0015): <c>path.invalid</c> and <c>path.reserved</c> are raised by the asset endpoint too.
 /// Task 4.3; tests N-07, N-25, N-27 and the escape paths of N-10. ADR-0007 is why it judges
@@ -68,12 +69,12 @@ internal sealed partial class RequestGate(ILogger logger)
 
         if (!PathIsNormal(context))
         {
-            return RefuseAsync(context, StatusCodes.Status400BadRequest, "invalid_request", RuleIds.PathInvalid);
+            return EndAsync(context, RuleIds.PathInvalid);
         }
 
         if (CookieNameImitatesPlatformCookie(request.Headers.Cookie))
         {
-            return RefuseAsync(context, StatusCodes.Status400BadRequest, "invalid_request", RuleIds.GateCookieName);
+            return EndAsync(context, RuleIds.GateCookieName);
         }
 
         Row row = Classify(request.Path);
@@ -82,39 +83,39 @@ internal sealed partial class RequestGate(ILogger logger)
             case Row.Reserved:
                 // /signout-oidc: the framework's remote sign-out is switched off (threat T18, N-27), and
                 // a /bff path that is none of the three endpoints is the platform's, not the SPA's.
-                return RefuseAsync(context, StatusCodes.Status404NotFound, "not_found", RuleIds.PathReserved);
+                return EndAsync(context, RuleIds.PathReserved);
 
             case Row.Callback:
-                return MethodIs(context, HttpMethods.Get) ? next(context) : RefuseMethodAsync(context, HttpMethods.Get);
+                return MethodIs(context, HttpMethods.Get) ? next(context) : EndMethodAsync(context, HttpMethods.Get);
 
             case Row.Asset:
                 return MethodIs(context, HttpMethods.Get) || MethodIs(context, HttpMethods.Head)
                     ? next(context)
-                    : RefuseMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
+                    : EndMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
         }
 
         // /api and /bff: same-origin browser requests only.
         if (!FetchSiteAllowed(request.Headers["Sec-Fetch-Site"], allowNone: row == Row.BffLogin))
         {
-            return RefuseAsync(context, StatusCodes.Status403Forbidden, "origin_rejected", RuleIds.GateFetchSite);
+            return EndAsync(context, RuleIds.GateFetchSite);
         }
 
         if (!OriginAllowed(request.Headers.Origin, AppOrigin(request, app.App), required: row == Row.BffLogout))
         {
-            return RefuseAsync(context, StatusCodes.Status403Forbidden, "origin_rejected", RuleIds.GateOrigin);
+            return EndAsync(context, RuleIds.GateOrigin);
         }
 
         switch (row)
         {
             case Row.BffSession when !MethodIs(context, HttpMethods.Get):
             case Row.BffLogin when !MethodIs(context, HttpMethods.Get):
-                return RefuseMethodAsync(context, HttpMethods.Get);
+                return EndMethodAsync(context, HttpMethods.Get);
 
             case Row.BffLogout when !MethodIs(context, HttpMethods.Post):
-                return RefuseMethodAsync(context, HttpMethods.Post);
+                return EndMethodAsync(context, HttpMethods.Post);
 
             case Row.BffLogin when !IsDocumentNavigation(request.Headers):
-                return RefuseAsync(context, StatusCodes.Status403Forbidden, "origin_rejected", RuleIds.GateNavigation);
+                return EndAsync(context, RuleIds.GateNavigation);
         }
 
         // /api takes every method the allowlist in UsePlatformForwardedHeaders lets through.
@@ -318,29 +319,28 @@ internal sealed partial class RequestGate(ILogger logger)
     private static bool MethodIs(HttpContext context, string method) =>
         string.Equals(context.Request.Method, method, StringComparison.Ordinal);
 
-    private Task RefuseMethodAsync(HttpContext context, params string[] allowed)
+    private Task EndMethodAsync(HttpContext context, params string[] allowed)
     {
-        // RFC 9110 section 15.5.6: a 405 carries Allow, here the methods this path takes.
-        context.Response.Headers.Allow = string.Join(", ", allowed);
-        return RefuseAsync(context, StatusCodes.Status405MethodNotAllowed, "method_not_allowed", RuleIds.GateMethod);
+        LogRejected(logger, RuleIds.GateMethod);
+
+        // RFC 9110 section 15.5.6: a 405 carries Allow, here the methods this path takes. The one entry
+        // that ends a 405 is the one that sets it (#142, Q13).
+        return Rejection.EndMethodAsync(context, allowed);
     }
 
-    private Task RefuseAsync(HttpContext context, int status, string code, string rule)
+    private Task EndAsync(HttpContext context, string rule)
     {
         // The rule id only. Nothing the client sent goes in the line: the path can carry a code, and
         // a cookie name is the client's to choose (contracts/telemetry.md -> Never logged).
-        Refused(logger, rule);
+        LogRejected(logger, rule);
 
         // Task 4.3a: the same id on the one request line UsePlatformTelemetry writes, and the field it
         // counts security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach
-        // the request line"). The same `rule` the line above logged, so the two cannot drift. Null
-        // conditional because this project's own tests run with no UsePlatformTelemetry to create the
-        // feature.
-        context.Features.Get<IRequestTelemetryFeature>()?.Rule = rule;
-
-        return Problems.WriteAsync(context, status, code);
+        // the request line"), then the id's problem body. The same `rule` the line above logged, so
+        // the two cannot drift.
+        return Rejection.EndAsync(context, rule);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The request gate refused the request. rule={Rule}")]
-    private static partial void Refused(ILogger logger, string rule);
+    private static partial void LogRejected(ILogger logger, string rule);
 }
