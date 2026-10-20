@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using Platform.Testing;
 
 namespace Platform.Proxy.Tests;
@@ -11,9 +12,9 @@ namespace Platform.Proxy.Tests;
 /// The id is <c>api.unknown</c> (<c>contracts/request-gate.md</c> -> Rule ids).
 ///
 /// <c>UsePlatformTelemetry</c> belongs to workstream 6, so these component tests install
-/// <c>Platform.Testing</c>'s <see cref="SettableRequestTelemetryFeature"/> in its place. Every other
-/// test in this project starts its host without one, which is what exercises the null-conditional
-/// write.
+/// <c>Platform.Testing</c>'s <see cref="SettableRequestTelemetryFeature"/> in its place. The endpoint
+/// ends through <c>Rejection.EndAsync</c>, whose null-conditional write with no feature installed is
+/// proven once in tests/Platform.Abstractions.Tests (#142, Q10).
 /// </summary>
 public sealed class RuleIdTelemetryTests
 {
@@ -51,18 +52,25 @@ public sealed class RuleIdTelemetryTests
     }
 
     [Fact]
-    public async Task An_unlisted_api_name_is_still_refused_with_no_telemetry_feature_installed()
+    public async Task An_unlisted_api_name_logs_its_rule_through_the_endpoint_s_template()
     {
-        // The write is null-conditional: this component host omits UsePlatformTelemetry, so the refusal
-        // must remain unchanged when no telemetry feature is installed (contracts/telemetry.md).
-        await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, TestApps.Entry("app1"));
+        // The endpoint's Warning line is its own (the module never logs, #142 Q9), written through a
+        // LoggerMessage template under the category it always had. A template's line carries an event
+        // id named after its method; the ad hoc LogWarning call it replaced carried none, so this fails
+        // if the endpoint goes back to one.
+        await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, telemetry: true, TestApps.Entry("app1"));
         using HttpClient client = new();
 
         using HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/reports/items"), Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Equal("unknown_api", await Problem.CodeOf(response));
-        Assert.Empty(gateway.TelemetryRules);
+        LogLine line = Assert.Single(gateway.Log, line => line.Message.Contains("rule=api.unknown", StringComparison.Ordinal));
+        Assert.Equal("Platform.Proxy.UnknownApi", line.Category);
+        Assert.Equal(LogLevel.Warning, line.Level);
+        Assert.False(string.IsNullOrEmpty(line.EventId.Name), "the line was not written through a LoggerMessage template");
+
+        // The path is attacker-chosen and stays out of the line.
+        Assert.DoesNotContain("reports", line.Message, StringComparison.Ordinal);
     }
 }

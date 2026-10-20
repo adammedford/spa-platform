@@ -40,24 +40,25 @@ internal static class AccessTokenStep
                     await next(context);
                     break;
 
-                // contracts/http-contract.md -> Errors. Neither writes a rule id. The 401 for a live
+                // Answers, not rejections: each names its code alone and Problems.WriteAsync takes the
+                // status from contracts/http-contract.md -> Errors (#142, Q7). Neither writes a rule id. The 401 for a live
                 // session that yields no token is deliberately not a rejection (contracts/telemetry.md ->
                 // "How `rule` and `session_ref` reach the request line"), and auth.session turns on
                 // whether a cookie was presented (contracts/request-gate.md), which Unauthenticated does
                 // not say, so the step has nothing to write it from.
                 case AccessTokenResult.SessionEnded:
-                    await Problems.WriteAsync(context, StatusCodes.Status401Unauthorized, "session_ended");
+                    await Problems.WriteAsync(context, Problems.SessionEnded);
                     break;
 
                 case AccessTokenResult.Unauthenticated:
-                    await Problems.WriteAsync(context, StatusCodes.Status401Unauthorized, "unauthenticated");
+                    await Problems.WriteAsync(context, Problems.Unauthenticated);
                     break;
 
                 // The provider could not be reached and the session is kept, so not a 401, which the
                 // browser reads as "log in again" (assumption A3). Not a rejection either, so no rule id
                 // (change request 4.2 -> Decision).
                 case AccessTokenResult.ProviderUnavailable:
-                    await Problems.WriteAsync(context, StatusCodes.Status503ServiceUnavailable, "idp_unavailable");
+                    await Problems.WriteAsync(context, Problems.IdpUnavailable);
                     break;
 
                 // An outcome the frozen contract does not name. Never forwarded: with no token to attach
