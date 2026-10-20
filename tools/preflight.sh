@@ -323,7 +323,7 @@ if have docker; then
     later "Container engine" "task 1.7. docker is installed but no engine is running"
   fi
 else
-  later "Container engine" "task 1.7. See decision D-2 in docs/dependencies.md"
+  later "Container engine" "task 1.7. brew install --cask docker-desktop (decision D-2 in docs/dependencies.md)"
 fi
 
 # Hosts file entries

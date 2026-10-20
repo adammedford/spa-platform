@@ -26,7 +26,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
 | Session Manager plugin | 1.2.835.0 | `brew install --cask session-manager-plugin` | 1.6b | The tunnel to the internal ALB |
-| Container engine with ARM64 builds | Docker Desktop 4.94.0, or Colima 0.10.3 | Decision D-2 | 1.7 | `deploy.sh` builds the gateway and mock API images |
+| Container engine with ARM64 builds | Docker Desktop 4.94.0 | `brew install --cask docker-desktop` | 1.7 | Decision D-2. `deploy.sh` builds the gateway and mock API images |
 | Chromium for Playwright | Comes with Microsoft.Playwright 1.63.0 | Installed by the test suite | 5.2, 6.5 | Playwright needs macOS 14 or later. See the note below. |
 | GitHub repository with Actions | n/a | n/a | I-5 | The plan's default CI. It needs a read-only AWS role to run Terraform plans, which task 1.0 creates. |
 | A Cognito domain prefix | n/a | n/a | 1.1 | Must be unique in the region |
@@ -117,6 +117,30 @@ The engine runs in the gateway process, through `src/Platform.Registry`, and the
 
 **Revisit when** 8.x stops receiving a fix we need. Then pick a permissively licensed engine from the table above. In shipping code the engine is touched in one file, `src/Platform.Registry/RegistrySchemas.cs`, which is the whole of the gateway's and `spactl`'s exposure to it; the two test projects in the row above call it directly as well, and they are not what a swap has to keep working. A one-file change in the code that ships is why this is recorded here and not as an ADR.
 
+### D-2: the container engine. Docker Desktop, through the `docker-desktop` cask
+
+Decided by the integrator on 19 October 2026, in the Phase 2 planning session, ahead of task 1.7
+(#58), whose `deploy.sh` builds the gateway and mock API images for ARM64, and of the sittings that
+run it.
+
+| Option | Licence | Trade-off |
+| --- | --- | --- |
+| **Docker Desktop 4.94.0** | Free for personal use and for companies under 250 employees and under $10 million revenue. Paid otherwise. | The simplest install, and the `docker` and `docker buildx` commands the two Dockerfiles and `deploy.sh` are written for. Needs macOS 14 or later. **Chosen.** |
+| Colima 0.10.3 with the `docker` and `docker-buildx` formulas | MIT | The same commands without the licence question. A little more setup. |
+| No engine | n/a | `dotnet publish /t:PublishContainer` would replace the two Dockerfiles of tasks I-4 and 5.3, so it is a plan change. |
+
+What it changes: `Brewfile` installs the cask, `tools/preflight.sh` names the install when it finds
+no engine, and `deploy.sh` (#58) may assume the `docker` CLI with buildx on the workstation. One
+effect on Phase 2: with an engine on every workstation, DynamoDB Local in a container is available
+to a session that wants to try the real condition-expression grammar before G6 (change request
+`contracts/changes/p2-1-dynamodb-session-store.md`, option (b)). The suite's proof stays that
+request's fake server, because `CODING_STANDARDS.md` forbids a test that skips on a machine without
+the engine, and CI would need a container of its own.
+
+**Revisit when** the organisation adopting the platform falls outside Docker Desktop's free terms.
+The swap is Colima: the same `docker` CLI and the same Dockerfiles, so it is three Brewfile lines
+and nothing in the repository's scripts.
+
 ### D-3: the shell scripts' tests. Python's `unittest`, running the real script
 
 Decided on #66, from archived overnight ticket 69's Q1 and Q14, which Adam accepted. `tools/land.sh`
@@ -176,15 +200,7 @@ image notes.
 
 ## Open decisions
 
-### D-2: the container engine
-
-Not needed before task 1.7.
-
-| Option | Licence | Trade-off |
-| --- | --- | --- |
-| Docker Desktop 4.94.0 | Free for personal use and for companies under 250 employees and under $10 million revenue. Paid otherwise. | The simplest install. Needs macOS 14 or later. |
-| Colima 0.10.3 with the `docker` and `docker-buildx` formulas | MIT | No licence question. A little more setup. |
-| No engine | n/a | The .NET SDK can build an image and push it to a registry without Docker (`dotnet publish /t:PublishContainer`). That would replace the two Dockerfiles of tasks I-4 and 5.3, so it is a plan change. |
+None. D-2, the container engine, was the last and is decided above.
 
 ## What was checked, and what was not
 

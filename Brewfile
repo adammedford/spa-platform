@@ -15,11 +15,7 @@ brew "awscli"                    # AWS CLI v2. Terraform credentials, certs.sh, 
 brew "gh"                        # The GitHub CLI: the tracker and tools/land.sh. Then gh auth login.
 cask "session-manager-plugin"    # The tunnel to the internal ALB. Task 1.6b.
 
-# A container engine is needed from task 1.7, when deploy.sh builds the two images.
-# It is left out on purpose: see decision D-2 in docs/dependencies.md, then add one of these.
-#
-# cask "docker-desktop"
-#
-# brew "colima"
-# brew "docker"
-# brew "docker-buildx"
+# A container engine is needed from task 1.7, when deploy.sh builds the two images for ARM64.
+# Docker Desktop, by decision D-2 in docs/dependencies.md; Colima with the docker and
+# docker-buildx formulas is the swap if the licence terms stop fitting.
+cask "docker-desktop"            # The container engine and docker buildx. Task 1.7.
