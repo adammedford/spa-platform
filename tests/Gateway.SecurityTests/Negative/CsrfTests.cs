@@ -110,7 +110,7 @@ public sealed class CsrfTests
 
         BrowserResponse response = await PostAsync(browser, headers);
 
-        Contract.ErrorRow expected = Contract.Error("antiforgery token was missing or wrong");
+        Contract.ErrorRow expected = Contract.Error("csrf_failed");
         Assert.Equal((HttpStatusCode)expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", response.Body, StringComparison.Ordinal);

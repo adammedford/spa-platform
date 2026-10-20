@@ -25,7 +25,7 @@ namespace Gateway.IntegrationTests.Functional;
 /// <c>HttpClient</c>. A test must therefore pick its request out by trace id, which it takes from the
 /// request log line in that harness's own <see cref="GatewayHarness.Log"/>, and may not assert on how
 /// many spans there are. Assertions about a name's shape are safe either way, which is what
-/// <see cref="ContractText.PlatformInstrumentNames"/> is for.</para>
+/// <see cref="FixtureFiles.PlatformInstrumentNames"/> is for.</para>
 ///
 /// <para>The exporters below are written here rather than taken from
 /// <c>OpenTelemetry.Exporter.InMemory</c>: that package's exporter calls <c>ICollection.Add</c> with

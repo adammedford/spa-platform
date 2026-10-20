@@ -95,7 +95,7 @@ public sealed class ForwardedHeaderTests
         int before = await Observed.SettledCountAsync(harness, Suite.Ct);
         RawResponse refused = await Call(harness, "https");
 
-        Contract.ErrorRow expected = Contract.Error("The request gate refused the request");
+        Contract.ErrorRow expected = Contract.Error("origin_rejected");
         Assert.Equal(expected.Status, refused.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(refused), StringComparison.Ordinal);
         Assert.Equal(RuleIds.GateOrigin, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
@@ -183,7 +183,7 @@ public sealed class ForwardedHeaderTests
     /// </summary>
     private static async Task AssertAdmittedByTheGateAsync(GatewayHarness harness, RawResponse response, int before)
     {
-        Contract.ErrorRow noSession = Contract.Error("No session");
+        Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         Assert.Equal(noSession.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{noSession.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
         Assert.Null(await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));

@@ -15,4 +15,9 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The contract reader's parsers are internal; Harness/ContractTests feeds them planted text (#139). -->
+    <InternalsVisibleTo Include="Gateway.IntegrationTests" />
+  </ItemGroup>
+
 </Project>

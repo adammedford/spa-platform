@@ -1,9 +1,16 @@
+using Platform.Abstractions;
+
 namespace Gateway.ArchitectureTests;
 
 /// <summary>
 /// A-01 to A-04 against this solution. The rules themselves are proven in
 /// <see cref="ReferenceRuleTests"/>, against graphs that break them; these four read the real
 /// project files, and they are what CI fails on.
+///
+/// The rule-id rule likewise: <see cref="RuleIdLiterals"/> is proven in
+/// <see cref="RuleIdLiteralTests"/>, and its live assertion here reads the workstream projects' own
+/// sources. It carries no <c>A-</c> id, because the plan's test table is frozen and a number minted
+/// outside it would be a copy of nothing (#154).
 ///
 /// A-05, path ownership, is not here. It is a property of a change rather than of the tree, so
 /// <c>.githooks/pre-push</c> and the CI step from task I-5 check it against a diff.
@@ -69,5 +76,41 @@ public sealed class ArchitectureTests
             ProjectGraph.Solution.Projects.Select(project => project.Name).Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void No_workstream_project_spells_a_rule_id_as_a_literal()
+    {
+        // The six projects A-03 binds, so Hosting, Registry and Telemetry are covered by construction
+        // and Platform.Abstractions, where the literals belong, is not. Test projects are left out on
+        // purpose: see RuleIdLiterals.
+        Assert.Empty(RuleIdLiterals.Violations(ReferenceRules.WorkstreamProjects.Select(DirectoryOf), RuleIds.All));
+    }
+
+    [Fact]
+    public void The_rule_id_scan_finds_the_literals_platform_abstractions_holds()
+    {
+        // The live assertion above passes over a tree with no literal whether or not the scan read a
+        // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
+        // same rule runs here over the one project that must hold the literals: the twelve declarations
+        // in RuleIds, and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the
+        // scan reads comments too. The count moves with its subject: a quoted id added to or removed
+        // from Platform.Abstractions moves it.
+        string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIds.All)];
+
+        Assert.Equal(13, hits.Length);
+        Assert.Equal(
+            [("Platform.Abstractions/IRequestTelemetryFeature.cs", 1), ("Platform.Abstractions/RuleIds.cs", 12)],
+            hits
+                .GroupBy(hit => hit[..hit.IndexOf(':', StringComparison.Ordinal)], StringComparer.Ordinal)
+                .Select(file => (file.Key, file.Count()))
+                .Order());
+    }
+
     private static string RepositoryRoot => ProjectGraph.RepositoryRoot;
+
+    /// <summary>
+    /// A project's directory, from where the solution says its project file is rather than from an
+    /// assumed <c>src/</c> layout.
+    /// </summary>
+    private static string DirectoryOf(string project) =>
+        Path.GetDirectoryName(Path.Combine(RepositoryRoot, ProjectGraph.Solution[project].Path))!;
 }

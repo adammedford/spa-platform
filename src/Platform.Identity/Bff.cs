@@ -41,7 +41,8 @@ internal static class Bff
 
         if (await SessionOfAsync(context, app) is not { } record)
         {
-            await Problems.WriteAsync(context, StatusCodes.Status401Unauthorized, Problems.Unauthenticated);
+            // An answer for no cookie, a rejection for a dead one, which KeyOf has noted; one body.
+            await Problems.WriteAsync(context, Problems.Unauthenticated);
             return;
         }
 
@@ -59,15 +60,34 @@ internal static class Bff
 
     /// <summary>
     /// <c>GET /bff/login</c>: discards any session this browser has on the app, then challenges. The
-    /// cookie handler's sign-out removes the stored session it authenticated this request with as well as
-    /// expiring the cookie (CookieAuthenticationHandler.HandleSignOutAsync, cited at <see cref="NoteDeadSession"/>). The
-    /// return path is kept only when it is local (N-15); the sign-in that follows always lands under a new
-    /// session key, which the callback-blind cookie manager of task 3.3 ensures (R-D5).
+    /// discard is the session module's end with no action before the removal, under the session's gate,
+    /// so a refresh in flight on the session finishes before the session goes and every removal the
+    /// gateway itself starts runs gated-first under the one ownership check (#141 Q9). It revokes nothing:
+    /// contracts/http-contract.md promises a discard, and a revocation here would be a change to that
+    /// frozen behaviour and would put the provider deadline on every login (#141 Q10).
+    ///
+    /// The cookie handler's sign-out still follows, for the cookie it expires; the removal it makes through
+    /// the ticket store finds the session already gone and does nothing (<see cref="AppSessions.RemoveAsync"/>,
+    /// #141 Q12; CookieAuthenticationHandler.HandleSignOutAsync:
+    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
+    /// A request with no session, or whose cookie resolves to a dead one, is challenged all the same, the
+    /// dead cookie noted under <c>auth.session</c> by <see cref="AppSessions.KeyOf"/>. The return path is
+    /// kept only when it is local (N-15); the sign-in that follows always lands under a new session key,
+    /// which the callback-blind cookie manager of task 3.3 ensures (R-D5).
     /// </summary>
     private static async Task LoginAsync(HttpContext context)
     {
         AppDefinition app = Pinned(context, "MapPlatformBff");
         string returnUrl = ReturnUrl.LocalOrRoot(context.Request.Query["returnUrl"]);
+
+        AppSessions sessions = context.RequestServices.GetRequiredService<AppSessions>();
+        AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
+        if (sessions.KeyOf(context, session) is { } key)
+        {
+            // Released before the sign-out, whose ungated removal needs no gate and should wait on none.
+            using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
+            await lease.EndAsync();
+        }
 
         await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
         await context.ChallengeAsync(SchemeNames.Oidc(app.AppId), new AuthenticationProperties { RedirectUri = returnUrl });
@@ -83,7 +103,10 @@ internal static class Bff
     {
         AppDefinition app = Pinned(context, "MapPlatformBff");
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (session.Succeeded && context.Features.Get<SessionKeyFeature>()?.Key is { } key)
+
+        // A dead cookie is not refused here: the browser is still signed out of the provider and its
+        // cookies still cleared, so the request ends in no rejection and carries no rule id.
+        if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
             await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(app, key);
         }
@@ -101,23 +124,18 @@ internal static class Bff
     }
 
     /// <summary>
-    /// The record of the session this request authenticated with, when it is this app's and this client's.
-    /// A cookie that resolved to no session is noted under <c>auth.session</c>.
+    /// The record of the session this request authenticated with, when it is this app's and this client's:
+    /// the session module's ungated read, which holds the ownership check (#141). A read changes
+    /// nothing, so it waits behind no refresh and takes the request's token. A cookie that resolved to no
+    /// session is noted under <c>auth.session</c>, by <see cref="AppSessions.KeyOf"/>.
     /// </summary>
     private static async Task<SessionRecord?> SessionOfAsync(HttpContext context, AppDefinition app)
     {
+        AppSessions sessions = context.RequestServices.GetRequiredService<AppSessions>();
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (!session.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
-        {
-            NoteDeadSession(context, session);
-            return null;
-        }
-
-        return await context.RequestServices.GetRequiredService<ISessionStore>().GetAsync(key, context.RequestAborted) is { } record
-            && string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
-            && string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal)
-                ? record
-                : null;
+        return sessions.KeyOf(context, session) is { } key
+            ? await sessions.ReadAsync(app, key, context.RequestAborted)
+            : null;
     }
 
     /// <summary>
@@ -135,14 +153,18 @@ internal static class Bff
     /// (S-B7), or not decryptable at all. The cookie handler reports each as a failure, and reports no
     /// cookie as no result, which is not a rejection and leaves the rule unset
     /// (CookieAuthenticationHandler.ReadCookieTicket:
-    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs). Null-conditional, because
-    /// a component test runs without the telemetry stage.
+    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
+    ///
+    /// That decision reads the framework's authentication result, so it stays here; the note is
+    /// <see cref="Rejection.Note"/>'s, which writes no response, since the challenge or the 401 that
+    /// follows is another writer's (#142, Q11). Called from <see cref="AppSessions.KeyOf"/> and nowhere
+    /// else, so the project's one <c>auth.session</c> note has one call site (#141, S3).
     /// </summary>
     internal static void NoteDeadSession(HttpContext context, AuthenticateResult session)
     {
         if (session.Failure is not null)
         {
-            context.Features.Get<IRequestTelemetryFeature>()?.Rule = RuleIds.AuthSession;
+            Rejection.Note(context, RuleIds.AuthSession);
         }
     }
 

@@ -11,8 +11,10 @@ namespace Platform.Security.Tests;
 ///
 /// <c>UsePlatformTelemetry</c> belongs to workstream 6; these component hosts install
 /// <c>Platform.Testing</c>'s <see cref="Platform.Testing.SettableRequestTelemetryFeature"/> in its
-/// place, which is what a stage's own test project can do. Every other test in this project starts
-/// its host with no feature at all, so the stages' null-conditional writes are exercised both ways.
+/// place, which is what a stage's own test project can do. The stages end through
+/// <c>Rejection.EndAsync</c> and <c>Rejection.EndMethodAsync</c>, whose null-conditional write with no
+/// feature installed is proven once in tests/Platform.Abstractions.Tests (#142, Q10); what is proven
+/// here is the wiring, status and rule together.
 ///
 /// Each assertion names the id it expects, so a stage that set a different one, or none, fails it.
 /// It also asserts the stage's own Warning line carries the same id: both come from one value in the
@@ -144,18 +146,6 @@ public sealed class RuleIdTelemetryTests
         Assert.Equal(0, host.Reached);
     }
 
-    [Fact]
-    public async Task The_method_allowlist_refuses_with_no_telemetry_feature_installed()
-    {
-        await using GateHost host = await GateHost.StartAsync(Ct);
-
-        string response = await host.RawAsync("TRACE /api/orders/items HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
-
-        Assert.StartsWith("HTTP/1.1 405 ", response);
-        Assert.Single(host.LinesFor("gate.method"));
-        Assert.Empty(host.TelemetryRules);
-    }
-
     [Theory]
     [InlineData("GET", "/api/orders/items")]
     [InlineData("GET", "/")]
@@ -172,21 +162,6 @@ public sealed class RuleIdTelemetryTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Null(Assert.Single(host.TelemetryRules));
         Assert.Equal(1, host.Reached);
-    }
-
-    [Fact]
-    public async Task The_gate_refuses_with_no_telemetry_feature_installed()
-    {
-        // The write is null-conditional: these component hosts omit UsePlatformTelemetry, so the
-        // refusal must remain unchanged when no telemetry feature is installed
-        // (contracts/telemetry.md).
-        await using GateHost host = await GateHost.StartAsync(Ct);
-
-        using HttpResponseMessage response = await host.SendAsync("GET", "/api/orders/items", Ct, FetchSite("cross-site"));
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Single(host.LinesFor("gate.fetch-site"));
-        Assert.Empty(host.TelemetryRules);
     }
 
     // ---- UsePlatformAntiforgery ----
@@ -220,18 +195,5 @@ public sealed class RuleIdTelemetryTests
         // Two requests: /bff/session issued the pair, and neither was refused.
         Assert.All(host.TelemetryRules, rule => Assert.Null(rule));
         Assert.Equal(2, host.TelemetryRules.Count);
-    }
-
-    [Fact]
-    public async Task Antiforgery_refuses_with_no_telemetry_feature_installed()
-    {
-        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct);
-
-        using HttpResponseMessage response = await host.SendAsync(
-            "POST", "/api/orders/items", AntiforgeryHost.App1, "alice", Ct);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Single(host.LinesFor("csrf.token"));
-        Assert.Empty(host.TelemetryRules);
     }
 }

@@ -30,8 +30,8 @@ public sealed class SessionTests
         foreach (string path in new[] { "/api/reports/whoami", "/bff/session" })
         {
             FetchResult refused = await profile.FetchAsync(path);
-            Assert.Equal(401, refused.Status);
-            Assert.Equal(Contract.Error("No session").Code, refused.Code);
+            Assert.Equal(Contract.Error("unauthenticated").Status, refused.Status);
+            Assert.Equal(Contract.Error("unauthenticated").Code, refused.Code);
         }
 
         // A navigation is challenged afresh: to the provider, for app 2's own client. The load balancer
@@ -62,10 +62,10 @@ public sealed class SessionTests
             FetchResult answer = await profile.FetchAsync(path);
 
             // redirect: "manual" would show a redirect as an opaque response with status 0.
-            Assert.Equal(401, answer.Status);
+            Assert.Equal(Contract.Error("unauthenticated").Status, answer.Status);
             Assert.Equal("basic", answer.Type);
             Assert.Equal("application/problem+json", answer.ContentType);
-            Assert.Equal(Contract.Error("No session").Code, answer.Code);
+            Assert.Equal(Contract.Error("unauthenticated").Code, answer.Code);
         }
     }
 
@@ -77,14 +77,16 @@ public sealed class SessionTests
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
 
+        // A reserved path that is switched off: the Errors row the request gate's path.reserved names.
+        Contract.ErrorRow reserved = Contract.Error("not_found");
         IResponse? get = await profile.Page.GotoAsync(app.Url("/signout-oidc").ToString());
-        Assert.Equal(404, get?.Status);
+        Assert.Equal(reserved.Status, get?.Status);
 
         // A form post, as a page would send the framework's remote sign-out.
         await profile.Page.SetContentAsync($"<form method=\"post\" action=\"{app.Url("/signout-oidc")}\"><button>go</button></form>");
         IResponse post = await profile.Page.RunAndWaitForResponseAsync(
             () => profile.Page.ClickAsync("button"), response => response.Url == app.Url("/signout-oidc").ToString());
-        Assert.Equal(404, post.Status);
+        Assert.Equal(reserved.Status, post.Status);
         Assert.Equal("POST", post.Request.Method);
 
         await profile.Page.GotoAsync(app.Url("/").ToString());

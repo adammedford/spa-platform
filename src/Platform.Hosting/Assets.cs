@@ -62,17 +62,19 @@ internal sealed partial class Assets(ILogger logger)
         bool head = HttpMethods.IsHead(request.Method);
         if (!head && !HttpMethods.IsGet(request.Method))
         {
-            // The request gate refuses this first (rule gate.method). The endpoint takes every method so
-            // that, without the gate, the answer is still the contract's 405 problem.
-            context.Response.Headers.Allow = "GET, HEAD";
-            await Problems.WriteAsync(context, StatusCodes.Status405MethodNotAllowed, Problems.MethodNotAllowed);
+            // The request gate refuses this first, under the same rule. The endpoint takes every method
+            // so that, without the gate, the answer is still the contract's 405 problem, and it ends
+            // under gate.method, the id the rule-id table gives the case, so that it reaches the
+            // request line and the count as every other rejection does (#142, Q14). No Warning line of
+            // this endpoint's own: the gate logs the method refusals it makes, and the pinned line
+            // below names this endpoint's path checks only.
+            await Rejection.EndMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
             return;
         }
 
         if (IsReserved(request.Path))
         {
-            Refuse(context, RuleIds.PathReserved);
-            await Problems.WriteAsync(context, StatusCodes.Status404NotFound, Problems.NotFound);
+            await RejectAsync(context, RuleIds.PathReserved);
             return;
         }
 
@@ -84,8 +86,7 @@ internal sealed partial class Assets(ILogger logger)
             : null;
         if (relative is null)
         {
-            Refuse(context, RuleIds.PathInvalid);
-            await Problems.WriteAsync(context, StatusCodes.Status400BadRequest, Problems.InvalidRequest);
+            await RejectAsync(context, RuleIds.PathInvalid);
             return;
         }
 
@@ -107,7 +108,8 @@ internal sealed partial class Assets(ILogger logger)
         StoredObject? stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
         if (stored is null)
         {
-            await Problems.WriteAsync(context, StatusCodes.Status404NotFound, Problems.NotFound);
+            // An answer, not a rejection: no rule id, only the code (#142).
+            await Problems.WriteAsync(context, Problems.NotFound);
             return;
         }
 
@@ -207,29 +209,29 @@ internal sealed partial class Assets(ILogger logger)
     }
 
     /// <summary>
-    /// Records one rejection under its rule id, in the two places the contracts put it.
+    /// Rejects a path under its rule id: this endpoint's Warning line, then
+    /// <see cref="Rejection.EndAsync"/>, which notes the rule on <see cref="IRequestTelemetryFeature"/>
+    /// for the request line and <c>security.rejections</c> and writes the id's problem body.
     ///
-    /// <para>On <see cref="IRequestTelemetryFeature"/> for the one request line
-    /// <c>UsePlatformTelemetry</c> writes once the pipeline has returned, and for
-    /// <c>security.rejections</c> counted from the same field (contracts/telemetry.md -> "How
-    /// <c>rule</c> and <c>session_ref</c> reach the request line"). Null-conditionally because
-    /// component pipelines can omit <c>UsePlatformTelemetry</c>; a missing feature must not change
-    /// the rejection (contracts/changes/6.4-request-telemetry-feature.md).</para>
+    /// <para>The Warning line is this endpoint's, and it keeps it: the module never logs (#142, Q9).
+    /// The line says which of this endpoint's checks refused the request, at the moment it did, which
+    /// the request line cannot: that line carries one rule id for the whole request and is written by
+    /// another project. Keeping it is this owner's choice, not a contract matter
+    /// (contracts/changes/6.4-request-telemetry-feature.md), and <c>AssetTests</c> asserts on its text
+    /// and category.</para>
     ///
-    /// <para>And on this endpoint's own Warning line, which it keeps. The line says which of this
-    /// endpoint's checks refused the request, at the moment it did, which the request line cannot:
-    /// that line carries one rule id for the whole request and is written by another project.
-    /// Keeping it is this owner's choice, not a contract matter
-    /// (contracts/changes/6.4-request-telemetry-feature.md), and <c>AssetTests</c> asserts on it.</para>
+    /// <para>Named by the glossary's word, as the request gate's helpers are (GLOSSARY.md ->
+    /// Rejection); the log message keeps "refused", which the glossary gives the code's log
+    /// messages.</para>
     /// </summary>
-    private void Refuse(HttpContext context, string rule)
+    private Task RejectAsync(HttpContext context, string rule)
     {
-        context.Features.Get<IRequestTelemetryFeature>()?.Rule = rule;
-        LogRefused(logger, rule);
+        LogRejected(logger, rule);
+        return Rejection.EndAsync(context, rule);
     }
 
     // The rule id only (contracts/request-gate.md, Rule ids). The path is not logged: it is the
     // client's text, and the telemetry contract's request line already carries the route.
     [LoggerMessage(EventId = 1001, Level = LogLevel.Warning, Message = "Asset request refused under {Rule}")]
-    private static partial void LogRefused(ILogger logger, string rule);
+    private static partial void LogRejected(ILogger logger, string rule);
 }

@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Platform.Abstractions;
 
@@ -113,7 +112,7 @@ public sealed class RuleIdsTests
     /// </summary>
     private static string[] ContractRuleIds()
     {
-        return ParseRuleIds(File.ReadAllLines(Path.Combine(ContractsDirectory(), "request-gate.md")));
+        return ParseRuleIds(ContractTables.RequestGate());
     }
 
     private static string[] ParseRuleIds(IEnumerable<string> lines)
@@ -150,35 +149,5 @@ public sealed class RuleIdsTests
 
         Assert.NotEmpty(ids);
         return [.. ids];
-    }
-
-    /// <summary>
-    /// The source tree first, then the output directory's ancestors, the same two places
-    /// Contracts.Tests looks. This file sits at tests/Platform.Abstractions.Tests/.
-    /// </summary>
-    private static string ContractsDirectory([CallerFilePath] string? thisFile = null)
-    {
-        if (thisFile is not null)
-        {
-            string fromSource =
-                Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", "contracts"));
-
-            if (Directory.Exists(fromSource))
-            {
-                return fromSource;
-            }
-        }
-
-        for (DirectoryInfo? candidate = new(AppContext.BaseDirectory);
-             candidate is not null;
-             candidate = candidate.Parent)
-        {
-            if (File.Exists(Path.Combine(candidate.FullName, "SpaPlatform.slnx")))
-            {
-                return Path.Combine(candidate.FullName, "contracts");
-            }
-        }
-
-        throw new InvalidOperationException("contracts/ is neither beside the source nor above the output.");
     }
 }

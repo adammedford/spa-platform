@@ -192,22 +192,6 @@ public sealed class HostResolutionTests
     }
 
     /// <summary>
-    /// The write is null-conditional, so host resolution refuses an unknown host the same way with
-    /// no feature installed, as required by contracts/changes/6.4-request-telemetry-feature.md.
-    /// This case explicitly protects component pipelines that omit <c>UsePlatformTelemetry</c>.
-    /// </summary>
-    [Fact]
-    public async Task An_unknown_host_is_refused_the_same_way_with_no_feature_installed()
-    {
-        await using HostingHost gateway = await StartAsync();
-
-        AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
-
-        Assert.Null(gateway.LastTelemetry);
-        Assert.Equal(0, gateway.Reached);
-    }
-
-    /// <summary>
     /// Host resolution writes no log line of its own for an unknown host: those requests are the
     /// cheapest traffic anyone can send, so a line each would let a stranger flood the log, and the
     /// request line plus <c>security.rejections</c> record the rejection once

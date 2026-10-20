@@ -79,7 +79,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         await SignedIn.OnPageOfAsync(sessionless, Harness.App("app1"));
         BrowserResponse unauthenticatedAsset = await sessionless.GetAsync(AssetPath, ct: Suite.Ct);
         BrowserResponse unauthenticatedApi = await sessionless.GetAsync("/api/echo/thing", ct: Suite.Ct);
-        Contract.ErrorRow noSession = Contract.Error("No session");
+        Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         foreach (BrowserResponse unauthenticated in (BrowserResponse[])[unauthenticatedAsset, unauthenticatedApi])
         {
             Assert.Equal((HttpStatusCode)noSession.Status, unauthenticated.StatusCode);

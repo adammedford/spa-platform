@@ -4,6 +4,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Platform.Abstractions/Platform.Abstractions.csproj" />
+    <!-- SettableRequestTelemetryFeature, for Rejection's tests (#160): the module writes the
+         feature, and Platform.Testing holds the settable stand-in for UsePlatformTelemetry. -->
+    <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
   </ItemGroup>
 
 </Project>

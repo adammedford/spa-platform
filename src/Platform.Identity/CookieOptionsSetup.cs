@@ -48,7 +48,7 @@ public sealed class CookieOptionsSetup(IHttpContextAccessor accessor, IRegistry 
         options.SlidingExpiration = false;
 
         // The ticket and its saved tokens on the server, bound to this app and client (ADR-0004).
-        options.SessionStore = new AppBoundTicketStore(app.AppId, app.OAuth.ClientId);
+        options.SessionStore = new AppBoundTicketStore(app);
 
         // The callback never sees an existing session cookie, so a login always gets a new key (R-D6).
         options.CookieManager = new CallbackBlindCookieManager(OidcOptionsSetup.CallbackPath);

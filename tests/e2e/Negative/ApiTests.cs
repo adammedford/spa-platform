@@ -33,8 +33,9 @@ public sealed class ApiTests
         int mark = stack.RequestLines.Count;
         FetchResult unlisted = await profile.FetchAsync("/api/unlisted/whoami");
 
-        Assert.Equal(404, unlisted.Status);
-        Assert.Equal(Contract.Error("lists no upstream").Code, unlisted.Code);
+        Contract.ErrorRow expected = Contract.Error("unknown_api");
+        Assert.Equal(expected.Status, unlisted.Status);
+        Assert.Equal(expected.Code, unlisted.Code);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.ApiUnknown, app.AppId);
         Assert.Empty(stack.Harness.Echo.Requests);
     }

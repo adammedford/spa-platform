@@ -20,10 +20,12 @@
 # build and Terraform when the change touches their half.
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
-# port the caller names, and `terraform test` for every root and module that has tests. Its lines
-# say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero
-# on failure, so a log's last line is the verdict. Two things differ from the default mode, both
-# because a verdict is read without the lines above it:
+# port the caller names, `terraform test` for every root and module that has tests, and the test
+# companion of each script in tools/ or .github/ the change touches (#134), but not
+# tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it ends
+# on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a log's
+# last line is the verdict. Two things differ from the default mode, both because a verdict is read
+# without the lines above it:
 #   - It shows the build's and Terraform's own output, which the hook sends to /dev/null: a lane
 #     reads its failure from the log, and a hidden compiler error costs it a second run.
 #   - A tool a check needs that is not on PATH fails it, where the hook warns and passes. So does
@@ -43,10 +45,11 @@
 # did, and the substitution is visible to whoever reads the verdict. tools/terraform-floor.sh says
 # where the floor lives, and tools/preflight.sh says how to install it.
 #
-# --both-halves runs both halves whatever the diff touches. On main the diff against origin/main is
-# empty, so without it the full check would pass having run none of the three things it adds; #68's
-# second box asks for the full mode green on main, and only this makes that run test anything. The
-# hook never passes it, and a lane does not need it: its diff earns its skips.
+# --both-halves runs both halves whatever the diff touches, and every test companion the full check
+# would run for some diff. On main the diff against origin/main is empty, so without it the full
+# check would pass having run none of the things it adds; #68's second box asks for the full mode
+# green on main, and only this makes that run test anything. The hook never passes it, and a lane
+# does not need it: its diff earns its skips.
 #
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
@@ -392,9 +395,98 @@ else
   missing terraform Terraform
 fi
 
+# --- in full, the test companions of the scripts the change touches ------------------------------
+#
+# A change to tools/ or .github/ touches neither half, so without this a green full check on it
+# would have run none of its code: on 2026-10-19, 7 of the 12 merged tickets were such changes, and
+# their reviewers ran the companions by hand (#134). CI runs a fixed list of companions whatever the
+# diff, and none of them is under tools/scripts/ (.github/workflows/ci.yml); this runs those the
+# diff earns, as the halves are gated.
+#
+# A script's companion is the file beside it named `<name>_tests.py`, its name with the extension
+# dropped and hyphens as underscores (tools/land.sh's is tools/land_tests.py, and
+# .github/path-ownership.py's .github/path_ownership_tests.py), or else its named test file
+# `<name>-tests.py` (.github/plan-secrecy.py's is .github/plan-secrecy-tests.py). A companion runs
+# when the diff touches its script or the companion itself, and every tracked one runs under
+# --both-halves, which promises no skips. Each is a tracked `*_tests.py` or `*-tests.py` under
+# tools/ or .github/, at any depth, so tools/scripts/ is covered too. The hook leaves them to the
+# full check and to CI, as it does the test suite.
+companion_names() {
+  # The companions a changed path could name: itself if it is one, else the two names above.
+  while IFS= read -r path; do
+    dir="${path%/*}"
+    name="${path##*/}"
+    case "$name" in
+      *_tests.py | *-tests.py)
+        echo "$path"
+        continue
+        ;;
+    esac
+    stem="${name%.*}"
+    echo "$dir/${stem//-/_}_tests.py"
+    echo "$dir/$stem-tests.py"
+  done
+}
+
+# Whether the companion $1 runs: the diff names it, or --both-halves asks for every one. grep -Fx
+# rather than -q: -q would close the pipe at a match and fail printf under pipefail.
+earned() {
+  $both || printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null
+}
+
+# What the verdict adds when it ran no check of the check itself.
+unrun=""
+if $full; then
+  named="$(printf '%s\n' "${changed:-}" | companion_names)"
+  companions=""
+  others=""
+  for found in $(git ls-files -- tools .github); do
+    case "$found" in
+      *_tests.py | *-tests.py) ;;
+      *) continue ;;
+    esac
+    case "$found" in
+      # tools/check_tests.py runs this script, so running it from here would recurse: every case
+      # there that runs --full on a change to the check would start the companion again. It stays
+      # CI's, in the Documents job and the bash 3.2 job.
+      tools/check_tests.py)
+        if earned "$found"; then
+          echo "check: tools/check_tests.py not run: it runs this check, so CI runs it."
+          others=" other"
+          unrun=", but not tools/check_tests.py, which is CI's"
+        fi
+        continue
+        ;;
+    esac
+    if earned "$found"; then
+      companions="$companions $found"
+    fi
+  done
+
+  if [ -z "$companions" ] && $both; then
+    echo "check: no test companion is tracked in tools/ or .github/."
+  elif [ -z "$companions" ]; then
+    echo "check: test companions skipped: no${others} script with one in tools/ or .github/ changed."
+  else
+    listed=""
+    count=0
+    for found in $companions; do
+      echo "check: the test companion $found:"
+      python3 -I "$found" || fail "the test companion $found failed."
+      listed="${listed:+$listed, }$found"
+      count=$((count + 1))
+    done
+    if [ "$count" -eq 1 ]; then
+      ran="$ran, the test companion $listed"
+    else
+      ran="$ran, the test companions $listed"
+    fi
+  fi
+fi
+
 verdict="pass"
 if $full; then
-  echo "check: pass: $ran."
+  echo "check: pass: $ran$unrun."
 else
   echo "pre-push: $ran pass."
 fi

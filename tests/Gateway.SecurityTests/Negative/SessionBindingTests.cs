@@ -44,7 +44,7 @@ public sealed class SessionBindingTests
         BrowserResponse api = await attacker.GetAsync("/api/reports/whoami", RequestOptions.With(("Cookie", cookie)), Suite.Ct);
         BrowserResponse session = await SignedIn.SessionAsync(attacker, cookie);
 
-        Contract.ErrorRow unauthenticated = Contract.Error("No session");
+        Contract.ErrorRow unauthenticated = Contract.Error("unauthenticated");
         foreach (BrowserResponse refused in (BrowserResponse[])[api, session])
         {
             Assert.Equal((HttpStatusCode)unauthenticated.Status, refused.StatusCode);

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Duende.AccessTokenManagement;
 using Duende.AccessTokenManagement.OpenIdConnect;
+using Duende.IdentityModel;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -12,11 +13,13 @@ namespace Platform.Identity;
 /// The access token for this request's session, refreshed when it is within a minute of expiry
 /// (plan row 3.8, ADR-0005, ADR-0017).
 ///
-/// The gateway owns the orchestration and the library owns the protocol. Under the session's gate
-/// (<see cref="SessionGates"/>) this reads the session from the store, not from the ticket the request
-/// authenticated with, decides whether a refresh is due, asks the library's endpoint for it, and writes
-/// the new tokens back into the same record (T-D1, T-D2). The record keeps its key and its expiry, so
-/// the cookie issued at login still identifies it, and no cookie is issued on the way (S-E2, T-B9).
+/// The gateway owns the orchestration and the library owns the protocol. Under the session's gate this
+/// takes the session from the store, not from the ticket the request authenticated with, decides whether
+/// a refresh is due, asks the library's endpoint for it, and writes the new tokens back into the same
+/// record (T-D1, T-D2). <see cref="AppSessions"/> enters the gate, checks the record is this app's and
+/// this client's, makes the versioned write and the removal; every decision, and every line logged
+/// about one, stays here. The record keeps its key and its expiry, so the cookie issued at login still
+/// identifies it, and no cookie is issued on the way (S-E2, T-B9).
 ///
 /// Four rules from the gate runs hold here:
 /// <list type="bullet">
@@ -37,8 +40,7 @@ namespace Platform.Identity;
 /// </list>
 /// </summary>
 internal sealed partial class AccessTokenSource(
-    ISessionStore sessions,
-    SessionGates gates,
+    AppSessions sessions,
     ProfileTokenEndpoints endpoints,
     CredentialStyles styles,
     AccessTokenSourceOptions options,
@@ -67,17 +69,15 @@ internal sealed partial class AccessTokenSource(
 
         // The authentication middleware has authenticated this scheme already; the handler answers
         // again from what it read. A cookie for no session, another app's session, an expired one or
-        // none at all leaves no session key behind.
+        // none at all resolves to no session key. KeyOf notes a dead cookie as it answers, because the
+        // proxy only receives Unauthenticated and cannot recover the distinction (telemetry.md).
         AuthenticateResult authenticated = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (!authenticated.Succeeded || context.Features.Get<SessionKeyFeature>()?.Key is not { } key)
+        if (sessions.KeyOf(context, authenticated) is not { } key)
         {
-            // Authentication distinguishes a dead cookie from no cookie. Record that distinction
-            // here; the proxy only receives Unauthenticated and cannot recover it (telemetry.md).
-            Bff.NoteDeadSession(context, authenticated);
             return new AccessTokenResult.Unauthenticated();
         }
 
-        using SessionGates.Lease lease = await gates.EnterAsync(key);
+        using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
 
         switch (lease.WhileWaiting)
         {
@@ -87,7 +87,7 @@ internal sealed partial class AccessTokenSource(
                 return new AccessTokenResult.SessionEnded();
         }
 
-        if (await OwnedAsync(app, key) is not { } record)
+        if (lease.Owned is not { } record)
         {
             return new AccessTokenResult.Unauthenticated();
         }
@@ -102,7 +102,7 @@ internal sealed partial class AccessTokenSource(
         if (ticket.Properties.GetTokenValue(RefreshTokenName) is not { Length: > 0 } refreshToken)
         {
             // Nothing to refresh with, so the session can never yield a token again.
-            await EndAsync(context, app, key);
+            await EndAsync(context, app, lease);
             lease.Finish(new RefreshOutcome.Ended());
             return new AccessTokenResult.SessionEnded();
         }
@@ -113,10 +113,10 @@ internal sealed partial class AccessTokenSource(
         {
             lease.Finish(new RefreshOutcome.Refreshed());
             Refreshed(logger, app.AppId, SessionRef.Of(key));
-            return await StoreAsync(app, key, record, ticket, token);
+            return await StoreAsync(app, key, lease, record, ticket, token);
         }
 
-        if (error != "invalid_grant")
+        if (error != OidcConstants.TokenErrors.InvalidGrant)
         {
             lease.Finish(new RefreshOutcome.Unavailable());
             RefreshFailed(logger, app.AppId, SessionRef.Of(key), error!);
@@ -125,7 +125,7 @@ internal sealed partial class AccessTokenSource(
 
         // Refused. Another writer may have refreshed the session in between, so it rotated the refresh
         // token this call presented: then the record holds its successor, and its access token is good.
-        if (await OwnedAsync(app, key) is { } reread
+        if (await sessions.ReadAsync(app, key, CancellationToken.None) is { } reread
             && Deserialize(reread).Properties is var current
             && current.GetTokenValue(RefreshTokenName) is { Length: > 0 } newer
             && !string.Equals(newer, refreshToken, StringComparison.Ordinal)
@@ -135,7 +135,7 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Token(newerAccess);
         }
 
-        await EndAsync(context, app, key);
+        await EndAsync(context, app, lease);
         lease.Finish(new RefreshOutcome.Ended());
         Ended(logger, app.AppId, SessionRef.Of(key));
         return new AccessTokenResult.SessionEnded();
@@ -179,7 +179,7 @@ internal sealed partial class AccessTokenSource(
     /// when the provider rotated it, and the ID token only when the answer carried one (T-B13).
     /// </summary>
     private async Task<AccessTokenResult> StoreAsync(
-        AppDefinition app, string key, SessionRecord record, AuthenticationTicket ticket, UserToken token)
+        AppDefinition app, string key, AppSessions.Lease lease, SessionRecord record, AuthenticationTicket ticket, UserToken token)
     {
         string access = token.AccessToken.ToString();
         Dictionary<string, string> tokens = ticket.Properties.GetTokens()
@@ -199,14 +199,14 @@ internal sealed partial class AccessTokenSource(
         ticket.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
 
         SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
-        if (await sessions.ReplaceAsync(key, next, record.Version, CancellationToken.None))
+        if (await lease.ReplaceAsync(next))
         {
             return new AccessTokenResult.Token(access);
         }
 
         // A concurrent writer won the versioned replace (T-D2). Return its persisted token rather
         // than this response's unpersisted token; a removed or rebound session authenticates nobody.
-        if (await OwnedAsync(app, key) is not { } winner)
+        if (await sessions.ReadAsync(app, key, CancellationToken.None) is not { } winner)
         {
             return new AccessTokenResult.Unauthenticated();
         }
@@ -228,34 +228,32 @@ internal sealed partial class AccessTokenSource(
     /// cancellation, so a waiter can trust what it reads; the sign-out then expires the browser's cookie,
     /// unless the browser has already gone.
     /// </summary>
-    private async Task EndAsync(HttpContext context, AppDefinition app, string key)
+    private static async Task EndAsync(HttpContext context, AppDefinition app, AppSessions.Lease lease)
     {
-        await sessions.RemoveAsync(key, CancellationToken.None);
+        await lease.EndAsync();
         if (!context.RequestAborted.IsCancellationRequested && !context.Response.HasStarted)
         {
             await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
         }
     }
 
-    /// <summary>The record under the key, when it is still this app's and this client's (task 3.3, task 3.6).</summary>
-    private async Task<SessionRecord?> OwnedAsync(AppDefinition app, string key) =>
-        await sessions.GetAsync(key, CancellationToken.None) is { } record
-        && string.Equals(record.AppId, app.AppId, StringComparison.Ordinal)
-        && string.Equals(record.ClientId, app.OAuth.ClientId, StringComparison.Ordinal)
-            ? record
-            : null;
-
     /// <summary>
     /// The provider's error as a fixed category. An OAuth error value is provider-controlled text that can
     /// carry a credential, so only known categories reach the warning (contracts/telemetry.md, N-16),
     /// <c>invalid_grant</c> among them because it alone ends a session (ADR-0005). Unknown text becomes
     /// <c>refresh_failed</c>.
+    ///
+    /// The OAuth error names are the library's constants, not literals: RFC 6749's vocabulary is the
+    /// library's to spell, and one of them, <c>invalid_request</c>, is also a problem code in
+    /// contracts/http-contract.md -> Errors, which no workstream project spells (#142, #158).
     /// </summary>
     private static string SafeError(string? error) => error switch
     {
-        "invalid_grant" or "invalid_client" or "invalid_request" or "invalid_scope"
-            or "unauthorized_client" or "unsupported_grant_type" or "server_error"
-            or "temporarily_unavailable" or "deadline_exceeded" or "unreachable" => error,
+        OidcConstants.TokenErrors.InvalidGrant or OidcConstants.TokenErrors.InvalidClient
+            or OidcConstants.TokenErrors.InvalidRequest or OidcConstants.TokenErrors.InvalidScope
+            or OidcConstants.TokenErrors.UnauthorizedClient or OidcConstants.TokenErrors.UnsupportedGrantType
+            or OidcConstants.AuthorizeErrors.ServerError or OidcConstants.AuthorizeErrors.TemporarilyUnavailable
+            or "deadline_exceeded" or "unreachable" => error,
         _ => "refresh_failed",
     };
 

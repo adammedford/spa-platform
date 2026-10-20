@@ -52,9 +52,12 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
     /// <summary>
     /// The platform cookie names, from the Cookies table of the browser contract, with a suffix
     /// substituted for the wildcard the login-state cookies carry. Read from the contract, so a
-    /// cookie the platform adds later is covered without this file changing.
+    /// cookie the platform adds later is covered without this file changing. Read on access, not in
+    /// this type's initialiser, as e09bb51 did for <c>SignedIn</c>: a Cookies table that no longer
+    /// parses then fails the tests that read a name with the reader's message naming the file and the
+    /// section, not every test in this class with a type-initialisation error (#153, box 4).
     /// </summary>
-    private static readonly ImmutableArray<string> Names =
+    private static ImmutableArray<string> Names =>
         [.. Contract.PlatformCookieNames.Select(name => name.Replace(".*", ".abc123", StringComparison.Ordinal))];
 
     public static TheoryData<string> PlatformCookieNames => new(Names);
@@ -138,7 +141,7 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
     /// <summary>The shell gate's answer to a request the gate admitted with no session: 401 <c>unauthenticated</c>, under <paramref name="rule"/>.</summary>
     private async Task AssertRefusedForNoSessionAsync(RawResponse response, int before, string? rule)
     {
-        Contract.ErrorRow expected = Contract.Error("No session");
+        Contract.ErrorRow expected = Contract.Error("unauthenticated");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
         Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
@@ -146,7 +149,7 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
 
     private async Task AssertRefusedAsync(RawResponse response, int before)
     {
-        Contract.ErrorRow expected = Contract.Error("a cookie name imitates a platform cookie");
+        Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
         Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);

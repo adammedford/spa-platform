@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Platform.Abstractions;
 
 namespace Platform.Identity;
@@ -40,14 +41,15 @@ internal static class ShellGate
         // Fails closed: without the pinned app there is no scheme to ask, and passing the request on
         // would serve an asset without a session.
         AppDefinition app = Bff.Pinned(context, "UsePlatformShellGate");
+        // KeyOf answers null unless the cookie authenticated a session this app owns, and notes a dead
+        // cookie under auth.session as it does.
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (session.Succeeded)
+        if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session) is not null)
         {
             await next(context);
             return;
         }
 
-        Bff.NoteDeadSession(context, session);
         await context.ChallengeAsync(SchemeNames.Oidc(app.AppId));
     }
 

@@ -161,14 +161,19 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// for <paramref name="issuerProfile"/>; false to leave the real profiles of task 3.7 in charge,
     /// with <see cref="Profile"/> registered under a name no issuer uses.
     /// </param>
+    /// <param name="idpClock">
+    /// The clock the provider runs its delays on: <see cref="HeldClock"/> for a test that acts while the
+    /// provider holds a request. The system clock when null.
+    /// </param>
     public static async Task<IdentityGateway> StartAsync(
         IEnumerable<AppDefinition> apps,
         Action<IServiceCollection>? services = null,
         string issuerProfile = "standard",
-        bool stubProfile = true)
+        bool stubProfile = true,
+        TimeProvider? idpClock = null)
     {
         AppDefinition[] entries = [.. apps];
-        TestIdentityProvider idp = new();
+        TestIdentityProvider idp = new(idpClock);
         await idp.StartAsync(TestContext.Current.CancellationToken);
 
         FakeClientSecretSource secrets = new();

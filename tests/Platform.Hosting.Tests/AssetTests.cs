@@ -248,6 +248,36 @@ public sealed class AssetTests
     }
 
     /// <summary>
+    /// The backup 405 is a rejection, and it ends under the id the rule-id table gives its case,
+    /// <c>gate.method</c> (contracts/request-gate.md, Rule ids), so that it reaches the request line
+    /// and <c>security.rejections</c> like every other rejection the application answers
+    /// (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request line").
+    /// <c>UsePlatformRequestGate</c> refuses the method first in the composed gateway, which therefore
+    /// never reaches this answer: this project's tests are the only place it shows. The feature is
+    /// <c>Platform.Testing</c>'s settable one, standing in for <c>UsePlatformTelemetry</c>.
+    ///
+    /// Mutation: revert the endpoint's 405 to the plain body writer (set <c>Allow</c> and call
+    /// <c>Problems.WriteAsync</c> with <c>method_not_allowed</c>), and every row fails on the rule
+    /// while <see cref="Other_methods_get_405_and_read_nothing"/> still passes.
+    /// </summary>
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("DELETE")]
+    public async Task The_backup_405_sets_rule_gate_method_on_the_telemetry_feature(string method)
+    {
+        (HostingHost gateway, RecordingObjectStore store) = await StartAsync(telemetry: true);
+        await using HostingHost _ = gateway;
+
+        RawResponse response = await gateway.SendAsync(method, App1.Host, "/index.html", Ct, "Content-Length: 0\r\n");
+
+        Assert.Equal(405, response.Status);
+        Assert.Equal("GET, HEAD", response.Headers["allow"]);
+        AssertProblem(response, "method_not_allowed");
+        Assert.Equal("gate.method", gateway.LastTelemetry?.Rule);
+        Assert.Empty(store.KeysRead);
+    }
+
+    /// <summary>
     /// The reserved paths (contracts/http-contract.md: an SPA cannot serve content under them) are 404
     /// and never read, even when the release holds a file there. They match without regard to case,
     /// as routing and the request gate match them.
@@ -296,11 +326,12 @@ public sealed class AssetTests
     }
 
     /// <summary>
-    /// A refusal is logged under its rule id (contracts/request-gate.md, Rule ids: "Tests assert on both
-    /// the code and the rule id"), and the line carries the rule id only, never the client's path. The
-    /// canary in each path is what a line that logged the path would contain. Only the platform's own
-    /// categories are held to that: ASP.NET Core's request-start line carries the URL at Information,
-    /// and which framework lines the gateway keeps is workstream 6's to configure (Platform.Telemetry).
+    /// A refusal is logged under its rule id (docs/plan/02-contracts.md, Request gate: "Tests assert on
+    /// both the code and the rule id"), and the line carries the rule id only, never the client's path.
+    /// The canary in each path is what a line that logged the path would contain. Only the platform's
+    /// own categories are held to that: ASP.NET Core's request-start line carries the URL at
+    /// Information, and which framework lines the gateway keeps is workstream 6's to configure
+    /// (Platform.Telemetry).
     /// </summary>
     [Theory]
     [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request", "path.invalid")]
@@ -356,27 +387,6 @@ public sealed class AssetTests
         Assert.Equal(200, (await gateway.GetAsync(App1.Host, "/index.html", Ct)).Status);
         Assert.NotNull(gateway.LastTelemetry);
         Assert.Null(gateway.LastTelemetry.Rule);
-    }
-
-    /// <summary>
-    /// Both writes are null-conditional, so the endpoint refuses the same way with no feature
-    /// installed, as required by contracts/changes/6.4-request-telemetry-feature.md. This case
-    /// explicitly protects component pipelines that omit <c>UsePlatformTelemetry</c>.
-    /// </summary>
-    [Theory]
-    [InlineData("/canary-7f3e%2Fsecret.js", 400, "invalid_request")]
-    [InlineData("/bff/canary-7f3e.js", 404, "not_found")]
-    public async Task A_refusal_is_unchanged_with_no_telemetry_feature_installed(string path, int status, string code)
-    {
-        (HostingHost gateway, RecordingObjectStore store) = await StartAsync();
-        await using HostingHost _ = gateway;
-
-        RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
-
-        Assert.Equal(status, response.Status);
-        AssertProblem(response, code);
-        Assert.Null(gateway.LastTelemetry);
-        Assert.Empty(store.KeysRead);
     }
 
     /// <summary>
