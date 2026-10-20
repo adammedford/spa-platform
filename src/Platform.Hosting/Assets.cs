@@ -74,7 +74,7 @@ internal sealed partial class Assets(ILogger logger)
 
         if (IsReserved(request.Path))
         {
-            await RefuseAsync(context, RuleIds.PathReserved);
+            await RejectAsync(context, RuleIds.PathReserved);
             return;
         }
 
@@ -86,7 +86,7 @@ internal sealed partial class Assets(ILogger logger)
             : null;
         if (relative is null)
         {
-            await RefuseAsync(context, RuleIds.PathInvalid);
+            await RejectAsync(context, RuleIds.PathInvalid);
             return;
         }
 
@@ -209,7 +209,7 @@ internal sealed partial class Assets(ILogger logger)
     }
 
     /// <summary>
-    /// Refuses a path under its rule id: this endpoint's Warning line, then
+    /// Rejects a path under its rule id: this endpoint's Warning line, then
     /// <see cref="Rejection.EndAsync"/>, which notes the rule on <see cref="IRequestTelemetryFeature"/>
     /// for the request line and <c>security.rejections</c> and writes the id's problem body.
     ///
@@ -219,15 +219,19 @@ internal sealed partial class Assets(ILogger logger)
     /// another project. Keeping it is this owner's choice, not a contract matter
     /// (contracts/changes/6.4-request-telemetry-feature.md), and <c>AssetTests</c> asserts on its text
     /// and category.</para>
+    ///
+    /// <para>Named by the glossary's word, as the request gate's helpers are (GLOSSARY.md ->
+    /// Rejection); the log message keeps "refused", which the glossary gives the code's log
+    /// messages.</para>
     /// </summary>
-    private Task RefuseAsync(HttpContext context, string rule)
+    private Task RejectAsync(HttpContext context, string rule)
     {
-        LogRefused(logger, rule);
+        LogRejected(logger, rule);
         return Rejection.EndAsync(context, rule);
     }
 
     // The rule id only (contracts/request-gate.md, Rule ids). The path is not logged: it is the
     // client's text, and the telemetry contract's request line already carries the route.
     [LoggerMessage(EventId = 1001, Level = LogLevel.Warning, Message = "Asset request refused under {Rule}")]
-    private static partial void LogRefused(ILogger logger, string rule);
+    private static partial void LogRejected(ILogger logger, string rule);
 }
