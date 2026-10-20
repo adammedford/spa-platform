@@ -286,12 +286,15 @@ existing stage, owner or entry point's signature, land on the integrator's decis
 Errors row changes, because every edit the migrates make is inside a stage body or a test project.
 `IRequestTelemetryFeature` landed this way (change request 6.4).
 
-**The `code` column lands now, and does not wait for G3's tag.** It adds no rule id, renames no
-field and changes no stage, owner or signature, which is the list the rule says waits; it states a
-join the contract already implies by wording, and every cell is what the code writes today, so
-nothing built against the frozen table has to change to keep compiling, and the one parser of that
-table reads the first cell only. Change request 4.2's `503 | idp_unavailable` row is the precedent
-for a frozen table gaining a cell between gates. Because it lands now, #160's two-table test keys a
+**The `code` column lands now, and does not wait for G3's tag.** A new column is on neither of the
+rule's lists: it is not prose or a new type, which land, and it is not one of the examples of what
+waits, since it adds no rule id, renames no field and changes no stage, owner or signature. So it is
+decided by the rule's reason, that nothing already built against the frozen contract has to change
+to keep compiling, and by precedent. It states a join the contract already implies by wording, and
+every cell is what the code writes today, so nothing built against the frozen table has to change,
+and the one parser of that table reads the first cell only. Change request 4.2's
+`503 | idp_unavailable` row is the precedent for a frozen table gaining a cell between gates, and it
+is that precedent, more than the rule's wording, that carries this decision. Because it lands now, #160's two-table test keys a
 contract row by `code` exactly and does not pair by hand. The corrected sentence under the table is
 the prose case.
 
