@@ -166,7 +166,10 @@ public sealed class BffLoginTests
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, login.Location, StringComparison.Ordinal);
         Assert.Equal("auth.session", login.Rule);
         Assert.Equal(SessionRef.Of(key), login.SessionRef);
-        Assert.Single(gateway.Sessions.Removed);
+
+        // The one removal the store saw is this test's own, above: the login's sign-out found no session
+        // and removed nothing (AppSessions.RemoveAsync).
+        Assert.Equal(key, Assert.Single(gateway.Sessions.Removed).Key);
     }
 
     [Fact]
