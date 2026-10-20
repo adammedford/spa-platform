@@ -21,11 +21,11 @@
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
 # port the caller names, `terraform test` for every root and module that has tests, and the test
-# companion of each script in tools/ or .github/ the change touches (#134), but tools/check_tests.py,
-# which runs this file and so stays CI's. Its lines
-# say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero
-# on failure, so a log's last line is the verdict. Two things differ from the default mode, both
-# because a verdict is read without the lines above it:
+# companion of each script in tools/ or .github/ the change touches (#134), but not
+# tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it ends
+# on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a log's
+# last line is the verdict. Two things differ from the default mode, both because a verdict is read
+# without the lines above it:
 #   - It shows the build's and Terraform's own output, which the hook sends to /dev/null: a lane
 #     reads its failure from the log, and a hidden compiler error costs it a second run.
 #   - A tool a check needs that is not on PATH fails it, where the hook warns and passes. So does
@@ -46,10 +46,10 @@
 # where the floor lives, and tools/preflight.sh says how to install it.
 #
 # --both-halves runs both halves whatever the diff touches, and every test companion the full check
-# would run for some diff. On main the diff against origin/main is
-# empty, so without it the full check would pass having run none of the three things it adds; #68's
-# second box asks for the full mode green on main, and only this makes that run test anything. The
-# hook never passes it, and a lane does not need it: its diff earns its skips.
+# would run for some diff. On main the diff against origin/main is empty, so without it the full
+# check would pass having run none of the things it adds; #68's second box asks for the full mode
+# green on main, and only this makes that run test anything. The hook never passes it, and a lane
+# does not need it: its diff earns its skips.
 #
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
