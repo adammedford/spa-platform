@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Security;
 using Platform.Testing;
@@ -20,16 +21,19 @@ public sealed class ProxyHost : IAsyncDisposable
 {
     private readonly WebApplication app;
     private readonly List<SettableRequestTelemetryFeature> telemetryFeatures;
+    private readonly RecordingLoggerProvider log;
 
     private ProxyHost(
         WebApplication app, Uri baseAddress, InMemoryRegistry registry,
-        List<SettableRequestTelemetryFeature> telemetryFeatures, FakeAccessTokenSource tokens)
+        List<SettableRequestTelemetryFeature> telemetryFeatures, FakeAccessTokenSource tokens,
+        RecordingLoggerProvider log)
     {
         this.app = app;
         BaseAddress = baseAddress;
         Registry = registry;
         this.telemetryFeatures = telemetryFeatures;
         Tokens = tokens;
+        this.log = log;
     }
 
     /// <summary>The token placed on a forwarded call when a test arranges nothing.</summary>
@@ -65,6 +69,9 @@ public sealed class ProxyHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Every line the gateway logged, in the order written.</summary>
+    internal IReadOnlyList<LogLine> Log => log.Lines;
+
     public static Task<ProxyHost> StartAsync(CancellationToken ct, params AppDefinition[] apps) =>
         StartAsync(ct, telemetry: false, apps);
 
@@ -74,8 +81,9 @@ public sealed class ProxyHost : IAsyncDisposable
     /// <param name="telemetry">
     /// true installs <c>UsePlatformTelemetry</c>'s stand-in, a <see cref="SettableRequestTelemetryFeature"/> per request,
     /// and records what each request left on it in <see cref="TelemetryRules"/>. Off in the overload
-    /// above, so every other test here runs <c>MapPlatformProxy</c> with no feature installed, which is what holds
-    /// the stage's write to being null-conditional.
+    /// above, so every other test here runs <c>MapPlatformProxy</c> with no feature installed, as a stage's own
+    /// test project does. That the write is null-conditional is <c>Rejection</c>'s, proven once in
+    /// tests/Platform.Abstractions.Tests (#142, Q10).
     /// </param>
     public static async Task<ProxyHost> StartAsync(CancellationToken ct, ProxyHostOptions options, params AppDefinition[] apps)
     {
@@ -84,6 +92,8 @@ public sealed class ProxyHost : IAsyncDisposable
         FakeAccessTokenSource tokens = new() { Result = new AccessTokenResult.Token(DefaultToken) };
 
         WebApplicationBuilder builder = Loopback.Builder();
+        RecordingLoggerProvider log = new();
+        builder.Logging.AddProvider(log);
         builder.Services.AddSingleton<IRegistry>(registry);
         if (options.TokenSource)
         {
@@ -103,8 +113,8 @@ public sealed class ProxyHost : IAsyncDisposable
         // UsePlatformTelemetry's stand-in, when a test asks for it: the feature it sets on the request before
         // calling the rest of the pipeline and reads back once it returns
         // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
-        // by default, so every other test here runs the stage with no feature installed, which is what
-        // holds the stage's write to being null-conditional.
+        // by default, so every other test here runs the stage with no feature installed; the write is
+        // Rejection's and null-conditional, proven in tests/Platform.Abstractions.Tests (#142, Q10).
         //
         // The feature is recorded before the request runs rather than after: each stage sets the rule
         // id before it writes the response, so a test reading the recorded feature cannot race the
@@ -148,7 +158,7 @@ public sealed class ProxyHost : IAsyncDisposable
 
         await web.StartAsync(ct);
 
-        return new ProxyHost(web, Loopback.AddressOf(web, "gateway"), registry, telemetryFeatures, tokens);
+        return new ProxyHost(web, Loopback.AddressOf(web, "gateway"), registry, telemetryFeatures, tokens, log);
     }
 
     /// <summary>A request to this gateway, addressed to one app's host.</summary>

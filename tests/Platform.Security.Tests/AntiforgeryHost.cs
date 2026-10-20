@@ -132,8 +132,8 @@ public sealed class AntiforgeryHost : IAsyncDisposable
         // UsePlatformTelemetry's stand-in, when a test asks for it: the feature that stage sets on the
         // request before calling the rest of the pipeline and reads back once it returns
         // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
-        // by default, so every other test here runs the stage with no feature installed, which is what
-        // holds the stage's write to being null-conditional.
+        // by default, so every other test here runs the stage with no feature installed; the write is
+        // Rejection's and null-conditional, proven in tests/Platform.Abstractions.Tests (#142, Q10).
         //
         // The feature is recorded before the request runs rather than after: each stage sets the rule
         // id before it writes the response, so a test reading the recorded feature cannot race the

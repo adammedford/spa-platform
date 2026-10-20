@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Platform.Abstractions;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Platform.Proxy;
@@ -32,16 +33,18 @@ internal static class UpstreamFailure
             return;
         }
 
+        // The status YARP set picks the code; the body's status is then the Errors table's for that
+        // code (#142, Q7), which is the status YARP set, so the two cannot disagree.
         string? code = context.Response.StatusCode switch
         {
-            StatusCodes.Status504GatewayTimeout => "upstream_timeout",
-            StatusCodes.Status502BadGateway => "upstream_unavailable",
+            StatusCodes.Status504GatewayTimeout => Problems.UpstreamTimeout,
+            StatusCodes.Status502BadGateway => Problems.UpstreamUnavailable,
             _ => null,
         };
 
         if (code is not null)
         {
-            await Problems.WriteAsync(context, context.Response.StatusCode, code);
+            await Problems.WriteAsync(context, code);
         }
     });
 }

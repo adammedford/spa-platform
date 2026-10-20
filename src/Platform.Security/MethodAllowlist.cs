@@ -37,8 +37,6 @@ internal static partial class MethodAllowlist
         HttpMethods.Patch, HttpMethods.Delete, HttpMethods.Options,
     ];
 
-    private static readonly string AllowHeader = string.Join(", ", Allowed);
-
     internal static Task InvokeAsync(HttpContext context, RequestDelegate next, ILogger logger)
     {
         string method = context.Request.Method;
@@ -53,18 +51,15 @@ internal static partial class MethodAllowlist
         }
 
         // The rule id only: the method is the client's to choose, so it stays out of the log line.
-        Refused(logger, Rule);
+        LogRejected(logger, Rule);
 
         // The same constant on the request line UsePlatformTelemetry writes, and the field it counts
         // security.rejections by (contracts/telemetry.md -> "How `rule` and `session_ref` reach the
-        // request line"). Null conditional because this project's own hosts omit the telemetry stage.
-        context.Features.Get<IRequestTelemetryFeature>()?.Rule = Rule;
-
-        // RFC 9110 section 15.5.6: a 405 carries Allow.
-        context.Response.Headers.Allow = AllowHeader;
-        return Problems.WriteAsync(context, StatusCodes.Status405MethodNotAllowed, "method_not_allowed");
+        // request line"), then the 405 with Allow, which RFC 9110 section 15.5.6 requires: all seven
+        // methods, since no path takes this one (#142, Q13).
+        return Rejection.EndMethodAsync(context, Allowed);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No path accepts the request's method. rule={Rule}")]
-    private static partial void Refused(ILogger logger, string rule);
+    private static partial void LogRejected(ILogger logger, string rule);
 }
