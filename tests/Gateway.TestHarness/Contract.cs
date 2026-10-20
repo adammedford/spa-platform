@@ -19,8 +19,9 @@ namespace Gateway.TestHarness;
 /// static initialisers would fail every test that touched the class with a type-initialisation
 /// error. No member returns empty: a shape that is not there throws, because an empty list would make
 /// every assertion built on it vacuous (CODING_STANDARDS.md -> "An assertion must be able to fail").
-/// The parsing is <see cref="ContractParser"/>'s, proven on planted text by
-/// <c>Gateway.IntegrationTests/Harness/ContractTests</c>.</para>
+/// The parsing is <see cref="ContractParser"/>'s, which <c>Gateway.IntegrationTests/Harness/ContractTests</c>
+/// feeds planted text; <see cref="ContractParser"/>'s summary names the parsers that text breaks and
+/// the ones it does not.</para>
 ///
 /// <para>Rule ids are not here, deliberately: they come from <see cref="Platform.Abstractions.RuleIds"/>,
 /// which ADR-0015 put in the abstractions so four workstreams cannot keep four copies, and

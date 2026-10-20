@@ -7,9 +7,14 @@ namespace Gateway.TestHarness;
 /// The text functions behind <see cref="Contract"/>: each takes a contract file's text and returns
 /// the one table, list or block <see cref="Contract"/> exposes, or throws naming the file and the
 /// section when that shape is not there. Internal, and open to <c>Gateway.IntegrationTests</c> only so
-/// <c>Harness/ContractTests</c> can feed them planted text that breaks them (#139: "the parsers take
-/// text ... each is proven on planted input that breaks it before it is asserted against the live
-/// tree"). Nothing here reads a file; <see cref="Contract"/> does, once per member.
+/// <c>Harness/ContractTests</c> can feed them planted text (#139: "the parsers take text ... each is
+/// proven on planted input that breaks it before it is asserted against the live tree"). Six are
+/// proven that way: <see cref="ErrorRows"/>, <see cref="Error"/>, <see cref="CookieNames"/>,
+/// <see cref="BaselineCspTemplate"/>, <see cref="ForbiddenHeaderPrefix"/> and
+/// <see cref="TelemetryNames"/>. <see cref="FixedResponseHeaders"/> and <see cref="BaselineCsp"/> are
+/// fed only unbroken text there, and <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are
+/// read only from the live contract. Nothing here reads a file; <see cref="Contract"/> does, once per
+/// member.
 ///
 /// <para>No function returns empty. A shape that is missing throws an
 /// <see cref="InvalidOperationException"/>, because an empty list would make every assertion built on

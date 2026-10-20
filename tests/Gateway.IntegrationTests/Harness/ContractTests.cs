@@ -4,10 +4,11 @@ namespace Gateway.IntegrationTests.Harness;
 
 /// <summary>
 /// The contract reader's parsers (<see cref="ContractParser"/>), fed planted text through the internal
-/// seam the harness opens to this project, so each read is known to fail on the shape that breaks it
-/// before every composed suite asserts against what it returns from the live contract
-/// (CODING_STANDARDS.md -> "An assertion must be able to fail": a rule over a model is fed a breaking
-/// input). Each mutation test names the edit to the contract it plants, and each has a control beside
+/// seam the harness opens to this project, so each read with a mutation test here is known to fail on
+/// the shape that breaks it before every composed suite asserts against what it returns from the live
+/// contract (CODING_STANDARDS.md -> "An assertion must be able to fail": a rule over a model is fed a
+/// breaking input). <see cref="ContractParser"/>'s summary names the parsers with no such test here.
+/// Each mutation test names the edit to the contract it plants, and each has a control beside
 /// it that reads the same text unbroken, so the throw is the mutation's and not the planted text's.
 ///
 /// <para>The expected values are the planted text's own, written here as literals: the text is the
