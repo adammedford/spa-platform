@@ -108,7 +108,8 @@ internal sealed partial class Assets(ILogger logger)
         StoredObject? stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
         if (stored is null)
         {
-            await Problems.WriteAsync(context, StatusCodes.Status404NotFound, Problems.NotFound);
+            // An answer, not a rejection: no rule id, only the code (#142).
+            await Problems.WriteAsync(context, Problems.NotFound);
             return;
         }
 
