@@ -252,28 +252,19 @@ public sealed class AccessTokenSourceTests
     [Fact]
     public async Task A_refusal_after_another_writer_refreshed_uses_the_newer_token_and_keeps_the_session()
     {
-        // T-B8, at a provider with no grace window. Between this call's read of the session and its
-        // grant, another writer (another gateway task sharing the store) refreshes the session: the
-        // provider then refuses the rotated-out token this call presents. Re-reading the session finds
-        // the successor, and its access token is the answer.
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        // T-B8, at a provider with no grace window. While the provider holds this call's refresh, another
+        // writer (another gateway task sharing the store) refreshes the session, so the provider refuses
+        // the rotated-out token this call presents. Re-reading the session finds the successor, and its
+        // access token is the answer. Mutation: drop the re-read on a refusal (end the session on every
+        // invalid_grant); the refused call ends the session the other writer had refreshed, and this fails.
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
         gateway.Idp.Faults.RefreshRotationGrace = TimeSpan.Zero;
 
-        // The first read is the cookie handler's, as it authenticates; the second is the source's own,
-        // under the session's gate.
-        int reads = 0;
-        gateway.Sessions.AfterRead = async _ =>
-        {
-            if (++reads == 2)
-            {
-                gateway.Sessions.AfterRead = null;
-                await RefreshElsewhereAsync(gateway, App1, key);
-            }
-        };
-
-        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer answer = await WhileTheProviderHoldsTheRefreshAsync(
+            gateway, hold, jar, () => RefreshElsewhereAsync(gateway, App1, key));
 
         Assert.Collection(gateway.Idp.RefreshGrants,
             g => Assert.Equal("ok", g.Outcome),
@@ -287,54 +278,51 @@ public sealed class AccessTokenSourceTests
     [Fact]
     public async Task A_successful_refresh_that_loses_the_session_version_race_uses_the_stored_winner()
     {
-        // T-D2: another gateway may update the session after this gateway's read. A successful
-        // provider response cannot override the versioned winner or return an unpersisted token.
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        // T-D2: another gateway task refreshes the session while the provider holds this call's refresh,
+        // and writes first. Inside the grace window both grants succeed, this call's versioned replace
+        // loses, and the answer is the stored winner's token: a successful response cannot override the
+        // winner or hand back a token that was never persisted. Mutation: return this response's token on
+        // a lost replace; the unpersisted token is handed back, and this fails.
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
-        int reads = 0;
-        gateway.Sessions.AfterRead = async _ =>
-        {
-            if (++reads == 2)
-            {
-                gateway.Sessions.AfterRead = null;
-                await RefreshElsewhereAsync(gateway, App1, key);
-            }
-        };
 
-        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer answer = await WhileTheProviderHoldsTheRefreshAsync(
+            gateway, hold, jar, () => RefreshElsewhereAsync(gateway, App1, key));
 
-        Assert.Equal(2, gateway.Idp.RefreshGrants.Count);
-        Assert.All(gateway.Idp.RefreshGrants, grant => Assert.True(grant.Ok));
-        Assert.Equal(await StoredTokenAsync(gateway, "access_token", key), answer.Body);
+        Assert.Collection(gateway.Idp.RefreshGrants,
+            g => Assert.True(g is { Ok: true, ReplayedInsideGrace: false }),
+            g => Assert.True(g is { Ok: true, ReplayedInsideGrace: true }));
+        TokenGrant other = gateway.Idp.RefreshGrants[0];
+        Assert.Equal((200, other.AccessToken), (answer.Status, answer.Body));
+        Assert.Equal(other.AccessToken, await StoredTokenAsync(gateway, "access_token", key));
+        Assert.NotEqual(gateway.Idp.RefreshGrants[1].AccessToken, answer.Body);
     }
 
     [Fact]
     public async Task A_refresh_that_loses_the_race_to_a_record_with_no_access_token_fails_the_call_and_keeps_that_record()
     {
-        // T-D2's other branch: the versioned winner holds no access token, and this call's own token was
-        // never persisted, so the call has no token it may hand back. It fails with ProviderUnavailable,
-        // the winner stays as it was written, and the source's warning names the session by reference.
+        // T-D2's other branch: while the provider holds this call's refresh, another writer rewrites the
+        // session with no access token. The versioned winner holds no token, and this call's own was never
+        // persisted, so the call has no token it may hand back. It fails with ProviderUnavailable, the
+        // winner stays as it was written, and the source's warning names the session by reference.
+        // Mutation: treat a winner with no token as ended (end the lease and answer SessionEnded); the
+        // session is removed, and this fails.
         CapturingLoggerProvider logs = new();
+        HeldClock hold = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+            [App1], services => services.AddSingleton<ILoggerProvider>(logs), idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
         SessionRecord? winner = null;
-        int reads = 0;
-        gateway.Sessions.AfterRead = async _ =>
-        {
-            if (++reads == 2)
-            {
-                gateway.Sessions.AfterRead = null;
-                winner = await RemoveTokenElsewhereAsync(gateway, key, "access_token");
-            }
-        };
 
-        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer answer = await WhileTheProviderHoldsTheRefreshAsync(
+            gateway, hold, jar, async () => winner = await RemoveTokenElsewhereAsync(gateway, key, "access_token"));
 
         Assert.Equal((503, "idp_unavailable"), (answer.Status, answer.Body));
         Assert.True(Assert.Single(gateway.Idp.RefreshGrants).Ok);
+        Assert.NotNull(winner);
         Assert.Equal(winner, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
         string warning = Assert.Single(SourceLines(logs), line => line.Contains("no access token", StringComparison.Ordinal));
         Assert.Contains(SessionRef.Of(key), warning, StringComparison.Ordinal);
@@ -521,6 +509,34 @@ public sealed class AccessTokenSourceTests
     /// <summary>The lines the token source itself wrote, oldest first.</summary>
     private static string[] SourceLines(CapturingLoggerProvider logs) =>
         [.. logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName).Select(line => line.Message)];
+
+    /// <summary>
+    /// Asks for app 1's token on a due session while the provider holds the refresh, and runs
+    /// <paramref name="elsewhere"/> in that window: the token delay opens it and <paramref name="hold"/>
+    /// keeps it open, so another writer is placed by time at the provider, after this call has read the
+    /// session and before its grant is carried out (#167). The delay is off again before
+    /// <paramref name="elsewhere"/> runs, so a refresh made there is answered at once and the held one is
+    /// the only one waiting. Then the held refresh goes on, and the call's answer is returned.
+    /// </summary>
+    private static async Task<IdentityGateway.Answer> WhileTheProviderHoldsTheRefreshAsync(
+        IdentityGateway gateway, HeldClock hold, Dictionary<string, string> jar, Func<Task> elsewhere)
+    {
+        gateway.Idp.Faults.TokenDelay = TimeSpan.FromSeconds(1);
+        Task<IdentityGateway.Answer> call = Task.Run(
+            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar), TestContext.Current.CancellationToken);
+        try
+        {
+            await hold.Holding.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            gateway.Idp.Faults.TokenDelay = TimeSpan.Zero;
+            await elsewhere();
+        }
+        finally
+        {
+            hold.Release();
+        }
+
+        return await call;
+    }
 
     /// <summary>
     /// Refreshes the session at the provider and writes the result into its record, as another gateway
