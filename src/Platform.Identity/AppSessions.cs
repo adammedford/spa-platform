@@ -14,8 +14,9 @@ namespace Platform.Identity;
 /// It also opens a session, holds the request's session key and writes <c>session_ref</c>, all for
 /// <see cref="AppBoundTicketStore"/>, the cookie handler's adapter: <see cref="OpenAsync"/>,
 /// <see cref="ResolveAsync"/> and <see cref="RemoveAsync"/> are that adapter's door, and stay off the
-/// session gate because the framework calls them (#141). The key leaves the module only through
-/// <see cref="KeyOf"/>, and only as <see cref="SessionRef.Of"/>'s result toward a log (N-16).
+/// session gate because the framework calls them (#141). Apart from <see cref="OpenAsync"/>'s answer,
+/// which the cookie handler puts in the cookie, the request's key leaves the module only through
+/// <see cref="KeyOf"/>, and toward a log only as <see cref="SessionRef.Of"/>'s result (N-16).
 ///
 /// One refresh at a time per session (ADR-0017 decision 1, ADR-0005's reserve design, T-D1 to T-D10).
 /// Cognito granted a refresh token replayed 2.0 seconds inside its grace window and then refused the

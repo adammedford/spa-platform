@@ -15,8 +15,9 @@ namespace Platform.Identity;
 /// the app it was built for to the module's one ownership check, so a record bound to anything else is
 /// treated as absent: it is not returned or removed. A validly encrypted cookie for one app that names
 /// another app's session key is anonymous (S-B7, N-02), and so is a session established with a client
-/// the app has since left (task 3.6). The module also writes <c>session_ref</c> and keeps the request's
-/// session key; nothing here touches either.
+/// the app has since left (task 3.6). The module also writes <c>session_ref</c> and sets the request's
+/// key channel; nothing here does either, and the key <c>StoreAsync</c> returns is the module's answer
+/// passed on to the cookie handler.
 ///
 /// Its reads and removes stay off the session gate on purpose: the handler reads through here on every
 /// request that presents a session, and gating that read would serialise every request on a session
