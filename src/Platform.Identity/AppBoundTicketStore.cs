@@ -34,9 +34,9 @@ internal sealed class AppBoundTicketStore(AppDefinition app) : ITicketStore
     private const string NoRequest = "The session store is only used with the request the cookie handler passes.";
 
     private const string NoRenew =
-        "A session is never renewed through the ticket store: every sign-in stores a new key (CallbackBlindCookieManager) "
-        + "and sliding expiry is off (CookieOptionsSetup). A renew here would write the ticket this request started with "
-        + "over whatever a concurrent refresh stored.";
+        "A session is never renewed through the ticket store: every sign-in stores a new key (CallbackBlindCookieManager), "
+        + "sliding expiry is off (CookieOptionsSetup), and no ValidatePrincipal event asks for a renewal. A renew here "
+        + "would write the ticket this request started with over whatever a concurrent refresh stored.";
 
     public Task<string> StoreAsync(AuthenticationTicket ticket) => throw new NotSupportedException(NoRequest);
 
@@ -55,10 +55,17 @@ internal sealed class AppBoundTicketStore(AppDefinition app) : ITicketStore
     }
 
     /// <summary>
-    /// Refused (#141, Q11). Nothing reaches it, since the callback-blind cookie manager makes every
-    /// sign-in store a new key and sliding expiry is off; if anything ever did, it would write the ticket
-    /// captured at the request's start under a version read fresh, the ungated stale write
-    /// <see cref="AppSessions"/> exists to remove. Throwing makes that path fail loudly.
+    /// Refused (#141, Q11). The cookie handler renews through the store on three paths, and nothing
+    /// takes any of them: a sign-in on a request that already carries a session key, which the
+    /// callback-blind cookie manager prevents by making every sign-in store a new key; a sliding-expiry
+    /// refresh, which is off; and a <c>ValidatePrincipal</c> event that sets <c>ShouldRenew</c>, where
+    /// no cookie event is configured at all
+    /// (CookieAuthenticationHandler.HandleSignInAsync, CheckForRefreshAsync and HandleAuthenticateAsync,
+    /// each reaching <c>SessionStore.RenewAsync</c>:
+    /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
+    /// If anything ever did, it would write the ticket captured at the request's start under a version
+    /// read fresh, the ungated stale write <see cref="AppSessions"/> exists to remove. Throwing makes
+    /// that path fail loudly.
     /// </summary>
     public Task RenewAsync(string key, AuthenticationTicket ticket, HttpContext httpContext, CancellationToken cancellationToken) =>
         throw new NotSupportedException(NoRenew);
