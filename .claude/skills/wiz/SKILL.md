@@ -68,6 +68,7 @@ gh issue view 129 --json comments --jq '[.comments[] | select(.body | test("^Con
 aws ecs describe-services --cluster spa-poc --services gateway \
   --query 'services[0].{status:status,desired:desiredCount,running:runningCount}'
 ls tools/scripts/                               # which of tunnel.sh, verify-tunnel.sh, seed.sh, deploy.sh, teardown.sh have landed
+ls tests/e2e/Stack/DeployedStack.cs             # the browser suite's deployed mode (#209); C2 and C3 need it
 docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'no engine'
 ```
 
@@ -76,7 +77,9 @@ Then say which sitting applies and list its stages with the minutes from the spe
 - **A** when the service exists and #56 has no read-back comment yet.
 - **B** when #56's read-back is posted and `tunnel.sh` and `verify-tunnel.sh` are on `main`.
 - **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, the engine runs, and the
-  platform root is destroyed or absent.
+  platform root is destroyed or absent. Offer C2 and C3 only when `tests/e2e/Stack/DeployedStack.cs`,
+  the browser suite's deployed mode (#209), is on `main`, read from the tree as the scripts are;
+  without it the sitting stops after C1 and says so.
 - If the service is absent in A: the sitting becomes the platform root's re-apply on the sample
   image (A-alt below) before the read pass.
 
@@ -249,7 +252,8 @@ that the cell is down until `deploy.sh`.
 
 ## Sitting C: the first deployment and the gate runs
 
-Needs #58's scripts on `main`, Docker Desktop running (D-2), and the platform root absent.
+Needs #58's scripts on `main`, Docker Desktop running (D-2), and the platform root absent; C2 and
+C3 also need `tests/e2e`'s deployed stack on `main` (#209).
 
 **C1.** In the plan's First deployment order: the platform root on the sample image (A-alt),
 `tools/scripts/seed.sh`, `tools/scripts/deploy.sh` (builds both images for ARM64, pushes by
@@ -257,15 +261,17 @@ digest, applies with `health_check_path=/readyz`, waits for steady state, assert
 digest), then `tunnel.sh` and `verify-tunnel.sh /healthz`. Each apply on confirm; post each
 script's exit code and key lines on #58.
 
-**C2, #63 for G3.** The browser suite through the tunnel (`dotnet test --project tests/e2e` with
-the stack settings #61's suite documents), `verify-release-immutability.sh` as P-04, P-06 (a
+**C2, #63 for G3.** The browser suite through the tunnel (`SPA_E2E_STACK=deployed dotnet test
+--project tests/e2e`, with what `tests/e2e/Stack/DeployedStack.cs`'s summary says a sitting has
+before the run), `verify-release-immutability.sh` as P-04, P-06 (a
 connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -w 5
 -z <address> 8080; echo "exit=$?"`, expecting non-zero), then `teardown.sh` and P-05 (the tag query
 empty, the roles gone by name, #118), then seed and deploy again from nothing. Post per test id on
 #63.
 
-**C3, #63 for G4 and G5.** The deployed negative subset (`tests/Gateway.SecurityTests` against the
-stack, N-26 in the browser), then F-07: the apps root's plan with `fixtures/onboarding/app3.json`
+**C3, #63 for G4 and G5.** The deployed negative subset (the rows
+`tests/e2e/Deployed/DeployedSubsetTests.cs` names, run by the same `SPA_E2E_STACK=deployed`
+`dotnet test --project tests/e2e`, N-26 in the browser), then F-07: the apps root's plan with `fixtures/onboarding/app3.json`
 shows three resources, `spactl release publish`, `spactl app add`, `spactl wait`, the task id and
 task definition revision unchanged before and after, app 3 served. Post on #63.
 
