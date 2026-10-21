@@ -1,6 +1,8 @@
 # ADR-0026: Track the workflow scripts, so a workflow change is a branch, a review and a landing
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-21 by ADR-0027:** decision 1 also un-ignores the
+  overnight script's test companion, its fixtures and the project skills under `.claude/skills/`;
+  the other decisions are unchanged.
 - **Date:** 2026-10-21
 - **Deciders:** integrator
 - **Plan ref:** No decision row. #135, grilled Q1 to Q15 on its "## Grilling record" comment and
