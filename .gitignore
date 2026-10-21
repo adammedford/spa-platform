@@ -77,7 +77,8 @@ spikes/g0/real-handler/vendor/ref/
 # other integrator change (ADR-0026). The mock harness and its fixtures beside them stay ignored
 # until #133's follow-up tracks the harness as the script's test companion. The review-queue script's
 # test companion is tracked from the start (#83), named for its script as #213 names the overnight one,
-# and so are the retro script's (#260), the morning script's (#263) and the truth-audit script's (#267).
+# and so are the retro script's (#260), the morning script's (#263), the truth-audit script's (#267)
+# and the pins-sweep script's (#269).
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
 # for the scripts alone.
@@ -90,6 +91,7 @@ spikes/g0/real-handler/vendor/ref/
 !.claude/workflows/retro_tests.mjs
 !.claude/workflows/morning_tests.mjs
 !.claude/workflows/truth-audit_tests.mjs
+!.claude/workflows/pins-sweep_tests.mjs
 
 # Python bytecode. A companion that loads a sibling module by path, as tools/land_tests.py loads
 # tools/companion_runner.py, leaves it beside that module under any python3 but the one macOS ships.
