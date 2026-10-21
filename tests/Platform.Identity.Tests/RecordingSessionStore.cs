@@ -12,6 +12,7 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
 {
     private readonly ConcurrentQueue<string> created = new();
     private readonly ConcurrentQueue<(string Key, SessionRecord? Held)> removed = new();
+    private readonly ConcurrentQueue<(string Key, bool? GateHeld)> gated = new();
 
     /// <summary>Every key <see cref="CreateAsync"/> returned, oldest first, whether or not it was since removed.</summary>
     public IReadOnlyList<string> Created => [.. created];
@@ -35,8 +36,22 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
     /// </summary>
     public IReadOnlyList<(string Key, SessionRecord? Held)> Removed => [.. removed];
 
+    /// <summary>
+    /// Asked as each removal arrives, when a test sets it, and its answers kept in
+    /// <see cref="GatedRemovals"/>: a test sets it to whether the session module has a gate held, which
+    /// tells a removal made under a lease from the cookie handler's ungated one.
+    /// </summary>
+    public Func<bool>? GateHeld { get; set; }
+
+    /// <summary>
+    /// For each removal, oldest first, what <see cref="GateHeld"/> answered as it arrived. Recorded before
+    /// the store is read, so two overlapping removals can sit in a different order in <see cref="Removed"/>.
+    /// </summary>
+    public IReadOnlyList<(string Key, bool? GateHeld)> GatedRemovals => [.. gated];
+
     public async Task RemoveAsync(string key, CancellationToken ct)
     {
+        gated.Enqueue((key, GateHeld?.Invoke()));
         removed.Enqueue((key, await inner.GetAsync(key, ct)));
         await inner.RemoveAsync(key, ct);
     }
