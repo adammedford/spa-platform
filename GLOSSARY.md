@@ -182,12 +182,12 @@ key.
 
 **Session gate** — the in-process, per-session-key serialisation of refreshes: one holder reads,
 decides, refreshes and writes, and the callers queued behind it take its outcome. In process only;
-two tasks share no gate. See ADR-0017 and ADR-0026.
+two tasks share no gate. See ADR-0017 and ADR-0024.
 _Avoid_: "lock", and "lease" for this.
 
 **Refresh lease** — the cross-task claim on one session's refresh, held by one task for a bounded
 time and given back when its refresh is written. The **holder** is the task that took it; a
-**loser** is a task that could not, and re-reads the record instead. See ADR-0026.
+**loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
 
 ## Work, gates and evidence
