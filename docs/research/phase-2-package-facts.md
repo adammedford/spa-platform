@@ -16,7 +16,7 @@ credentials, so nothing called AWS. nuget.org was reachable for restores.
 | # | Fact as the ticket states it | Verdict |
 | --- | --- | --- |
 | 1 | `AWSSDK.Core` resolves to 4.0.102.12 in `Platform.Identity` and `Gateway`, stays at 4.0.102.9 in `Platform.Registry` and `spactl`; nothing conflicts | **Confirmed**, with one graph the request did not mention: `Platform.Hosting` (and `Platform.Hosting.Tests`) resolve `AWSSDK.Core` 4.0.3.17 and `AWSSDK.SimpleSystemsManagement` 4.0.7.3, the key-ring package's own floors |
-| 2 | The package takes an `IAmazonSimpleSystemsManagement` registered ahead of it; a stub registered first is the whole test seam | **Confirmed** by source and by execution. Three wording corrections to P2-2 item 3: the fallback it names does not exist (`SSMXmlRepository` is `internal`); the call also replaces `IKeyManager`; the net10.0 assembly names three operations, not two |
+| 2 | The package takes an `IAmazonSimpleSystemsManagement` registered ahead of it; a stub registered first is the whole test seam | **Confirmed** by source and by execution. Four wording corrections to P2-2, items 1 and 3: the fallback item 3 names does not exist (`SSMXmlRepository` is `internal`); the call also replaces `IKeyManager`; the repository disposes the client it is given; the net10.0 assembly names three operations, not the two item 1 counts |
 | 3 | The 10.0.7 floor restores cleanly beside the 10.0.12 shared framework, no NU1605/NU1608, no `Microsoft.AspNetCore.*` package in the output | **Corrected in part.** No NU1605, no NU1608, build exit 0, nothing from the floor reaches any output. But the floor's own dependencies `System.Security.Cryptography.Xml` 10.0.7 and `System.Security.Cryptography.Pkcs` 10.0.7 stay in the graph of `Platform.Hosting` and of every `Microsoft.NET.Sdk` project that references it, and raise 10 advisory warnings each (NU1902/NU1903), 50 in all; they pass only because `Directory.Build.props` already lists NU1901-NU1904 in `WarningsNotAsErrors` |
 | 4 | A key element with the framework defaults fits a standard-tier parameter (4 KB); `StandardOnly` is the default | **Confirmed.** 956 characters (956 UTF-8 bytes) as the repository stores it, `AES_256_CBC` + `HMACSHA256`, chosen tier `Standard`. Holds with no XML encryptor configured, which is what the gateway gets; `ProtectKeysWithCertificate` with RSA-2048 grows it to 3,505 |
 | 5 | `AWSSDK.Extensions.NETCore.Setup` arrives transitively at 4.0.3.25 and needs no pin | **Confirmed.** 4.0.3.25 in `Gateway`, `Platform.Hosting` and `Platform.Hosting.Tests`; Apache-2.0 by its nuspec's licence expression |
@@ -135,7 +135,7 @@ registered second. The request's sentence "resolves its `IAmazonSimpleSystemsMan
 `GetService` and otherwise constructs a default client" is right in effect; the mechanism is
 `TryAddAWSService` at registration time and `GetService` when the options are built.
 
-**Consequences for P2-2 item 3's wording.**
+**Consequences for P2-2's wording (items 1 and 3).**
 
 - Strike "If it is not, the `PersistKeysToAWSSystemsManager` call gives way to the same package's
   repository registered behind the framework's `IXmlRepository`, whose constructor takes the client
@@ -215,8 +215,7 @@ framework's own version as vulnerable: `System.Security.Cryptography.Xml >= 10.0
 10.0.13` (GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj, GHSA-r955-8q5j-3h83) and
 `System.Security.Cryptography.Pkcs >= 10.0.0, <= 10.0.12 -> 10.0.13` (GHSA-846f-f764-76mx,
 GHSA-2fmv-rv2c-59x7); the other five end at `<= 10.0.9 -> 10.0.10`. The 10.0.12 runtime this
-workstation and the gateway image run therefore carries those five whether or not this package is
-added: NuGet audit reports package versions, not the shared framework, so the warnings are the
+workstation runs therefore carries those five whether or not this package is added: NuGet audit reports package versions, not the shared framework, so the warnings are the
 visible edge of a runtime-patch question (a 10.0.13 runtime), not something the pin introduces or
 a different pin removes.
 
@@ -235,6 +234,11 @@ explained, the levers are the integrator's: a central `PackageVersion` plus a di
 `Platform.Hosting` to `System.Security.Cryptography.Xml` and `.Pkcs` at 10.0.13 (the advisories'
 first patched version; its existence on nuget.org was not checked here), or `NuGetAuditSuppress`
 items for the ten advisories. Neither was tried, and the finding takes no position.
+
+The runtime sentence above is about this workstation. The gateway image's runtime is whatever
+`mcr.microsoft.com/dotnet/aspnet:10.0-noble` resolves to at build time (`src/Gateway/Dockerfile`
+line 39, read), a floating tag that was not resolved here; whether it is 10.0.12 or already
+10.0.13 is a fact for the session that next builds the image.
 
 **Source provenance for the floor.** The package's `net10.0` dependency group says
 `Microsoft.AspNetCore.DataProtection` 10.0.7 (nuspec, read from the cache), but the repository tag
