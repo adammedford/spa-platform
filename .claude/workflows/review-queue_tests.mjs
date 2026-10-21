@@ -95,8 +95,10 @@ function run(scriptArgs, served, behave = {}) {
   globalThis.args = args
   globalThis.phase = () => {}
   globalThis.log = () => {}
-  // A rejected branch rejects the whole call: the script, not this stub, must turn a dying agent into
-  // a row, since nothing promises the Workflow tool's parallel swallows a throw.
+  // A rejected branch rejects the whole call. This is stricter than the Workflow tool, whose parallel()
+  // resolves a thrower to null and never rejects, and whose agent() returns null for an agent that
+  // dies (the workflow-authoring reference, "Script body hooks"). The stub is strict on purpose, so
+  // the script's own guard turns a dying mutation agent into a row and no check rests on that promise.
   globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
   globalThis.agent = async (prompt, opts) => {
     const [kind, n] = opts.label.split(':')
@@ -391,6 +393,15 @@ try {
     result = await execute(env)
     const offTotal = (resultOf(206, result).mutations || [])[0] || {}
     if (offTotal.countsMatched !== false) fail(`PR 206: a stated 4 of 153 reproduced as 4 of 150 has countsMatched ${offTotal.countsMatched}`)
+    // A body that gives the failed count and no total (-1) is compared on what it gives: a reproduced
+    // 4 matches a stated "failed 4", whatever the total, and the prompt never quotes "of -1".
+    const NO_TOTAL = { 206: { ...HOLDS[206], statedMutations: [stated('Said', 4, -1)] } }
+    env = run({ prs: [206] }, NO_TOTAL, { mutate: { Said: row('reproduced', 4, 153) } })
+    result = await execute(env)
+    const noTotal = (resultOf(206, result).mutations || [])[0] || {}
+    if (noTotal.countsMatched !== true) fail(`PR 206: a stated "failed 4" with no total reproduced as 4 of 153 has countsMatched ${noTotal.countsMatched}`)
+    const said = (env.mutations[0] || {}).prompt || ''
+    if (!said.includes('(failed 4).')) fail('PR 206: the mutation prompt does not give the stated "failed 4" alone, with no total')
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
