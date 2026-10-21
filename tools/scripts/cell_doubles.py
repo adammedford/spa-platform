@@ -135,10 +135,21 @@ def platform_outputs(gateway_image: str = SAMPLE_IMAGE, bucket: str = BUCKET) ->
     }
 
 
+def task_ip(task: dict) -> str:
+    """The private IPv4 address of a task's elastic network interface, made from its id. The task
+    runs in awsvpc mode and the target group's target type is ip (infra/modules/cell/ecs.tf,
+    alb.tf), so this is also the id of the task's target."""
+    low = int(task["id"][-4:], 16)
+    return f"10.0.{low >> 8}.{low & 0xff}"
+
+
 def default_world() -> dict:
     """The cell after the first deployment's step 3: the three roots applied, the service on the
-    sample image with / as its health path, an empty bucket and empty repositories."""
+    sample image with / as its health path and its one task's target healthy, an empty bucket and
+    empty repositories."""
     first = f"{FAMILY}:1"
+    task = {"id": "0123456789abcdef0123456789abcdef", "lastStatus": "RUNNING", "taskDefinition": first,
+            "gatewayDigest": SAMPLE_IMAGE.split("@")[1]}
     return {
         "region": REGION,
         "caller": OPERATOR_ARN,
@@ -158,9 +169,8 @@ def default_world() -> dict:
         "task_definitions": {first: {"status": "ACTIVE", "containers": {
             GATEWAY: {"image": SAMPLE_IMAGE, "environment": environment()}}}},
         "service": {"taskDefinition": first, "rolloutState": "COMPLETED", "deployments": 1},
-        "tasks": [{"id": "0123456789abcdef0123456789abcdef", "lastStatus": "RUNNING", "taskDefinition": first,
-                   "gatewayDigest": SAMPLE_IMAGE.split("@")[1]}],
-        "target_group": {"path": "/", "states": ["healthy"]},
+        "tasks": [task],
+        "target_group": {"path": "/", "targets": [{"id": task_ip(task), "state": "healthy"}]},
         "tagged": [],
         "faults": {},
         "next_task": 1,
@@ -294,11 +304,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         return [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}" for task in world["tasks"]]
     if command == "ecs describe-tasks":
         expected = (f"tasks[].[taskArn, lastStatus, taskDefinitionArn, "
-                    f"containers[?name=='{GATEWAY}'] | [0].imageDigest]")
+                    f"containers[?name=='{GATEWAY}'] | [0].imageDigest, "
+                    f"containers[?name=='{GATEWAY}'] | [0].networkInterfaces[0].privateIpv4Address]")
         if query != expected:
             raise Unexpected(f"describe-tasks --query {query!r}")
         known = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task for task in world["tasks"]}
-        return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"]]
+        return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"],
+                 task_ip(known[arn])]
                 for arn in options["tasks"] if arn in known]
     if command == "ecs wait services-stable":
         if world["faults"].get("wait"):
@@ -311,9 +323,9 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             raise Unexpected(f"describe-target-groups --query {query!r}")
         return world["target_group"]["path"]
     if command == "elbv2 describe-target-health":
-        if query != "TargetHealthDescriptions[].TargetHealth.State":
+        if query != "TargetHealthDescriptions[].[Target.Id, TargetHealth.State]":
             raise Unexpected(f"describe-target-health --query {query!r}")
-        return world["target_group"]["states"]
+        return [[target["id"], target["state"]] for target in world["target_group"]["targets"]]
     if command == "s3api list-object-versions":
         prefix = options.get("prefix", "")
         listed = objects_listing(world, prefix)
@@ -553,7 +565,11 @@ def world_root(case: pathlib.Path) -> pathlib.Path:
 def apply_platform(world: dict, variables: dict):
     """What an apply of the platform root does to the cell when the images change: a new task
     definition revision, the service moved to it and the old one deregistered, a new task, and the
-    health check on the path given. A circuit-breaker fault leaves the service on the old one."""
+    health check on the path given. A circuit-breaker fault leaves the service on the old one.
+
+    The target group then holds what the sitting saw on #58 (2026-10-21, #207) once the service is
+    stable: the new task's target healthy, and the previous task's target draining for the group's
+    deregistration delay. A target that was already draining has finished deregistering and is gone."""
     revisions = [int(name.split(":")[1]) for name in world["task_definitions"]]
     name = f"{FAMILY}:{max(revisions) + 1}"
     containers = {GATEWAY: {"image": variables["gateway_image"], "environment": environment(world["roots"]["platform"]["bucket"])}}
@@ -586,6 +602,15 @@ def apply_platform(world: dict, variables: dict):
     world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
                        "taskDefinition": previous if world["faults"].get("running_definition") else name,
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
+    # "new_target": the new task's target in another state than healthy, or None for not registered.
+    # "extra_targets": more targets in the group, as [id, state] pairs.
+    group = world["target_group"]
+    group["targets"] = [{"id": target["id"], "state": "draining"}
+                        for target in group["targets"] if target["state"] != "draining"]
+    new_state = world["faults"].get("new_target", "healthy")
+    if new_state is not None:
+        group["targets"].append({"id": task_ip(world["tasks"][0]), "state": new_state})
+    group["targets"] += [{"id": ident, "state": state} for ident, state in world["faults"].get("extra_targets", [])]
 
 
 # One resource of each root, as `terraform destroy -auto-approve -no-color` names it: first in the

@@ -24,7 +24,7 @@
 # Then it does what deploy.sh does after its push: it plans and applies infra/envs/poc/platform with
 # both images and the health check on /readyz, records them in images.auto.tfvars there, writes
 # infra/envs/poc/outputs.json, waits for a stable service, and asserts the running digest and the
-# target's health.
+# targets' health as deploy.sh's step 5 does, tolerating the previous task's draining target.
 #
 # The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
 # Terraform state (contracts/infra-outputs.schema.json).

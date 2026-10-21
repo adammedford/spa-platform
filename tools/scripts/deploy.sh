@@ -21,8 +21,12 @@
 #      root passes the same digests back and never moves the image.
 #   4. It writes infra/envs/poc/outputs.json from the three roots' outputs.
 #   5. It waits for the service to be stable, then asserts the primary deployment completed on the
-#      applied task definition, every running task's gateway container has the pushed digest, the
-#      target is healthy on /readyz, and the outputs document names the applied gateway.
+#      applied task definition, every running task's gateway container has the pushed digest, each
+#      running task's own target is healthy on /readyz, every other target is healthy or draining,
+#      and the outputs document names the applied gateway. It tolerates draining because a stable
+#      service still lists the previous task's target as draining for the target group's
+#      deregistration delay, and on the first deployment that task, the sample image, fails the new
+#      /readyz check meanwhile (#207). Any other state, unhealthy.draining among them, fails.
 #
 # The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
 # Terraform state (contracts/infra-outputs.schema.json).
