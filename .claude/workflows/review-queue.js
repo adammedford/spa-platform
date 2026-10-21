@@ -296,7 +296,7 @@ ${HOUSE}
 OUTPUT FILE: ${DIR(n)}/range.json
 
 1. \`git -C ${REPO} fetch origin --tags\`. from = ${from}; the current head is ${inv.head}.
-2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push dropped the recorded head); fill nothing else and stop. If ${from} cannot be read at all, ancestor is false and error says why.
+2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push dropped the recorded head); leave commits, merges and changedFiles empty and go to step 4. If ${from} cannot be read at all, ancestor is false and error says why.
 3. commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`. merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`. changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`.
 4. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
@@ -339,7 +339,7 @@ Take every finding's severity for yourself: a sub-agent's "looks wrong" is somet
 The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
-${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
+${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated mutation that did not reproduce. A could-not-run on a stated or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
 
 const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
@@ -456,7 +456,7 @@ const scopeLines = (d, full) => (d
   : full ? [`Full review: the latest record, ${full.url}, names ${full.head}, ${full.why}.`] : [])
 const earlierLines = (d, v) => (d && d.verdict === 'hold'
   ? ['## The earlier hold', '', `The findings of ${d.url}, checked for an answer in ${deltaRange(d)}:`,
-    ...(v.earlierFindings.length ? v.earlierFindings.map((f) => `- ${f.finding}: ${f.answered ? 'answered' : 'not answered'}. ${f.how}`) : ['- The verdict listed none.']), '']
+    ...(v.earlierFindings.length ? v.earlierFindings.map((f) => `- ${f.finding}: ${f.answered ? 'answered' : 'not answered'}. ${f.how}`) : ['- The verdict listed none, so the hold stands: a held record\'s findings are never dropped unchecked.']), '']
   : [])
 const commentBody = (inv, v, axes, record, mut, d, full) => [
   '## Review',
@@ -553,8 +553,9 @@ const review = async (n) => {
   v.earlierFindings = v.earlierFindings || []
   // The script holds on what it can judge itself: an axis that returned nothing, a mutation row
   // under the hold rules, or a held record's finding the range leaves unanswered. The verdict agent
-  // can hold on more, never on less.
-  const unanswered = d && d.verdict === 'hold' && v.earlierFindings.some((f) => f.answered === false)
+  // can hold on more, never on less. An empty earlierFindings after a hold holds too: a hold always
+  // had a reason, and a list with none in it is that reason left unchecked (A check fails closed).
+  const unanswered = d && d.verdict === 'hold' && (!v.earlierFindings.length || v.earlierFindings.some((f) => f.answered === false))
   const verdict = axes.missing.length || mut.holds.length || unanswered ? 'hold' : v.verdict
   // The record names the head the inventory read, whatever the post agent finds later.
   const record = recordLine(inv.head, inv.forkPoint, verdict)

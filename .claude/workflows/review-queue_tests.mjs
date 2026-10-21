@@ -489,6 +489,9 @@ try {
     const kept = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
     if (!kept.startsWith('## Review') || kept.split('\n').pop() !== `Reviewed ${sha('1')} against ${FORK}: merge`) fail(`PR 101 unposted: ${file} does not hold the comment body: ${JSON.stringify(kept.slice(0, 60))}`)
     if (gh.store.length) fail(`PR 101 unposted: ${gh.store.length} comment(s) reached GitHub`)
+    // Nothing is retried: the post agent ran once, and the stub's failure stood.
+    const postRuns = env.calls.filter((l) => l === 'post:101').length
+    if (postRuns !== 1) fail(`PR 101 unposted: the post agent ran ${postRuns} time(s); an unreachable GitHub is never retried`)
     // An unreachable gh served no head, so no move is reported on it.
     if (r.headMoved !== false || JSON.stringify(result.headMoved) !== '[]') fail(`PR 101 unposted: headMoved ${r.headMoved}, run level ${JSON.stringify(result.headMoved)}; an unread head is not a moved one`)
     gh.failPost = false
@@ -595,6 +598,11 @@ try {
     env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', answered: false, how: 'nothing in the range touches it' }] } })
     result = await execute(env)
     if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 with the earlier hold unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
+    // A verdict that lists none of the held record's findings has checked none of them: it holds.
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 after a hold with no earlier finding listed: verdict ${resultOf(207, result).verdict}, expected hold`)
+    if (!/listed none, so the hold stands/.test(commentOf(env, 207))) fail('PR 207 after a hold with no earlier finding listed: the comment does not say the hold stands')
   }
   // Not an ancestor (a force-push), or no range at all: a full review, and the comment says why.
   for (const [what, range] of [['not an ancestor', { 207: { ...RANGE[207], ancestor: false } }], ['the range agent returned nothing', { 207: 'null' }]]) {
