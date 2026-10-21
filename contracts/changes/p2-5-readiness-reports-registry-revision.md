@@ -125,10 +125,11 @@ exists for:
 1. Onboard app 3 (`OnboardAsync`) and poll host A only. A's `/readyz` says `2`, B's says `1`.
 2. A wait against the balancer with both instance ids returns only after B is polled too; a wait
    given a deadline before that times out, naming B as the instance still at `1`. The bodiless 503
-   is proved in `spactl`'s own suite, where `ReadyzStub.Lag` (`tests/Spactl.Tests/Harness.cs`)
-   answers 503 before the first snapshot and `Wait_fails_on_a_gateway_that_never_became_ready`
-   already asserts the timeout prints `HTTP 503`: with `--instances`, that 503 is printed
-   unattributed and the listed id is named as never answered.
+   is proved in `spactl`'s own suite, where `ReadyzStub` (`tests/Spactl.Tests/Harness.cs`) answers
+   503 while the store holds no registry (or for `Lag` polls) and
+   `Wait_fails_on_a_gateway_that_never_became_ready` asserts the timeout prints `HTTP 503` without
+   `--instances`. Workstream 2 adds a case beside it, with `--instances`, asserting that the 503 is
+   printed unattributed and the listed id is named as never answered.
 3. Start a login to app 3 on A, up to the redirect to the provider, then finish its callback on B.
    It lands on app 3's shell.
 4. The control that makes the assertion able to fail (`CODING_STANDARDS.md`): the same login with
@@ -175,18 +176,20 @@ right only in a cell.
 3. **Only the 200 body of `/readyz` carries it.** `/healthz` stays bodiless, and the 503 before a
    snapshot stays bodiless. A task answering 503 fails the ALB health check and is taken out of
    service after `UnhealthyThresholdCount` consecutive failures; while another target is healthy, no
-   reader through the ALB reaches it. When no registered target is healthy the ALB fails open and
-   forwards to all of them (the fail-open paragraph of
+   reader through the ALB reaches it. When every registered target is unhealthy the ALB fails open
+   and forwards to all of them (the fail-open paragraph of
    https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html),
    and a cell runs one task (`infra/modules/cell/ecs.tf`, `desired_count`), so a reader through the
    ALB can receive that 503. It needs no body: `spactl wait` reads the status, counts a non-200 as
    not yet at `N`, and prints it unattributed, because an answer with no `instance` names no task
-   (item 5).
+   (item 5). Q4's own reason, that no reader through the ALB sees this 503, was wrong; it was
+   corrected here on 2026-10-21, and the decision it supported is unchanged.
 4. **The contract text** is the row and the sentence as applied, with "gateway instance" and
    "instances"; "a reader takes the members it names and ignores the rest" is the rule that makes
    the next additive member prose too. `contracts/http-contract.md` reserves the path and does not
    change.
-5. **`spactl wait --instances <id,id,...>`**: one comma-separated option, optional, no AWS package.
+5. **`spactl wait --instances <id,id,...>`**: one comma-separated option, optional, no AWS package,
+   validated only to the extent of rejecting an empty element as a usage error.
    A repeated option would silently keep its last value on today's parser, and an in-`spactl`
    `list-tasks` would need `AWSSDK.ECS`, which is not pinned, and ECS credentials in a command the
    hermetic tests run with none. With the option, the wait ends with 0 when every listed id has
