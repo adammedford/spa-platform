@@ -1,5 +1,4 @@
-# The startup floor's image (#173). Owner: integrator, until the request in
-# contracts/changes/issue-172-tools-bench-ownership.md gives tools/bench to workstream 6.
+# The startup floor's image (#173). Owner: the owner OWNERSHIP.md names for tools/bench/.
 #
 # src/Gateway/Dockerfile's pattern, line for line where it applies: the same SDK and aspnet bases,
 # the same build files copied first, the same TARGETARCH restore and publish, the same port and the

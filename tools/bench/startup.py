@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""PROTOTYPE: the startup benchmark harness (#173, on the map #169). Owner: integrator, until the
-request in contracts/changes/issue-172-tools-bench-ownership.md gives tools/bench to workstream 6.
+"""PROTOTYPE: the startup benchmark harness (#173, on the map #169). Owner: the owner OWNERSHIP.md
+names for tools/bench/.
 
 Throwaway code that answers one question: how is one cold start of the gateway timed, against the
 startup floor, and what does a run print. The method choices it makes are recorded in #173's
@@ -545,7 +545,11 @@ class Bench:
         finally:
             if prober and prober.poll() is None:
                 prober.kill()
-            self.remove(*[c for c in (target, holder) if c])
+            # Killing the `docker run` client leaves its container running, still on the bench
+            # network, which would then refuse `network rm` in down() and leave the subnet taken for
+            # the next run. So the probe is removed by name, like the containers it measured.
+            probe_name = f"{name}-probe" if prober else None
+            self.remove(*[c for c in (probe_name, target, holder) if c])
 
     def facts(self, tags: Dict[str, str]) -> dict:
         info = json.loads(self.docker("info", "--format", "{{json .}}"))

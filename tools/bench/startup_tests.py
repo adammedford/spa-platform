@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Test companion for tools/bench/startup.py (#173). Owner: integrator.
+"""Test companion for tools/bench/startup.py (#173). Owner: the owner OWNERSHIP.md names for
+tools/bench/.
 
 The harness's Docker half needs a Docker daemon and minutes of wall time, so it is proved by running
 it (the numbers in #173's Answer), not here. What runs here is everything that decides a number
