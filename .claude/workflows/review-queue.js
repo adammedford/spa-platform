@@ -5,16 +5,18 @@ export const meta = {
   phases: [
     { title: 'Inventory', detail: 'one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
-    { title: 'Verdict', detail: 'one agent per pull request re-takes every severity and says merge or hold; one comment is posted, its last line the record' },
+    { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
+    { title: 'Verdict', detail: 'one agent per pull request re-takes every severity and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
   ],
 }
 
 // ---------------------------------------------------------------- what this is
-// The walking skeleton of the review-queue spec (#79, ticket 1 of 5: #83). For each pull request it is
-// given it inventories, reviews on both axes, decides, and posts exactly one comment whose last line is
-// the review record docs/agents/review.md -> "The review record" defines. It never merges, pushes,
-// tags, labels, assigns or edits a branch. It runs no mutations, and its comment says "No mutations
-// run" so the record never implies one (#83). Test companion: review-queue_tests.mjs beside it.
+// The review-queue workflow of the spec #79. For each pull request it is given it inventories, reviews
+// on both axes, mutates the tests the diff adds or changes, decides, and posts exactly one comment
+// whose last line is the review record docs/agents/review.md -> "The review record" defines. It never
+// merges, pushes, tags, labels, assigns or edits a branch. Every build or test run happens in a
+// throwaway worktree under wt, detached at the head and removed after the run. Test companion:
+// review-queue_tests.mjs beside it.
 //
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/review-queue.js
@@ -28,6 +30,8 @@ export const meta = {
 //   prs           required  a non-empty array of pull request numbers into main. The script reads no
 //                           queue of its own: it reviews exactly the pull requests it is named (#83).
 //   maxParallel   optional  positive integer, default 3: agents running at once.
+//   maxMutationsPerPr optional positive integer, default 3: mutation agents per pull request. The
+//                           list is cut here, and the comment names what the cap left unmutated.
 //   skipRecorded  optional  boolean, default true. A head that already carries a record of either
 //                           verdict is skipped and reported; false reviews it again and posts a new
 //                           record, which is how a hold answered without a new commit becomes merge.
@@ -42,6 +46,7 @@ const badArguments = (a) => {
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; no worktree is made under the repository')
   if (!Array.isArray(a.prs) || a.prs.length === 0 || !a.prs.every(count)) bad.push('prs: a non-empty array of pull request numbers, e.g. [255]')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
+  if (a.maxMutationsPerPr !== undefined && !count(a.maxMutationsPerPr)) bad.push('maxMutationsPerPr: a positive integer (default 3)')
   if (a.skipRecorded !== undefined && typeof a.skipRecorded !== 'boolean') bad.push('skipRecorded: true or false, a boolean (default true)')
   return bad
 }
@@ -55,6 +60,7 @@ const DATE = A.date
 const WTROOT = A.wt.replace(/\/+$/, '')
 const PRS = [...new Set(A.prs)]
 const MAX_PAR = A.maxParallel || 3
+const MUTATION_CAP = A.maxMutationsPerPr || 3
 const SKIP_RECORDED = A.skipRecorded !== false
 // The run's directory under the git-ignored scratch log (.gitignore: .scratch/*/log/). It is the only
 // place the run writes in the main checkout, apart from git's own bookkeeping for fetches and worktrees.
@@ -125,7 +131,7 @@ const HOUSE = `House rules (a review run; you write nothing under review):
 - CI has already run. Rebuild nothing and never run the solution. Where a runtime claim genuinely must be run, make a throwaway worktree under ${WTROOT}, detached at the head, run the one project there, and remove it with \`git -C ${REPO} worktree remove --force <path>\` and \`git -C ${REPO} worktree prune\` before you return.
 - Never push, merge, tag, label, assign, or edit a pull request's body or branch. Never start a process on a port.
 - Never log or quote a credential, token, cookie, authorization code or state value.
-- Write each OUTPUT FILE line's path exactly as given, and no other file.`
+- Write each OUTPUT FILE line's path exactly as given, and no other file outside a throwaway worktree under ${WTROOT}.`
 
 const AXIS_GUIDE = `Read docs/agents/review.md (at origin/main) before anything else: it is the review guide, with the sources each axis holds the diff to and the bar for a finding. CODING_STANDARDS.md is the standard. Read both yourself; this prompt does not transcribe them.`
 
@@ -137,6 +143,28 @@ const ENTRY = {
     created_at: { type: 'string' }, submitted_at: { type: 'string' }, state: { type: 'string' },
   },
   required: ['body', 'author_association', 'html_url'],
+}
+// A candidate invariant test: an xUnit fact or theory, a Terraform test file or a Python test
+// companion the diff adds or changes. project is what runs it alone: the .NET test project, the
+// Terraform test directory, or the companion's path. breaks is the source it would take to break it.
+const CANDIDATE = {
+  type: 'object',
+  properties: { test: { type: 'string' }, project: { type: 'string' }, guards: { type: 'string' }, breaks: { type: 'string' } },
+  required: ['test', 'project', 'guards', 'breaks'],
+}
+// A mutation the pull request's body states, quoted, with its counts (-1 when the body gives none).
+const STATED = {
+  type: 'object',
+  properties: {
+    test: { type: 'string' }, project: { type: 'string' }, mutation: { type: 'string' },
+    failed: { type: 'integer' }, total: { type: 'integer' }, quote: { type: 'string' },
+  },
+  required: ['test', 'project', 'mutation', 'failed', 'total', 'quote'],
+}
+const NOMINATION = {
+  type: 'object',
+  properties: { test: { type: 'string' }, project: { type: 'string' }, why: { type: 'string' } },
+  required: ['test', 'project', 'why'],
 }
 const INVENTORY = {
   type: 'object',
@@ -150,11 +178,13 @@ const INVENTORY = {
     ci: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, state: { type: 'string' } }, required: ['name', 'state'] } },
     cites: { type: 'object', properties: { planRow: { type: 'string' }, issues: { type: 'array', items: { type: 'integer' } }, mergeSubject: { type: 'string' } }, required: ['planRow', 'issues', 'mergeSubject'] },
     bodyClaims: { type: 'array', items: { type: 'string' } },
+    statedMutations: { type: 'array', items: STATED },
+    candidates: { type: 'array', items: CANDIDATE },
     comments: { type: 'array', items: ENTRY },
     reviews: { type: 'array', items: ENTRY },
     error: { type: 'string' },
   },
-  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'ownership', 'ci', 'cites', 'bodyClaims', 'comments', 'reviews', 'error'],
+  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
 }
 const FINDING = {
   type: 'object',
@@ -176,7 +206,7 @@ const AXIS = {
     sourcesRead: { type: 'array', items: { type: 'string' } },
     findings: { type: 'array', items: FINDING },
     claims: { type: 'array', items: CLAIM },
-    nominations: { type: 'array', items: { type: 'string' } },
+    nominations: { type: 'array', items: NOMINATION },
   },
   required: ['axis', 'sourcesRead', 'findings', 'claims', 'nominations'],
 }
@@ -190,6 +220,17 @@ const VERDICT = {
     summary: { type: 'string' },
   },
   required: ['verdict', 'findings', 'claims', 'outstanding', 'summary'],
+}
+const RESULTS = ['reproduced', 'did-not-fail', 'could-not-run']
+const MUTATION = {
+  type: 'object',
+  properties: {
+    test: { type: 'string' }, broken: { type: 'string' },
+    failed: { type: 'integer' }, total: { type: 'integer' },
+    failingNames: { type: 'array', items: { type: 'string' } },
+    result: { type: 'string', enum: RESULTS }, why: { type: 'string' },
+  },
+  required: ['test', 'broken', 'failed', 'total', 'failingNames', 'result', 'why'],
 }
 const POST = {
   type: 'object',
@@ -212,7 +253,8 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 3. head = headRefOid (40 hex). baseTip = \`git -C ${REPO} rev-parse origin/main\`. forkPoint = \`git -C ${REPO} merge-base origin/main <head>\`. commits = \`git -C ${REPO} log --format=%H <forkPoint>..<head>\`. changedFiles = \`git -C ${REPO} diff --name-only <forkPoint>...<head>\`.
 4. ownership: run \`cd ${REPO} && python3 -I .github/path-ownership.py <forkPoint> <head>\`; owners = the owner sets it names, ok = whether it exited 0, output = its last lines.
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
-6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included.
+6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
+6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
@@ -236,9 +278,9 @@ Read the diff yourself with the review guide's commands (\`git -C ${REPO} diff $
 ${axis === 'Standards'
     ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail, by file and test name.'
     : 'Hold the diff to the spec sources the review guide\'s table names: the plan row, the issue\'s body and comments, the contracts and pipeline table, the test and evidence ids the row names, change requests and ADRs. The pull request body is the author\'s claim, not the spec: put every claim in claims, verified or not, and how.'}
-Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
+${axis === 'Standards' ? 'Each nomination: test (by the name the inventory\'s candidates use, if it is one), project (what runs it alone), and why you suspect it cannot fail. ' : ''}Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
 
-const verdictPrompt = (n, inv, axes) => `Decide the review of pull request #${n}: ${inv.title}. You wrote none of its commits.
+const verdictPrompt = (n, inv, axes, mut) => `Decide the review of pull request #${n}: ${inv.title}. You wrote none of its commits.
 
 ${HOUSE}
 
@@ -248,7 +290,72 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json. ${axes.missing.length ? `The ${axes.missing.join(' and ')} axis returned nothing: say so in summary, and hold.` : ''}
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail; otherwise merge. No mutations run in this version of the review, so none is claimed. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
+The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
+${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}
+${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated mutation that did not reproduce. A could-not-run on a stated or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
+
+const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
+const mutationLog = (n, i) => `${DIR(n)}/mutation-${i}.txt`
+const mutatePrompt = (n, inv, m, i) => {
+  const wt = mutationWorktree(n, i)
+  return `Run one mutation for the review of pull request #${n}: break what one test guards, and see whether the test goes red. You wrote none of its commits.
+
+${HOUSE}
+
+OUTPUT FILE: ${mutationLog(n, i)}
+WORKTREE: ${wt}
+TEST: ${m.test}
+
+The test: ${m.test}, run by ${m.project}. ${m.kind === 'stated'
+    ? `The author states this mutation; apply it exactly as stated: ${m.mutation}. The body says: ${JSON.stringify(m.quote)}${m.failed >= 0 ? ` (failed ${m.failed} of ${m.total})` : ''}.`
+    : `${m.kind === 'nominated' ? `The Standards axis suspects it cannot fail: ${m.why}. ` : ''}It guards: ${m.guards || '(say what it guards, from reading it)'}. Break that in the source it guards (${m.breaks || 'find it'}), never in the test, with the smallest change that should turn it red.`}
+
+1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
+2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
+3. Make the mutation in ${wt} only. Run only ${m.project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why. broken: what you broke, in one line.
+5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
+6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
+}
+
+// The mutation list: the body's stated mutations, then the Standards axis's nominations, then the
+// inventory's remaining candidates, deduplicated by test and cut at the cap. kind decides the hold
+// rule a could-not-run row falls under.
+const mutationList = (inv, standards) => {
+  const byTest = new Map((inv.candidates || []).map((c) => [c.test, c]))
+  const all = [
+    ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
+    ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })),
+    ...(inv.candidates || []).map((c) => ({ ...c, kind: 'candidate' })),
+  ]
+  const seen = new Set()
+  const list = all.filter((m) => m.test && !seen.has(m.test) && seen.add(m.test))
+  return { list: list.slice(0, MUTATION_CAP), cut: list.slice(MUTATION_CAP).map((m) => m.test) }
+}
+
+// One row per mutation. An agent that dies, returns nothing or returns a result that is none of the
+// three is a could-not-run row, so a dead agent never reads as a pass and the verdict still runs.
+const mutationRow = (n, m, i, got) => {
+  const ok = got && RESULTS.includes(got.result)
+  const row = {
+    test: m.test, kind: m.kind, guards: m.guards || m.why || '', mutation: m.mutation || '',
+    broken: (ok && got.broken) || m.mutation || '', failed: ok && Number.isInteger(got.failed) ? got.failed : 0,
+    total: ok && Number.isInteger(got.total) ? got.total : 0, failingNames: (ok && got.failingNames) || [],
+    result: ok ? got.result : 'could-not-run',
+    why: ok ? (got.why || '') : (got ? `the mutation agent returned the result ${JSON.stringify(got.result)}, which is none of ${RESULTS.join(', ')}` : 'the mutation agent died or returned nothing'),
+    countsMatched: null, logFile: mutationLog(n, i),
+  }
+  if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && row.total === m.total
+  return row
+}
+// What in the rows holds the verdict, each named.
+const mutationHolds = (rows) => rows.flatMap((r) => {
+  if (r.result === 'did-not-fail') return [`${r.test} did not fail with ${r.broken || 'what it guards'} broken`]
+  if (r.kind === 'stated' && r.result !== 'reproduced') return [`the stated mutation of ${r.test} did not reproduce (${r.result})`]
+  if (r.kind === 'nominated' && r.result === 'could-not-run') return [`the nominated mutation of ${r.test} could not run: ${r.why}`]
+  return []
+})
 
 const postPrompt = (n, record, body) => `Post one review comment on pull request #${n}, at most once.
 
@@ -270,7 +377,18 @@ END COMMENT`
 const findingLines = (list) => (list.length
   ? list.map((f) => `- **${f.title}** (${f.status}, ${f.severity}) at ${f.where}. Checked: ${f.checked}`)
   : ['- None.'])
-const commentBody = (inv, v, axes, record) => [
+const cell = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
+const mutationLines = (mut) => [
+  ...(mut.rows.length
+    ? ['| Test | What was broken | Failed of total | Result | Log file |', '| --- | --- | --- | --- | --- |',
+      ...mut.rows.map((r) => `| ${[r.test, r.broken || '-', `${r.failed} of ${r.total}`,
+        r.result + (r.countsMatched === true ? ', counts match the stated claim' : r.countsMatched === false ? ', counts differ from the stated claim' : '') + (r.why ? `: ${r.why}` : ''),
+        r.logFile].map(cell).join(' | ')} |`)]
+    : ['No mutations run: the diff adds or changes no candidate invariant test and the body states no mutation.']),
+  '',
+  mut.cut.length ? `Not mutated, cut by the cap of ${MUTATION_CAP}: ${mut.cut.join(', ')}.` : `Not mutated: nothing; the cap of ${MUTATION_CAP} cut nothing.`,
+]
+const commentBody = (inv, v, axes, record, mut) => [
   '## Review',
   '',
   `Head ${inv.head}, read against the fork point ${inv.forkPoint} (origin/main at ${inv.baseTip}).`,
@@ -291,7 +409,7 @@ const commentBody = (inv, v, axes, record) => [
   '',
   '## Mutations',
   '',
-  'No mutations run: this version of the review runs none.',
+  ...mutationLines(mut),
   '',
   '## Outstanding',
   '',
@@ -304,7 +422,7 @@ const commentBody = (inv, v, axes, record) => [
 const review = async (n) => {
   const res = {
     number: n, head: '', base: '', verdict: '', outcome: 'failed', stage: '', recordUrl: '',
-    findings: { verified: [], suspected: [] }, mutations: [], skippedBecauseRecorded: false,
+    findings: { verified: [], suspected: [] }, mutations: [], notMutated: [], skippedBecauseRecorded: false,
     headMoved: false, earlierRecords: [], commentFile: '',
   }
   const inv = await run(inventoryPrompt(n), { label: `inventory:${n}`, phase: 'Inventory', schema: INVENTORY })
@@ -330,11 +448,22 @@ const review = async (n) => {
   ])
   const axes = { standards, spec, missing: [standards ? '' : 'Standards', spec ? '' : 'Spec'].filter(Boolean) }
 
-  const v = await run(verdictPrompt(n, inv, axes), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
+  const { list, cut } = mutationList(inv, standards)
+  const got = await parallel(list.map((m, i) => async () => {
+    try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
+  }))
+  const rows = list.map((m, i) => mutationRow(n, m, i + 1, got && got[i]))
+  const mut = { rows, cut, holds: mutationHolds(rows) }
+  res.mutations = rows
+  res.notMutated = cut
+
+  const v = await run(verdictPrompt(n, inv, axes, mut), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) { res.stage = 'verdict'; return res }
-  const verdict = axes.missing.length ? 'hold' : v.verdict
+  // The script holds on what it can judge itself: an axis that returned nothing, or a mutation row
+  // under the hold rules. The verdict agent can hold on more, never on less.
+  const verdict = axes.missing.length || mut.holds.length ? 'hold' : v.verdict
   const record = recordLine(inv.head, inv.forkPoint, verdict)
-  const body = commentBody(inv, v, axes, record)
+  const body = commentBody(inv, v, axes, record, mut)
   res.verdict = verdict
   res.findings = {
     verified: v.findings.filter((f) => f.status === 'verified'),
@@ -353,6 +482,6 @@ const review = async (n) => {
 phase('Inventory')
 log(`review-queue ${DATE}: ${PRS.length} pull request(s): ${PRS.map((n) => '#' + n).join(', ')}; log ${LOG}`)
 const results = await parallel(PRS.map((n) => () => review(n)))
-const prs = results.map((r, i) => r || { number: PRS[i], head: '', base: '', verdict: '', outcome: 'failed', stage: 'unknown', recordUrl: '', findings: { verified: [], suspected: [] }, mutations: [], skippedBecauseRecorded: false, headMoved: false, earlierRecords: [], commentFile: '' })
+const prs = results.map((r, i) => r || { number: PRS[i], head: '', base: '', verdict: '', outcome: 'failed', stage: 'unknown', recordUrl: '', findings: { verified: [], suspected: [] }, mutations: [], notMutated: [], skippedBecauseRecorded: false, headMoved: false, earlierRecords: [], commentFile: '' })
 for (const r of prs) log(`#${r.number}: ${r.outcome}${r.verdict ? ' ' + r.verdict : ''}${r.stage ? ' (' + r.stage + ')' : ''}${r.recordUrl ? ' ' + r.recordUrl : ''}`)
 return { date: DATE, logDir: LOG, agents: agentsRun, prs }
