@@ -318,7 +318,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         versions = [entry for entry in listed if not entry.get("marker")]
         markers = [entry for entry in listed if entry.get("marker")]
         if query == "[Versions, DeleteMarkers][].[Key, VersionId]":
-            return [[entry["Key"], entry["VersionId"]] for entry in versions + markers]
+            listing = [[entry["Key"], entry["VersionId"]] for entry in versions + markers]
+            # "written_after_listing": one version, the first, is written after this listing
+            # answered (a spactl still publishing, say), so the listing leaves it out and a delete of
+            # every listed version leaves the bucket holding it.
+            if world["faults"].get("written_after_listing") and listing:
+                listing = listing[1:]
+            return listing
         if query == "[length(Versions || `[]`), length(DeleteMarkers || `[]`)]":
             return [len(versions), len(markers)]
         raise Unexpected(f"list-object-versions --query {query!r}")
@@ -556,18 +562,26 @@ def apply_platform(world: dict, variables: dict):
     world["task_definitions"][previous]["status"] = "INACTIVE"
     world["tagged"].append({"arn": td_arn(name), "type": "ecs:task-definition", "root": "platform",
                             "tags": {"Platform": "spa-platform", "Cell": CELL}})
-    world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
-    world["target_group"]["path"] = variables.get("health_check_path", "/")
+    # Each fault below leaves one thing the apply should have moved where it was, so that a case can
+    # show the check in deploy.sh's wait_and_assert that reads it is the one that catches it.
+    if not world["faults"].get("output_image_stale"):
+        world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
+    if not world["faults"].get("health_path_stale"):
+        world["target_group"]["path"] = variables.get("health_check_path", "/")
     if world["faults"].get("circuit_breaker"):
         # The new tasks failed their health checks and ECS put the previous task definition back:
         # stable, on the old one.
         world["service"] = {"taskDefinition": previous, "rolloutState": "COMPLETED", "deployments": 1}
         return
+    # "deployments": the previous deployment not yet drained, so the service lists two.
     world["service"] = {"taskDefinition": name, "rolloutState": world["faults"].get("rollout", "COMPLETED"),
-                        "deployments": 1}
+                        "deployments": world["faults"].get("deployments", 1)}
     world["next_task"] += 1
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
-    world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING", "taskDefinition": name,
+    # "running_definition": a task running the applied digest under another revision, as one started
+    # from a task definition another apply registered with the same image would.
+    world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
+                       "taskDefinition": previous if world["faults"].get("running_definition") else name,
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
 
 
