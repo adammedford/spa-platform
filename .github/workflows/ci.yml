@@ -10,7 +10,7 @@
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
 # infra/ and the floor's own file and helper. The hook shares these path patterns
 # through .github/touches.sh. CI's decision step also runs both jobs for changes to its workflow,
-# the classifier or tools/smoke.sh, or when the base cannot be resolved.
+# the classifier, tools/smoke.sh or tools/image-check.sh, or when the base cannot be resolved.
 #
 # A job skipped that way still satisfies main's protection, which requires `Build and test` and
 # `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
@@ -77,10 +77,11 @@ jobs:
         # three-dot form the hook uses, so the diff is what the change adds and not what main did
         # meanwhile. The two jobs below read the answer. Every job runs when there is no base to
         # diff against -- a push whose `before` GitHub does not have -- and when the files that make
-        # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh, which only the
-        # build job exercises. A decision cannot vouch for a change to itself. The base it resolved
-        # is an output too, empty when there was none, for the steering check's authority rule,
-        # which judges the commits from it to HEAD: one place decides the range, not two.
+        # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh and
+        # tools/image-check.sh, which only the build job exercises. A decision cannot vouch for a
+        # change to itself. The base it resolved is an output too, empty when there was none, for
+        # the steering check's authority rule, which judges the commits from it to HEAD: one place
+        # decides the range, not two.
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -100,8 +101,8 @@ jobs:
             resolved="$base"
             changed="$(git diff --name-only "$base"...HEAD)"
             # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
-            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/smoke\.sh$' > /dev/null; then
-              echo "::notice::the workflow, the halves or the smoke test changed, so every job runs."
+            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/(smoke|image-check)\.sh$' > /dev/null; then
+              echo "::notice::the workflow, the halves, the smoke test or the image check changed, so every job runs."
             else
               printf '%s\n' "$changed" | .github/touches.sh build || build=false
               printf '%s\n' "$changed" | .github/touches.sh terraform || terraform=false
@@ -371,6 +372,14 @@ jobs:
         #
         # The script holds the probes, so a local run and this one are the same test.
         run: tools/smoke.sh Release 5080
+
+      - name: The gateway image builds from a workstation's tree and starts as its runtime user
+        # The first deployment found what this runner's clean checkout cannot show: a host obj/ in
+        # the image's build context, and a file only its owner can read, which kills the gateway in
+        # WebApplication.CreateBuilder as $APP_UID (#58, #204). The script plants both in a copy of
+        # the tree, builds src/Gateway/Dockerfile without pushing, and starts the image as its own
+        # user (#210). The runner's Docker builds for its own architecture; the script says why.
+        run: tools/image-check.sh
 
   terraform:
     name: Terraform

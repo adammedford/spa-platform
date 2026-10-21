@@ -7,9 +7,10 @@ tools/land_tests.py's.
 **What runs is the script itself.** Each case runs the tracked files' current bytes, whole, in
 place: `/bin/bash <absolute path of the hook or the script>`, with a throwaway repository as the
 working directory. Both start by moving to that repository's top level, so the check files they
-reach from there -- .github/touches.sh, tools/smoke.sh, the Python checks -- are the case's. The
-case links .github/touches.sh and tools/check.sh to the real ones, so the halves are decided by the
-real classifier and the hook reaches the real script; it puts a double at tools/smoke.sh.
+reach from there -- .github/touches.sh, tools/smoke.sh, tools/image-check.sh, the Python checks --
+are the case's. The case links .github/touches.sh and tools/check.sh to the real ones, so the halves
+are decided by the real classifier and the hook reaches the real script; it puts doubles at
+tools/smoke.sh and tools/image-check.sh.
 
 **The interpreter is named**, as in land_tests.py: /bin/bash, so a Mac with Homebrew's bash first
 on PATH still tests the 3.2 macOS ships, and SCRIPT_TESTS_REQUIRE_BASH (CI's macOS job sets it to
@@ -20,11 +21,12 @@ on PATH still tests the 3.2 macOS ships, and SCRIPT_TESTS_REQUIRE_BASH (CI's mac
 the git configuration and the locale are the case's own. An inherited GIT_DIR would point every
 git call at another repository.
 
-**Real git; doubles for python3, dotnet, terraform and the smoke test.** The Python checks have
-their own companions and ask GitHub things; the build, the suite and Terraform take minutes and
-reach the network. Each double records its arguments, in one sequence shared by all of them, so a
-case asserts what ran and in what order. dotnet and terraform print a line on standard output, so
-a case can see whether the script showed or hid it. A double fails when a case names the call.
+**Real git; doubles for python3, dotnet, terraform, the smoke test and the image check.** The
+Python checks have their own companions and ask GitHub things; the build, the suite, Terraform and
+the image take minutes and reach the network. Each double records its arguments, in one sequence
+shared by all of them, so a case asserts what ran and in what order. dotnet and terraform print a
+line on standard output, so a case can see whether the script showed or hid it. A double fails
+when a case names the call.
 
 **The hook's output is asserted literally.** The expected lines in HookTests are the old hook's
 messages, typed from its text, not read from the script under test (#68: same checks, same skips,
@@ -95,7 +97,8 @@ TOOLS = ("git", "find", "xargs", "sort", "head", "dirname", "basename", "grep")
 PORT = "5299"
 
 # A double: records its name and arguments as one call in the shared sequence, then fails when the
-# case named this call, and otherwise prints a line (dotnet, terraform, smoke) or nothing (python3).
+# case named this call, and otherwise prints a line (dotnet, terraform, smoke, image) or nothing
+# (python3). The image check takes no arguments, so a case names its call as `*`, which fails any.
 # A Terraform double answers `version` as Terraform does, first line `Terraform v<version>`, with the
 # version the case gave it (#69).
 DOUBLE = """#!/bin/bash
@@ -111,6 +114,7 @@ if [ -n "$reports" ] && [ "$*" = version ]; then
   printf 'Terraform v%s\\non darwin_arm64\\n' "$reports"
   exit 0
 fi
+if [ "$fails_on" = "*" ]; then printf '%s double failed\\n' "$name" >&2; exit 1; fi
 if [ -n "$fails_on" ]; then
   case " $* " in
     *" $fails_on "*) printf '%s double failed: %s\\n' "$name" "$*" >&2; exit 1 ;;
@@ -158,6 +162,7 @@ PYTHON_CHECKS = [
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
 SMOKE = [["smoke", "Debug", PORT]]
+IMAGE = [["image"]]
 
 
 def terraform_checks() -> list[list[str]]:
@@ -281,7 +286,8 @@ class Case:
         self.git("checkout", "-q", "-b", "task", cwd=self.work)
 
         # The check files the script reaches from the top level: the real classifier and the real
-        # script, linked, and a double for the smoke test. Left untracked, so no diff includes them.
+        # script, linked, and doubles for the smoke test and the image check. Left untracked, so no
+        # diff includes them.
         (self.work / ".github").mkdir(exist_ok=True)
         (self.work / ".github" / "touches.sh").symlink_to(TOUCHES)
         (self.work / "tools").mkdir(exist_ok=True)
@@ -289,6 +295,8 @@ class Case:
         (self.work / "tools" / "terraform-floor.sh").symlink_to(FLOOR_HELPER)
         self.write_executable(self.work / "tools" / "smoke.sh",
                               self.double("smoke", fails_on.get("smoke", ""), "yes"))
+        self.write_executable(self.work / "tools" / "image-check.sh",
+                              self.double("image", fails_on.get("image", ""), "yes"))
 
         for name in (change,) if isinstance(change, str) else change or ():
             path = self.work / name
@@ -543,23 +551,33 @@ class FullModeTests(CheckTestCase):
         stream = result.stdout if status == 0 else result.stderr
         self.assertEqual(verdict, result.last_line(stream))
 
-    def test_a_dotnet_change_runs_the_build_the_tests_and_the_smoke_test(self):
+    def test_a_dotnet_change_runs_the_build_the_tests_the_smoke_test_and_the_image(self):
         case = Case(self, change="src/App/App.cs")
         result = self.full(case)
-        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE, case.calls())
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
+                                      "the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         # Shown, not hidden: a lane reads its failure from the log.
         self.assertIn("dotnet double ran: build --nologo --verbosity quiet", result.stdout)
         self.assertIn("check: Terraform and its tests skipped: nothing under infra/ or the floor changed.",
                       result.stdout)
         self.assertNotIn("pre-push", result.stdout + result.stderr)
 
+    def test_a_change_to_the_dockerignore_builds_the_gateway_image(self):
+        # .dockerignore decides what the image is built from, so it is in the build half (#210).
+        case = Case(self, change=".dockerignore")
+        result = self.full(case)
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
+                                      "the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
+        self.assertIn("image double ran: ", result.stdout)
+
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.")
         self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
-        self.assertIn("check: build, tests and smoke test skipped: no .NET source changed.",
+        self.assertIn("check: build, tests, smoke test and gateway image skipped: no .NET source changed.",
                       result.stdout)
 
     def test_a_docs_only_change_runs_neither_half(self):
@@ -589,6 +607,9 @@ class FullModeTests(CheckTestCase):
                           PYTHON_CHECKS + BUILD + TESTS),
             "the smoke test": ({"smoke": "Debug"}, "src/App/App.cs", "check: fail: the smoke test failed.",
                                PYTHON_CHECKS + BUILD + TESTS + SMOKE),
+            "the gateway image": ({"image": "*"}, "src/App/App.cs",
+                                  "check: fail: the gateway image failed to build or to start as its "
+                                  "runtime user.", PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
             "terraform test": ({"terraform": "test"}, "infra/roots/a/main.tf",
                                "check: fail: terraform test failed in infra/modules/m.",
                                PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS[:1]),
@@ -689,9 +710,10 @@ class BothHalvesTests(CheckTestCase):
         result = case.run("--full", "--port", PORT, "--both-halves")
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(
-            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, Terraform {FLOOR}, the Terraform tests.",
+            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, the gateway image, Terraform {FLOOR}, "
+            "the Terraform tests.",
             result.last_line(result.stdout))
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + terraform_checks() + TERRAFORM_TESTS,
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS,
                          case.calls())
         self.assertNotIn("skipped", result.stdout)
 
@@ -1009,7 +1031,11 @@ class CompanionTests(CheckTestCase):
         case = Case(self, extra={path: "" for path in beside}, change=scripts)
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"})
+        # tools/image_build_tests.py judges .dockerignore and the Dockerfiles, which no script's
+        # name names, so no change but its own earns it here; CI's documents job runs it on every
+        # pull request (#204). It was in this list from #204's merge, and the case failed on it.
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
+                                       "tools/image_build_tests.py"})
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 

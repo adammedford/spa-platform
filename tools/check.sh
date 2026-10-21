@@ -20,24 +20,35 @@
 # build and Terraform when the change touches their half.
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
-# port the caller names, `terraform test` for every root and module that has tests, and the test
-# companion of each script in tools/ or .github/ the change touches (#134), but not
-# tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it ends
-# on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a log's
-# last line is the verdict. Two things differ from the default mode, both because a verdict is read
-# without the lines above it:
+# port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
+# tests, and the test companion of each script in tools/ or .github/ the change touches (#134), but
+# not tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it
+# ends on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a
+# log's last line is the verdict.
+#
+# tools/image-check.sh builds the gateway's image the way a workstation does, from a copy of the
+# tree it has first given a host obj/ and an owner-only appsettings.json, and starts it as the
+# image's runtime user (#210). It catches the two defects the first deployment found and a clean
+# checkout cannot show: host build output reaching the image's restore, which .dockerignore keeps
+# out, and a file the runtime user cannot read, which the Dockerfile's chmod clears and which kills
+# the gateway in WebApplication.CreateBuilder (#58, #204). It needs Docker, so a full check without
+# it fails. It runs with the build half, and a change to .dockerignore is in that half.
+#
+# Two things differ from the default mode, both because a verdict is read without the lines above
+# it:
 #   - It shows the build's and Terraform's own output, which the hook sends to /dev/null: a lane
 #     reads its failure from the log, and a hidden compiler error costs it a second run.
 #   - A tool a check needs that is not on PATH fails it, where the hook warns and passes. So does
 #     having no base to judge against. A green verdict that skipped a check is the failure CODING_
 #     STANDARDS.md describes as "a test that skips on the machine it runs on".
 #
-# Both modes skip the same halves: the build, the tests and the smoke test when no .NET source
-# changed, and Terraform and its tests when nothing under infra/ did, nor the floor's file or its
-# helper. .github/touches.sh says what each half is, and CI's jobs skip by the same classifier, so a
-# green full check predicts CI's verdict on the same diff. CI additionally runs both halves when its
-# workflow, the classifier or tools/smoke.sh changes; this check does not, so a change to one of
-# those is proved in CI.
+# Both modes skip the same halves: the build, the tests, the smoke test and the gateway image when
+# no .NET source changed, and Terraform and its tests when nothing under infra/ did, nor the floor's
+# file or its helper. .github/touches.sh says what each half is, and CI's jobs skip by the same
+# classifier, so a green full check predicts CI's verdict on the same diff. CI additionally runs
+# both halves when its workflow, the classifier, tools/smoke.sh or tools/image-check.sh changes;
+# this check does not, so a change to one of those is proved in CI, and tools/image-check.sh by its
+# companion here as well.
 #
 # Both modes run Terraform at the floor, the version CI runs, when this machine has it, and name the
 # version in the last line either way (#69). Without the floor they run the terraform on PATH and
@@ -201,9 +212,9 @@ fi
 
 # Whether this change touches a half. What counts as a half is .github/touches.sh's to say, and CI
 # reads the same patterns. CI's decision step additionally runs both jobs for changes to the workflow,
-# the classifier or tools/smoke.sh. With no base to diff against, assume this change touches both
-# halves: a skipped check has to be earned by a diff that proves it unnecessary. --both-halves asks
-# for both outright; the header says when.
+# the classifier, tools/smoke.sh or tools/image-check.sh. With no base to diff against, assume this
+# change touches both halves: a skipped check has to be earned by a diff that proves it
+# unnecessary. --both-halves asks for both outright; the header says when.
 touches() {
   $both || [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
 }
@@ -342,7 +353,8 @@ fi
 # The full check then runs what CI's Build and test job runs after its build, on this build: every
 # test project, where 8 is Microsoft Testing Platform's "zero tests" and expected of a project that
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
-# default Debug, as the hook always has, and smokes what it built.
+# default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
+# and started as the header says; it publishes in the image, so it does not use this build.
 ran="A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts, the file modes"
 
 if touches build; then
@@ -352,10 +364,11 @@ if touches build; then
   if $full; then
     dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
-    ran="$ran, the tests, the smoke test"
+    tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
+    ran="$ran, the tests, the smoke test, the gateway image"
   fi
 elif $full; then
-  echo "check: build, tests and smoke test skipped: no .NET source changed."
+  echo "check: build, tests, smoke test and gateway image skipped: no .NET source changed."
 else
   echo "pre-push: build skipped: no .NET source changed."
 fi

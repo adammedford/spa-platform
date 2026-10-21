@@ -20,8 +20,9 @@ the tree this run happens to be in:
   The cases run each Dockerfile's own build-stage steps after its publish against a published tree
   whose modes are owner-only, and read the modes that come out.
 
-What no case here can show is the image itself: building it needs Docker, which neither this
-machine's check nor CI's runner has. #204's fourth box is that proof, run by hand.
+What no case here can show is the image itself, because these cases need no Docker.
+tools/image-check.sh builds and starts it from a tree given both conditions, and runs in
+tools/check.sh --full and in CI's Build and test job (#210).
 
 Run: python3 -I tools/image_build_tests.py
 """

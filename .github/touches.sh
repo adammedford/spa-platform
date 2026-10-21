@@ -7,16 +7,18 @@
 # tools/check.sh, which .githooks/pre-push runs, skips the build and Terraform when a change touches
 # neither half, and .github/workflows/ci.yml skips the same two jobs for the same reason. Those were
 # two copies of two patterns, and a copy agrees with its source until one of them is edited; this is
-# the one place both read them from. CI additionally runs both jobs when its workflow, this classifier or tools/smoke.sh
-# changes, or when it cannot resolve the base; those overrides belong to the workflow's decision step.
+# the one place both read them from. CI additionally runs both jobs when its workflow, this
+# classifier, tools/smoke.sh or tools/image-check.sh changes, or when it cannot resolve the base;
+# those overrides belong to the workflow's decision step.
 #
 # Written for the bash 3.2 that ships with macOS, and for grep -E rather than -P, which BSD grep
 # does not have.
 
 case "${1:-}" in
   # Contracts are embedded by Platform.Registry and read by behavior tests; nuget.config controls
-  # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50).
-  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config)$' ;;
+  # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50). .dockerignore
+  # decides what the gateway's image is built from, and the half builds that image (#210).
+  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config|\.dockerignore)$' ;;
   # Every Terraform root and module is under infra/. The floor's file and the helper that reads it
   # decide which Terraform checks them, so raising the floor runs them too (#69).
   terraform) pattern='^infra/|^\.terraform-version$|^tools/terraform-floor\.sh$' ;;
