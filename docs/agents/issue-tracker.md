@@ -55,6 +55,16 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
   `gh issue create --blocked-by <n>` or `gh issue edit <child> --add-blocked-by <n>` (`gh` 2.94+ has
   the flags; the API route under **Blocking** works on any version). A ticket is open to an agent
   when it carries `ready-for-agent`, every blocker is closed, and nobody is assigned.
+- **The shape of a ticket a lane can finish.** Five rules, confirmed on #227:
+  1. A ticket has one owner.
+  2. A box that needs a sitting is its own ready-for-human ticket, blocked by every ticket that
+     builds what it runs.
+  3. No box depends on a push or a landing.
+  4. Cross-owner work is a spec with one sub-issue per owner in build order, the integrator's
+     `Platform.Abstractions` change first. Two halves that must land together stay single-owner on
+     two branches, and the landing merges them.
+  5. Every ticket carries a `**Touches:**` line of the paths it writes; its owner is derived from
+     those paths through `OWNERSHIP.md`.
 - **The body is the current spec; the comments are the record.** Grilling records, routing, status
   notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
   to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
