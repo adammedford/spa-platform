@@ -102,7 +102,7 @@ public sealed class SignInTests
         // Signing in to app 1 did not sign the user in to app 2: each app has its own client and its own
         // session, so app 2 needs its own login.
         Assert.Equal(HttpStatusCode.OK, own.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, other.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, other.StatusCode);
         Assert.Single(harness.Idp.Authorizations);
         Assert.Equal(harness.Idp.DefaultSubject, System.Text.Json.JsonDocument.Parse(own.Body).RootElement.GetProperty("sub").GetString());
     }

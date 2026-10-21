@@ -77,7 +77,9 @@ public sealed class SessionTests
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
 
-        // A reserved path that is switched off: the Errors row the request gate's path.reserved names.
+        // A reserved path that is switched off: contracts/http-contract.md -> Errors has it in the
+        // not_found row's When text, and contracts/request-gate.md -> Rules by path says /signout-oidc
+        // is always 404.
         Contract.ErrorRow reserved = Contract.Error("not_found");
         IResponse? get = await profile.Page.GotoAsync(app.Url("/signout-oidc").ToString());
         Assert.Equal(reserved.Status, get?.Status);

@@ -32,7 +32,7 @@ public sealed class HarnessRegistryTests
 
         Assert.Equal(RefreshOutcome.Swapped, outcome);
         Assert.Equal(2, harness.Registry.Current.Revision);
-        Assert.Equal(HttpStatusCode.NotFound, removed.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("not_found").Status, removed.StatusCode);
         Assert.Null(removed.Header("Content-Security-Policy"));
         Assert.NotNull(kept.Header("Content-Security-Policy"));
 

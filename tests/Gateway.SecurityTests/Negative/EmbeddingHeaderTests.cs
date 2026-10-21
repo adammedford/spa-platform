@@ -60,17 +60,17 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         // needs a scope no app is granted, so it refuses the session's token with 403
         // insufficient_scope, and YARP copies its status and body back.
         BrowserResponse apiError = await browser.GetAsync("/api/orders/admin", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.Forbidden, apiError.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, apiError.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         Assert.Contains("insufficient_scope", apiError.Body, StringComparison.Ordinal);
 
         // The gateway's own 404, for an asset the release does not hold.
         BrowserResponse missing = await browser.GetAsync("/nothing-here.js", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("not_found").Status, missing.StatusCode);
 
         // The gateway's own 403, written by the request gate — the earliest shape that could omit them.
         BrowserResponse refused = await browser.GetAsync(
             "/api/echo/thing", RequestOptions.With(("Sec-Fetch-Site", FetchMetadata.CrossSite)), Suite.Ct);
-        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("origin_rejected").Status, refused.StatusCode);
 
         // And the two answers a browser without a session gets, each written by a different stage:
         // the shell gate's 401 for an asset it fetches, from the OpenID Connect handler's challenge
@@ -102,7 +102,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         RawResponse response = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "//double", Harness.App("app1").Host, ct: Suite.Ct);
 
-        Assert.Equal(400, response.StatusCode);
+        Assert.Equal(Contract.Error("invalid_request").Status, response.StatusCode);
         AssertEmbeddingHeaders(response.Header);
     }
 
@@ -140,7 +140,7 @@ public sealed class EmbeddingHeaderTests(EmbeddingHeaderTests.Cell cell) : IClas
         RawResponse response = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", "/", "nobody.spa-poc.test:8443", ct: Suite.Ct);
 
-        Assert.Equal(404, response.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, response.StatusCode);
         Assert.Empty(response.Values("Content-Security-Policy"));
     }
 

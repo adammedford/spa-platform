@@ -48,7 +48,7 @@ public sealed class ShellTests
         await Assertions.Expect(profile.Page.Locator("#session-state")).ToHaveTextAsync(Profile.SignedInState);
 
         IResponse? missing = await profile.Page.GotoAsync(app.Url("/assets/missing.0badf00d.js").ToString());
-        Assert.Equal(404, missing?.Status);
+        Assert.Equal(Contract.Error("not_found").Status, missing?.Status);
     }
 
     [Fact]

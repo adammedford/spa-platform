@@ -208,7 +208,7 @@ public sealed class LoginTests
         Assert.NotEqual("alice", (await SignedIn.Store(harness).GetAsync(plantedKey, Suite.Ct))?.Subject);
         BrowserResponse attackerSession = await SignedIn.SessionAsync(attacker);
         Assert.True(
-            attackerSession.StatusCode == HttpStatusCode.Unauthorized || SignedIn.Property(attackerSession, "sub") == "mallory",
+            (int)attackerSession.StatusCode == Contract.Error("unauthenticated").Status || SignedIn.Property(attackerSession, "sub") == "mallory",
             $"the planted cookie answered {attackerSession}");
         Assert.DoesNotContain("alice", attackerSession.Body, StringComparison.Ordinal);
     }
@@ -219,7 +219,7 @@ public sealed class LoginTests
     /// </summary>
     private static async Task AssertRejectedAsync(GatewayHarness harness, TestBrowser browser, HarnessApp app, BrowserResponse rejected)
     {
-        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode); // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
         Assert.DoesNotContain(rejected.SetCookies, line => line.StartsWith(SignedIn.SessionCookieName + "=", StringComparison.Ordinal));
         Assert.False(SignedIn.HoldsSessionCookie(browser, app));
 
@@ -227,7 +227,7 @@ public sealed class LoginTests
         await SignedIn.OnPageOfAsync(probe, app);
         string cookies = SignedIn.CookieHeader(browser, app);
         BrowserResponse session = await SignedIn.SessionAsync(probe, cookies.Length > 0 ? cookies : null);
-        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
     }
 
     /// <summary>The part of a wildcard cookie name before its star: <c>__Host-spa-corr.</c>.</summary>

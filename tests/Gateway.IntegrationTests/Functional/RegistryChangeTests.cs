@@ -113,7 +113,7 @@ public sealed class RegistryChangeTests
         BrowserResponse neighbour = await browser.NavigateAsync(harness.App("app1").Url("/"), ct: Ct);
 
         Assert.Equal(RefreshOutcome.Swapped, removed);
-        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("not_found").Status, gone.StatusCode);
         Assert.Equal(HttpStatusCode.OK, neighbour.StatusCode);
         Assert.Equal(FixtureFiles.Spa("app1")["index.html"], neighbour.Bytes);
 
@@ -128,7 +128,7 @@ public sealed class RegistryChangeTests
         BrowserResponse replay = await browser.GetAsync("/bff/session", RequestOptions.With(("Cookie", app2Cookies)), Ct);
 
         Assert.Equal(RefreshOutcome.Swapped, back);
-        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, replay.StatusCode);
     }
 
     private static JsonObject Entry(JsonObject document, string appId) =>

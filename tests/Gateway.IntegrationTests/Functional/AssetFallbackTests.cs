@@ -78,7 +78,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
         BrowserResponse json = await browser.GetAsync(
             Harness.App("app1").Url("/orders/42").ToString(), RequestOptions.With(("Accept", "application/json")), Ct);
 
-        Assert.Equal(HttpStatusCode.NotFound, json.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("not_found").Status, json.StatusCode);
         Assert.DoesNotContain("<!doctype html>", json.Body, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -94,7 +94,7 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
 
         foreach (BrowserResponse response in (BrowserResponse[])[missing, page])
         {
-            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Equal((HttpStatusCode)Contract.Error("not_found").Status, response.StatusCode);
             Assert.NotEqual(Released("app1", "index.html"), response.Bytes);
             Assert.DoesNotContain("<!doctype html>", response.Body, StringComparison.OrdinalIgnoreCase);
         }
@@ -142,6 +142,6 @@ public sealed class AssetFallbackTests(AssetFallbackTests.Cell cell) : IClassFix
             Released("app1", script.TrimStart('/')).Length.ToString(CultureInfo.InvariantCulture),
             head.Header("Content-Length"));
         Assert.Empty(head.Body);
-        Assert.Equal(404, headMissing.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, headMissing.StatusCode);
     }
 }

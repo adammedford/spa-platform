@@ -30,7 +30,7 @@ public sealed class ApiSessionTelemetryTests
         BrowserResponse response = await browser.GetAsync(app.Url("/api/echo/items").ToString(),
             RequestOptions.With(("Cookie", cookie)), ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, response.StatusCode);
         await CapturedTelemetry.UntilAsync(
             () => CapturedTelemetry.RequestLines(harness).Any(line => line.GetProperty("route").GetString() == "api"),
             "the API refusal's request log line", ct);
@@ -50,7 +50,7 @@ public sealed class ApiSessionTelemetryTests
         await browser.NavigateAsync(harness.App("app1").Url("/healthz"), ct: ct);
         BrowserResponse response = await browser.GetAsync("/api/echo/items", ct: ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, response.StatusCode);
         await CapturedTelemetry.UntilAsync(
             () => CapturedTelemetry.RequestLines(harness).Any(line => line.GetProperty("route").GetString() == "api"),
             "the API response's request log line", ct);

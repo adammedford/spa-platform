@@ -98,7 +98,7 @@ public sealed class CookiePlantingTests
             response => response.Url == callback.ToString());
 
         // So the callback is rejected, and no session is created: not the attacker's, not anyone's.
-        Assert.Equal(400, rejected.Status);
+        Assert.Equal(400, rejected.Status); // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
         await stack.AssertRuleLoggedAsync(mark, RuleIds.AuthCallback, app1.AppId);
         Assert.DoesNotContain(stack.Harness.Idp.Grants, grant => grant.GrantType == "authorization_code" && grant.ClientId == app1.ClientId);
         Assert.False(await victim.HoldsAsync(app1, Contract.PlatformCookie("-session")));

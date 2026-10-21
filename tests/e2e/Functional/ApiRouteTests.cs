@@ -47,7 +47,7 @@ public sealed class ApiRouteTests
         }
 
         // The listener admits this client, so the 403 is for want of the admin scope no app asks for.
-        Assert.Equal(403, admin.Status);
+        Assert.Equal(403, admin.Status); // Not an Errors row: the mock API's own answer, passed back.
         using (JsonDocument body = JsonDocument.Parse(admin.Body))
         {
             Assert.Equal("insufficient_scope", body.RootElement.GetProperty("error").GetString());

@@ -80,7 +80,7 @@ public sealed class ForwardedHeaderTests
         // And the other way round: the http origin, which is now the wrong one.
         before = await Observed.SettledCountAsync(harness, Suite.Ct);
         RawResponse refused = await Call(harness, "https", origin: "http");
-        Assert.Equal(403, refused.StatusCode);
+        Assert.Equal(Contract.Error("origin_rejected").Status, refused.StatusCode);
         Assert.Equal(RuleIds.GateOrigin, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
     }
 
@@ -149,7 +149,7 @@ public sealed class ForwardedHeaderTests
         int before = await Observed.SettledCountAsync(harness, Suite.Ct);
         RawResponse refused = await Call(harness, "https");
 
-        Assert.Equal(403, refused.StatusCode);
+        Assert.Equal(Contract.Error("origin_rejected").Status, refused.StatusCode);
         Assert.Equal(RuleIds.GateOrigin, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
     }
 

@@ -104,13 +104,13 @@ public sealed partial class LoginTests
     private static async Task AssertRejectedAsync(LocalStack stack, Profile profile, HarnessApp app, IResponse? callback, int mark)
     {
         Assert.NotNull(callback);
-        Assert.Equal(400, callback.Status);
+        Assert.Equal(400, callback.Status); // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
         Assert.False(await profile.HoldsAsync(app, Contract.PlatformCookie("-session")));
         await stack.AssertRuleLoggedAsync(mark, RuleIds.AuthCallback, app.AppId);
 
         await profile.OnOriginOfAsync(app);
         FetchResult session = await profile.FetchAsync("/bff/session");
-        Assert.Equal(401, session.Status);
+        Assert.Equal(Contract.Error("unauthenticated").Status, session.Status);
     }
 
     /// <summary>A cookie the browser held, copied to another app's host under the same name and attributes.</summary>

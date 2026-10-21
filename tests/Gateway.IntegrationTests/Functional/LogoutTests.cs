@@ -45,7 +45,7 @@ public sealed class LogoutTests
 
         // The session is gone at the gateway: the cookie the browser held before logout is anonymous now.
         BrowserResponse replay = await browser.GetAsync("/bff/session", RequestOptions.With(("Cookie", signedIn)), Ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, replay.StatusCode);
 
         // The provider saw the revocation of the session's refresh token, by app 1's own client.
         Revocation revocation = Assert.Single(harness.Idp.Revocations);
