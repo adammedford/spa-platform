@@ -234,14 +234,16 @@ class Rules(unittest.TestCase):
         self.assertEqual([153], [t["issue"] for t in answer["tickets"]])
         self.assertEqual([139], [p["issue"] for p in answer["parents"]])
 
-    def test_a_foreground_session_line_is_listed_apart_and_prose_naming_one_is_not(self):
-        """#137 quotes the line in a sentence and is a ticket; #83 carries it and is not."""
+    def test_a_session_foreground_line_no_longer_keeps_an_issue_out_of_the_tickets(self):
+        """#137 (ADR-0026, Q12 of #135): the workflow files are tracked, so a lane can write them
+        and the `**Session:** foreground` rule is gone. An issue that carries the line, as #109 did
+        on 2026-10-21, is read as any other ticket, and the answer has no "foreground" list."""
         answer = resolved(agent=[
-            issue(83, "**Owner:** integrator\n**Session:** foreground — not an overnight lane\n"),
+            issue(109, "**Owner:** integrator\n**Session:** foreground — not an overnight lane\n"),
             issue(137, "Today #83 carries `**Session:** foreground — ...`, which this ends.\n"),
         ])
-        self.assertEqual([137], [t["issue"] for t in answer["tickets"]])
-        self.assertEqual([83], [f["issue"] for f in answer["foreground"]])
+        self.assertEqual([109, 137], sorted(t["issue"] for t in answer["tickets"]))
+        self.assertNotIn("foreground", answer)
 
     def test_two_tickets_with_one_id_refuse_and_name_both(self):
         """#56 and #180 on 2026-10-20, both `**Plan row:** 1.4`."""

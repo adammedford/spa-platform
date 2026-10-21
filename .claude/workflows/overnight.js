@@ -33,7 +33,7 @@ export const meta = {
 //                             HEAD and checks it against origin.
 //   maxParallel     optional  positive integer, default 3.      maxFailures  optional  positive integer, default 4.
 //   only            optional  array of task ids to run.         skip         optional  array of task ids to
-//                             leave out, added to FOREGROUND_ONLY below.
+//                             leave out of this run.
 // Shell (#129): every agent's Bash must run /bin/bash. settings.json sets CLAUDE_CODE_SHELL=/bin/bash, but only a
 // Claude Code process started after that setting merged honours it; collect reports the shell, and the run halts
 // before Route, with no lane started, when it is not bash. Restart Claude Code before a launch if in doubt.
@@ -67,12 +67,9 @@ const WTROOT = A.wt
 const MAX_PAR = A.maxParallel || 3
 const MAX_FAIL = A.maxFailures || 4
 const ONLY = A.only || null          // task ids to implement/grill; null = all (applied after collect)
-// Foreground-only work: the six workflow specs (#77 to #82) build git-ignored files in the main checkout, which
-// no lane may write, so they stay out of every run until /to-tickets splits them into tickets a lane can land.
-// Remove an id here when its tickets exist; A.skip extends the list for one run. Tickets filed from these specs carry a
-// `**Session:** foreground` line instead, which the collect prompt reads, so they need no entry here.
-const FOREGROUND_ONLY = ['issue-77', 'issue-78', 'issue-79', 'issue-80', 'issue-81', 'issue-82']
-const SKIP = new Set([...FOREGROUND_ONLY, ...(A.skip || [])])
+// Task ids left out of this run. No id is left out of every run: the workflow files are tracked (ADR-0026), so a
+// lane can write them, and #137 dropped the foreground-only list and the `**Session:** foreground` rule with it.
+const SKIP = new Set(A.skip || [])
 // The standing answer is granted per launch (#78 grill, Q5/Q12), default off. Granted, grills and lanes take each
 // recommendation as decided and write pre-accepted answers; not granted, answers stay open and human-owned
 // decisions stop the lane. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue.
@@ -216,7 +213,7 @@ TICKETS come from GitHub Issues, one list per triage label (\`--label a,b\` is a
   cd ${REPO} && gh issue list --state open --label ready-for-agent --limit 500 --json number,title,body,labels,assignees,url,blockedBy
   cd ${REPO} && gh issue list --state open --label ready-for-human --limit 500 --json number,title,body,labels,assignees,url,blockedBy
   cd ${REPO} && gh issue list --state open --label needs-triage --limit 500 --json number,title,body,labels,assignees,url,blockedBy
-An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an Overnight report) is not a ticket. Nor is an issue whose body carries a \`**Session:** foreground\` line: its work happens in a foreground session in the main checkout (a git-ignored workflow file no lane may write); leave it out of tickets and name it in "reason" as foreground-only. Each listed issue is ONE ticket:
+An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an Overnight report) is not a ticket. Each listed issue is ONE ticket:
 - issue: its number; url: its url; title: its title.
 - id: the X of a \`**Plan row:** X\` line in the body, else \`issue-<number>\`; a value of \`none\` (or an empty value) counts as absent, so a spec issue filed with \`**Plan row:** none\` gets \`issue-<number>\`, never the id \`none\`. slug: a short kebab-case slug of the title.
 - owner: the \`**Owner:**\` line mapped to the OWNERSHIP.md role: ws1-infra (workstream 1, AWS and IaC, infra/), ws2-hosting (workstream 2, Registry/Hosting/spactl), ws3-identity (workstream 3, Identity), ws4-proxy (workstream 4, Proxy/Security), ws5-fixtures (workstream 5, fixtures/), ws6-verification (workstream 6, Telemetry, tests/Gateway.*, e2e, runbooks), integrator (everything else, and every I-* row). A body that says "workstream 2 (...)" maps the same way. When it names more than one owner, the ticket's owner is the first named and "why" says the others land in their own PRs.
