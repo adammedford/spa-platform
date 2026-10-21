@@ -15,7 +15,8 @@ namespace Gateway.E2ETests.Stack;
 /// operator's own AWS session in the environment (the <c>spa-platform</c> profile, with
 /// <c>tools/aws-project.env</c> sourced). The release switch of F-06 also needs
 /// <c>SPA_E2E_PLATFORM_CONFIG</c>, the platform configuration file <c>spactl release activate</c>
-/// bounds the registry with, and <c>spactl</c> able to sign in (#206).</para>
+/// bounds the registry with, and <c>spactl</c> able to sign in (#206). F-07's onboarding (#212) needs
+/// both too, and the apps root initialised as its README gives it, with Terraform on the path.</para>
 ///
 /// <para>Every name of the cell comes from the infrastructure outputs document (<see cref="Cell"/>),
 /// <c>infra/envs/poc/outputs.json</c> unless <c>SPA_E2E_OUTPUTS</c> names another, and never from
@@ -348,22 +349,53 @@ public sealed class DeployedStack : IBrowserStack
         }
     }
 
-    public async Task SwitchReleaseAsync(HarnessApp app, string release)
+    public async Task SwitchReleaseAsync(HarnessApp app, string release) =>
+        await SpactlAsync(["release", "activate", app.AppId, release, "--config", PlatformConfig("switching a release on the cell runs spactl release activate"), "--outputs", outputsPath]);
+
+    /// <summary>
+    /// The onboarding the plan gives for a third SPA (<see cref="CellOnboarding"/>): the apps root's
+    /// plan, read and then applied, spactl's publish and add, and <c>spactl wait</c> on the tunnel.
+    /// </summary>
+    public async Task<HarnessApp> OnboardAsync(string appId)
     {
-        string config = Environment.GetEnvironmentVariable(PlatformConfigVariable) is { Length: > 0 } named
-            ? named
-            : throw new InvalidOperationException(
-                $"switching a release on the cell runs spactl release activate, which needs {PlatformConfigVariable}: the platform configuration the gateway runs with, as seed.sh reads it from the task definition.");
-        await SpactlAsync(["release", "activate", app.AppId, release, "--config", config, "--outputs", outputsPath]);
+        LastOnboarding = await Onboarding("onboarding an app runs spactl app add").OnboardAsync(appId, TestContext.Current.CancellationToken);
+        return LastOnboarding.App;
     }
 
+    public Task OffboardAsync(string appId) =>
+        Onboarding("taking an onboarded app off runs spactl app remove").OffboardAsync(appId, TestContext.Current.CancellationToken);
+
+    /// <summary>The last onboarding on this stack: the app, the plan read before its apply, and the revision that named it.</summary>
+    public Onboarded? LastOnboarding { get; private set; }
+
+    /// <summary>
+    /// <c>spactl wait</c> reads <c>/readyz</c> on app 1's host through the tunnel: the name resolves to
+    /// loopback through the hosts-file line certs.sh asks for, and the port is the tunnel's.
+    /// </summary>
+    private CellOnboarding Onboarding(string why) => new(Cell, aws, new ProcessCommandRunner(), new OnboardingSetup(
+        FixtureFiles.RepositoryRoot,
+        Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "apps"),
+        outputsPath,
+        PlatformConfig(why),
+        new Uri($"https://{App("app1").Host.Split(':')[0]}:{tunnelPort}/"),
+        Spactl()));
+
+    private static string PlatformConfig(string why) =>
+        Environment.GetEnvironmentVariable(PlatformConfigVariable) is { Length: > 0 } named
+            ? named
+            : throw new InvalidOperationException(
+                $"{why}, which needs {PlatformConfigVariable}: the platform configuration the gateway runs with, as seed.sh reads it from the task definition.");
+
     /// <summary><c>SPACTL</c> when it names an executable, else <c>dotnet run --project tools/spactl</c>, as <c>tools/scripts/seed.sh</c> runs it.</summary>
+    private static string[] Spactl() =>
+        Environment.GetEnvironmentVariable("SPACTL") is { Length: > 0 } spactl
+            ? [spactl]
+            : ["dotnet", "run", "--project", Path.Combine(FixtureFiles.RepositoryRoot, "tools", "spactl"), "--"];
+
     private static Task<string> SpactlAsync(string[] arguments)
     {
-        ProcessCommandRunner runner = new();
-        return Environment.GetEnvironmentVariable("SPACTL") is { Length: > 0 } spactl
-            ? runner.RunAsync(spactl, arguments, TestContext.Current.CancellationToken)
-            : runner.RunAsync("dotnet", ["run", "--project", Path.Combine(FixtureFiles.RepositoryRoot, "tools", "spactl"), "--", .. arguments], TestContext.Current.CancellationToken);
+        string[] command = Spactl();
+        return new ProcessCommandRunner().RunAsync(command[0], [.. command.Skip(1), .. arguments], TestContext.Current.CancellationToken);
     }
 
     private static bool MessageStarts(JsonElement line, string message) =>

@@ -130,21 +130,51 @@ public sealed class CellAwsTests
             () => aws.ReleaseOfAsync("app3", TestContext.Current.CancellationToken))).Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_running_task_is_the_services_one_running_task_by_id_revision_and_start_with_no_account_in_it()
+    {
+        RecordedRunner runner = new(arguments => arguments[1] == "list-tasks"
+            ? """{"taskArns":["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f"]}"""
+            : """{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f","taskDefinitionArn":"arn:aws:ecs:us-east-1:111122223333:task-definition/spa-platform-poc:4","startedAt":"2026-10-21T02:00:00.123000+00:00","lastStatus":"RUNNING"}],"failures":[]}""");
+        CellAws aws = new(Cell, runner);
+
+        RunningTask task = await aws.RunningTaskAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(new RunningTask("0a1b2c3d4e5f", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 0, 0, 123, TimeSpan.Zero)), task);
+        Assert.DoesNotContain("111122223333", task.ToString(), StringComparison.Ordinal);
+        Assert.Equal(
+            [["ecs", "list-tasks", "--cluster", "spa-poc", "--service-name", "gateway", "--desired-status", "RUNNING", "--output", "json", "--region", "us-east-1"],
+             ["ecs", "describe-tasks", "--cluster", "spa-poc", "--tasks", "arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f", "--output", "json", "--region", "us-east-1"]],
+            runner.Calls.Select(call => call.Arguments));
+    }
+
+    [Theory]
+    [InlineData("""{"taskArns":[]}""", "0")]
+    [InlineData("""{"taskArns":["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/a","arn:aws:ecs:us-east-1:111122223333:task/spa-poc/b"]}""", "2")]
+    public async Task A_service_without_exactly_one_running_task_is_refused_since_its_identity_is_then_no_one_tasks(string listed, string count)
+    {
+        // During a deployment the old and the new task both run (#207), and before and after would then compare two different things.
+        CellAws aws = new(Cell, new RecordedRunner(_ => listed));
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => aws.RunningTaskAsync(TestContext.Current.CancellationToken));
+        Assert.Contains($"{count} running tasks", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("111122223333", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_live_registrys_revision_and_apps_are_read_from_the_cells_bucket()
+    {
+        CellAws aws = new(Cell, new RecordedRunner(_ => """{"revision":7,"apps":[{"appId":"app2","release":"r-2"},{"appId":"app1","release":"r-1"}]}"""));
+
+        LiveRegistry registry = await aws.LiveRegistryAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(7, registry.Revision);
+        Assert.Equal(["app2", "app1"], registry.AppIds);
+    }
+
     /// <summary>The AWS CLI's <c>filter-log-events</c> answer, merged across pages as the CLI does by default.</summary>
     private static string Events(params (string Stream, string Message)[] events) => JsonSerializer.Serialize(new
     {
         events = events.Select((e, i) => new { logStreamName = e.Stream, timestamp = 1_760_000_000_000L + i, message = e.Message, eventId = i.ToString(System.Globalization.CultureInfo.InvariantCulture) }),
     });
-
-    private sealed class RecordedRunner(Func<string[], string> answer) : ICommandRunner
-    {
-        public List<(string Program, string[] Arguments)> Calls { get; } = [];
-
-        public Task<string> RunAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct)
-        {
-            string[] copy = [.. arguments];
-            Calls.Add((program, copy));
-            return Task.FromResult(answer(copy));
-        }
-    }
 }

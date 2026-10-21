@@ -27,6 +27,16 @@ public sealed partial class DeployedSubsetTests
     }
 
     [Fact]
+    public void Every_functional_test_starts_the_chosen_stack_f07_included()
+    {
+        // The functional rows of G3 (#209) and F-07 at G5 (#212): SPA_E2E_STACK=deployed runs them all on the cell.
+        string[] files = Directory.GetFiles(Path.Combine(FixtureFiles.RepositoryRoot, "tests", "e2e", "Functional"), "*.cs");
+        Assert.Contains(files, path => Path.GetFileName(path) == "OnboardingTests.cs");
+
+        Assert.Empty(LocalOnly(files.ToDictionary(path => Path.GetFileName(path), File.ReadAllText)));
+    }
+
+    [Fact]
     public void A_negative_test_that_starts_the_local_stack_itself_is_found()
     {
         // The failing input for the rule above: a file as the suite was before #211.
@@ -92,7 +102,7 @@ public sealed partial class DeployedSubsetTests
     }
 
     /// <summary>The files that start a stack of their own choosing rather than the one the switch chooses.</summary>
-    private static string[] LocalOnly(Dictionary<string, string> sources) =>
+    internal static string[] LocalOnly(Dictionary<string, string> sources) =>
         [.. sources.Where(source => source.Value.Contains("LocalStack.StartAsync(", StringComparison.Ordinal)).Select(source => source.Key).Order(StringComparer.Ordinal)];
 
     [GeneratedRegex(@"^\| (?<id>N-\d\d) \|.*\| (?<tier>[^|]+) \|\s*$", RegexOptions.Multiline)]

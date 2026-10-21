@@ -1,13 +1,15 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
 /// What the deployed stack reads from AWS while it runs (#209): a test user's password from Parameter
-/// Store and the gateway's log lines from CloudWatch Logs. Both go through the AWS CLI v2, the tool
+/// Store, the gateway's log lines from CloudWatch Logs, the live registry from the bucket, and the
+/// gateway service's running task from ECS (F-07, #212). Each goes through the AWS CLI v2, the tool
 /// <c>tools/scripts/</c> already reach the cell with (docs/dependencies.md), because the project's
 /// profile signs in with <c>login_session</c>, which the CLI resolves on its own and the .NET SDK
 /// resolves only with an assembly no project references yet (#206). Every call names the cell's
@@ -108,21 +110,73 @@ public sealed partial class CellAws(Cell cell, ICommandRunner runner)
     public const string RegistryKey = "registry/registry.json";
 
     /// <summary>The release the live registry in the cell's bucket gives the app.</summary>
-    public async Task<string> ReleaseOfAsync(string appId, CancellationToken ct)
+    public async Task<string> ReleaseOfAsync(string appId, CancellationToken ct) =>
+        (await RegistryDocumentAsync(ct))["apps"]!.AsArray().SingleOrDefault(entry => entry?["appId"]?.GetValue<string>() == appId)?["release"]?.GetValue<string>()
+            ?? throw new InvalidOperationException($"the live registry names no release for {appId}.");
+
+    /// <summary>The live registry's revision and the apps in it, in its order.</summary>
+    public async Task<LiveRegistry> LiveRegistryAsync(CancellationToken ct)
+    {
+        JsonNode document = await RegistryDocumentAsync(ct);
+        long revision = document["revision"]?.GetValue<long>() ?? throw new InvalidOperationException($"s3://{cell.Bucket}/{RegistryKey} has no revision.");
+        return new LiveRegistry(revision, [.. document["apps"]!.AsArray().Select(entry => entry?["appId"]?.GetValue<string>() ?? "")]);
+    }
+
+    private async Task<JsonNode> RegistryDocumentAsync(CancellationToken ct)
     {
         // https://docs.aws.amazon.com/cli/latest/reference/s3/cp.html: "-" streams the object to stdout.
-        string document = await runner.RunAsync("aws",
+        string text = await runner.RunAsync("aws",
             ["s3", "cp", $"s3://{cell.Bucket}/{RegistryKey}", "-", "--region", cell.Region], ct);
-        System.Text.Json.Nodes.JsonArray apps = System.Text.Json.Nodes.JsonNode.Parse(document)?["apps"]?.AsArray()
-            ?? throw new InvalidOperationException($"s3://{cell.Bucket}/{RegistryKey} has no apps.");
-        return apps.SingleOrDefault(entry => entry?["appId"]?.GetValue<string>() == appId)?["release"]?.GetValue<string>()
-            ?? throw new InvalidOperationException($"the live registry names no release for {appId}.");
+        JsonNode document = JsonNode.Parse(text) ?? throw new InvalidOperationException($"s3://{cell.Bucket}/{RegistryKey} is empty.");
+        return document["apps"] is JsonArray ? document : throw new InvalidOperationException($"s3://{cell.Bucket}/{RegistryKey} has no apps.");
     }
+
+    /// <summary>
+    /// The gateway service's one running task (F-07: "the task id, start time and task definition are
+    /// unchanged"). A task the service is draining has desired status STOPPED and is not listed
+    /// (https://docs.aws.amazon.com/cli/latest/reference/ecs/list-tasks.html); while a deployment runs
+    /// two tasks are, and that is refused, since before and after would then not be one task's.
+    /// </summary>
+    public async Task<RunningTask> RunningTaskAsync(CancellationToken ct)
+    {
+        string listed = await runner.RunAsync("aws",
+            ["ecs", "list-tasks", "--cluster", cell.Cluster, "--service-name", cell.Service, "--desired-status", "RUNNING", "--output", "json", "--region", cell.Region], ct);
+        string[] arns;
+        using (JsonDocument list = JsonDocument.Parse(listed))
+        {
+            arns = [.. list.RootElement.GetProperty("taskArns").EnumerateArray().Select(arn => arn.GetString()!)];
+        }
+
+        if (arns.Length != 1)
+        {
+            throw new InvalidOperationException($"the service {cell.Service} in {cell.Cluster} has {arns.Length} running tasks, not one: wait for it to be steady and run again.");
+        }
+
+        // https://docs.aws.amazon.com/cli/latest/reference/ecs/describe-tasks.html; the CLI v2 prints
+        // timestamps in ISO 8601 (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html#cli-config-cli_timestamp_format).
+        string described = await runner.RunAsync("aws",
+            ["ecs", "describe-tasks", "--cluster", cell.Cluster, "--tasks", arns[0], "--output", "json", "--region", cell.Region], ct);
+        using JsonDocument tasks = JsonDocument.Parse(described);
+        JsonElement task = tasks.RootElement.GetProperty("tasks").EnumerateArray().Single();
+        return new RunningTask(
+            AfterLast(task.GetProperty("taskArn").GetString()!, '/'),
+            AfterLast(task.GetProperty("taskDefinitionArn").GetString()!, '/'),
+            DateTimeOffset.Parse(task.GetProperty("startedAt").GetString()!, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>The part of an ARN that names the thing without the account: a task's id, a task definition's family:revision.</summary>
+    private static string AfterLast(string arn, char separator) => arn[(arn.LastIndexOf(separator) + 1)..];
 
     /// <summary>A twelve-digit run, which is how an account id appears in an AWS error.</summary>
     [GeneratedRegex("[0-9]{12}")]
     internal static partial Regex AccountId();
 }
+
+/// <summary>The gateway's task as F-07 compares it before and after an onboarding: its id, its task definition as family:revision, and when it started. No account id.</summary>
+public sealed record RunningTask(string TaskId, string Revision, DateTimeOffset StartedAt);
+
+/// <summary>The live registry's revision and the ids of the apps in it.</summary>
+public sealed record LiveRegistry(long Revision, IReadOnlyList<string> AppIds);
 
 /// <summary>
 /// A secret value on its way to a form field. It prints, formats and serializes as nothing, so an
