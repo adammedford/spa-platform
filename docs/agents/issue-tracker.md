@@ -65,6 +65,16 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
      two branches, and the landing merges them.
   5. Every ticket carries a `**Touches:**` line of the paths it writes; its owner is derived from
      those paths through `OWNERSHIP.md`.
+- **The ticket-shape check holds them where a ticket is written.** `tools/ticket_shape.py` reads one
+  issue and fails it, naming the rule, on: `**Touches:**` paths of more than one owner; an
+  `**Owner:**` line naming other than exactly the role those paths derive, or other than exactly one
+  role where there is no Touches line; under `ready-for-agent`, an open box in the words of a
+  sitting or a landing, a `**Session:** foreground` line or a sub-issue; and a "Blocked by #N",
+  "after #N" or "once #N lands" with no blocked-by edge to an open #N.
+  `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is opened,
+  edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
+  rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
+  ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
 - **The body is the current spec; the comments are the record.** Grilling records, routing, status
   notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
   to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
