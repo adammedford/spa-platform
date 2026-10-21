@@ -134,7 +134,7 @@ function stub(env, scriptArgs, served) {
       const run = `${LOG}/${DATE}-${SHA.slice(0, 12)}`
       if (label === 'setup') {
         if (served.fetchFails) {
-          out = { fetched: false, reason: 'fatal: unable to access github.com', sha: '', date: '', run: '', tree: [], absolute: [], ownership: '', openIssues: [], ruleLines: [], rows: { known: false, unlanded: [], reason: '' } }
+          out = { fetched: false, listed: false, reason: 'fatal: unable to access github.com', sha: '', date: '', run: '', tree: [], absolute: [], ownership: '', openIssues: [], ruleLines: [], rows: { known: false, unlanded: [], reason: '' } }
         } else {
           const prefixes = dataLine(prompt, 'TREE PREFIXES') || []
           const tree = (served.tree || TREE).filter((f) => prefixes.some((p) => p === '' || f.path === p || f.path.startsWith(p + '/')))
@@ -144,8 +144,8 @@ function stub(env, scriptArgs, served) {
           })
           write(`${run}/run.log`, `${SHA}\n`)
           out = {
-            fetched: true, reason: '', sha: SHA, date: DATE, run, tree, absolute, ownership: OWNERSHIP,
-            openIssues: served.openIssues || [], ruleLines: served.ruleLines || [],
+            fetched: true, listed: !served.listFails, reason: served.listFails ? 'gh: error connecting to api.github.com' : '', sha: SHA, date: DATE, run, tree, absolute, ownership: OWNERSHIP,
+            openIssues: served.listFails ? [] : served.openIssues || [], ruleLines: served.listFails ? [] : served.ruleLines || [],
             rows: { known: served.rowsKnown !== false, unlanded: served.unlanded || [], reason: served.rowsKnown === false ? 'the main checkout is not at trunk' : '' },
           }
         }
@@ -311,6 +311,15 @@ try {
     if (ok.result.sha !== SHA) fail(`the return names sha ${ok.result.sha}`)
     const runLog = fs.readFileSync(path.join(ok.result.runLog, 'run.log'), 'utf8')
     if (runLog.split('\n')[0] !== SHA) fail(`the run log's first line is ${JSON.stringify(runLog.split('\n')[0])}, not the sha`)
+    // A failed open-issue or rule-target listing halts too, dry or not: read as empty, it would pass
+    // the duplicate, rule and same-day report checks with nothing judged.
+    for (const dry of [false, true]) {
+      const down = newRepo()
+      const d = await execute(down, withPlan({ dryRun: dry }), { ...TWO, listFails: true })
+      if (d.labels.join() !== 'setup' || down.gh.length) fail(`a failed listing (dryRun ${dry}) dispatched ${d.labels.join(', ')} and wrote ${down.gh.length} time(s)`)
+      if (!/could not be read[\s\S]*nothing was filed/.test(d.result.halted || '') || !/api\.github\.com/.test(d.result.halted || '')) fail(`a failed listing (dryRun ${dry}) returned ${JSON.stringify(d.result)}`)
+    }
+    if (!/listed false/.test(p)) fail('the setup prompt does not say what a failed listing returns')
   }
 
   // 3. Box 5: files resolution. A relative path is read at the trunk sha through git; a glob

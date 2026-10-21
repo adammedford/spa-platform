@@ -117,7 +117,7 @@ The glossary's words (GLOSSARY.md): a rejection is a response a stage ends the r
 const SETUP = {
   type: 'object',
   properties: {
-    fetched: { type: 'boolean' }, reason: { type: 'string' },
+    fetched: { type: 'boolean' }, listed: { type: 'boolean' }, reason: { type: 'string' },
     sha: { type: 'string' }, date: { type: 'string' }, run: { type: 'string' },
     tree: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, words: { type: 'integer' } }, required: ['path', 'words'] } },
     absolute: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, words: { type: 'integer' }, exists: { type: 'boolean' } }, required: ['path', 'words', 'exists'] } },
@@ -126,7 +126,7 @@ const SETUP = {
     ruleLines: { type: 'array', items: { type: 'string' } },
     rows: { type: 'object', properties: { known: { type: 'boolean' }, unlanded: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } }, required: ['known', 'unlanded', 'reason'] },
   },
-  required: ['fetched', 'reason', 'sha', 'date', 'run', 'tree', 'absolute', 'ownership', 'openIssues', 'ruleLines', 'rows'],
+  required: ['fetched', 'listed', 'reason', 'sha', 'date', 'run', 'tree', 'absolute', 'ownership', 'openIssues', 'ruleLines', 'rows'],
 }
 const CLAIM = {
   type: 'object',
@@ -320,15 +320,16 @@ TREE PREFIXES: ${JSON.stringify([...new Set(FILES.filter((f) => !f.startsWith('/
 ABSOLUTE FILES: ${JSON.stringify(FILES.filter((f) => f.startsWith('/')))}
 RULE ISSUE: ${RULE_ISSUE}
 
-1. Run \`git -C ${REPO} fetch origin --tags\`. If it fails, stop here: fetched false, reason its error, every other field empty, and write nothing anywhere. Progress is unverified without it (AGENTS.md).
+1. Run \`git -C ${REPO} fetch origin --tags\`. If it fails, stop here: fetched false, listed false, reason its error, every other field empty, and write nothing anywhere. Progress is unverified without it (AGENTS.md).
 2. sha is \`git -C ${REPO} rev-parse origin/main\`, the full 40 hex; date is \`date +%F\`. run is ${LOG}/<date>-<the sha's first 12 characters>. Create it with \`mkdir -p ${LOG}/<date>-<sha12>\`, then write the sha alone as the first line of the run log, \`git -C ${REPO} rev-parse origin/main > ${LOG}/<date>-<sha12>/run.log\`, and record the checkout as it is now, \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<sha12>/checkout-at-start.txt\`.
 3. tree: every file tracked at the sha under each TREE PREFIX ("" is the whole tree; a prefix that is a file is that file), with its word count: \`git -C ${REPO} ls-tree -r --name-only <sha> -- <prefix>\`, then for each path \`git -C ${REPO} show <sha>:<path> | wc -w\`. One entry per path, {path, words}.
 4. absolute: for each ABSOLUTE FILE, {path, words: \`wc -w < <path>\`, exists}; a file that is not there is exists false and words 0.
 5. ownership: OWNERSHIP.md at the sha verbatim, \`git -C ${REPO} show <sha>:OWNERSHIP.md\`.
 6. openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body --jq '.[] | {number, title, noun: ((.body // "") | split("\\n") | map(select(startswith("**Noun:**"))) | first // "")}'\`, one {number, title, noun} per issue, noun the line verbatim or "".
 7. ruleLines: \`cd ${REPO} && gh issue view ${RULE_ISSUE} --json comments --jq '.comments[].body | split("\\n")[] | select(startswith("**Rule:**"))'\`, each line verbatim.
+listed is true only when both commands in 6 and 7 exited 0. If either fails, stop there: listed false, reason its error, openIssues and ruleLines []. An empty listing from a failed command is not an empty tracker: the duplicate, rule and same-day report checks would pass on it.
 8. rows: the plan rows not yet landed, from tools/roadmap.py, which reads the working tree and its HEAD. Only when \`git -C ${REPO} rev-parse HEAD\` is the sha and \`git -C ${REPO} status --porcelain --untracked-files=no\` prints nothing does the working tree equal trunk: then run \`cd ${REPO} && python3 -I tools/roadmap.py --json\` (it writes nothing) and return known true and unlanded as every key of its "rows" whose value is not "landed". Otherwise known false, unlanded [], and reason which of the two failed.
-Return every field; reason is "" when the fetch succeeded.`
+Return every field; reason is "" when the fetch and both listings succeeded.`
 
 const shardPrompt = (ctx, shard, k, phaseFile) => `Shard ${k}: extract the claims these files make about the tree (#81 -> "Phase Shard: claims"). You read only these files and you never verify: a later agent does.
 
@@ -476,6 +477,10 @@ phase('Shard')
 const setup = await run(setupPrompt(), { label: 'setup', phase: 'Shard', schema: SETUP })
 if (!setup || !setup.fetched) return { halted: `the fetch of origin failed${setup && setup.reason ? `: ${setup.reason}` : ''}; progress is unverified, and no claim was read`, agents: agentsRun }
 if (!/^[0-9a-f]{40}$/.test(setup.sha) || !/^\d{4}-\d{2}-\d{2}$/.test(setup.date)) return { halted: `setup returned sha ${JSON.stringify(setup.sha)} and date ${JSON.stringify(setup.date)}; nothing was read`, agents: agentsRun }
+// The listing feeds the duplicate check, the already-posted rule check and the same-day report
+// dedupe; read as empty after a failure, all three pass with nothing judged, so the run stops here,
+// dry or not (CODING_STANDARDS.md -> "A check fails closed").
+if (!setup.listed) return { halted: `the open issues or #${RULE_ISSUE}'s comments could not be read${setup.reason ? `: ${setup.reason}` : ''}; the duplicate check cannot run, so no claim was read and nothing was filed`, sha: setup.sha, agents: agentsRun }
 const RUN = `${LOG}/${setup.date}-${setup.sha.slice(0, 12)}`
 const ctx = { sha: setup.sha, date: setup.date, run: RUN }
 const { files, missing } = resolveFiles(FILES, setup.tree, setup.absolute)
