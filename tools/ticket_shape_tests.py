@@ -454,6 +454,36 @@ class BareTouches(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIn("touches", self.broken(build_ticket(line)))
 
+    def test_an_owned_root_directory_beside_a_file_fails(self):
+        # `infra` and `fixtures` have no slash or dot, and are workstream 1's and 5's whole
+        # directories; read as prose, the integrator's file beside them would pass alone.
+        for line in ("**Touches:** infra, tools/check.sh", "**Touches:** fixtures, tools/check.sh",
+                     "**Touches:** tools/check.sh and infra"):
+            with self.subTest(line=line):
+                self.assertIn("one-owner", self.broken(build_ticket(line)))
+
+    def test_an_owned_root_directory_alone_passes_under_its_owner(self):
+        self.assertEqual(shape.touches(build_ticket("**Touches:** infra")), ["infra"])
+        self.assertEqual(self.broken(build_ticket("**Touches:** infra", owner="workstream 1")), [])
+        self.assertIn("owner-line", self.broken(build_ticket("**Touches:** infra")))
+
+    def test_a_root_entry_or_owned_prefix_is_a_path(self):
+        # `docs` is a root directory, `tests` a prefix of owned paths; the prose words are neither.
+        self.assertEqual(shape.touches(build_ticket("**Touches:** docs and tests, if added")),
+                         ["docs", "tests"])
+
+    def test_a_token_neither_path_nor_prose_fails(self):
+        # `Gateway` may mean src/Gateway/ or nothing; no owner can be derived from it, so the line
+        # cannot be fully judged. Lower-case words are the prose #260 and #269 mix in.
+        for line in ("**Touches:** Gateway, tools/check.sh",
+                     "**Touches:** tools/check.sh and TestIdp_v2"):
+            with self.subTest(line=line):
+                self.assertIn("touches", self.broken(build_ticket(line)))
+
+    def test_the_prose_of_260_and_269_is_still_no_path(self):
+        self.assertNotIn("and", shape.touches(build_ticket(TOUCHES_269)))
+        self.assertEqual(len(shape.touches(build_ticket(TOUCHES_260))), 6)
+
 
 class OwnerLine(unittest.TestCase):
     """The Owner line names exactly the derived role, by tools/overnight_collect.py's ROLES."""

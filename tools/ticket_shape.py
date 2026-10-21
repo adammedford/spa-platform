@@ -10,8 +10,11 @@ partial instead of never starting. This reads one issue and fails it, naming the
   read with A-05's own `rules` and `owner_of`;
 - touches: a `**Touches:**` line with no path in it, which read as absent would leave only the
   Owner line judged (CODING_STANDARDS.md, "A check fails closed"). A path is read from a code span
-  or bare, as a token with a `/` or a `.` in a name (`.gitignore`, `tools/check.sh`), so the prose
-  the build tickets mix in ("and, if a ... is added,") is not taken for one;
+  or bare, as a token with a `/` or a `.` in a name (`.gitignore`, `tools/check.sh`), a token that
+  is or begins a path OWNERSHIP.md names (`infra`, `fixtures`, `tests`), or the name of an entry at
+  the repository's root (`docs`), so the prose the build tickets mix in ("and, if a ... is added,")
+  is not taken for one. A token left that is neither a path nor a lower-case word (`Gateway`,
+  `#213`) fails too, since the line cannot then be fully judged;
 - owner-line: its `**Owner:**` line names other than exactly the role those paths derive, by
   tools/overnight_collect.py's ROLES. A body with no Touches line derives no role, so its Owner line
   must name exactly one; the tickets filed before #227 have none, and they are judged by what they
@@ -41,6 +44,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -114,6 +118,8 @@ SPAN_OR_TEXT = re.compile(r"`([^`\n]+)`|([^`]+)")
 # and "i.e." are words, not paths; a URL's colon keeps it out.
 BARE_PATH = re.compile(r"^(?=[^/]*/|\.?[\w-]*[\w-]\.[\w-]|\.[\w-])[\w./*-]+$")
 NOT_PATHS = {"e.g", "i.e"}
+# A word of the prose a Touches line mixes in, as #260 and #269 do: lower case, maybe hyphenated.
+PROSE = re.compile(r"[a-z]+(?:['-][a-z]+)*")
 
 
 class Unreadable(Exception):
@@ -149,22 +155,53 @@ def issue_of(raw: object) -> Issue:
         raise Unreadable(f"the issue's JSON has no readable {error}") from error
 
 
-def touches(body: str) -> list[str] | None:
-    """The paths of the Touches line, in its order: its code spans and its bare tokens that look
-    like paths. None when there is no line, and [] when there is one with no path in it."""
+def root_entries() -> set[str]:
+    """The names at the repository's root, exactly as written: a filesystem that ignores case
+    would otherwise take "Tools" for `tools`."""
+    return set(os.listdir(ROOT))
+
+
+def bare_path(token: str, parsed: list[tuple[str, str]]) -> bool:
+    """Whether a bare token names a path: it has a `/` or a dot in a name, it is or begins a path
+    OWNERSHIP.md names (`infra` is workstream 1's `/infra/`, which a slash or dot test would read as
+    prose), or it is an entry at the repository's root."""
+    if token in NOT_PATHS or not re.fullmatch(r"[\w./*-]+", token):
+        return False
+    if BARE_PATH.match(token):
+        return True
+    owned = (pattern.lstrip("/") for pattern, _ in parsed if pattern != "*")
+    return (any(pattern.startswith(token + "/") or pattern == token for pattern in owned)
+            or token in root_entries())
+
+
+def touches(body: str, parsed: list[tuple[str, str]] | None = None) -> list[str] | None:
+    """The paths of the Touches line, in its order: its code spans and its bare tokens that name
+    paths, by bare_path(). None when there is no line, and [] when there is one with no path."""
+    read = read_touches(body, parsed)
+    return None if read is None else read[0]
+
+
+def read_touches(body: str, parsed: list[tuple[str, str]] | None = None
+                 ) -> tuple[list[str], list[str]] | None:
+    """The Touches line's paths and its unread tokens: those neither a path nor a lower-case
+    word of prose. None when there is no line."""
     line = TOUCHES.search(body)
     if not line:
         return None
-    paths = []
+    parsed = ownership().rules() if parsed is None else parsed
+    paths: list[str] = []
+    unread: list[str] = []
     for span, text in SPAN_OR_TEXT.findall(line.group("value")):
         if span:
             paths.append(span)
             continue
         for token in re.split(r"[\s,;()]+", text):
             token = token.rstrip(".:")
-            if token not in NOT_PATHS and BARE_PATH.match(token):
+            if bare_path(token, parsed):
                 paths.append(token)
-    return paths
+            elif token and not PROSE.fullmatch(token):
+                unread.append(token)
+    return paths, unread
 
 
 def owner_of(path: str, parsed: list[tuple[str, str]]) -> str | None:
@@ -182,10 +219,14 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Fai
     parsed = ownership().rules() if parsed is None else parsed
     failures: list[Failure] = []
 
-    paths = touches(issue.body)
+    read = read_touches(issue.body, parsed)
+    paths, unread = read if read is not None else (None, [])
     if paths == []:
         failures.append(Failure("touches", "the Touches line names no path, so no owner is "
                                 "derived from it"))
+    elif unread:
+        failures.append(Failure("touches", "the Touches line has " + ", ".join(unread) +
+                                ", neither a path nor prose, so its owners cannot all be derived"))
     by_owner: dict[str, list[str]] = {}
     for path in paths or []:
         by_owner.setdefault(owner_of(path, parsed) or "no owner", []).append(path)
