@@ -10,8 +10,9 @@ namespace Gateway.E2ETests.Negative;
 /// N-03, N-04 and N-05 in a real browser (docs/plan/04-tests.md, tier D), on the stack
 /// <see cref="StackSwitch"/> chooses. A login is stopped at its callback
 /// (<see cref="Profile.StopAtCallbackAsync"/>), so the browser holds the code, the state and the
-/// login-state cookies, and the test then sends the callback the row describes. "Rejected" is read as the hermetic suite reads it: the callback's own answer, no session
-/// cookie in the browser, <c>/bff/session</c> answering 401, and the rule in the log.
+/// login-state cookies, and the test then sends the callback the row describes. "Rejected" is read as
+/// the hermetic suite reads it: the callback's own answer, no session cookie in the browser,
+/// <c>/bff/session</c> answering 401, and the rule in the log.
 /// </summary>
 public sealed partial class LoginTests
 {

@@ -55,10 +55,10 @@ public sealed class ApiTests
         await profile.SignInAsync(stack.App("app1"));
 
         // Locally the target is the harness's echo upstream, which records what reaches it. The cell has
-        // none, so there the target is reports, which answers app 1's whoami 403 (N-17): a path that
-        // escaped would come back 403, not 400 or 404.
+        // none, so there the target is app 1's second API, which answers app 1's whoami 403 (N-17): a
+        // path that escaped would come back 403, not 400 or 404.
         LocalStack? local = stack as LocalStack;
-        string target = local?.Harness.Options.EchoApi ?? "reports";
+        string target = local?.Harness.Options.EchoApi ?? SecondApi("app1");
         string path = template.Replace("{api}", target, StringComparison.Ordinal);
 
         FetchResult escaped = await profile.FetchAsync(path);

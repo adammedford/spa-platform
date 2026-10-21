@@ -1,6 +1,7 @@
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
 using Microsoft.Playwright;
+using Platform.Abstractions;
 
 namespace Gateway.E2ETests.Negative;
 
@@ -30,11 +31,15 @@ public sealed class SessionTests
         }]);
         await profile.OnOriginOfAsync(app2);
 
+        // A cookie that resolves to no session for this app is auth.session (contracts/request-gate.md),
+        // one line per refusal.
+        LogMark mark = stack.MarkLog();
         foreach (string path in new[] { "/api/reports/whoami", "/bff/session" })
         {
             FetchResult refused = await profile.FetchAsync(path);
             Assert.Equal(Contract.Error("unauthenticated").Status, refused.Status);
             Assert.Equal(Contract.Error("unauthenticated").Code, refused.Code);
+            await stack.AssertRuleLoggedAsync(mark, RuleIds.AuthSession, app2.AppId);
         }
 
         // A navigation is challenged afresh: to the provider, for app 2's own client. The login is held at
@@ -83,8 +88,10 @@ public sealed class SessionTests
         // not_found row's When text, and contracts/request-gate.md -> Rules by path says /signout-oidc
         // is always 404.
         Contract.ErrorRow reserved = Contract.Error("not_found");
+        LogMark mark = stack.MarkLog();
         IResponse? get = await profile.Page.GotoAsync(app.Url("/signout-oidc").ToString());
         Assert.Equal(reserved.Status, get?.Status);
+        await stack.AssertRuleLoggedAsync(mark, RuleIds.PathReserved, app.AppId);
 
         // A form post, as a page would send the framework's remote sign-out.
         await profile.Page.SetContentAsync($"<form method=\"post\" action=\"{app.Url("/signout-oidc")}\"><button>go</button></form>");
@@ -92,6 +99,7 @@ public sealed class SessionTests
             () => profile.Page.ClickAsync("button"), response => response.Url == app.Url("/signout-oidc").ToString());
         Assert.Equal(reserved.Status, post.Status);
         Assert.Equal("POST", post.Request.Method);
+        await stack.AssertRuleLoggedAsync(mark, RuleIds.PathReserved, app.AppId);
 
         await profile.Page.GotoAsync(app.Url("/").ToString());
         await profile.WaitSignedInAsync(app);

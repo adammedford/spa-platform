@@ -66,7 +66,9 @@ public sealed class HostTests
         // And from an unknown host, naming app 1: still unknown.
         using HttpRequestMessage unknown = new(HttpMethod.Get, $"https://unknown.{stack.ParentDomain}:{app1.Origin.Port}/");
         unknown.Headers.Add("X-Forwarded-Host", app1.Host);
+        LogMark mark = stack.MarkLog();
         using HttpResponseMessage answer = await stack.SendRawAsync(unknown);
         Assert.Equal(Contract.Error("not_found").Status, (int)answer.StatusCode);
+        await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
     }
 }

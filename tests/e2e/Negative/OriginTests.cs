@@ -107,17 +107,20 @@ public sealed class OriginTests
         await using IBrowserStack stack = await Stacks.StartAsync();
         HarnessApp app = stack.App("app1");
 
+        LogMark mark = stack.MarkLog();
         foreach (string path in new[] { "/api/orders/whoami", "/bff/session" })
         {
             using HttpRequestMessage absent = new(HttpMethod.Get, app.Url(path));
             using HttpResponseMessage noHeader = await stack.SendRawAsync(absent);
             await AssertOriginRejectedAsync(noHeader);
+            await stack.AssertRuleLoggedAsync(mark, RuleIds.GateFetchSite, app.AppId);
 
             using HttpRequestMessage foreign = new(HttpMethod.Get, app.Url(path));
             foreign.Headers.Add("Sec-Fetch-Site", "same-origin");
             foreign.Headers.Add("Origin", Elsewhere.GetLeftPart(UriPartial.Authority));
             using HttpResponseMessage foreignOrigin = await stack.SendRawAsync(foreign);
             await AssertOriginRejectedAsync(foreignOrigin);
+            await stack.AssertRuleLoggedAsync(mark, RuleIds.GateOrigin, app.AppId);
         }
     }
 
