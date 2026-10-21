@@ -88,6 +88,19 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
   feature lives only in an issue.
 - **The overnight run reports as an issue** titled `Overnight <date>`: the report, then the
   questions as numbered items. Answers are comments on it.
+- **A ticket that edits a steering document quotes each paragraph it changes whole, as it will read
+  after the edit.** A paragraph is a block blank lines separate in the source: a prose paragraph, a
+  list item with its continuation lines, a glossary entry or a fenced block; a table row is quoted
+  with its header row, a change to a non-prose file with its smallest enclosing object, and a new
+  file whole. A paragraph inserted or removed is quoted with the paragraphs on either side as they
+  will read. A sentence spliced into a paragraph reads differently than it did alone: #187 gave its
+  edits as old and new sentences, and what landed had an exemption that read as the wrong check's
+  and, in the untouched paragraph after an inserted one, an "it" that had lost its referent. The
+  implementer changes nothing but the wrapping; when a quoted paragraph has changed on `main` since
+  the approval, the session re-quotes it and asks again. The commit cites the human's approval of
+  the ticket as `Authority: #<n>` (`docs/agents/landing-work.md`), and an approval covers the body
+  as it stood when given. A proposal that a confirmed answer will commit, under
+  `## Proposed steering changes` or in a grill's proposals, is quoted the same way.
 
 ## The archive: tickets filed before ADR-0020
 
