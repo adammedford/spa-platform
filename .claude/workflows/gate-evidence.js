@@ -332,7 +332,9 @@ const reportText = (s) => {
   if (s.merges.length) for (const m of s.merges) L.push(`- ${m.sha.slice(0, 12)} ${m.subject}: ${m.pr ? `pull request ${'#' + m.pr}, ` : 'no pull request, '}${m.cleared ? `cleared by ${m.record}` : `open${m.record ? ` (${m.record})` : ''}`}`)
   else L.push('none')
   L.push('', '## DRAFT tag message', '', 'A draft for the tagger, not a record: the tag is cut by hand, and only once nothing above is withheld.', '', '```text', ...s.draft, '```')
-  L.push('', '## What this run did not do', '', 'It did not tag, merge or push, applied nothing in AWS, ran no deployed suite, and wrote no tracked file: its only writes are its log and its throwaway worktrees.', '', 'CHECKOUT: pending')
+  // The tracked-file half is not asserted here: the Report agent's checkout line below is its evidence,
+  // and it can say a file changed.
+  L.push('', '## What this run did not do', '', 'It did not tag, merge or push, applied nothing in AWS and ran no deployed suite: no prompt of this run asks for any of them. Its writes are meant to be its log and its throwaway worktrees only; the checkout line below says what the Report agent found.', '', 'CHECKOUT: pending')
   return L.join('\n')
 }
 const draftOf = (s) => {
@@ -367,7 +369,7 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
 6. changeRequests: each contracts/changes/*.md at base whose **Status:** line does not begin decided, rejected or withdrawn, with the plan rows it names and that status line. openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,labels,assignees\`, each issue whose title or body names a row of rows or ends " evidence, <date>", with the rows it names, its first label and its first assignee ("" for none).
 7. ci: the GitHub Actions run of base, \`cd ${REPO} && gh run list --commit <base> --json url,headSha,databaseId\` and \`cd ${REPO} && gh run view <id> --json jobs\`, with each job's name and conclusion. lastFull: walking \`git -C ${REPO} log --first-parent --format=%H <base>\`, the most recent commit whose run's Build and test and Terraform jobs both ran and succeeded: {sha, url}.
-8. merges: every commit on \`git -C ${REPO} log --first-parent --format=%H%x09%s <previousTag>..<base>\` with its subject, the pull request it merged (0 when none), and that pull request's head. For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${LOG}/<date>-<base's first 12>/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from a throwaway worktree at base: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not.
+8. merges: every merge on \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s <previousTag>..<base>\` (docs/agents/landing-work.md -> "Gates"; a direct commit, such as a generated roadmap refresh, is not one) with its subject, the pull request it merged (0 when none), and head, the merged head: the merge's second parent, \`git -C ${REPO} rev-parse <merge>^2\`. For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${LOG}/<date>-<base's first 12>/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from a throwaway worktree at base: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not.
 9. durable: every JSON file in ${LOG}/results/<base>/, each parsed, \`cat ${LOG}/results/<base>/*.json\` ([] when the directory is absent). Never read another base's directory.
 Return every field; reason is "" when the fetch succeeded.`
 
@@ -493,6 +495,9 @@ if (refusals.length) {
 
 // The ids this run proves: the gate's, narrowed by only and skipIds.
 const gateIds = g.ids.filter((x) => ID_RE.test(x.id) && x.tiers.length)
+// An id the Scope agent returned malformed or with no tier is named in the verdict, never dropped
+// unseen: a check that skips what it cannot read fails open (CODING_STANDARDS.md -> "A check fails closed").
+const unjudged = g.ids.filter((x) => !(ID_RE.test(x.id) && x.tiers.length)).map((x) => JSON.stringify(x.id))
 const leftOut = gateIds.filter((x) => (A.only && !A.only.includes(x.id)) || (A.skipIds && A.skipIds.includes(x.id))).map((x) => x.id)
 const ids = gateIds.filter((x) => !leftOut.includes(x.id))
 log(`gate-evidence ${gate} at ${base}: ${ids.length} ids; run log ${runLog}`)
@@ -578,6 +583,9 @@ for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reason
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)
 for (const m of openReviews) reasons.push(`merge ${m.sha.slice(0, 12)} since ${g.previousTag || 'the previous tag'} has an open review`)
+for (const x of unjudged) reasons.push(`the Scope agent returned ${x} from the exit test as no test id with a tier, so it was not judged`)
+// #80 -> "Phase Prove": a red baseline means the report says trunk is not green here, per project.
+for (const p of [...new Set(allTests.filter((t) => t.status === 'baseline-red').map((t) => t.project))]) reasons.push(`${p} failed unmutated at base, so trunk is not green here`)
 if (!gateIds.length) reasons.push(`the exit test of ${gate} names no test id, so nothing here proves it`)
 if (leftOut.length) reasons.push(`only or skipIds left out ${leftOut.join(', ')}, so the run did not judge the whole exit test`)
 for (const c of cleanups) {

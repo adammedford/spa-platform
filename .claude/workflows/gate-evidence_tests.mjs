@@ -201,7 +201,7 @@ function stub(env, scriptArgs, served) {
         let issue = 0
         if (target.mode === 'edit') { issue = target.issue; env.gh.push({ action: 'edit', issue, title: target.title }) }
         if (target.mode === 'create') { issue = 950; env.gh.push({ action: 'create', title: target.title }) }
-        out = { checkout: { trackedChanged: [], newUntracked: [] }, worktreesLeft: [], issue, url: `https://github.com/adammedford/spa-platform/issues/${issue}`, posted: true, reason: '' }
+        out = { checkout: served.reportCheckout || { trackedChanged: [], newUntracked: [] }, worktreesLeft: [], issue, url: `https://github.com/adammedford/spa-platform/issues/${issue}`, posted: true, reason: '' }
       } else throw new Error(`unexpected agent label ${label}`)
       const bad = validate(opts.schema, out)
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
@@ -420,6 +420,9 @@ try {
       ['a citing test did not fail', { ...base, outcome: { 'Gateway.ComposedTests.N02Composed': 'did-not-fail' } }, {}, /Gateway\.ComposedTests\.N02Composed, citing N-02, did not fail/],
       ['a mutation that failed other tests only', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'other-failed' } }, {}, /N01Composed, citing N-01, did not fail/],
       ['a baseline that is red', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'red' } }, {}, /N-01 is not proved at the hermetic tier: baseline red/],
+      ['a red baseline says trunk is not green', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'red' } }, {}, /tests\/Gateway\.ComposedTests failed unmutated at base, so trunk is not green here/],
+      ['an id the Scope agent returned with no tier', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-04', tiers: [] }] } } }, {}, /"N-04" .*was not judged/],
+      ['an id the Scope agent returned malformed', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-4', tiers: ['H'] }] } } }, {}, /"N-4" .*was not judged/],
       ['a row is not done', { ...base, audit: { '4.1': [{ sha: '2'.repeat(40), subject: 'Merge task 4.1: x', form: 'landed', outstanding: ['Outstanding test ids: N-01 (4.1)'], ownership: 'pass', ownershipDetail: '' }] } }, {}, /row 4\.1 is not done/],
       ['a row whose merge crosses owners', { ...base, audit: { '4.2': [{ sha: '3'.repeat(40), subject: 'Merge task 4.2: x', form: 'landed', outstanding: [], ownership: 'fail', ownershipDetail: 'src/Platform.Identity/X.cs is ws3-oauth' }] } }, {}, /row 4\.2 is not done/],
       ['a row with an open change request', { ...base, changeRequests: [{ file: 'contracts/changes/4.2-x.md', rows: ['4.2'], status: '**Status:** proposed' }] }, {}, /row 4\.2 is not done/],
@@ -441,6 +444,13 @@ try {
     if (dep.result.verdict !== 'tag withheld' || !dep.result.reasons.some((x) => /F-01 is not proved at the deployed tier: deployed, not run here/.test(x))) fail(`a deployed clause: ${dep.result.verdict} ${JSON.stringify(dep.result.reasons)}`)
     if (dep.result.counts.notRunHere !== 1 || dep.result.counts.proved !== 0) fail(`a deployed clause counted ${JSON.stringify(dep.result.counts)}`)
     if (!/deployed, not run here \(would run it: the deployed gate runs/.test(tableRow(dep.result.report.text, 'F-01'))) fail(`the deployed row does not name what would run it: ${tableRow(dep.result.report.text, 'F-01')}`)
+    // The open reviews are the range's merges (docs/agents/landing-work.md -> "Gates"), so a direct
+    // commit on trunk, such as a generated roadmap refresh, is not read as a merge with no review.
+    if (!commands(ready.prompt('scope')).some((c) => /\blog --first-parent --merges\b.*<previousTag>\.\.<base>/.test(c))) fail('the Scope prompt does not list the merges since the previous tag with --first-parent --merges')
+    // The report's closing section claims no clean checkout the Report agent did not find.
+    const dirty = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, reportCheckout: { trackedChanged: ['README.md'], newUntracked: [] } })
+    const closing = section(dirty.result.report.text, 'What this run did not do') || ''
+    if (!/tracked files changed: README\.md/.test(closing) || /wrote no tracked file/.test(closing)) fail(`with README.md changed, the closing section says: ${closing.trim()}`)
     // Both tiers: hermetic proved, deployed not run here, still withheld.
     const g5 = await execute(newRepo(), { gate: 'G5' })
     if (g5.result.verdict !== 'tag withheld' || !g5.result.reasons.some((x) => /F-07 is not proved at the deployed tier/.test(x)) || g5.result.reasons.some((x) => /F-07 is not proved at the hermetic/.test(x))) fail(`F-07 in both tiers: ${JSON.stringify(g5.result.reasons)}`)
