@@ -2,7 +2,8 @@
 
   <!-- Every package version in the solution. Owner: integrator.
        A project adds <PackageReference Include="Name" /> with no version, in its own project file.
-       Each version below was confirmed to exist on nuget.org on 11 October 2026.
+       Each version below was confirmed to exist on nuget.org on 11 October 2026, unless its comment
+       names a later date.
        docs/dependencies.md lists the licence of each and which project is expected to use it. -->
 
   <PropertyGroup>
@@ -24,6 +25,11 @@
   <ItemGroup Label="AWS">
     <PackageVersion Include="AWSSDK.S3" Version="4.0.101.6" />
     <PackageVersion Include="AWSSDK.SimpleSystemsManagement" Version="4.0.104.2" />
+    <!-- #206: the project's profile signs in with login_session, which the .NET SDK resolves only when
+         this assembly is present. 4.0.101.13 is the release whose AWSSDK.Core floor is 4.0.102.9, the
+         Core this solution resolves (SimpleSystemsManagement's floor), from the same 8 October 2026
+         SDK drop, so it moves no other version. Confirmed on nuget.org on 21 October 2026. -->
+    <PackageVersion Include="AWSSDK.Signin" Version="4.0.101.13" />
   </ItemGroup>
 
   <ItemGroup Label="Telemetry">
