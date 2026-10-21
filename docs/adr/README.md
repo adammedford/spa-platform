@@ -43,6 +43,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0022](0022-review-at-the-merge-path.md) | Hold review at `tools/land.sh`: merge only a head whose latest review record says merge, pinned to it, never `--admin`; no gate tag over an open review; required approving reviews rejected while one person holds the only account | — |
 | [0023](0023-lane-code-may-rest-on-a-pre-accepted-answer.md) | A lane's code may rest on a pre-accepted answer; a steering document changes only on a cited authority, which the steering check requires and the reviewer weighs | — |
 | [0024](0024-session-gate-in-process-and-refresh-lease-across-tasks.md) | One refresh per session across tasks: the in-process session gate stays, and a refresh lease, a contract type independent of the session record, is taken before the provider is called | — |
+| [0025](0025-one-key-ring-per-cell-registered-by-hosting.md) | One data-protection key ring per cell, named `spa-platform-{cell}` and kept in Parameter Store under a per-cell prefix, registered by hosting; nothing registered when the section is absent | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

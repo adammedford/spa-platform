@@ -1,6 +1,9 @@
 # ADR-0012: Make the cell the deployment unit
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-20 by
+  [ADR-0025](0025-one-key-ring-per-cell-registered-by-hosting.md): the data-protection application
+  name is `spa-platform-{cell}`, and the cell's key ring lives in Parameter Store, registered by
+  hosting.**
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D12 (Doc revision 36)

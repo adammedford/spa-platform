@@ -8,10 +8,17 @@ export; a term that changes meaning should be changed here and in the ADR that m
 
 ## The unit of deployment and the unit of tenancy
 
-**Cell** — the whole stack: ALB, service, bucket, registry, secrets prefix and session store. The
-deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, and the name is part
-of every resource name and of the data-protection application name. Phase 1 runs one cell. See
-ADR-0012.
+**Cell** — the whole stack: ALB, service, bucket, registry, secrets prefix, session store and key
+ring. The deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, and the
+name is part of every resource name. Every task of a cell shares one key ring, and no two cells
+share one. Phase 1 runs one cell. See ADR-0012 and ADR-0025.
+
+**Key ring** — the set of keys under which a cell's gateway protects what it hands to browsers and
+stores: session cookies, login state, antiforgery tokens and, from Phase 2, stored session tickets.
+Every task of a cell shares one ring and no two cells share one; a value protected under one ring is
+unreadable under another. In Phase 1 each task has a ring of its own, the "key durability" gap P2-2
+closes. See ADR-0025.
+_Avoid_: "keys" alone, which also means client secrets and KMS keys.
 
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
