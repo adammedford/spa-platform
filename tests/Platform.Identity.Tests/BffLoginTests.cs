@@ -109,6 +109,28 @@ public sealed class BffLoginTests
     }
 
     [Fact]
+    public async Task A_relogin_discard_removes_the_session_under_the_lease_before_the_sign_out()
+    {
+        // #166 box 2, #196: the discard is the session module's end through the lease (AppSessions.EndAsync
+        // with no action, #141 Q9), and the cookie handler's sign-out that follows finds the session gone.
+        // The sign-out's ungated removal would remove the session too, so "the session is gone" cannot
+        // tell the two apart; whether a gate was held as the one removal arrived can. Mutation: delete
+        // `await lease.EndAsync();` from Bff.LoginAsync, keeping the lease; the lease is released with
+        // the session still stored, the sign-out removes it with no gate held, and this fails.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        IdentityGateway.Login first = await gateway.LoginAsync(App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        AppSessions sessions = gateway.Services.GetRequiredService<AppSessions>();
+        gateway.Sessions.GateHeld = () => sessions.ActiveGates > 0;
+
+        IdentityGateway.Answer login = await gateway.SendAsync(App1, "/bff/login?returnUrl=/", first.Jar, headers: IdentityGateway.Navigation);
+
+        Assert.Equal(302, login.Status);
+        Assert.Equal((key, true), Assert.Single(gateway.Sessions.GatedRemovals));
+        Assert.Null(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task A_relogin_discard_waits_behind_a_refresh_in_flight_on_the_same_session()
     {
         // #166: the discard runs under the session gate (AppSessions.EndAsync, #141 Q9), so a refresh in
@@ -126,11 +148,10 @@ public sealed class BffLoginTests
         gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(5);
         (string key, _) = await gateway.Sessions.SingleAsync();
         gateway.Idp.Faults.TokenDelay = TimeSpan.FromMilliseconds(500);
-        AppSessions sessions = gateway.Services.GetRequiredService<AppSessions>();
 
         Task<IdentityGateway.Answer> refresh = Task.Run(
             () => gateway.SendAsync(App1, IdentityGateway.TokenPath, first.Jar), TestContext.Current.CancellationToken);
-        await HeldAsync(sessions, refresh);
+        await gateway.GateHeldAsync(refresh);
         IdentityGateway.Answer login = await gateway.SendAsync(App1, "/bff/login?returnUrl=/", first.Jar, headers: IdentityGateway.Navigation);
         IReadOnlyList<(string Key, SessionRecord? Held)> removedByTheChallenge = gateway.Sessions.Removed;
         IdentityGateway.Answer refreshed = await refresh;
@@ -181,20 +202,6 @@ public sealed class BffLoginTests
         IdentityGateway.Login login = await gateway.LoginAsync(App1, start: "/bff/login?returnUrl=/");
 
         TokenSearch.AssertNoTokens(gateway.Idp, login.Challenge.Body + login.Callback.Body);
-    }
-
-    /// <summary>
-    /// Returns once <paramref name="sessions"/> has a gate held, which the due token's refresh takes
-    /// before it reads the session and asks the provider, or fails if the refresh ends first.
-    /// </summary>
-    private static async Task HeldAsync(AppSessions sessions, Task refresh)
-    {
-        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
-        while (sessions.ActiveGates == 0)
-        {
-            Assert.False(refresh.IsCompleted, "The refresh ended before it was seen holding the session's gate.");
-            await Task.Delay(TimeSpan.FromMilliseconds(5), deadline.Token);
-        }
     }
 
     private static string? RefreshTokenOf(SessionRecord record) =>
