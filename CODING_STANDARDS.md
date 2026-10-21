@@ -58,6 +58,33 @@ reproduced exactly when the reviewer re-ran it, and each of the five that stated
 assertion that could not fail, including a Terraform suite that stayed green with the attribute
 N-09 depends on deleted.
 
+## A check fails closed
+
+A check that cannot read its input, or exits early, reports a failure, with its verdict line.
+
+A check is read by its verdict: the pre-push hook's exit status, the last line of
+`tools/check.sh --full`'s log, a test row's result. A path that ends without judging anything and
+still reads as a pass, or that ends with no verdict at all, says nothing about the code while
+looking as if it did, and the reader has no line above the verdict to tell them otherwise.
+
+The reviews of 21 October 2026 caught three checks that failed open, each on the reviewer's own
+judgement:
+
+- **A failed listing read as an empty one.** #205's file-mode check fed `git ls-files` through
+  `xargs` and `find` behind an outer `|| true`, so a git or xargs failure passed with nothing
+  judged. A failure of the listing now fails the check (db61e99).
+- **A stop with no verdict line.** #210's `tools/image-check.sh` could end on a bare `set -e` exit,
+  from a failed copy, image inspect or `docker run`, and later from the container-log dump under
+  `pipefail`, so docker's error was the last line where a reader looks for the verdict. Every
+  failure now ends through `fail()` on a verdict (66b2e9a, ba9dac1).
+- **A clean-up that replaced the row's own failure.** #212's F-07 offboarded in a `finally`, so a
+  failing clean-up threw over the row's failure and the reader saw only the clean-up's. It now
+  reports both (f234abc).
+
+So ask of any check, and of any test's setup and clean-up: what happens when the input is missing,
+unreadable or empty, and when a step before the verdict fails? "It passes" and "it stops" are both
+failing open.
+
 ## A guard reads the thing it guards
 
 A test that repeats the value it is protecting protects nothing: edit the source and the copy still
