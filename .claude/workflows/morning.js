@@ -71,6 +71,10 @@ const MAX_PAR = A.maxParallel || 3
 // its check logs and its pending-writes file. The morning writes only under morning-<date>/ there,
 // apart from the pending file's progress file and its rename, which #78 -> "Replay" puts beside it.
 const LOG = `${REPO}/.scratch/overnight/log`
+// Adam's account, the one whose Confirm comment confirms a night (#78 -> "Apply": "Adam's comment on
+// the Overnight issue beginning Confirm"; ADR-0021). The Replay agent returns each comment's author as
+// its login, so a Confirm from any other account confirms and overrides nothing.
+const ADAM = 'adammedford'
 const PARENT_ISSUE = 51 // the parent the overnight workflow files plan-row tickets under (#78 -> "Apply")
 const READER = `python3 -I ${REPO}/tools/review_record.py` // the repository's one record reader (#67)
 const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
@@ -299,7 +303,7 @@ const readQuestions = (comments) => {
 // in order. A question no Confirm comment names or overrides stays as the night left it: provisional.
 const RANGE = /Q(\d+)\s*(?:to|through|–|—|-)\s*Q?(\d+)/g
 const readConfirmations = (comments) => {
-  const confirms = comments.filter((c) => /^Confirm\b/.test(String(c.body || '').trimStart()))
+  const confirms = comments.filter((c) => c.author === ADAM && /^Confirm\b/.test(String(c.body || '').trimStart()))
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
   const covered = new Map() // q -> the URL of the latest Confirm comment that names it
   const overrides = new Map() // q -> { answer, url }

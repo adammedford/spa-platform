@@ -523,7 +523,23 @@ try {
     if (later.result.apply.answers[3].confirmed || !later.result.apply.answers[1].confirmed) fail(`a Confirm comment's later sentence: answers ${JSON.stringify(later.result.apply.answers)}`)
   }
 
-  // 15. Every agent call passes a schema and every stub's return satisfies it.
+  // 15. A Confirm comment counts only from Adam's account (#78 -> "Apply": "Adam's comment on the
+  //     Overnight issue beginning Confirm"): another account's "Confirm Q1", override line included,
+  //     confirms nothing, so Apply stays dry and no commit applier runs; Adam's own still confirms.
+  checks++
+  {
+    const outsider = (n, body, at) => ({ ...comment(n, body, at), author: 'someone-else' })
+    const out = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, outsider(40, 'Confirm Q1.\n\nQ1: yes, an outsider says so\n', '2026-10-21T08:00:00Z')]) })
+    const a1 = out.result.apply.answers[1] || {}
+    if (a1.confirmed || a1.answer !== `yes, pre-accepted under the standing answer granted ${DATE}`) fail(`an outsider's Confirm Q1 confirmed or overrode Q1: ${JSON.stringify(a1)}`)
+    if (!out.result.apply.dry) fail('an outsider\'s Confirm comment took Apply out of its dry run')
+    if (out.labels.some((l) => l.startsWith('apply:commit'))) fail(`an outsider's Confirm comment dispatched a commit applier: ${out.labels.join(', ')}`)
+    const own = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, outsider(40, 'Confirm Q2.', '2026-10-21T07:59:00Z'), comment(41, 'Confirm Q1.', '2026-10-21T08:00:00Z')]) })
+    const o = own.result.apply.answers
+    if (own.result.apply.dry || !o[1].confirmed || o[2].confirmed || !own.labels.some((l) => l.startsWith('apply:commit'))) fail(`Adam's Confirm Q1 beside an outsider's Confirm Q2: dry ${own.result.apply.dry}, answers ${JSON.stringify(o)}, dispatched ${own.labels.join(', ')}`)
+  }
+
+  // 16. Every agent call passes a schema and every stub's return satisfies it.
   checks++
   for (const c of allPrompts) if (!c.schema || c.schema.type !== 'object') fail(`${c.label}: called without a schema`)
   if (driftAll.length) fail(`returns not matching the script's schemas: ${driftAll.slice(0, 5).join(' | ')}`)
