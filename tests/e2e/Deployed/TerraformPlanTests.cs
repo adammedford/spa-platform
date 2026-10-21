@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
 
@@ -71,18 +72,18 @@ public sealed class TerraformPlanTests
 
     /// <summary>A <c>terraform show -json</c> document of these changes, each carrying the canary as a value, as a real one would.</summary>
     internal static string Plan(params (string Address, string Mode, string[] Actions)[] changes) =>
-        new System.Text.Json.Nodes.JsonObject
+        new JsonObject
         {
             ["format_version"] = "1.2",
-            ["prior_state"] = new System.Text.Json.Nodes.JsonObject { ["values"] = new System.Text.Json.Nodes.JsonObject { ["secret"] = Canary } },
-            ["resource_changes"] = new System.Text.Json.Nodes.JsonArray([.. changes.Select(change => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            ["prior_state"] = new JsonObject { ["values"] = new JsonObject { ["secret"] = Canary } },
+            ["resource_changes"] = new JsonArray([.. changes.Select(change => (JsonNode)new JsonObject
             {
                 ["address"] = change.Address,
                 ["mode"] = change.Mode,
-                ["change"] = new System.Text.Json.Nodes.JsonObject
+                ["change"] = new JsonObject
                 {
-                    ["actions"] = new System.Text.Json.Nodes.JsonArray([.. change.Actions.Select(action => (System.Text.Json.Nodes.JsonNode)action)]),
-                    ["after"] = new System.Text.Json.Nodes.JsonObject { ["value"] = Canary },
+                    ["actions"] = new JsonArray([.. change.Actions.Select(action => (JsonNode)action)]),
+                    ["after"] = new JsonObject { ["value"] = Canary },
                 },
             })]),
         }.ToJsonString();

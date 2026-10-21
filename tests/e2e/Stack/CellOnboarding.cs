@@ -33,10 +33,17 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
 
     public async Task<Onboarded> OnboardAsync(string appId, CancellationToken ct)
     {
-        if (cell.HasClient(appId) || (await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))
+        if (cell.HasClient(appId))
+        {
+            // The clean-up never writes the outputs document (workstream 1's scripts do), so it cannot make this pass.
+            throw new InvalidOperationException(
+                $"the infrastructure outputs document already names a client for {appId}, so the apps root's plan cannot show its onboarding. Once the clean-up has taken {appId} off, write the document again from the roots' outputs, as tools/scripts/seed.sh's first step does, then run again.");
+        }
+
+        if ((await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))
         {
             throw new InvalidOperationException(
-                $"{appId} is already onboarded on the cell, so the apps root's plan cannot show its onboarding. The run's clean-up takes it off; run again after it.");
+                $"{appId} is already in the live registry, so the apps root's plan cannot show its onboarding. The run's clean-up takes it off; run again after it.");
         }
 
         RequireInitialised();
@@ -87,13 +94,14 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     /// </summary>
     public async Task OffboardAsync(string appId, CancellationToken ct)
     {
+        // Before the registry changes, so a root that cannot destroy the app's resources leaves the app served rather than half taken off.
+        RequireInitialised();
         if ((await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))
         {
             await SpactlAsync(["app", "remove", appId, "--config", setup.PlatformConfig, "--outputs", setup.OutputsPath], ct);
             await WaitAsync((await aws.LiveRegistryAsync(ct)).Revision, ct);
         }
 
-        RequireInitialised();
         string[] owned = PerAppAddresses(appId);
         string work = PrivateDirectory();
         try

@@ -121,6 +121,38 @@ public sealed class CellOnboardingTests : IDisposable
     }
 
     [Fact]
+    public async Task An_app_the_outputs_document_already_names_is_refused_naming_the_rewrite_the_clean_up_does_not_do()
+    {
+        // The clean-up never writes the outputs document, so "run again after the clean-up" would refuse forever.
+        JsonObject outputs = JsonNode.Parse(Example)!.AsObject();
+        outputs["clients"]!["app3"] = outputs["clients"]!["app1"]!.DeepClone();
+        Cell cell = Cell.Parse(outputs.ToJsonString());
+        RecordedRunner runner = new((program, arguments) => new CellState().Answer(program, arguments, Plan()));
+        CellOnboarding onboarding = new(cell, new CellAws(cell, runner), runner, new OnboardingSetup(
+            FixtureFiles.RepositoryRoot, appsRoot, outputsPath, "/config/platform.json", new Uri("https://app1.spa-poc.test:9443/"), ["spactl"]));
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => onboarding.OnboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Contains("seed.sh", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task A_clean_up_on_a_root_not_initialised_leaves_the_registry_alone()
+    {
+        // Removing the app first would leave its client and secret live with nothing to destroy them.
+        Directory.Delete(Path.Combine(appsRoot, ".terraform"));
+        CellState cellState = new();
+        cellState.Add("app3");
+        RecordedRunner runner = new((program, arguments) => cellState.Answer(program, arguments, Plan()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Onboarding(runner).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public async Task An_apps_root_not_initialised_is_refused_naming_its_readme()
     {
         Directory.Delete(Path.Combine(appsRoot, ".terraform"));

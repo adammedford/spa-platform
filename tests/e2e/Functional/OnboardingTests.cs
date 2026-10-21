@@ -80,11 +80,23 @@ public sealed class OnboardingTests
                 Assert.Equal(before, await cell.Aws.RunningTaskAsync(TestContext.Current.CancellationToken));
             }
         }
-        finally
+        catch (Exception failure)
         {
             // Taken off even when the row fails, so the cell is left serving what it served and the next
-            // sitting's plan shows the onboarding again.
-            await stack.OffboardAsync("app3");
+            // sitting's plan shows the onboarding again. A clean-up that fails too is reported beside the
+            // row's own failure rather than in place of it.
+            try
+            {
+                await stack.OffboardAsync("app3");
+            }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException(failure, cleanup);
+            }
+
+            throw;
         }
+
+        await stack.OffboardAsync("app3");
     }
 }
