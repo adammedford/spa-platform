@@ -447,12 +447,14 @@ const reportText = (s) => {
   }
   L.push(`## Truth audit ${s.date}`, '')
   L.push(`Trunk: origin/main ${s.sha}. Corpus: ${s.files.length} files, ${s.words} words, in ${s.shards} shards; ${s.claims.length} claims in ${s.batches} verify batches. ${DRY ? 'Dry run: nothing was filed or posted.' : `Cap: ${MAX_ISSUES} issues.`}`)
+  if (s.failed.length) L.push('', `**Incomplete:** ${s.failed.length} agent(s) returned nothing, listed under "Agents that returned nothing"; what they held is missing from every count and list below.`)
   L.push('', '### Counts by type and verdict', '', `| Type | ${VERDICTS.join(' | ')} | no verdict |`, `| --- | ${VERDICTS.map(() => '---').join(' | ')} | --- |`)
   for (const t of TYPES) {
     const cs = s.claims.filter((c) => c.type === t)
     L.push(`| ${t} | ${VERDICTS.map((v) => cs.filter((c) => (s.verdictById.get(c.id) || {}).verdict === v).length).join(' | ')} | ${cs.filter((c) => !s.verdictById.has(c.id)).length} |`)
   }
   list(DRY ? 'Filed (Would file, on a run that is not dry)' : 'Filed', s.filed.map((f) => (DRY ? `Would file: ${f.title} (${f.sites} sites)` : `#${f.number} ${f.title} (${f.sites} sites)`)))
+  if (s.failed.length) list('Agents that returned nothing', s.failed)
   list('Skipped', s.skipped.map((k) => `${k.noun}: ${k.reason}`))
   if (s.pending.length) list('Not written: GitHub unreachable', s.pending.map((p) => `${p.what}: appended to ${s.pendingFile}`))
   list('Stale claims', s.stale.map((c) => `${c.file}:${c.line} (${c.type}) ${c.noun}: ${(s.verdictById.get(c.id) || {}).why || ''}`), 'none, not filed')
@@ -490,11 +492,16 @@ log(`truth audit at ${ctx.sha}: ${files.length} files; run log ${RUN}`)
 
 const shards = shardsOf(files)
 const sharded = await parallel(shards.map((s, i) => () => run(shardPrompt(ctx, s, i + 1, `${RUN}/shard-${i + 1}.json`), { label: `shard-${i + 1}`, phase: 'Shard', schema: SHARDED })))
+// An agent that returns nothing is named here and in the report, never read as an empty result
+// (CODING_STANDARDS.md -> "A check fails closed"); the run goes on with what the others returned.
+const failed = []
+const filesOf = (paths) => [...new Set(paths)].join(', ')
 // The script holds the shard agents to their files and to the noun rule, and numbers the ids itself.
 const claims = []
 sharded.forEach((r, i) => {
   const mine = new Set(shards[i].files.map((f) => f.path))
-  for (const c of (r && r.claims) || []) {
+  if (!r || !Array.isArray(r.claims)) { failed.push(`shard-${i + 1} (${filesOf(mine)}) returned nothing: its files' claims were not read`); return }
+  for (const c of r.claims) {
     if (!mine.has(c.file) || !String(c.noun || '').trim()) continue
     const id = `${c.file}:${c.line}:${c.ordinal}`
     if (claims.some((x) => x.id === id)) continue
@@ -508,7 +515,8 @@ const verified = await parallel(batches.map((b, i) => () => run(verifyPrompt(ctx
 const verdictById = new Map()
 verified.forEach((r, i) => {
   const ids = new Set(batches[i].map((c) => c.id))
-  for (const v of (r && r.verdicts) || []) if (ids.has(v.id) && !verdictById.has(v.id)) verdictById.set(v.id, v)
+  if (!r || !Array.isArray(r.verdicts)) { failed.push(`verify-${i + 1} (${filesOf(batches[i].map((c) => c.file))}) returned nothing: ${ids.size} claim${ids.size === 1 ? '' : 's'} have no verdict`); return }
+  for (const v of r.verdicts) if (ids.has(v.id) && !verdictById.has(v.id)) verdictById.set(v.id, v)
 })
 const verdictOf = (c) => (verdictById.get(c.id) || {}).verdict
 const counts = Object.fromEntries(VERDICTS.map((v) => [v, claims.filter((c) => verdictOf(c) === v).length]))
@@ -518,9 +526,10 @@ phase('Cluster')
 // Only false and stale reach the cluster; an unverifiable claim is counted and never filed.
 const given = claims.filter((c) => ['false', 'stale'].includes(verdictOf(c))).map((c) => ({ claim: c, verdict: verdictById.get(c.id) }))
 const clustered = given.length ? await run(clusterPrompt(ctx, given, `${RUN}/cluster.json`), { label: 'cluster', phase: 'Cluster', schema: CLUSTERED }) : { findings: [] }
+if (!clustered || !Array.isArray(clustered.findings)) failed.push(`the Cluster agent returned nothing: ${given.length} false or stale verdicts were not grouped, and no finding was filed from them`)
 const owner = ownersOf(setup.ownership)
 const unlanded = new Set(setup.rows.unlanded)
-const findings = ((clustered && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({
+const findings = ((clustered && Array.isArray(clustered.findings) && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({
   ...f,
   sites: f.sites.map((s) => {
     const o = s.file.startsWith('/') ? 'integrator' : owner(s.file)
@@ -575,6 +584,7 @@ if (DRY) {
     if (w.rule) w.rule.state = `not posted: GitHub unreachable, pending in ${pendingFile}`
   }
   fileReason = (done && done.reason) || (done ? '' : 'the File agent returned nothing')
+  if (!done) failed.push(`the File agent returned nothing: ${writes.length} write(s) unaccounted for, each under Skipped`)
   for (const w of writes) {
     const accounted = filed.some((f) => f.title === w.title && w.action === 'create') || pending.some((p) => p.key === w.key) || (w.rule && /^posted/.test(w.rule.state))
     if (!accounted) skipped.push({ noun: w.noun || w.rule.key, reason: `not written: ${fileReason || 'the File agent did not report it'}` })
@@ -587,17 +597,20 @@ const unverifiable = claims.filter((c) => verdictOf(c) === 'unverifiable')
 const sample = sampleOf(claims, verdictById)
 const text = reportText({
   date: ctx.date, sha: ctx.sha, files, words: files.reduce((n, f) => n + f.words, 0), shards: shards.length, batches: batches.length,
-  claims, verdictById, filed, skipped, pending, pendingFile, stale, unverifiable, sample, rules, missing, rows: setup.rows,
+  claims, verdictById, filed, skipped, pending, pendingFile, stale, unverifiable, sample, rules, missing, rows: setup.rows, failed,
 })
 const day = open.find((i) => i.title === `Truth audit ${ctx.date}`)
 const target = day ? { mode: 'edit', issue: day.number, title: `Truth audit ${ctx.date}` } : { mode: 'create', issue: 0, title: `Truth audit ${ctx.date}` }
 const reportFile = `${RUN}/report.md`
 const rep = await run(reportPrompt(ctx, text, target, reportFile), { label: 'report', phase: 'Report', schema: REPORTED })
 const checkout = (rep && rep.checkout) || { trackedChanged: ['the report agent returned nothing'], newUntracked: [] }
+// The report text is composed before its agent runs, so a Report that returned nothing is named in
+// the return alone.
+if (!rep) failed.push('the Report agent returned nothing: the report was not checked against the checkout, written or posted')
 const finalText = text.replace(/^CHECKOUT: pending$/m, checkoutLine(checkout))
 return {
   sha: ctx.sha, date: ctx.date, runLog: RUN, dryRun: DRY, corpus: files.map((f) => f.path), missing,
-  claims: claims.length, verdicts: counts, findings: findings.length,
+  claims: claims.length, verdicts: counts, findings: findings.length, failed,
   filed, skipped, pending: pending.map((p) => p.what), pendingFile: pending.length ? pendingFile : '',
   rules: rules.map((r) => ({ key: r.key, state: r.state })), ruleIssue: RULE_ISSUE,
   report: { issue: rep ? rep.issue : 0, url: rep ? rep.url : '', posted: rep ? rep.posted : false, reason: rep ? rep.reason : 'the report agent returned nothing', file: reportFile, text: finalText },

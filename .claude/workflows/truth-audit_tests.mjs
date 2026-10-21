@@ -114,7 +114,8 @@ const claimRecord = (file, c, ordinal) => ({
 
 // served: { fetchFails, tree, absolute: [{path, words}], openIssues, ruleLines, rowsKnown, unlanded,
 //           claims: {file: [{line, type, noun, ...}]}, verdicts: {noun: verdict}, rules: {noun: rule},
-//           rows: {noun: row}, changeRequest: [noun], ghDown: true, checkout: {trackedChanged, newUntracked} }
+//           rows: {noun: row}, changeRequest: [noun], ghDown: true, checkout: {trackedChanged, newUntracked},
+//           nothingFrom: [label], the agents that return nothing, as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -130,6 +131,7 @@ function stub(env, scriptArgs, served) {
     try {
       await new Promise((r) => setTimeout(r, 3))
       calls.push({ label, prompt, schema: opts.schema })
+      if ((served.nothingFrom || []).includes(label)) return null
       let out
       const run = `${LOG}/${DATE}-${SHA.slice(0, 12)}`
       if (label === 'setup') {
@@ -611,6 +613,31 @@ try {
     if (dirty.result.checkoutClean !== false || !/Tracked files changed: README\.md/.test(dirty.result.report.text)) fail('a changed tracked file is not reported')
     for (const k of ['sha', 'claims', 'verdicts', 'findings', 'filed', 'skipped', 'report', 'checkoutClean']) if (!(k in result)) fail(`the return has no ${k}`)
     if (result.verdicts.true !== CORPUS.length) fail(`the verdict counts ${JSON.stringify(result.verdicts)}`)
+  }
+
+  // 17. An agent that returns nothing is a failure the run reports, never an empty result
+  //     (CODING_STANDARDS.md -> "A check fails closed"): a Shard, a Verify batch and the Cluster each
+  //     named in the return and the report, which says it is incomplete; the same runs with every
+  //     agent answering name no failure, so each assertion can fail.
+  checks++
+  {
+    const one = { files: ['contracts/telemetry.md'] }
+    const incomplete = (t) => /^\*\*Incomplete:\*\*/m.test(t)
+    const named = (r, re) => (r.failed || []).some((f) => re.test(f)) && new RegExp(`### Agents that returned nothing[\\s\\S]*${re.source}`).test(r.report.text)
+    const ok = await execute(newRepo(), one)
+    if (!Array.isArray(ok.result.failed) || ok.result.failed.length || incomplete(ok.result.report.text) || ok.result.claims !== 1) fail(`a run with every agent answering: failed ${JSON.stringify(ok.result.failed)}, claims ${ok.result.claims}`)
+    const sh = await execute(newRepo(), one, { nothingFrom: ['shard-1'] })
+    if (!named(sh.result, /shard-1 \(contracts\/telemetry\.md\) returned nothing/) || !incomplete(sh.result.report.text)) fail(`a Shard that returned nothing: failed ${JSON.stringify(sh.result.failed)}; the report ${incomplete(sh.result.report.text) ? 'says' : 'does not say'} it is incomplete`)
+    const ve = await execute(newRepo(), one, { nothingFrom: ['verify-1'] })
+    if (!named(ve.result, /verify-1 \(contracts\/telemetry\.md\) returned nothing: 1 claim/) || !incomplete(ve.result.report.text)) fail(`a Verify batch that returned nothing: failed ${JSON.stringify(ve.result.failed)}`)
+    const good = newRepo()
+    const g = await execute(good, withPlan(), TWO)
+    if ((g.result.failed || []).length || g.result.findings !== 2) fail(`TWO with every agent answering: failed ${JSON.stringify(g.result.failed)}, findings ${g.result.findings}`)
+    const cl = newRepo()
+    const c = await execute(cl, withPlan(), { ...TWO, nothingFrom: ['cluster'] })
+    if (c.result.verdicts.false !== 4 || c.result.findings !== 0) fail(`a Cluster that returned nothing: verdicts ${JSON.stringify(c.result.verdicts)}, findings ${c.result.findings}`)
+    if (!named(c.result, /the Cluster agent returned nothing: 4 false or stale verdicts/) || !incomplete(c.result.report.text)) fail(`a Cluster that returned nothing: failed ${JSON.stringify(c.result.failed)}`)
+    if (cl.gh.some((x) => x.action === 'create' && !/^Truth audit/.test(x.title))) fail('a Cluster that returned nothing still filed a finding')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
