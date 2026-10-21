@@ -23,9 +23,9 @@
 
 | Package (pinned in `Directory.Packages.props`) | Source read | Identity of the source |
 | --- | --- | --- |
-| `Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.12 | `dotnet/aspnetcore` tag `v10.0.12` (commit `cb21a42e`), `src/Security/Authentication/OpenIdConnect/src/` and `src/Security/Authentication/Core/src/` | `OpenIdConnectHandler.cs` at `v10.0.12` is byte-identical to `release/10.0` at commit `a3bb8c0e` (2026-10-20), so the request's `release/10.0` citations and these `v10.0.12` ones name the same text |
+| `Microsoft.AspNetCore.Authentication.OpenIdConnect` 10.0.12 | `dotnet/aspnetcore` tag `v10.0.12` (commit `cb21a42e`), `src/Security/Authentication/OpenIdConnect/src/` and `src/Security/Authentication/Core/src/` | The four files cited (`OpenIdConnectHandler.cs`, `OpenIdConnectOptions.cs`, `PushedAuthorizationBehavior.cs`, `RemoteAuthenticationHandler.cs`) were each diffed between `v10.0.12` and `release/10.0` at commit `a3bb8c0e` (2026-10-20) and are byte-identical, so the request's `release/10.0` citations and these `v10.0.12` ones name the same text |
 | `Duende.AccessTokenManagement.OpenIdConnect` 4.2.0 | `DuendeSoftware/foss` tag `atm-4.2.0`, `access-token-management/src/` | The package's nuspec depends on `Duende.IdentityModel` 8.1.0 |
-| `Duende.IdentityModel` 8.1.0 | `DuendeSoftware/foss` tag `im-8.1.0`, `identity-model/src/IdentityModel/` | The IdentityModel files at `atm-4.2.0` are not what 8.1.0 shipped, so they were read at their own tag |
+| `Duende.IdentityModel` 8.1.0 | `DuendeSoftware/foss` tag `im-8.1.0` (commit `9f24e82e`), `identity-model/src/IdentityModel/` | The IdentityModel files were read at their own tag because the monorepo's `atm-4.2.0` snapshot (commit `9c06a0fc`) is not 8.1.0's: `ProtocolRequest.cs` differs between the two (`im-8.1.0` adds a `ClientAssertionFactory` for DPoP retries; the `Prepare()` logic cited below is the same in both), while `HttpClientTokenRevocationExtensions.cs` and `Parameters.cs` are identical |
 | `Microsoft.IdentityModel.*` 8.19.2 | `AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet` tag `8.19.2` | Only for `SetParameter` and the telemetry parameters |
 
 Line numbers below are the `v10.0.12` file's.
@@ -231,7 +231,7 @@ to the endpoint over `Backchannel`, requires an `application/json` answer with `
 (`GetPushedAuthorizationRequestUri`, lines 604-623), then clears the authorize parameters and adds
 `client_id` and `request_uri` (lines 599-601). `OpenIdConnectMessage.CreateAuthenticationRequestUrl`
 (8.19.2, lines 172-199) then adds `x-client-SKU` and `x-client-ver` when `EnableTelemetryParameters`
-is on, which it is unless `Options.DisableTelemetry`.
+is on; the handler sets it to `!Options.DisableTelemetry` on the challenge message (line 401).
 
 `_configuration` is whatever the configuration manager returns, so the harness used a static
 `OpenIdConnectConfiguration` per scheme in place of a discovery document; the switch reads the same
