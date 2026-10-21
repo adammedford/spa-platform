@@ -14,8 +14,8 @@ namespace Gateway.TestHarness;
 /// <see cref="Error"/>, <see cref="CookieNames"/>, <see cref="BaselineCspTemplate"/>,
 /// <see cref="FixedResponseHeaders"/> (an empty value), <see cref="ForbiddenHeaderPrefix"/> and
 /// <see cref="TelemetryNames"/>. <see cref="BaselineCsp"/> is fed only unbroken text there, and
-/// <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are read only from the live contract. Nothing here reads a file; <see cref="Contract"/> does, once per
-/// member.
+/// <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are read only from the live contract.
+/// Nothing here reads a file; <see cref="Contract"/> does, once per member.
 ///
 /// <para>No function returns empty. A shape that is missing throws an
 /// <see cref="InvalidOperationException"/>, because an empty list would make every assertion built on
