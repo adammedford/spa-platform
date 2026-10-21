@@ -152,9 +152,9 @@ key.
 
 ## Work, gates and evidence
 
-**Workstream** — one of the six parallel lanes (1 AWS and IaC, 2 Hosting and registry, 3 OAuth and
-sessions, 4 API and security, 5 Fixtures, 6 Verification and operations), each with its own paths in
-`OWNERSHIP.md`. Not "team".
+**Workstream** — one of the six parallel streams of work (1 AWS and IaC, 2 Hosting and registry,
+3 OAuth and sessions, 4 API and security, 5 Fixtures, 6 Verification and operations), each with its
+own paths in `OWNERSHIP.md`. Not "team", and not "lane".
 
 **Integrator** — the owner of the shared skeleton: contracts, abstractions, test doubles, the
 composition root, `docs/adr/`, `docs/plan/`, CI and package versions. A role that agent sessions
@@ -179,6 +179,22 @@ frozen export, and a spec is one feature's working statement.
 **Standing answer** — a launch-time instruction that a night's lanes and grills take each
 recommendation as decided instead of stopping for the human. Given per run, and recorded in that
 run's `Overnight <date>` issue. Not "approval".
+
+**Workflow script** — a script the Workflow tool runs, under `.claude/workflows/` (the overnight run
+is one), which launches scripted sessions and tells each what to do. It is tracked and changes by a
+branch, a review and a landing like any other integrator change (ADR-0024). It is not a CI workflow
+under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
+
+**Lane** — one owner's tickets in one overnight run, worked in that owner's worktree, each on a
+branch of its own. The integrator has a lane and no workstream. _Avoid_: "lane" for a workstream.
+
+**Foreground session** — an agent session the human starts and watches, at the workstation, for
+work only the human can steer or approve as it happens. _Avoid_: "interactive session", and
+"foreground" for where a file lives.
+
+**Scripted session** — an agent session a workflow script launches: a lane's implementer, a
+reviewer, a griller, the report writer. It drafts and never commits an ADR or a frozen contract's
+sentence (ADR-0021 decision 4). _Avoid_: "background agent", "subagent", for this.
 
 **Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
 the night. Provisional until confirmed: a lane's code may rest on it until the human lands, but no
