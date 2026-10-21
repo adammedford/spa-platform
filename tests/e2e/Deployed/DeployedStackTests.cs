@@ -38,6 +38,33 @@ public sealed partial class DeployedStackTests
         Assert.NotEqual(DeployedStack.User, DeployedStack.OtherUser);
     }
 
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData(0, 12)]
+    [InlineData(5, 7)]
+    [InlineData(12, 0)]
+    [InlineData(60, 0)]
+    [InlineData(-30, 12)]
+    public void A_stack_on_the_cell_waits_out_what_is_left_of_the_quiet_since_the_last_one_ended(int? endedSecondsAgo, int waitSeconds)
+    {
+        // A mark reaches back of the workstation's clock, so a stack that started sooner could match a
+        // line the last test caused and never asserted (N-07's preflight before N-07's fact). An end in
+        // the future, a clock set back during the run, still waits one quiet and no more.
+        DateTimeOffset now = new(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        TimeSpan quiet = TimeSpan.FromSeconds(12);
+        DateTimeOffset? ended = endedSecondsAgo is { } ago ? now - TimeSpan.FromSeconds(ago) : null;
+
+        Assert.Equal(TimeSpan.FromSeconds(waitSeconds), DeployedStack.StartDelay(now, ended, quiet));
+    }
+
+    [Fact]
+    public void The_quiet_outlasts_a_mark_reaching_back_from_a_clock_behind_awss_by_the_margin()
+    {
+        // The last stack's line can carry an AWS time just after it ended, and the new mark reaches the
+        // margin back of a clock that may be the margin behind AWS's: twice the margin, and then some.
+        Assert.True(DeployedStack.Quiet > 2 * DeployedStack.ClockMargin, $"{DeployedStack.Quiet} is not more than twice {DeployedStack.ClockMargin}.");
+    }
+
     [GeneratedRegex(@"^\s*access_token_validity\s*=\s*(\d+)", RegexOptions.Multiline)]
     private static partial Regex AccessTokenValidity();
 

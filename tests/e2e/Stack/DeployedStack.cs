@@ -60,17 +60,32 @@ public sealed class DeployedStack : IBrowserStack
     private static readonly TimeSpan LogArrival = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// How far back of the workstation's clock a log mark reaches, so a clock a little ahead of AWS's
-    /// loses no line. A line inside that margin from before the mark is kept out by <see cref="Claimed"/>.
+    /// How far the workstation's clock may be from AWS's, either way. A log mark reaches this far back,
+    /// so a clock up to this far ahead loses none of its own test's lines; <see cref="Quiet"/> covers a
+    /// clock up to this far behind.
     /// </summary>
-    private static readonly TimeSpan ClockMargin = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan ClockMargin = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long after the last stack on the cell ended a new one starts (<see cref="StartDelay"/>). The
+    /// last stack's lines carry AWS times up to a moment after it ended, since the request line is
+    /// written after the rest of the pipeline returns (contracts/telemetry.md) and a request the browser
+    /// left in flight ends later still; and a mark reaches <see cref="ClockMargin"/> back of a workstation
+    /// clock that may itself be that far behind AWS's. Twice the margin and two seconds puts every such
+    /// line before this stack's start and every mark it makes.
+    /// </summary>
+    internal static readonly TimeSpan Quiet = (2 * ClockMargin) + TimeSpan.FromSeconds(2);
 
     private static readonly SemaphoreSlim OneAtATime = new(1, 1);
+
+    /// <summary>When the last stack on the cell ended, on the workstation's clock; written and read under <see cref="OneAtATime"/>, which orders the two.</summary>
+    private static DateTimeOffset? lastEnded;
 
     /// <summary>
     /// The request lines a rule assertion has already matched, by trace and span, in this process: a
     /// second refusal with the same rule must find its own line, not the first one's (N-06 asserts
-    /// four in a row), and the next test on the cell must not find the last test's.
+    /// four in a row). A line an earlier test caused, asserted or not, falls before this stack's marks
+    /// (<see cref="Quiet"/>).
     /// </summary>
     private static readonly HashSet<string> Claimed = [];
 
@@ -136,6 +151,8 @@ public sealed class DeployedStack : IBrowserStack
         ForeignSites? foreign = null;
         try
         {
+            await Task.Delay(StartDelay(DateTimeOffset.UtcNow, lastEnded, Quiet), ct);
+
             // Every app host goes to the tunnel, whatever the hosts file says, except the sibling, which
             // goes with the site elsewhere to this run's own foreign listener; the provider is reached on
             // the internet as it is. The context trusts only what the workstation trusts, and the foreign
@@ -158,6 +175,16 @@ public sealed class DeployedStack : IBrowserStack
             throw;
         }
     }
+
+    /// <summary>
+    /// How long a new stack waits before it starts: what is left of <paramref name="quiet"/> since the
+    /// last stack ended. Nothing for the first stack in the process, and never more than
+    /// <paramref name="quiet"/>, so a workstation clock set back during a run costs one quiet at most.
+    /// </summary>
+    internal static TimeSpan StartDelay(DateTimeOffset now, DateTimeOffset? previousEnded, TimeSpan quiet) =>
+        previousEnded is { } ended
+            ? TimeSpan.FromTicks(Math.Clamp((ended + quiet - now).Ticks, 0, quiet.Ticks))
+            : TimeSpan.Zero;
 
     public HarnessApp App(string appId) => Cell.App(appId);
 
@@ -434,6 +461,7 @@ public sealed class DeployedStack : IBrowserStack
         }
         finally
         {
+            lastEnded = DateTimeOffset.UtcNow;
             OneAtATime.Release();
         }
     }
