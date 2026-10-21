@@ -33,7 +33,7 @@ belongs to G1b (ADR-0017).
 | --- | --- | --- |
 | `__Host-spa-session` | `Secure; HttpOnly; SameSite=Lax; Path=/`, no `Domain` | A session id, encrypted for this app's scheme |
 | `__Host-spa-csrf` | `Secure; HttpOnly; SameSite=Strict; Path=/`, no `Domain` | The antiforgery cookie token. Cleared at logout. |
-| `__Host-spa-corr.*` and `__Host-spa-nonce.*` | `Secure; HttpOnly; SameSite=Lax; Path=/`, no `Domain`, minutes | Login state. Deleted by the callback. |
+| `__Host-spa-corr.*` and `__Host-spa-nonce.*` | `Secure; HttpOnly; SameSite=Lax; Path=/`, no `Domain`, minutes (`SameSite=None` under a profile that uses `form_post`: `pingfederate`, change request P2-6) | Login state. Deleted by the callback. |
 
 Every cookie carries the `__Host-` prefix, so only the app's own host can set it. That includes the
 login-state cookies: under their framework names a sibling SPA could plant them and complete a

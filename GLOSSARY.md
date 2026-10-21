@@ -128,6 +128,23 @@ unique within an app.
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
 identifier. One audience per app in Phase 1.
 
+**Client credential style** — how the gateway, as the confidential client, authenticates to the
+provider's backchannel endpoints: a form-body secret, a Basic header, or a client assertion. One per
+IdP profile, governing every backchannel call. See ADR-0017 and change request P2-6.
+_Avoid_: "auth method", "token endpoint auth".
+
+**Client assertion** — the signed JWT the gateway presents in place of a client secret under
+`private_key_jwt`, signed with the cell's key for that issuer.
+_Avoid_: "client JWT", "key assertion".
+
+**Pushed authorization** — the login's authorize parameters sent to the provider over the backchannel
+before the browser is redirected, so the browser carries a reference and not the parameters.
+_Avoid_: "PAR" alone in prose.
+
+**Login-state cookies** — the correlation and nonce cookies a login leaves until its callback,
+`__Host-spa-corr.*` and `__Host-spa-nonce.*`, minutes long and deleted by the callback. See ADR-0007.
+_Avoid_: "OIDC cookies", "auth cookies".
+
 **Stage** — one entry point in the middleware table of `contracts/pipeline.md`, in the position that
 table gives it. The number is the position and nothing more: it is normative only in that table, and
 it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is named by its entry

@@ -56,7 +56,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | OpenTelemetry.Exporter.OpenTelemetryProtocol | 1.19.1 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Exporter.InMemory | 1.19.1 | Apache-2.0 | Telemetry tests | F-11 |
 | Microsoft.AspNetCore.Authentication.JwtBearer | 10.0.12 | MIT | `fixtures/MockApi` |  |
-| Microsoft.IdentityModel.JsonWebTokens | 8.19.2 | MIT | `fixtures/TestIdp` | Signing for the test identity provider |
+| Microsoft.IdentityModel.JsonWebTokens | 8.19.2 | MIT | `fixtures/TestIdp`, `Platform.Identity` | Signing for the test identity provider, and the client assertion under `PrivateKeyJwt` (change request P2-6). Already in `Platform.Identity`'s closure through the handler package. |
 | xunit.v3 | 4.0.2 | Apache-2.0 | Every `*Tests` project | Added by `Directory.Build.props`. Runs on Microsoft Testing Platform v2. |
 | xunit.v3.extensibility.core | 4.0.2 | Apache-2.0 | `Platform.Testing` | The attributes without the runner. xUnit refuses `xunit.v3` on a library that is not an executable and names this instead. Already a transitive dependency of `xunit.v3`. |
 | xunit.v3.assert | 4.0.2 | Apache-2.0 | `Platform.Testing` | `Assert`, for the store contract suites that each implementation subclasses (task 3.4). Same 4.0.2 set. |
