@@ -587,7 +587,8 @@ def report(facts: dict, runs: List[dict]) -> str:
                    else "unconstrained (reported, not the floor)")
         lines += ["", f"{heading}: {len(floor)} floor and {len(gateway)} gateway cold starts, alternating",
                   render_table(summarise(floor), summarise(gateway)),
-                  "precision, the widest window between the attempt before a mark and the mark: "
+                  "precision, the widest window between the attempt before a mark and the mark (a clock "
+                  "reached on its first attempt has only that request's round trip): "
                   + ", ".join(f"{label} {widths[name]:.0f} ms" for name, label in CLOCKS if name in widths),
                   f"`docker start` took {cli:.0f} ms median, timed on the host's clock and not part of the table"]
     return "\n".join(lines)
