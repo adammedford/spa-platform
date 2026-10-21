@@ -64,6 +64,127 @@ ROAD = {
 }
 
 
+# Issue bodies as they were filed, every acceptance box open: #172, #204, #206 and #209 are the shapes
+# that ended partial on 2026-10-21 (#226), and #147 and #198 the single-owner, buildable shape #247
+# names as passing. Copied whole, so a pattern is tried on the text around a box as well as the box.
+FILED = {
+    172: '''## Question
+
+Charting decided the harness and the floor artifact live under `tools/bench`, owned by workstream 6 (verification). `OWNERSHIP.md` is an integrator file, and `tools/` is integrator by the `*` rule, so the path needs a line under "6 Verification and operations" and `AGENTS.md`'s owner table needs the same.
+
+Resolution: `contracts/changes/<id>-tools-bench-ownership.md` filed on a branch and pushed, following the existing change request's shape, naming this ticket and the map. The integrator decides and edits; this ticket closes when the request is filed, and the answer links it.
+
+## Acceptance
+
+- [ ] The change request giving workstream 6 the `tools/bench` path is filed under `contracts/changes/` on a pushed branch, in the existing change requests' shape, naming this ticket and the map (#169); the answer links it.
+''',
+    204: '''**Raised by:** #58 (sitting C, stage C1, 2026-10-21)
+**Owner:** integrator (root files, `src/Gateway/Dockerfile`), with workstream 5 for `fixtures/MockApi/Dockerfile`
+
+## What to build
+
+A workstation builds and runs the gateway and mock API images the way CI does, and the files the scripts write never reach a commit or a builder.
+
+Tonight's first deployment hit two defects that a clean CI checkout can't show. The image build copied the workstation's own build output over the image's `linux-arm64` restore, so `dotnet publish --no-restore` failed with `NETSDK1047`; and because no `.dockerignore` exists, every build also sent the local certificate authority's private key, the scratch directory and the git-ignored Terraform variables to the builder. Then, once the images built, the gateway died on its first line: `UnauthorizedAccessException` on `appsettings.json`, because the files were owner-only on the workstation, `COPY` and `publish` keep that mode, and the final stage runs as `$APP_UID`.
+
+The scripts also write the infrastructure outputs document into the tree, and git doesn't ignore it. It carries the account id and both apps' client ids, so one `git add .` would commit it.
+
+## Acceptance criteria
+
+- [ ] A root `.dockerignore` keeps build output, the local certificate authority, the scratch directory, `.git/`, Terraform's working directories, state and variable files out of the build context
+- [ ] The infrastructure outputs document the scripts write is git-ignored
+- [ ] Both Dockerfiles make the published output readable by the runtime user whatever the build context's file modes were
+- [ ] From a tree that has host build output and an owner-only `appsettings.json`, the gateway image builds, and a container started as its own user gets past `WebApplication.CreateBuilder`
+
+## Blocked by
+
+None (can start immediately).
+''',
+    206: '''**Raised by:** #58 (sitting C, stage C1, 2026-10-21)
+**Owner:** integrator (`Directory.Packages.props`, `docs/dependencies.md`), workstream 2 (`tools/spactl`, its tests)
+
+## What to build
+
+`spactl` signs in as the project's profile, so `seed.sh`, onboarding and every operator command run with no exported credentials.
+
+The `spa-platform` profile signs in with `login_session`, which the new AWS experience sets up. The AWS CLI and Terraform resolve it. The .NET SDK resolves it only when the `AWSSDK.Signin` assembly is present, and `spactl` references the S3 package alone, so every provider in its credential chain failed tonight (`Assembly AWSSDK.Signin could not be found or loaded`). The sitting got past it by exporting short-lived credentials into the shell before `seed.sh`.
+
+## Acceptance criteria
+
+- [ ] `AWSSDK.Signin` is pinned centrally at the release that pairs with the pinned S3 package's core, and `spactl` references it
+- [ ] `docs/dependencies.md` carries its row and the reason: the project's profile signs in with `login_session`, which the CLI and Terraform resolve on their own and the .NET SDK resolves only with this assembly
+- [ ] A test in `spactl`'s test project loads the credential chain against a profile file that uses `login_session` and asserts it gets past the missing-assembly failure, with no AWS call
+- [ ] `seed.sh` runs to its pass line on a workstation with the profile alone
+
+## Blocked by
+
+None (can start immediately).
+''',
+    209: '''**Raised by:** #63 (sitting C, stages C2 and C3, 2026-10-21)
+**Owner:** workstream 6 (`tests/e2e`)
+
+## What to build
+
+The browser suite runs against the deployed cell, through the tunnel, against Cognito, and the G3 functional rows (F-01 to F-06 and F-08) pass there. Tonight the stack was up and verified, and none of them could run: every test builds the in-process stack, and nothing points the browser at the tunnel, signs in through the managed login, or reads the gateway's log from CloudWatch.
+
+Running it needs a sitting: the cell deployed, `tunnel.sh` up, and the local authority trusted. The suite reads the cell's names from the infrastructure outputs document, never from Terraform state.
+
+## Acceptance criteria
+
+- [ ] A deployed stack beside the local one, chosen by an environment switch, with the local stack still the default
+- [ ] Chromium reaches every app host through the tunnel's local port and trusts the local authority
+- [ ] Sign-in goes through Cognito's managed login with the identity root's test users, whose passwords are read from Parameter Store at run time and never logged
+- [ ] The gateway's request lines are read from its CloudWatch log group, so the rows that assert a rule id or a redaction still can
+- [ ] F-01 to F-06 and F-08 pass against the deployed cell in a sitting, and the run is posted on #63
+
+## Blocked by
+
+None (can start immediately).
+''',
+    147: '''**Owner:** 4 API and security
+**Plan row:** none
+
+## Parent
+
+Part of #140, the `stage-host` spec. Ticket 4 of 10: the security tests' four hosts.
+
+## What to build
+
+`GateHost`, `AntiforgeryHost`, `HeadersHost` and `SecurityHost` in the security tests are each reduced to what is their own: a services delegate with the stage's settings, a pipeline delegate holding the stages they prove in the contract's order, their host-resolution pin and their terminal, and a `SendAsync` carrying their stage's headers. Everything else comes from `StageHost`: the listener, the telemetry stand-in through `TelemetryStandIn`, the captured log, the raw sender and the client. The antiforgery host's stand-in, installed today after the forwarded-headers stage in the reverse of the pipeline's order, is installed by the module outermost, so the method allowlist's 405 finds a feature to write on. The project's own `ListLoggerProvider` and its raw sender and parser are deleted.
+
+Call-shape edits the suite needs: a `string` becomes a `RawResponse` at the raw-send sites, the `lock` blocks over the live log list go because `Lines` is a snapshot, and rule-id queries use `LinesFor(rule, level?)`, which reads the `Rule` state property. With the floor at Trace a single-line assertion may meet a second, lower-level line; pass the level where it does. The pin stays in the pipeline delegate with no option and no helper. Note while migrating: the antiforgery host's pin matches the request's host without its port, while the real stage compares the full authority, port included; the ticket records this and changes nothing in the stage.
+
+## Acceptance criteria
+
+- [ ] The four hosts start on `StageHost` and each is its services delegate, pipeline delegate, pin, terminal and `SendAsync`, with no copied listener, stand-in, capture or sender left.
+- [ ] `ListLoggerProvider` and the project's raw sender and parser are deleted.
+- [ ] Every behaviour test in the project passes unchanged in behaviour, including the six proofs that a stage writes the feature null-conditionally with the stand-in off.
+- [ ] A test sends the antiforgery host a method the allowlist refuses with the stand-in on and reads the method rule id from `TelemetryRules`, which the reversed order could never show.
+- [ ] The change touches only workstream 4's paths and leaves no change request open.
+''',
+    198: '''**Owner:** 1 AWS and IaC
+**Plan row:** none
+**Raised by:** P8 in #186's independent review, https://github.com/adammedford/spa-platform/pull/186#issuecomment-6302058080
+
+## Parent
+
+#190
+
+## What to build
+
+The tunnel finds the cluster, the service and the load balancer by asking AWS for them by name, because the outputs document did not exist when 1.6b landed. 1.7 now writes it, and the frozen infra-outputs schema says the scripts read their names from it. The 1.6b review asked for this, and its merge body's Outstanding line left it out.
+
+## Acceptance criteria
+
+- [ ] The tunnel reads the ECS cluster, the service and the ALB's DNS name from the outputs document, and refuses with a named error when the document is absent.
+- [ ] Its companion fails when the tunnel goes back to looking the names up in AWS.
+- [ ] The tunnel's header says where its names come from.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+''',
+}
+
+
 def issue(number: int, body: str = "", *, title: str = "", assignees: tuple[str, ...] = (),
           blockers: tuple[tuple[int, str], ...] = (), subs: int = 0) -> dict:
     """One issue as `gh issue list --json` gives it."""
@@ -262,6 +383,105 @@ class Rules(unittest.TestCase):
         self.assertEqual([{"id": "issue-65", "issue": 65}], answer["landedButOpen"])
 
 
+class WillEndPartial(unittest.TestCase):
+    """#228: the launch plan of 2026-10-21 forecast 22 integrated tickets and got 15 (#226), and
+    nothing at collect time said which would end partial. Each ticket now carries "willEndPartial":
+    one entry per other owner its Owner line names (#227 rule 1), and one per open box that names a
+    sitting, the deployed cell or #63 (rule 2) or a pushed branch or a landing (rule 3)."""
+
+    def flags(self, number: int, text: str | None = None, *, label: str = "agent") -> list[dict]:
+        listed = {label: [issue(number, FILED[number] if text is None else text)]}
+        return by_issue(resolved(**listed))[number]["willEndPartial"]
+
+    def boxes(self, flags: list[dict]) -> list[tuple[str, list[str]]]:
+        return [(flag["box"], flag["names"]) for flag in flags if "box" in flag]
+
+    def owners(self, flags: list[dict]) -> list[str]:
+        return [flag["owner"] for flag in flags if "owner" in flag]
+
+    def test_172_is_flagged_for_its_pushed_branch_box(self):
+        flags = self.flags(172)
+        self.assertEqual([], self.owners(flags))
+        self.assertEqual(
+            [("The change request giving workstream 6 the `tools/bench` path is filed under "
+              "`contracts/changes/` on a pushed branch, in the existing change requests' shape, "
+              "naming this ticket and the map (#169); the answer links it.", ["a pushed branch"])],
+            self.boxes(flags))
+        self.assertIn("#227 rule 3", flags[0]["reason"])
+
+    def test_204_is_flagged_for_workstream_5_and_for_no_box(self):
+        """Its Raised-by line names a sitting, and is no box."""
+        flags = self.flags(204)
+        self.assertEqual((["ws5-fixtures"], []), (self.owners(flags), self.boxes(flags)))
+        self.assertIn("#227 rule 1", flags[0]["reason"])
+
+    def test_206_is_flagged_for_workstream_2_and_for_no_box(self):
+        flags = self.flags(206)
+        self.assertEqual((["ws2-hosting"], []), (self.owners(flags), self.boxes(flags)))
+
+    def test_209_is_flagged_for_its_sitting_box_alone(self):
+        """Boxes 1 to 4 name the deployed stack, the tunnel, Parameter Store and CloudWatch, and a
+        lane built each of them; box 5 is the sitting's."""
+        flags = self.flags(209)
+        self.assertEqual([], self.owners(flags))
+        self.assertEqual(
+            [("F-01 to F-06 and F-08 pass against the deployed cell in a sitting, and the run is "
+              "posted on #63", ["a sitting", "the deployed cell", "#63"])],
+            self.boxes(flags))
+        self.assertIn("#227 rule 2", flags[0]["reason"])
+
+    def test_one_owner_and_buildable_boxes_is_not_flagged(self):
+        for number in (147, 198):
+            with self.subTest(issue=number):
+                self.assertEqual([], self.flags(number))
+
+    def test_a_ticked_box_is_not_flagged(self):
+        ticked = FILED[209].replace("- [ ] F-01", "- [x] F-01")
+        self.assertEqual([], self.flags(209, ticked))
+
+    def test_each_term_flags_a_box_alone(self):
+        for box, names in (
+            ("- [ ] It passes in a sitting", ["a sitting"]),
+            ("- [ ] Two sittings run it", ["a sitting"]),
+            ("- [ ] It runs on the Deployed Cell", ["the deployed cell"]),
+            ("- [ ] The run is posted on #63.", ["#63"]),
+            ("- [ ] The branch is pushed", ["a pushed branch"]),
+            ("- [ ] Ticked at the landing", ["a landing"]),
+            ("- [ ] Once #200 has landed", ["a landing"]),
+            ("- [ ] Met when the change lands", ["a landing"]),
+            ("- [ ] Ticked at the landing.", ["a landing"]),
+            ("- [ ] Once #200 has landed.", ["a landing"]),
+        ):
+            with self.subTest(box=box):
+                self.assertEqual([(box[6:], names)], self.boxes(self.flags(7, body(boxes=box))))
+
+    def test_a_term_inside_another_word_or_name_is_not_flagged(self):
+        """A box may cite the landing guide, the pre-push hook or the cell scripts, carry #63 inside
+        a longer token or by its URL, or say a landings table or unpushed, and still be buildable."""
+        for box in (
+            "- [ ] `docs/agents/landing-work.md` names the step",
+            "- [ ] `landing.md` names the step",
+            "- [ ] The pre-push hook refuses it",
+            "- [ ] The cell scripts' companions search for it",
+            "- [ ] It cites #63a and x#63",
+            "- [ ] It links https://github.com/adammedford/spa-platform/issues/63",
+            "- [ ] The landings table has a column",
+            "- [ ] The flag is unpushed",
+        ):
+            with self.subTest(box=box):
+                self.assertEqual([], self.flags(7, body(boxes=box)))
+
+    def test_an_integrator_row_whose_owner_line_names_a_workstream_is_flagged(self):
+        """An I-* row is the integrator's whatever its Owner line says, so a line naming ws2 is a
+        second owner: the same pair the "why" already says lands in its own pull request."""
+        self.assertEqual(["ws2-hosting"], self.owners(self.flags(7, body("I-7", "ws2-hosting"))))
+
+    def test_every_ticket_carries_the_field_whatever_its_status(self):
+        """The forecast reads the ready-for-agent ones; the field is the ticket's shape, so a human's
+        ticket carries it too."""
+        self.assertEqual(["ws5-fixtures"], self.owners(self.flags(204, label="human")))
+
+
 class ThroughGh(unittest.TestCase):
     """main() end to end, with the fake gh on PATH and nothing else of the caller's environment."""
 
@@ -305,8 +525,18 @@ class ThroughGh(unittest.TestCase):
             self.assertIn(f"--label {label} --limit 500 --json {collect.FIELDS}", call)
         self.assertIn("subIssuesSummary", collect.FIELDS)
         answer = json.loads(out)
+        self.assertEqual([[], []], [t["willEndPartial"] for t in answer["tickets"]])
         self.assertEqual([("1.7", "ready-for-agent"), ("issue-2", "ready-for-human")],
                          [(t["id"], t["status"]) for t in answer["tickets"]])
+
+    def test_the_json_marks_a_ticket_that_will_end_partial_and_stderr_counts_it(self):
+        self.listings(agent=[issue(204, FILED[204]), issue(198, FILED[198])])
+        code, out, err = self.run_main("--json")
+        self.assertEqual(0, code, err)
+        found = {t["issue"]: t["willEndPartial"] for t in json.loads(out)["tickets"]}
+        self.assertEqual([], found[198])
+        self.assertEqual(["ws5-fixtures"], [flag["owner"] for flag in found[204]])
+        self.assertIn("1 will end partial", err)
 
     def test_a_shared_id_exits_1_with_nothing_on_stdout(self):
         self.listings(agent=[issue(56, body("1.4")), issue(180, body("1.4"))])
