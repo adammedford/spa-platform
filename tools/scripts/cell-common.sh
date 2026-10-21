@@ -312,18 +312,23 @@ wait_and_assert() {
   [ "$placed" = "$gateway" ] ||
     fail "the service runs task definition $(revision_of "$definition"), whose gateway image is $(redact "$placed"), not the one applied. The circuit breaker rolled it back, or another apply ran."
 
-  # Every running task's gateway container, by the digest ECS resolved when it started it.
-  # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Container.html (imageDigest)
+  # Every running task's gateway container, by the digest ECS resolved when it started it, and the
+  # task's private address, which is its target's id: the task runs in awsvpc mode and the target
+  # group's target type is ip (infra/modules/cell/ecs.tf, alb.tf), whose target id is the address.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetDescription.html
+  # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Container.html (imageDigest,
+  # networkInterfaces)
   aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
     --desired-status RUNNING --query taskArns
   # shellcheck disable=SC2046
   set -- $(tr '\t' ' ' < "$OUT")
   [ "$#" -gt 0 ] || fail "${SERVICE} is stable with no running task."
   aws_read "the tasks of ${SERVICE}" ecs describe-tasks --cluster "$CLUSTER" --tasks "$@" \
-    --query "tasks[].[taskArn, lastStatus, taskDefinitionArn, containers[?name=='${GATEWAY_CONTAINER}'] | [0].imageDigest]"
-  local arn status task_definition running wrong=""
-  while IFS="$(printf '\t')" read -r arn status task_definition running; do
+    --query "tasks[].[taskArn, lastStatus, taskDefinitionArn, containers[?name=='${GATEWAY_CONTAINER}'] | [0].imageDigest, containers[?name=='${GATEWAY_CONTAINER}'] | [0].networkInterfaces[0].privateIpv4Address]"
+  local arn status task_definition running address wrong="" addresses=""
+  while IFS="$(printf '\t')" read -r arn status task_definition running address; do
     [ -n "$arn" ] || continue
+    addresses="${addresses} ${arn##*/}=${address}"
     if [ "$status" != "RUNNING" ] || [ "$task_definition" != "$definition" ] || [ "$running" != "$digest" ]; then
       wrong="${wrong}  task ${arn##*/}: ${status}, $(revision_of "$task_definition"), gateway digest ${running}"$'\n'
     fi
@@ -339,17 +344,47 @@ wait_and_assert() {
     --query 'TargetGroups[0].HealthCheckPath'
   [ "$(printed)" = "$READY_PATH" ] || fail "the target group checks $(printed), not ${READY_PATH}."
   aws_read "the target group's targets" elbv2 describe-target-health --target-group-arn "$group" \
-    --query 'TargetHealthDescriptions[].TargetHealth.State'
-  # Every target healthy, and nothing else: a list of the bad states would pass one it left out.
-  # TargetHealth's State is initial, healthy, unhealthy, unhealthy.draining, unused, draining or
-  # unavailable, https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetHealth.html
-  local states state
-  states="$(tr '\t' ' ' < "$OUT" | awk '{$1 = $1; print}')"
+    --query 'TargetHealthDescriptions[].[Target.Id, TargetHealth.State]'
+  # Every target healthy or draining, and nothing else: a list of the bad states would pass one it
+  # left out. TargetHealth's State is initial, healthy, unhealthy, unhealthy.draining, unused,
+  # draining or unavailable, and draining means the target is being deregistered:
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetHealth.html
+  # A stable service still lists the previous task's target as draining for the group's
+  # deregistration delay, and on the first deployment that task, the sample image, also fails the
+  # new /readyz check meanwhile; deploy.sh exited 1 on exactly that in the sitting of #58 (#207).
+  # unhealthy.draining is not draining and still fails. A draining target is tolerated only as a
+  # task that is going away: each running task's own target has to be healthy, below.
+  local id state states="" healthy=" "
+  while IFS="$(printf '\t')" read -r id state; do
+    [ -n "$id" ] || continue
+    states="${states} ${state}"
+    if [ "$state" = "healthy" ]; then healthy="${healthy}${id} "; fi
+  done < "$OUT"
+  states="$(printf '%s' "$states" | awk '{$1 = $1; print}')"
   [ -n "$states" ] || fail "the target group has no target."
   # Word splitting on purpose: one state per word, and no state holds a space.
   # shellcheck disable=SC2086
   for state in $states; do
-    [ "$state" = "healthy" ] || fail "the target group's targets are: ${states}."
+    case "$state" in
+      healthy | draining) ;;
+      *) fail "the target group's targets are: ${states}." ;;
+    esac
+  done
+  # Each running task, all of them the applied gateway by the checks above, has its own target
+  # healthy on the ready path: a healthy target that is no running task's does not stand in for it.
+  local entry task found
+  for entry in $addresses; do
+    task="${entry%%=*}" address="${entry#*=}"
+    case "$healthy" in
+      *" ${address} "*) ;;
+      *)
+        state="not registered"
+        while IFS="$(printf '\t')" read -r id found; do
+          [ "$id" = "$address" ] && state="$found"
+        done < "$OUT"
+        fail "task ${task}'s target ${address} is not healthy on ${READY_PATH}: ${state}."
+        ;;
+    esac
   done
 
   # The image every reader of the outputs document is told runs, which apply_images rewrote from

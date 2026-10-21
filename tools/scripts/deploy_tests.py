@@ -134,6 +134,18 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         for call in case.calls():
             self.assertNotIn(cell.PASSWORD, json.dumps(call["argv"]))
 
+    def test_the_previous_tasks_target_draining_beside_the_new_tasks_healthy_one_is_steady(self):
+        # The sitting of #58, stage C1 (2026-10-21): the service stable, the new task's target
+        # healthy on /readyz and the previous task's draining for the deregistration delay, and
+        # deploy.sh exited 1 with "the target group's targets are: healthy draining" (#207). The
+        # doubles' apply leaves the group so on every deployment; this case names it.
+        case, result = self.deployed()
+        world = case.load()
+        new_task = world["tasks"][0]
+        self.assertEqual(sorted([[cell.task_ip(new_task), "healthy"], [cell.task_ip(cell.default_world()["tasks"][0]), "draining"]]),
+                         sorted([t["id"], t["state"]] for t in world["target_group"]["targets"]))
+        self.assertIn("pass:", result.stdout)
+
     def test_two_deployments_push_two_tags(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
         self.assertEqual(0, case.run(SCRIPT).status)
@@ -215,17 +227,45 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
 
     def test_an_unhealthy_target(self):
         world = seeded_world()
-        world["target_group"]["states"] = ["unhealthy"]
-        self.failed(world, "targets are: unhealthy")
+        world["faults"]["new_target"] = "unhealthy"
+        self.failed(world, "targets are: draining unhealthy")
 
     def test_a_target_in_a_state_other_than_healthy(self):
         # unhealthy.draining is in TargetHealth's State enum and was in no list of bad states, so a
         # deploy whose target was in it exited 0 (the review of PR #186, S2). One healthy target
-        # beside it does not make the group healthy.
+        # beside it does not make the group healthy, and only draining itself is tolerated (#207).
         # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetHealth.html
         world = seeded_world()
-        world["target_group"]["states"] = ["healthy", "unhealthy.draining"]
-        self.failed(world, "targets are: healthy unhealthy.draining")
+        world["faults"]["extra_targets"] = [["10.0.9.9", "unhealthy.draining"]]
+        self.failed(world, "targets are: draining healthy unhealthy.draining")
+
+    def test_a_target_in_any_state_but_healthy_or_draining_fails_beside_a_healthy_new_task(self):
+        # Every other value of TargetHealth's State, each as a second target beside the new task's
+        # healthy one and the previous task's draining one (#207, the second box).
+        for state in ("initial", "unhealthy", "unhealthy.draining", "unused", "unavailable"):
+            with self.subTest(state=state):
+                world = seeded_world()
+                world["faults"]["extra_targets"] = [["10.0.9.9", state]]
+                self.failed(world, f"targets are: draining healthy {state}.")
+
+    def test_the_new_tasks_target_draining_is_not_tolerated(self):
+        # Draining is tolerated as the previous task's state, never as the new one's: the new task
+        # has to be healthy on /readyz (#207, the first box).
+        world = seeded_world()
+        world["faults"]["new_target"] = "draining"
+        self.failed(world, "is not healthy on /readyz: draining")
+
+    def test_the_new_task_not_registered_while_another_target_is_healthy(self):
+        # A healthy target that is no running task's does not stand in for the new task's.
+        world = seeded_world()
+        world["faults"]["new_target"] = None
+        world["faults"]["extra_targets"] = [["10.0.9.9", "healthy"]]
+        self.failed(world, "is not healthy on /readyz: not registered")
+
+    def test_only_draining_targets(self):
+        world = seeded_world()
+        world["faults"]["new_target"] = None
+        self.failed(world, "is not healthy on /readyz: not registered")
 
     # The four cases below each turn one check of cell-common.sh's wait_and_assert red when that
     # check is removed, and no other check catches what they set up (#192, from the review of #186,
