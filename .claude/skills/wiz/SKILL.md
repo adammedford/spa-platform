@@ -62,24 +62,26 @@ answer governs Stage 0 too. Then run every time, before choosing a sitting.
 
 ```bash
 set -a; . tools/aws-project.env; set +a
-tools/preflight.sh                              # must end ready; it compares the account with the pin
+tools/preflight.sh                              # must end ready; it compares the account with the pin; C reads its Container engine row
 git fetch origin --tags && git status --short   # main checkout clean, on main, at origin/main
 gh issue view 129 --json comments --jq '[.comments[] | select(.body | test("^Confirm")) | .body]'
 aws ecs describe-services --cluster spa-poc --services gateway \
   --query 'services[0].{status:status,desired:desiredCount,running:runningCount}'
 ls tools/scripts/                               # which of tunnel.sh, verify-tunnel.sh, seed.sh, deploy.sh, teardown.sh have landed
 ls tests/e2e/Stack/DeployedStack.cs             # the browser suite's deployed mode (#209); C2 and C3 need it
-docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'no engine'
 ```
 
 Then say which sitting applies and list its stages with the minutes from the spec's inventory:
 
 - **A** when the service exists and #56 has no read-back comment yet.
 - **B** when #56's read-back is posted and `tunnel.sh` and `verify-tunnel.sh` are on `main`.
-- **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, the engine runs, and the
-  platform root is destroyed or absent. Offer C2 and C3 only when `tests/e2e/Stack/DeployedStack.cs`,
-  the browser suite's deployed mode (#209), is on `main`, read from the tree as the scripts are;
-  without it the sitting stops after C1 and says so.
+- **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, preflight's `Container engine`
+  row reads `ok` in the shell this sitting runs in, and the platform root is destroyed or absent. A
+  running engine is not enough: a per-user Docker Desktop puts `docker` in `~/.docker/bin`, which
+  that shell may not have on `PATH`, and then preflight and the scripts see no engine. Offer C2
+  and C3 only when `tests/e2e/Stack/DeployedStack.cs`, the browser suite's deployed mode (#209), is
+  on `main`, read from the tree as the scripts are; without it the sitting stops after C1 and says
+  so.
 - If the service is absent in A: the sitting becomes the platform root's re-apply on the sample
   image (A-alt below) before the read pass.
 
@@ -252,7 +254,8 @@ that the cell is down until `deploy.sh`.
 
 ## Sitting C: the first deployment and the gate runs
 
-Needs #58's scripts on `main`, Docker Desktop running (D-2), and the platform root absent; C2 and
+Needs #58's scripts on `main`, preflight's `Container engine` row reading `ok` in this sitting's
+shell (Docker Desktop, D-2), and the platform root absent; C2 and
 C3 also need `tests/e2e`'s deployed stack on `main` (#209).
 
 **C1.** In the plan's First deployment order: the platform root on the sample image (A-alt),
