@@ -84,6 +84,9 @@ spikes/g0/real-handler/vendor/ref/
 !.claude/workflows/
 .claude/workflows/*
 !.claude/workflows/*.js
+!.claude/workflows/overnight_tests.mjs
+!.claude/workflows/fixtures/
+!.claude/skills/
 
 # Python bytecode. A companion that loads a sibling module by path, as tools/land_tests.py loads
 # tools/companion_runner.py, leaves it beside that module under any python3 but the one macOS ships.
