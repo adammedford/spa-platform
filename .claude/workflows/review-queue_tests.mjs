@@ -6,7 +6,9 @@
 // Runs review-queue.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed
 // where the script reaches it: through the inventory agent, which serves canned pull requests as gh
 // would list them, and the post agent, which records the comment it was asked to post instead of
-// posting it. No agent, gh or network call is made. The main checkout the script is given is a
+// posting it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
+// throwing or returning nothing, and records the worktree its prompt names. No agent, gh or network
+// call is made. The main checkout the script is given is a
 // throwaway git repository with this repository's .gitignore, and a stubbed agent writes every file
 // a prompt names as an OUTPUT FILE into it, so the checkout's state after the run is evidence.
 // Exits 0 when every check holds, 1 when one fails (each failure printed), 2 when the script cannot
@@ -32,6 +34,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ownership: { owners: ['integrator'], ok: true, output: 'path-ownership: one owner' },
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
+  candidates: [], statedMutations: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -68,9 +71,17 @@ const PRS = {
 const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 
-function run(scriptArgs, served) {
+// A candidate invariant test as the inventory reports it, and a mutation the body states.
+const cand = (test, project = 'tests/Platform.Registry.Tests') => ({ test, project, guards: `what ${test} guards`, breaks: `src/${test}.cs` })
+const stated = (test, failed, total, project = 'tests/Platform.Registry.Tests') => ({ test, project, mutation: `break what ${test} guards`, failed, total, quote: `breaking it failed ${failed} of ${total}` })
+// What a stubbed mutation agent reports: reproduced, did-not-fail or could-not-run, with counts.
+const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({ result, failed, total })
+
+// behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold' }
+function run(scriptArgs, served, behave = {}) {
   const calls = []
   const posted = []
+  const mutations = []
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'review-queue-tests-'))
   made.push(repo)
   const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' })
@@ -84,7 +95,11 @@ function run(scriptArgs, served) {
   globalThis.args = args
   globalThis.phase = () => {}
   globalThis.log = () => {}
-  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f().catch(() => null)))
+  // A rejected branch rejects the whole call. This is stricter than the Workflow tool, whose parallel()
+  // resolves a thrower to null and never rejects, and whose agent() returns null for an agent that
+  // dies (the workflow-authoring reference, "Script body hooks"). The stub is strict on purpose, so
+  // the script's own guard turns a dying mutation agent into a row and no check rests on that promise.
+  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
   globalThis.agent = async (prompt, opts) => {
     const [kind, n] = opts.label.split(':')
     calls.push(opts.label)
@@ -93,8 +108,20 @@ function run(scriptArgs, served) {
       fs.writeFileSync(m[1], `${opts.label}\n`)
     }
     if (kind === 'inventory') return served[n]
-    if (kind === 'standards' || kind === 'spec') return { axis: kind, sourcesRead: ['CODING_STANDARDS.md'], findings: [], claims: [], nominations: [] }
-    if (kind === 'verdict') return { verdict: 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's' }
+    if (kind === 'standards' || kind === 'spec') {
+      const nominations = kind === 'standards' ? ((behave.nominations || {})[n] || []) : []
+      return { axis: kind, sourcesRead: ['CODING_STANDARDS.md'], findings: [], claims: [], nominations }
+    }
+    if (kind === 'mutate') {
+      const test = (/^TEST: (.+)$/m.exec(prompt) || [])[1]
+      const worktree = (/^WORKTREE: (\S+)$/m.exec(prompt) || [])[1]
+      mutations.push({ n: Number(n), test, worktree, prompt })
+      const b = (behave.mutate || {})[test] || row('reproduced')
+      if (b === 'throw') throw new Error('the mutation agent died')
+      if (b === 'null') return null
+      return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
+    }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's' }
     if (kind === 'post') {
       const body = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       posted.push({ n: Number(n), body: body ? body[1] : null })
@@ -102,7 +129,7 @@ function run(scriptArgs, served) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, calls, posted, git }
+  return { repo, wt: args.wt, calls, posted, mutations, git }
 }
 
 async function execute() {
@@ -133,7 +160,8 @@ try {
     const lines = (comments[0].body || '').split('\n')
     const want = `Reviewed ${sha(String(n % 10))} against ${FORK}: merge`
     if (lines[lines.length - 1] !== want) fail(`PR ${n}: the comment's last line is ${JSON.stringify(lines[lines.length - 1])}, expected ${JSON.stringify(want)}`)
-    if (!lines.some((l) => /^No mutations run/.test(l))) fail(`PR ${n}: the comment does not say no mutations run`)
+    if (!lines.some((l) => /^No mutations run/.test(l))) fail(`PR ${n}: with no candidate and no stated mutation, the comment does not say no mutations run`)
+    if (env.calls.some((c) => c.startsWith(`mutate:${n}:`))) fail(`PR ${n}: a mutation agent ran with nothing to mutate`)
   }
 
   // 2. After that run the main checkout's tracked files are unchanged, nothing new is visible to git,
@@ -238,6 +266,143 @@ try {
   result = await execute(env)
   const tie = (result.prs || [])[0] || {}
   if (tie.verdict !== 'hold') fail(`PR 76 with a hold and a merge at one instant: verdict ${tie.verdict}, expected hold`)
+
+  // The mutations a run posted for one pull request: its comment's table rows, as cells.
+  const TABLE_HEAD = '| Test | What was broken | Failed of total | Result | Log file |'
+  const tableOf = (body) => {
+    const lines = (body || '').split('\n')
+    const at = lines.indexOf(TABLE_HEAD)
+    if (at < 0) return null
+    const rows = []
+    for (const l of lines.slice(at + 2)) {
+      if (!l.startsWith('|')) break
+      rows.push(l.slice(1, -1).split(' | ').map((c) => c.trim()))
+    }
+    return rows
+  }
+  const resultOf = (n, result) => (result.prs || []).find((x) => x.number === n) || {}
+  const commentOf = (env, n) => (env.posted.find((p) => p.n === n) || {}).body || ''
+
+  // 10. A mutation agent that dies, by throwing or by returning nothing, becomes a could-not-run row
+  //     and the verdict still runs. On a candidate nobody suspected it is reported and does not hold;
+  //     on a nominated test it holds.
+  checks++
+  const DIES = { 201: pr(201, ['tests/Platform.Registry.Tests/A.cs'], { candidates: [cand('ThrowsTest'), cand('NullTest'), cand('FineTest')] }) }
+  env = run({ prs: [201] }, DIES, { mutate: { ThrowsTest: 'throw', NullTest: 'null' } })
+  result = await execute(env)
+  {
+    const r = resultOf(201, result)
+    if (!env.calls.includes('verdict:201')) fail('PR 201: a dying mutation agent stopped the verdict')
+    if (r.outcome !== 'recorded') fail(`PR 201: outcome ${r.outcome}, expected recorded`)
+    for (const t of ['ThrowsTest', 'NullTest']) {
+      const m = (r.mutations || []).find((x) => x.test === t)
+      if (!m) fail(`PR 201: no mutation row for ${t}, whose agent died`)
+      else if (m.result !== 'could-not-run' || !m.why) fail(`PR 201: ${t}'s row is ${JSON.stringify(m)}, expected could-not-run with why`)
+      const cells = (tableOf(commentOf(env, 201)) || []).find((c) => c[0] === t)
+      if (!cells || !/^could-not-run: \S/.test(cells[3])) fail(`PR 201: the comment's table has no could-not-run row with why for ${t}`)
+    }
+    if (r.verdict !== 'merge') fail(`PR 201: verdict ${r.verdict}; a could-not-run on candidates nobody suspected must not hold`)
+  }
+  env = run({ prs: [201] }, DIES, { mutate: { ThrowsTest: 'throw', NullTest: 'null' }, nominations: { 201: [{ test: 'NullTest', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] } })
+  result = await execute(env)
+  if (resultOf(201, result).verdict !== 'hold') fail(`PR 201 with NullTest nominated: verdict ${resultOf(201, result).verdict}; a could-not-run on a nominated test must hold`)
+
+  // 11. Every mutation agent is given its own throwaway worktree under the worktree root, none under
+  //     the repository, and is told to remove and prune it after its run.
+  checks++
+  const WIDE = { 202: pr(202, ['tests/x.cs'], { candidates: [cand('T1'), cand('T2'), cand('T3')] }), 203: pr(203, ['tests/y.cs'], { candidates: [cand('T4')] }) }
+  env = run({ prs: [202, 203] }, WIDE)
+  await execute(env)
+  if (env.mutations.length !== 4) fail(`PRs 202 and 203: ${env.mutations.length} mutation agents, expected 4`)
+  const seen = new Set()
+  for (const m of env.mutations) {
+    const w = m.worktree || ''
+    if (!w.startsWith(env.wt + '/')) fail(`mutation ${m.test}: worktree ${JSON.stringify(w)} is not under the worktree root ${env.wt}`)
+    if (w === env.repo || w.startsWith(env.repo + '/')) fail(`mutation ${m.test}: worktree ${w} is under the repository`)
+    if (seen.has(w)) fail(`mutation ${m.test}: worktree ${w} is shared with another mutation`)
+    seen.add(w)
+    if (!m.prompt.includes(`git -C ${env.repo} worktree add --detach ${w} `)) fail(`mutation ${m.test}: not told to add its worktree detached at the head`)
+    // Removed and pruned after the run: the instruction comes after the worktree is added.
+    const added = m.prompt.indexOf(`git -C ${env.repo} worktree add --detach ${w} `)
+    if (m.prompt.lastIndexOf(`git -C ${env.repo} worktree remove --force ${w}`) < added) fail(`mutation ${m.test}: not told to remove its worktree after its run`)
+    if (m.prompt.lastIndexOf(`git -C ${env.repo} worktree prune`) < added) fail(`mutation ${m.test}: not told to prune worktrees after its run`)
+  }
+
+  // 12. With more candidates than the cap, the cap is honoured and what it cut is named in the comment
+  //     body handed to gh. The list is the stated mutations, then the nominations, then the remaining
+  //     candidates, deduplicated by test.
+  checks++
+  const CAPPED = { 204: pr(204, ['tests/z.cs'], {
+    candidates: [cand('C1'), cand('C2'), cand('Nom'), cand('C3'), cand('Said')],
+    statedMutations: [stated('Said', 1, 10)],
+  }) }
+  env = run({ prs: [204], maxMutationsPerPr: 3 }, CAPPED, { nominations: { 204: [{ test: 'Nom', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] } })
+  result = await execute(env)
+  {
+    const ran = env.mutations.map((m) => m.test)
+    if (JSON.stringify(ran) !== JSON.stringify(['Said', 'Nom', 'C1'])) fail(`PR 204 with a cap of 3: mutated ${JSON.stringify(ran)}, expected ["Said","Nom","C1"]`)
+    const body = commentOf(env, 204)
+    const cutLine = body.split('\n').find((l) => /^Not mutated/.test(l)) || ''
+    for (const t of ['C2', 'C3']) if (!cutLine.includes(t)) fail(`PR 204: the comment's not-mutated line ${JSON.stringify(cutLine)} does not name ${t}, which the cap cut`)
+    for (const t of ['Said', 'Nom', 'C1']) if (cutLine.includes(t)) fail(`PR 204: the not-mutated line names ${t}, which was mutated`)
+    if (JSON.stringify(resultOf(204, result).notMutated) !== JSON.stringify(['C2', 'C3'])) fail(`PR 204: notMutated ${JSON.stringify(resultOf(204, result).notMutated)}, expected ["C2","C3"]`)
+    const rows = tableOf(body)
+    if (!rows || rows.length !== 3) fail(`PR 204: the comment's mutations table has ${rows ? rows.length : 'no'} rows, expected 3`)
+  }
+  // The default cap is 3.
+  env = run({ prs: [204] }, { 204: { ...CAPPED[204], statedMutations: [] } })
+  await execute(env)
+  if (env.mutations.length !== 3) fail(`PR 204 with the default cap: ${env.mutations.length} mutation agents, expected 3`)
+
+  // 13. The hold rules. A did-not-fail row holds, a stated mutation that does not reproduce holds, and
+  //     a stated mutation that reproduces with its counts merges, its row saying the counts matched.
+  checks++
+  const HOLDS = { 205: pr(205, ['tests/h.cs'], { candidates: [cand('Weak')] }), 206: pr(206, ['tests/i.cs'], { statedMutations: [stated('Said', 4, 153)] }) }
+  const cases = [
+    [205, { Weak: row('did-not-fail') }, 'hold', 'a did-not-fail row'],
+    [206, { Said: row('did-not-fail', 0, 153) }, 'hold', 'a stated mutation that did not reproduce'],
+    [206, { Said: row('could-not-run', 0, 0) }, 'hold', 'a stated mutation that could not run'],
+    [206, { Said: row('reproduced', 4, 153) }, 'merge', 'a stated mutation reproduced with its counts'],
+    [206, { Said: { result: 'went-red-ish', failed: 4, total: 153 } }, 'hold', 'a result that is none of the three', 'could-not-run'],
+  ]
+  for (const [n, mutate, want, what, rowWant] of cases) {
+    env = run({ prs: [n] }, HOLDS, { mutate })
+    result = await execute(env)
+    const r = resultOf(n, result)
+    if (r.verdict !== want) fail(`PR ${n} with ${what}: verdict ${r.verdict}, expected ${want}`)
+    const got = ((r.mutations || [])[0] || {}).result
+    if (got !== (rowWant || Object.values(mutate)[0].result)) fail(`PR ${n} with ${what}: the row's result is ${got}, expected ${rowWant || Object.values(mutate)[0].result}`)
+    const body = commentOf(env, n)
+    if (body.split('\n').pop() !== `Reviewed ${HOLDS[n].head} against ${FORK}: ${want}`) fail(`PR ${n} with ${what}: the record does not say ${want}`)
+    const rows = tableOf(body)
+    if (!rows || rows.length !== 1 || rows[0].length !== 5) fail(`PR ${n} with ${what}: the comment's mutations table is ${JSON.stringify(rows)}, expected one row of five cells under ${TABLE_HEAD}`)
+    else if (!/^mutation-1\.txt$|\/mutation-1\.txt$/.test(rows[0][4])) fail(`PR ${n} with ${what}: log file cell ${rows[0][4]}`)
+  }
+  {
+    env = run({ prs: [206] }, HOLDS, { mutate: { Said: row('reproduced', 4, 153) } })
+    result = await execute(env)
+    const m = (resultOf(206, result).mutations || [])[0] || {}
+    if (m.countsMatched !== true) fail(`PR 206: a stated 4 of 153 reproduced as 4 of 153 has countsMatched ${m.countsMatched}`)
+    const cells = (tableOf(commentOf(env, 206)) || [])[0] || []
+    if (cells[2] !== '4 of 153' || !/counts match/.test(cells[3] || '')) fail(`PR 206: the row reads ${JSON.stringify(cells)}, expected 4 of 153 and a result saying the counts match`)
+    env = run({ prs: [206] }, HOLDS, { mutate: { Said: row('reproduced', 3, 153) } })
+    result = await execute(env)
+    const off = (resultOf(206, result).mutations || [])[0] || {}
+    if (off.countsMatched !== false) fail(`PR 206: a stated 4 of 153 reproduced as 3 of 153 has countsMatched ${off.countsMatched}`)
+    env = run({ prs: [206] }, HOLDS, { mutate: { Said: row('reproduced', 4, 150) } })
+    result = await execute(env)
+    const offTotal = (resultOf(206, result).mutations || [])[0] || {}
+    if (offTotal.countsMatched !== false) fail(`PR 206: a stated 4 of 153 reproduced as 4 of 150 has countsMatched ${offTotal.countsMatched}`)
+    // A body that gives the failed count and no total (-1) is compared on what it gives: a reproduced
+    // 4 matches a stated "failed 4", whatever the total, and the prompt never quotes "of -1".
+    const NO_TOTAL = { 206: { ...HOLDS[206], statedMutations: [stated('Said', 4, -1)] } }
+    env = run({ prs: [206] }, NO_TOTAL, { mutate: { Said: row('reproduced', 4, 153) } })
+    result = await execute(env)
+    const noTotal = (resultOf(206, result).mutations || [])[0] || {}
+    if (noTotal.countsMatched !== true) fail(`PR 206: a stated "failed 4" with no total reproduced as 4 of 153 has countsMatched ${noTotal.countsMatched}`)
+    const said = (env.mutations[0] || {}).prompt || ''
+    if (!said.includes('(failed 4).')) fail('PR 206: the mutation prompt does not give the stated "failed 4" alone, with no total')
+  }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)
