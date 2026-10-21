@@ -70,8 +70,9 @@ internal static class Bff
     /// the ticket store finds the session already gone and does nothing (<see cref="AppSessions.RemoveAsync"/>,
     /// #141 Q12; CookieAuthenticationHandler.HandleSignOutAsync:
     /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Cookies/src/CookieAuthenticationHandler.cs).
-    /// A request with no session, or whose cookie resolves to a dead one, is challenged all the same, the
-    /// dead cookie noted under <c>auth.session</c> by <see cref="AppSessions.KeyOf"/>. The return path is
+    /// A request with no session, or whose cookie resolves to a dead one, is challenged all the same, and
+    /// the dead cookie is not refused: the login does what it was asked, so the request ends in no
+    /// rejection and carries no rule id (#199, #185 Q18). The return path is
     /// kept only when it is local (N-15); the sign-in that follows always lands under a new session key,
     /// which the callback-blind cookie manager of task 3.3 ensures (R-D5).
     /// </summary>
@@ -82,7 +83,7 @@ internal static class Bff
 
         AppSessions sessions = context.RequestServices.GetRequiredService<AppSessions>();
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (sessions.KeyOf(context, session) is { } key)
+        if (sessions.KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
             // Released before the sign-out, whose ungated removal needs no gate and should wait on none.
             using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
