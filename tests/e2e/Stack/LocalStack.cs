@@ -12,7 +12,7 @@ namespace Gateway.E2ETests.Stack;
 /// (docs/plan/05-infrastructure-and-cost.md). One per test: each starts with an empty provider log,
 /// an empty session store and a browser that has seen nothing.
 /// </summary>
-public sealed class LocalStack : IAsyncDisposable
+public sealed class LocalStack : IBrowserStack
 {
     private readonly IBrowser browser;
 
@@ -62,11 +62,94 @@ public sealed class LocalStack : IAsyncDisposable
         }
     }
 
+    public StackKind Kind => StackKind.Local;
+
     public HarnessApp App(string appId) => Harness.App(appId);
+
+    public string ProviderHost => new Uri(Harness.Idp.AuthorizeEndpoint).Host;
+
+    public string AuthorizeEndpoint => Harness.Idp.AuthorizeEndpoint;
+
+    public string EndSessionEndpoint => Harness.Idp.EndSessionEndpoint;
+
+    /// <summary>The test provider approves every authorization at once, so a login needs nothing more from the browser.</summary>
+    public Task CompleteLoginAsync(Profile profile, HarnessApp app) => Task.CompletedTask;
+
+    public Task<IReadOnlyList<Exchange>> ExchangesAsync() => Task.FromResult(LoadBalancer.Exchanges);
+
+    public Task<IReadOnlyList<System.Text.Json.JsonElement>> LogLinesAsync(string message) => Task.FromResult(LogLines(message));
+
+    public async Task<IReadOnlyList<System.Text.Json.JsonElement>> SettledLogLinesAsync(string message)
+    {
+        // The captured log is in process; a line is there within milliseconds of being written.
+        for (int attempt = 0; attempt < 250 && LogLines(message).Count == 0; attempt++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        IReadOnlyList<System.Text.Json.JsonElement> lines = LogLines(message);
+        Assert.True(lines.Count > 0, $"no gateway line starts \"{message}\".");
+        return lines;
+    }
+
+    /// <summary>
+    /// Expiry is made at the provider, which issues the login's token already expired: the token
+    /// library and the mock API read the system clock (evidence T-B10). Later tokens are valid.
+    /// </summary>
+    public async Task SignInWithExpiredAccessTokenAsync(Profile profile, HarnessApp app)
+    {
+        Harness.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(-10);
+        await profile.SignInAsync(app);
+        Harness.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(5);
+    }
+
+    /// <summary>
+    /// The test provider approves every authorization at once, so a browser left alone would sign
+    /// straight back in. The load balancer holds the next callback instead: the browser stops just
+    /// after the provider's authorization endpoint, which is its login page.
+    /// </summary>
+    public async Task StopAtProviderLoginAsync(Profile profile, Func<Task> action)
+    {
+        LoadBalancer.Hold(url => url.AbsolutePath == "/signin-oidc");
+        try
+        {
+            await action();
+            await Assertions.Expect(profile.Page).ToHaveTitleAsync(TlsLoadBalancer.HeldTitle);
+        }
+        finally
+        {
+            LoadBalancer.Release();
+        }
+    }
+
+    public Task<string> ReleaseOfAsync(string appId) => Task.FromResult(Harness.Options.Release);
+
+    public Task PublishReleaseAsync(string appId, string release, IReadOnlyDictionary<string, byte[]> files) =>
+        Harness.PublishReleaseAsync(appId, release, files, TestContext.Current.CancellationToken);
+
+    /// <summary>A new registry revision, written and polled at once (Gateway.TestHarness), as <c>spactl release activate</c> writes one.</summary>
+    public async Task SwitchReleaseAsync(HarnessApp app, string release)
+    {
+        Platform.Registry.RefreshOutcome outcome = await Harness.UpdateRegistryAsync(document =>
+        {
+            foreach (System.Text.Json.Nodes.JsonNode? entry in document["apps"]!.AsArray())
+            {
+                if (entry!["appId"]!.GetValue<string>() == app.AppId)
+                {
+                    entry["release"] = release;
+                }
+            }
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(Platform.Registry.RefreshOutcome.Swapped, outcome);
+    }
+
+    /// <summary>The harness polls as it writes, so the swap is done when <see cref="SwitchReleaseAsync"/> returns.</summary>
+    public TimeSpan RegistryPropagation => TimeSpan.FromSeconds(5);
 
     /// <summary>A fresh browser profile: no cookies, no storage.</summary>
     public async Task<Profile> OpenAsync()
     {
+        // The stand-in's certificate is this run's own, trusted by no store (TlsLoadBalancer).
         IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = true });
         IPage page = await context.NewPageAsync();
         return new Profile(this, context, page);

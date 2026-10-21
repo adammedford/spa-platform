@@ -18,26 +18,26 @@ public sealed class ShellTests
     [Fact]
     public async Task F06_each_app_gets_its_own_policy_and_the_browser_enforces_it()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app1 = stack.App("app1");
         HarnessApp app2 = stack.App("app2");
 
         // App 2 lists data: under img-src, so its own badge loads.
         await profile.SignInAsync(app2);
-        Assert.Contains("data:", ImgSrc(Shell(stack, app2)), StringComparison.Ordinal);
+        Assert.Contains("data:", ImgSrc(await ShellAsync(stack, app2)), StringComparison.Ordinal);
         Assert.True(await LoadsAsync(profile, DataImage), "app 2's policy allows data: images, so its badge should load.");
 
         // App 1 does not, so the same image on its shell is refused by the browser.
         await profile.SignInAsync(app1);
-        Assert.DoesNotContain("data:", ImgSrc(Shell(stack, app1)), StringComparison.Ordinal);
+        Assert.DoesNotContain("data:", ImgSrc(await ShellAsync(stack, app1)), StringComparison.Ordinal);
         Assert.False(await LoadsAsync(profile, DataImage), "app 1's policy has no data: in img-src, so Chromium should refuse the image.");
     }
 
     [Fact]
     public async Task F06_an_extensionless_path_gets_the_shell_and_a_missing_asset_gets_404()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
@@ -54,50 +54,61 @@ public sealed class ShellTests
     [Fact]
     public async Task F06_switching_the_release_changes_the_content_with_no_deployment_and_switching_back_restores_it()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
-        string first = stack.Harness.Options.Release;
+        string first = await stack.ReleaseOfAsync("app1");
         const string Second = "2026-10-16.1";
 
         // A second release of app 1 in the bucket, with a heading the first does not have.
         Dictionary<string, byte[]> files = new(FixtureFiles.Spa("app1"), StringComparer.Ordinal);
         files["index.html"] = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(files["index.html"])
             .Replace("<h1 id=\"marker\">Fixture SPA app1</h1>", "<h1 id=\"marker\">Fixture SPA app1, second release</h1>", StringComparison.Ordinal));
-        await stack.Harness.PublishReleaseAsync("app1", Second, files, TestContext.Current.CancellationToken);
+        await stack.PublishReleaseAsync("app1", Second, files);
 
         await profile.SignInAsync(app);
         await Assertions.Expect(profile.Page.Locator("#marker")).ToHaveTextAsync("Fixture SPA app1");
 
-        await SwitchAsync(stack, app, Second);
-        await profile.Page.ReloadAsync();
-        await Assertions.Expect(profile.Page.Locator("#marker")).ToHaveTextAsync("Fixture SPA app1, second release");
+        try
+        {
+            await stack.SwitchReleaseAsync(app, Second);
+            await ReloadUntilMarkerAsync(stack, profile, "Fixture SPA app1, second release");
+        }
+        finally
+        {
+            // Switched back even when the row fails, so the cell is left serving what it served.
+            await stack.SwitchReleaseAsync(app, first);
+        }
 
-        await SwitchAsync(stack, app, first);
-        await profile.Page.ReloadAsync();
-        await Assertions.Expect(profile.Page.Locator("#marker")).ToHaveTextAsync("Fixture SPA app1");
+        await ReloadUntilMarkerAsync(stack, profile, "Fixture SPA app1");
         await Assertions.Expect(profile.Page.Locator("#session-state")).ToHaveTextAsync(Profile.SignedInState);
     }
 
-    /// <summary>Points the app's entry at another release in a new registry revision, as <c>spactl</c> does.</summary>
-    private static async Task SwitchAsync(LocalStack stack, HarnessApp app, string release)
+    /// <summary>
+    /// Reloads until the shell's heading reads <paramref name="marker"/>, for up to one registry poll:
+    /// the cell's gateway picks a new revision up on its next poll, where the local harness polls as it
+    /// writes.
+    /// </summary>
+    private static async Task ReloadUntilMarkerAsync(IBrowserStack stack, Profile profile, string marker)
     {
-        Platform.Registry.RefreshOutcome outcome = await stack.Harness.UpdateRegistryAsync(document =>
+        System.Diagnostics.Stopwatch waited = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
         {
-            foreach (System.Text.Json.Nodes.JsonNode? entry in document["apps"]!.AsArray())
+            await profile.Page.ReloadAsync();
+            string? text = await profile.Page.Locator("#marker").TextContentAsync();
+            if (text == marker || waited.Elapsed >= stack.RegistryPropagation)
             {
-                if (entry!["appId"]!.GetValue<string>() == app.AppId)
-                {
-                    entry["release"] = release;
-                }
+                Assert.Equal(marker, text);
+                return;
             }
-        }, TestContext.Current.CancellationToken);
-        Assert.Equal(Platform.Registry.RefreshOutcome.Swapped, outcome);
+
+            await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        }
     }
 
     /// <summary>The last shell the browser received for the app.</summary>
-    private static Exchange Shell(LocalStack stack, HarnessApp app) =>
-        stack.LoadBalancer.Exchanges.Last(exchange => exchange.Url == app.Url("/") && exchange.Status == 200);
+    private static async Task<Exchange> ShellAsync(IBrowserStack stack, HarnessApp app) =>
+        (await stack.ExchangesAsync()).Last(exchange => exchange.Url == app.Url("/") && exchange.Status == 200);
 
     private static string ImgSrc(Exchange shell) =>
         Contract.Directives(shell.Header("Content-Security-Policy")!).Single(directive => directive.Key == "img-src").Value;

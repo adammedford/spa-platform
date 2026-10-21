@@ -5,11 +5,11 @@ using Microsoft.Playwright;
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
-/// One browser profile on a <see cref="LocalStack"/>: a Playwright context (its own cookie jar and
+/// One browser profile on a stack (<see cref="IBrowserStack"/>): a Playwright context (its own cookie jar and
 /// storage) and a page in it. What a test does here is what a user, an SPA's script or a hostile page
 /// does in a real browser; nothing sets a header the browser would compute itself.
 /// </summary>
-public sealed class Profile(LocalStack stack, IBrowserContext context, IPage page) : IAsyncDisposable
+public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage page) : IAsyncDisposable
 {
     /// <summary>The fixture shell marks itself signed in once <c>/bff/session</c> has answered 200 (fixtures/spa).</summary>
     public const string SignedInState = "signed in";
@@ -26,6 +26,7 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     public async Task SignInAsync(HarnessApp app)
     {
         await Page.GotoAsync(app.Url("/bff/login").ToString());
+        await Stack.CompleteLoginAsync(this, app);
         await WaitSignedInAsync(app);
     }
 
@@ -55,18 +56,18 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     public async Task<Uri> StopAtCallbackAsync(HarnessApp app)
     {
         string callback = app.Url("/signin-oidc").ToString();
-        int before = Stack.LoadBalancer.Held.Count;
-        Stack.LoadBalancer.Hold(url => url.ToString().StartsWith(callback, StringComparison.Ordinal));
+        int before = Local.LoadBalancer.Held.Count;
+        Local.LoadBalancer.Hold(url => url.ToString().StartsWith(callback, StringComparison.Ordinal));
         try
         {
             await Page.GotoAsync(app.Url("/bff/login").ToString());
         }
         finally
         {
-            Stack.LoadBalancer.Release();
+            Local.LoadBalancer.Release();
         }
 
-        return Stack.LoadBalancer.Held.Skip(before).SingleOrDefault()
+        return Local.LoadBalancer.Held.Skip(before).SingleOrDefault()
             ?? throw new InvalidOperationException($"the login to {app} never reached its callback; the page is at {Page.Url}.");
     }
 
@@ -132,12 +133,16 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     /// </summary>
     public async Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>")
     {
-        Stack.LoadBalancer.ServeForeign(url, html);
+        Local.LoadBalancer.ServeForeign(url, html);
         await Page.GotoAsync(url.ToString());
     }
 
     /// <summary>The stack this profile is on.</summary>
-    public LocalStack Stack { get; } = stack;
+    public IBrowserStack Stack { get; } = stack;
+
+    /// <summary>The stack, for what only the local stand-in load balancer can do: hold a request, serve a foreign page.</summary>
+    private LocalStack Local => Stack as LocalStack
+        ?? throw new NotSupportedException("this step needs the local stack's stand-in load balancer, which the deployed cell has no counterpart of.");
 
     public ValueTask DisposeAsync() => Context.DisposeAsync();
 }
