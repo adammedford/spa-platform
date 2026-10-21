@@ -24,6 +24,8 @@ public sealed class Cell
         Bucket = Field("bucket");
         LogGroup = Field("logGroup");
         ProviderHost = Field("cognitoDomain");
+        Cluster = Field("ecsCluster");
+        Service = Field("ecsService");
         Section("clients");
         Section("testUsers");
     }
@@ -36,6 +38,12 @@ public sealed class Cell
 
     /// <summary>The task's CloudWatch log group, which both containers write to under their own stream prefix (infra/modules/cell/ecs.tf).</summary>
     public string LogGroup { get; }
+
+    /// <summary>The ECS cluster the gateway's service runs in.</summary>
+    public string Cluster { get; }
+
+    /// <summary>The gateway's ECS service, whose one task F-07 holds unchanged across an onboarding (#212).</summary>
+    public string Service { get; }
 
     /// <summary>The managed-login domain, host only.</summary>
     public string ProviderHost { get; }
@@ -77,9 +85,21 @@ public sealed class Cell
     {
         string clientId = (document["clients"] as JsonObject)?[appId]?["clientId"]?.GetValue<string>()
             ?? throw new InvalidOperationException($"the infrastructure outputs name no client for {appId}: is it applied in the apps root?");
+        return App(appId, clientId);
+    }
+
+    /// <summary>
+    /// An app with a client this document does not yet name: app 3, whose client the apps root makes
+    /// while the run goes on (F-07). Its host is still its definition's, in fixtures/apps/ or fixtures/onboarding/.
+    /// </summary>
+    public HarnessApp App(string appId, string clientId)
+    {
         string host = HostOf(appId);
         return new HarnessApp(appId, host, new Uri("https://" + host + "/"), clientId, ClientSecret: "", SecretRef: "");
     }
+
+    /// <summary>Whether the document names a client for the app.</summary>
+    public bool HasClient(string appId) => (document["clients"] as JsonObject)?.ContainsKey(appId) == true;
 
     /// <summary>The Parameter Store name of a test user's generated password, never the password.</summary>
     public string PasswordParameter(string user) =>

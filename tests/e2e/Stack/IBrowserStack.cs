@@ -8,7 +8,7 @@ namespace Gateway.E2ETests.Stack;
 /// row needs it: the apps, a fresh browser profile, what the browser exchanged with the cell, the
 /// provider's endpoints, the gateway's log and the rule ids in it, a raw client, a foreign page, and
 /// the levers a row pulls (token expiry, a stop at the provider's login or at the callback, a release
-/// switch). A clause only one stack can show (what the test provider counted, say) is
+/// switch, an onboarding). A clause only one stack can show (what the test provider counted, say) is
 /// asserted by the row on a <see cref="LocalStack"/> alone; docs/plan/04-tests.md names those clauses
 /// "In H".
 /// </summary>
@@ -115,6 +115,16 @@ public interface IBrowserStack : IAsyncDisposable
     /// leaves the browser as usual.
     /// </summary>
     Task OpenForeignPageAsync(Profile profile, Uri url, string html);
+
+    /// <summary>
+    /// Onboards an app while the others are in use, with no restart (F-07): a client at the provider,
+    /// its secret, its release and its entry in a new registry revision, and returns once the gateway
+    /// serves that revision. The mock API does not admit the new client: that is its owner's decision.
+    /// </summary>
+    Task<HarnessApp> OnboardAsync(string appId);
+
+    /// <summary>Takes an onboarded app off again, whatever part of <see cref="OnboardAsync"/> ran, so the stack is left as it was.</summary>
+    Task OffboardAsync(string appId);
 
     /// <summary>How long after <see cref="SwitchReleaseAsync"/> the gateway may take to serve it: one registry poll (docs/plan/05-infrastructure-and-cost.md, Deployment and rollback).</summary>
     TimeSpan RegistryPropagation { get; }

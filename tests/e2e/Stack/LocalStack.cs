@@ -1,5 +1,6 @@
 using Gateway.TestHarness;
 using Microsoft.Playwright;
+using Platform.Registry;
 using Platform.Testing;
 
 namespace Gateway.E2ETests.Stack;
@@ -145,6 +146,18 @@ public sealed class LocalStack : IBrowserStack
 
     /// <summary>The harness polls as it writes, so the swap is done when <see cref="SwitchReleaseAsync"/> returns.</summary>
     public TimeSpan RegistryPropagation => TimeSpan.FromSeconds(5);
+
+    /// <summary>The harness's onboarding, the hermetic half of F-07, which swaps the gateway's snapshot as it writes.</summary>
+    public async Task<HarnessApp> OnboardAsync(string appId)
+    {
+        (HarnessApp app, RefreshOutcome outcome) = await Harness.OnboardAsync(appId, TestContext.Current.CancellationToken);
+        return outcome == RefreshOutcome.Swapped
+            ? app
+            : throw new InvalidOperationException($"onboarding {appId} left the gateway's snapshot {outcome}, not swapped.");
+    }
+
+    /// <summary>Nothing: the harness, and the app onboarded into it, end with this stack.</summary>
+    public Task OffboardAsync(string appId) => Task.CompletedTask;
 
     /// <summary>A fresh browser profile: no cookies, no storage.</summary>
     public async Task<Profile> OpenAsync()
