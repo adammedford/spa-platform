@@ -8,9 +8,10 @@ the tool input a session's Bash call would send, so the cases are the commands t
 **Real git in a throwaway directory.** One fixture serves every case, because the hook only reads:
 a repository whose first commit holds copies of the guard and of the tracked `.claude/settings.json`,
 a linked worktree of it, a symbolic link to it, a second repository, and a directory that is in none.
-The main worktree holds an untracked file and is otherwise a clean `main`; five more repositories,
-each with its own guard, are a `main` with a changed, a staged and a deleted tracked file, a detached
-HEAD and another branch, for the fast-forward's refusals (#200).
+The main worktree holds an untracked file and is otherwise a clean `main`; six more repositories,
+each with its own guard, are a `main` with a changed, a staged and a deleted tracked file, a `main`
+whose index git cannot read, a detached HEAD and another branch, for the fast-forward's refusals
+(#200).
 The throwaway directory keeps the path the system gives it, which on macOS runs through a symbolic
 link (/var is /private/var). HOME is that directory, so `~` names it; PWD is the main checkout, as a
 hook started by a session there inherits it; and git reads the fixture's own configuration and no
@@ -229,7 +230,13 @@ class Fixture:
         git(self.detached, "checkout", "-q", "--detach", env=self.env)
         self.branch = self.checkout("branch")
         git(self.branch, "switch", "-q", "-c", "task/other", env=self.env)
+        # An index git cannot read: `git status` fails while `rev-parse` still finds the repository,
+        # so the guard reaches its status read and must take the failure as not clean, failing closed
+        # (CODING_STANDARDS.md "A check fails closed").
+        self.unreadable = self.checkout("unreadable")
+        (self.unreadable / ".git" / "index").write_bytes(b"not an index")
         self.unclean = {"a changed tracked file": (self.dirty, CHANGED),
+                        "an unreadable index": (self.unreadable, CHANGED),
                         "a staged change": (self.staged, CHANGED),
                         "a deleted tracked file": (self.deleted, CHANGED),
                         "a detached HEAD": (self.detached, NOT_MAIN),
@@ -487,7 +494,6 @@ class Passes(GuardCase):
                         "git worktree add --detach ../spa-land origin/main"):
             with self.subTest(command=command):
                 self.assertPasses(command, self.fx.main)
-
 
 
 class FileWork(GuardCase):
