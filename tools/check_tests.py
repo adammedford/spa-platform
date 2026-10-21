@@ -23,9 +23,10 @@ git call at another repository.
 
 **Real git; doubles for python3, dotnet, terraform, the smoke test and the image check.** The
 Python checks have their own companions and ask GitHub things; the build, the suite, Terraform and
-the image take minutes and reach the network. Each double records its arguments, in one sequence shared by all of them, so a
-case asserts what ran and in what order. dotnet and terraform print a line on standard output, so
-a case can see whether the script showed or hid it. A double fails when a case names the call.
+the image take minutes and reach the network. Each double records its arguments, in one sequence
+shared by all of them, so a case asserts what ran and in what order. dotnet and terraform print a
+line on standard output, so a case can see whether the script showed or hid it. A double fails
+when a case names the call.
 
 **The hook's output is asserted literally.** The expected lines in HookTests are the old hook's
 messages, typed from its text, not read from the script under test (#68: same checks, same skips,

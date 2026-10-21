@@ -22,7 +22,7 @@
 # for STARTUP_SECONDS. Nothing is pushed.
 #
 # For this machine's architecture, not the ECS task's ARM64: both defects are the same on every
-# architecture, and an image for another one needs an emulator a CI runner does not have. No port is
+# architecture, and an image for another one needs an emulator CI's runner is not given. No port is
 # published: the container's own log says whether the process started, so nothing on the host is
 # bound and two runs at once do not collide. The image and the container are removed on every way
 # out; Docker keeps the layers, so a second run rebuilds only what changed.
@@ -76,7 +76,8 @@ git ls-files -z \
       if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi
     done \
   | tar --null -T - -cf - \
-  | tar -xpf - -C "$context"
+  | tar -xpf - -C "$context" \
+  || fail "the tracked tree could not be copied into $context."
 
 # The workstation's conditions. A host restore's assets file is for the host and no runtime, so the
 # image's `--no-restore` publish cannot use it; this one is not even JSON, which fails the same way
@@ -93,7 +94,9 @@ if ! "$docker" build --progress=plain -f "$context/src/Gateway/Dockerfile" -t "$
   fail "the gateway image did not build; a host bin/ or obj/ in the build context is one cause, which .dockerignore keeps out."
 fi
 
-user="$("$docker" image inspect -f '{{.Config.User}}' "$image")"
+# Every step below fails through fail(), so the last line is a verdict and never a bare set -e exit.
+user="$("$docker" image inspect -f '{{.Config.User}}' "$image")" \
+  || fail "the built image $image could not be inspected."
 case "$user" in
   '' | 0 | root | 0:* | root:*)
     fail "the gateway image runs as root, not as the runtime user, so it cannot show what that user can read."
@@ -101,13 +104,15 @@ case "$user" in
 esac
 
 # As the image's own user: no --user, so what runs is what ECS runs.
-"$docker" run -d --name "$name" "$image" > /dev/null
+"$docker" run -d --name "$name" "$image" > /dev/null || fail "the gateway image could not be started."
 
 started=false
 waited=0
 while [ "$waited" -lt "$STARTUP_SECONDS" ]; do
   "$docker" logs "$name" > "$work/run.log" 2>&1 || true
-  # The lifetime's "Application started" line, which follows the listener's start.
+  # The lifetime's "Application started" line, which the generic host's console lifetime logs once
+  # the host has started, after the listener:
+  # https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host#ihostapplicationlifetime
   if grep -F 'Application started' "$work/run.log" > /dev/null; then
     started=true
     break
