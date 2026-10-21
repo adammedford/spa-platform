@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using Gateway.TestHarness;
 
@@ -65,7 +63,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
             string outputsCopy = Path.Combine(work, "outputs.json");
             await File.WriteAllTextAsync(outputsCopy, outputs.ToJsonString(), ct);
 
-            string release = ReleaseName(appId);
+            string release = ContentRelease.Name("onboarding", FixtureFiles.Spa(appId));
             await SpactlAsync(["release", "publish", appId, Path.Combine(setup.RepositoryRoot, "fixtures", "spa", appId), release, "--outputs", outputsCopy], ct);
             await SpactlAsync(["app", "add", Path.Combine(setup.RepositoryRoot, "fixtures", "onboarding", appId + ".json"), "--release", release,
                                "--config", setup.PlatformConfig, "--outputs", outputsCopy], ct);
@@ -164,23 +162,6 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
 
     private Task<string> WaitAsync(long revision, CancellationToken ct) =>
         SpactlAsync(["wait", "--url", setup.ReadyOrigin.ToString(), "--revision", revision.ToString(CultureInfo.InvariantCulture), "--timeout", WaitSeconds], ct);
-
-    /// <summary>
-    /// Named for the fixture's content, as seed.sh names the seed's: a release prefix is written once
-    /// (ADR-0009) and spactl leaves identical bytes alone, so a second sitting's publish is a no-op and a
-    /// changed fixture gets a new name rather than a refused overwrite.
-    /// </summary>
-    private static string ReleaseName(string appId)
-    {
-        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach ((string path, byte[] bytes) in FixtureFiles.Spa(appId).OrderBy(file => file.Key, StringComparer.Ordinal))
-        {
-            hash.AppendData(Encoding.UTF8.GetBytes($"{path}\0{bytes.Length}\0"));
-            hash.AppendData(bytes);
-        }
-
-        return "onboarding-" + Convert.ToHexStringLower(hash.GetHashAndReset())[..12];
-    }
 
     /// <summary>A new directory outside the repository that only this user can open.</summary>
     private static string PrivateDirectory()

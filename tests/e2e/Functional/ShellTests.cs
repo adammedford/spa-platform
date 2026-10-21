@@ -58,20 +58,22 @@ public sealed class ShellTests
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         string first = await stack.ReleaseOfAsync("app1");
-        const string Second = "2026-10-16.1";
 
-        // A second release of app 1 in the bucket, with a heading the first does not have.
+        // A second release of app 1 in the bucket, with a heading the first does not have, named for
+        // its content: on the cell a release prefix is written once, so a fixed name would be refused
+        // at the next sitting after the fixture changed.
         Dictionary<string, byte[]> files = new(FixtureFiles.Spa("app1"), StringComparer.Ordinal);
         files["index.html"] = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(files["index.html"])
             .Replace("<h1 id=\"marker\">Fixture SPA app1</h1>", "<h1 id=\"marker\">Fixture SPA app1, second release</h1>", StringComparison.Ordinal));
-        await stack.PublishReleaseAsync("app1", Second, files);
+        string second = ContentRelease.Name("f06", files);
+        await stack.PublishReleaseAsync("app1", second, files);
 
         await profile.SignInAsync(app);
         await Assertions.Expect(profile.Page.Locator("#marker")).ToHaveTextAsync("Fixture SPA app1");
 
         try
         {
-            await stack.SwitchReleaseAsync(app, Second);
+            await stack.SwitchReleaseAsync(app, second);
             await ReloadUntilMarkerAsync(stack, profile, "Fixture SPA app1, second release");
         }
         finally
