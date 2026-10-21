@@ -121,11 +121,10 @@ anywhere but `.scratch/sitting/log/`, which `.gitignore` already ignores.
   (`certs.sh`, `verify-release-immutability.sh`, `tunnel.sh`, `verify-tunnel.sh`, `seed.sh`,
   `deploy.sh`, `rollback.sh`, `teardown.sh`) are workstream 1's and the wizard calls them. Decision
   D-3's shape, a tested script, is kept for anything that writes to AWS.
-- **Where the skill lives.** `.claude/skills/wizard/SKILL.md`, which `.gitignore` ignores today
-  (`.claude/*`, with only `settings.json` kept). The draft is `.scratch/sitting/wizard-SKILL.md`
-  beside this spec. Tracking it is #135's question (track `.claude/workflows/`); if that is decided
-  yes, a `!.claude/skills/` line beside the existing `!.claude/settings.json` tracks this one too,
-  and the skill gains a test companion in D-3's shape for its redaction and its stop conditions.
+- **Where the skill lives.** `.claude/skills/wiz/SKILL.md`, tracked since #213 (ADR-0027): the
+  `!.claude/skills/` line in `.gitignore` tracks it, and every change to it is a branch, a review
+  and a landing. The draft that sat beside this spec is removed. The skill gains a test companion
+  in D-3's shape for its redaction and its stop conditions (W-4).
 - **The record.** One log per sitting at `.scratch/sitting/log/<date>.log`, every command and its
   output, redacted before any of it is posted; the post is the stage's command, exit code and key
   lines, under a heading that names the stage. A skipped or failed stage posts "not run" or
@@ -172,7 +171,7 @@ anywhere but `.scratch/sitting/log/`, which `.gitignore` already ignores.
 
 | Ticket | Owner | Does | Blocked by |
 | --- | --- | --- | --- |
-| W-1 Install the draft skill and run sitting A | the human, with a foreground session | `.scratch/sitting/wizard-SKILL.md` copied to `.claude/skills/wizard/SKILL.md`; A0 to A7 run; A8 prepared, made once #129 is confirmed | nothing; the cell must still stand, else A becomes a re-apply of the platform root on the sample image |
+| W-1 Install the draft skill and run sitting A | the human, with a foreground session | the skill at `.claude/skills/wiz/SKILL.md`; A0 to A7 run; A8 prepared, made once #129 is confirmed | nothing; the cell must still stand, else A becomes a re-apply of the platform root on the sample image |
 | W-2 Sitting B | the human, with a session | B0 to B2 | #57 landed; A done |
 | W-3 Sitting C | the human, with a session | C0 to C5 | #58 landed; D-2's install; B done |
 | W-4 Track the skill and give it a companion | integrator | A `!.claude/skills/` line in `.gitignore`; `tools/wizard_redact.py` and its companion in D-3's shape; the skill's stop conditions tested | #135 decided yes |
