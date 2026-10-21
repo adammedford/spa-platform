@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The startup floor: the least an ASP.NET Core 10 process on the gateway's image chain costs to
+       start, so the gateway's own cold start can be read as a gap over it (#169, #173). Owner:
+       integrator, until the request in contracts/changes/issue-172-tools-bench-ownership.md gives
+       tools/bench to workstream 6. It references nothing and takes no package on purpose: anything
+       added here raises the floor. -->
+
+</Project>
