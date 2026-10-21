@@ -54,6 +54,13 @@ serves all four, and the choice of entry point decides which workstream owns the
 - The pin, the section's two keys and the dependencies row are decided with the rest of the request
   on https://github.com/adammedford/spa-platform/issues/222.
 - `GLOSSARY.md` gains *Key ring*, and *Cell* states the invariant.
+- On 2026-10-21 change request P2-2 kept the ring's parameters in Parameter Store's standard tier
+  (`TierStorageMode.StandardOnly`, the package's default), on the assumption that the `SecureString`
+  type is the encryption at rest and no key encryptor is configured
+  (https://github.com/adammedford/spa-platform/issues/222). A default key element is 956 bytes,
+  under the standard tier's 4 KB. An RSA-2048 certificate encryptor grows it to 3,505 bytes, and a
+  longer chain crosses 4 KB, where `StandardOnly` throws. Adding a key encryptor
+  (`ProtectKeysWith*`) therefore reopens the tier.
 
 ## Evidence
 

@@ -6,7 +6,7 @@
 - **Tasks:** P2-2; P2-1, whose ticket encryption needs the ring to be shared; P2-9, whose read-only
   root filesystem needs no key on disk
 - **Date:** 2026-10-19
-- **Status:** item 3 decided, 2026-10-20; items 1, 2 and 5 open, on https://github.com/adammedford/spa-platform/issues/222. See the Decision section below.
+- **Status:** decided, 2026-10-21. Item 3 on https://github.com/adammedford/spa-platform/issues/219 (2026-10-20); item 4 by that decision's items 6 and 7; items 1, 2, 5 and 6 on https://github.com/adammedford/spa-platform/issues/222. See the Decision section below.
 
 ## The gap
 
@@ -242,3 +242,125 @@ listed under Blocking.
    invariant rather than the mechanism; "application name" gets no entry. ADR-0025 records the
    durable facts (one ring per cell, the derived name, Parameter Store under a per-cell prefix,
    registered by hosting), with the entry point under its Consequences and a pointer from ADR-0012.
+
+### Items 1, 2, 5 and 6
+
+Integrator, 2026-10-21, on Adam's answers to the eleven questions of
+https://github.com/adammedford/spa-platform/issues/222, with the package facts
+https://github.com/adammedford/spa-platform/issues/216 verified (branch
+`research/phase-2-package-facts`). Nine were accepted as recommended. Two carry a change he
+accepted: the advisory warnings (decision 11) and the parameters' tags (decision 17). This decides
+items 1, 2, 5 and 6 and closes the request; item 4 was decided in effect by decisions 6 and 7 above.
+
+**What this hands the Phase 2 spec issue.** One integrator ticket carries the pin and the two
+`docs/dependencies.md` rows (decisions 10 and 18), and the section's schema follows at the next gate
+(decision 14). Workstream 2's P2-2 ticket carries the registration, the refusal of a section without
+its prefix and the cross-section rule (decisions 15 and 16). Workstream 1's row on #215 carries the
+task role's grants and teardown's deletion of the ring prefix (decisions 12 and 17).
+
+10. **The pin (item 1).** `Amazon.AspNetCore.DataProtection.SSM` 4.0.3 under `Label="AWS"`, still
+    the newest on nuget.org on 2026-10-21. Item 1's table is read with #216's corrections. The
+    `AWSSDK.SimpleSystemsManagement` row (line 44) is satisfied by the 4.0.104.2 pin only once
+    `Platform.Hosting` references the SDK directly, as decision 3 requires: without that reference
+    Hosting's graph resolves the SDK at 4.0.7.3 and `AWSSDK.Core` at 4.0.3.17. The
+    `Microsoft.AspNetCore.DataProtection` row (line 46) is verified: the shared framework's 10.0.12
+    wins at compile and run time, and nothing from the 10.0.7 floor reaches an output. Item 3's
+    fallback sentence (lines 116-118) is struck, as decision 3 already says, and the three facts the
+    Blocking section listed as unverified are settled by #216. One fact the request does not state:
+    the call registers `XmlDeletableKeyManager` as `IKeyManager` with `AddSingleton`, not `TryAdd`,
+    so it replaces the framework's `XmlKeyManager`, and a test that substitutes `IKeyManager`
+    registers after the call.
+11. **The advisory warnings are explained, not pinned away or suppressed (items 1 and 5).** With the
+    pin, the floor's `System.Security.Cryptography.Xml` and `.Pkcs` 10.0.7 stay in five graphs:
+    `Platform.Hosting`, `Platform.Hosting.Tests`, `Gateway.TestHarness`, `Gateway.IntegrationTests`
+    and `Gateway.SecurityTests`, all `Microsoft.NET.Sdk` projects. Each raises ten NU1902/NU1903
+    warnings, 50 in all, and they pass because `Directory.Build.props` downgrades NU1901 to NU1904
+    (line 13). A 10.0.13 pin of the two packages would not patch the image: the gateway prunes them
+    from its restore graph and runs the framework's own copy, so only the test hosts would load
+    different crypto assemblies from the image. A suppression would hide the five advisories that
+    name the 10.0.12 runtime itself. The `docs/dependencies.md` row says the warnings are expected
+    and why. **Changed from the round:** the runtime patch is its own issue,
+    https://github.com/adammedford/spa-platform/issues/273, rather than a note for the session that
+    next builds the image.
+12. **Three operations, two grants (item 1).** Item 1's "the two operations the assembly
+    references" (lines 53-54) are three: the `net10.0` assembly also calls `DeleteParameterAsync`,
+    reached only through `IKeyManager.DeleteKeys` and `DeleteAllKeys`, which the framework never
+    calls on its own. The task role gets `ssm:PutParameter` and `ssm:GetParametersByPath` on the
+    cell's ring prefix, and deliberately no `ssm:DeleteParameter`: nothing in the platform deletes a
+    key, and a role that cannot delete one cannot lose the ring by accident. Without that grant an
+    explicit deletion fails and serving does not. Two notes go to workstream 1's row on #215, not to
+    this request. `GetParametersByPath` is authorised against the path's own ARN as well as its
+    children, read from the package source and not executed against AWS. And the gateway now writes
+    `SecureString`s, so a customer-managed key needs its encrypt side granted beside `kms:Decrypt`.
+13. **`TierStorageMode` stays `StandardOnly`, with no configuration key (item 1).** A default key
+    element is 956 bytes against the standard tier's 4 KB, measured on #216. That holds only with no
+    key encryptor: an RSA-2048 certificate encryptor grows the element to 3,505 bytes, and a longer
+    chain or a 4096-bit key crosses 4 KB, where `StandardOnly` throws rather than falling back. The
+    gateway configures none, because Parameter Store's `SecureString` is the encryption at rest.
+    `AdvancedUpgradeable` would buy headroom nobody needs: advanced parameters are charged, and a
+    parameter cannot revert from advanced to standard. So adding a key encryptor
+    (`ProtectKeysWith*`) reopens the tier, and ADR-0025 carries that as a dated consequence.
+14. **The section narrows the schema, so its schema lands at the next gate (item 2).** Item 2 calls a
+    section whose members are all optional a widening (lines 67-73). Under the open root
+    (`contracts/platform-config.schema.json:8`) every value under `DataProtection` validates today,
+    `{"Foo": 1}` and `"x"` included, so a closed object, a pattern or a type makes invalid a document
+    that is valid now. By the reading section 2 of `p2-1-dynamodb-session-store.md` gives (lines
+    91-96), that is a narrowing. `Session:TableName` differs, because `Session` is already closed. The
+    section's schema is recorded here and lands at the next gate, with the narrowings already deferred
+    there. Nothing waits on it. The open root already admits `DataProtection__ParameterPrefix` in the
+    task environment. The gateway never validates its environment against the schema; the one caller
+    outside tests, spactl's `--config` check (`tools/spactl/Commands.cs:517`), reads an operator's
+    file, which the open root already lets carry the section. The cell module's Terraform test reads
+    only each section's `required` (`infra/modules/cell/tests/module.tftest.hcl:683-698`). Workstream
+    2 builds and proves the registration now, against the keys the code enforces.
+15. **The section's shape (item 2).** A closed object with no `required`. No `required` also keeps the
+    Terraform assert at `module.tftest.hcl:683-698` passing: it walks every section's `required` and
+    would otherwise demand the prefix in every cell, the `memory` ones included. `ParameterPrefix`
+    keeps the request's pattern, and the code refuses the section without it at start. `KmsKeyId`
+    takes the API's own `KeyId` pattern and length, `^[a-zA-Z0-9:/_-]{1,256}$`: that admits a key id, a
+    key ARN, an alias and an alias ARN, and refuses an empty string, which the package would read as
+    no key. No third key: the application name is derived (decision 4) and the tier is fixed
+    (decision 13).
+16. **`Session:Store = dynamodb` requires the section, and `AddPlatformHosting` enforces it (item
+    2).** Hosting already owns the absent-section path (decision 5). With `Session:Store` set to
+    `dynamodb`, that path fails the start instead, with a message naming both keys. Hosting reads
+    `Session:Store` from configuration and needs no project reference for it. Every `DataProtection`
+    rule then sits in one place and is proved in `tests/Platform.Hosting.Tests`. The other candidate
+    was the DynamoDB store's `FromConfiguration`, which would read workstream 2's section and would
+    land the rule only with the store. A Terraform validation pairing `session_store = "dynamodb"`
+    with a ring prefix is workstream 1's choice on its row. The schema's `if`/`then` waits for the
+    gate (decision 14).
+17. **Teardown deletes the ring, and the tags wait (a gap item 2 leaves).** The gateway creates the
+    ring's parameters at run time, outside Terraform, and with the request's call they carry no tags
+    (#216). They are then invisible to teardown's exact-match query on the platform tag
+    (`tools/scripts/teardown.sh:297-300`, `contracts/resource-tags.md`) and to P-05, and they
+    outlive `terraform destroy`: a cell rebuilt under the same name would load the old ring. So
+    teardown deletes `/spa-platform/{cell}/data-protection/*` before its emptiness check. That goes
+    to workstream 1's row on #215 and holds whatever is decided about tags. **Changed from the
+    round:** tagging the parameters `Platform`, `Cell` and `ManagedBy = gateway` is deferred. It
+    widens the task role, and both facts its benefit rests on are unverified: whether a tagged
+    `PutParameter` also needs `ssm:AddTagsToResource`, and whether the Resource Groups Tagging API
+    returns SSM parameters. https://github.com/adammedford/spa-platform/issues/274 holds the
+    question. The request never raised the tags, so deferring them leaves no item of it open.
+18. **The `docs/dependencies.md` rows (item 5).** Item 5's row stands, with `Platform.Hosting` under
+    "Expected in" as decision 3 fixed it. Its Note gains four things: confirmed on nuget.org on
+    2026-10-21 as still the newest; the package replaces `IKeyManager` with
+    `XmlDeletableKeyManager`; `Platform.Hosting` also references `AWSSDK.SimpleSystemsManagement`
+    directly, or its graph floors at 4.0.7.3; and decision 11's sentence on the advisory warnings.
+    The `AWSSDK.SimpleSystemsManagement` row's "Expected in" (`docs/dependencies.md:53`) becomes
+    `Platform.Registry` and `Platform.Hosting`. No KMS package, as the request says.
+19. **P2-2 is a prerequisite of P2-9 (item 6).** The blocking edge goes on the Phase 2 spec issue
+    when it is filed. Item 6's "nothing in the gateway writes to disk" (line 153) narrows to
+    "nothing the gateway's code configures writes to disk". The framework's default repository, under
+    the home of the user the image runs as (`src/Gateway/Dockerfile:56`), is the one writer the
+    gateway's code configures. Whether the runtime's diagnostics socket under `TMPDIR` leaves P2-9 a
+    writable `/tmp` is P2-9's to check; it was not verified here.
+20. **The record.** The `Status` line now accounts for all six items, which fixes its omission of
+    item 6. No new ADR and no glossary edit: the pin, the section's shape and the cross-section rule
+    are reversible and unsurprising, and *Key ring* and *Cell* already carry the invariant. The one
+    durable assumption, decision 13's, is a dated consequence on ADR-0025.
+
+Three citations are corrected by this record. `IdentityGateway.StartAsync` begins at
+`tests/Platform.Identity.Tests/IdentityGateway.cs:184`, not 186 (item 4). Item 1's KMS reasoning is
+the comment at `infra/modules/cell/iam.tf:158-163`. And #216's research cites the image's final
+stage as `src/Gateway/Dockerfile` line 39; it is line 47 now.
