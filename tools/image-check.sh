@@ -130,7 +130,9 @@ while [ "$waited" -lt "$STARTUP_SECONDS" ]; do
 done
 
 if ! $started; then
-  "$docker" logs "$name" 2>&1 | tail -20 >&2
+  # The container's last lines, for the reader of the verdict below; a logs call that fails here must
+  # not end the script before it.
+  "$docker" logs "$name" 2>&1 | tail -20 >&2 || true
   if grep -F 'Unhandled exception' "$work/run.log" > /dev/null \
     || [ "$("$docker" inspect -f '{{.State.Running}}' "$name")" != true ]; then
     fail "the gateway failed before it started; a file the runtime user cannot read is one cause, which the Dockerfile's chmod clears."

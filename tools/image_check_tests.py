@@ -17,7 +17,8 @@ tracks.
 **Docker is required, not optional.** A case that skipped without it would pass on the machine
 that cannot run it, the failure CODING_STANDARDS.md names. The cases find Docker as the script
 does, on PATH or at Docker Desktop's `~/.docker/bin/docker`, and one case runs the script without
-either, to see it fail rather than pass.
+either, to see it fail rather than pass. One class needs no daemon at all: a fake docker on a PATH of
+its own takes the script down a failure path a real daemon cannot be made to take on demand.
 
 Run: python3 -I tools/image_check_tests.py
 """
@@ -27,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import pathlib
+import shlex
 import shutil
 import stat
 import subprocess
@@ -161,6 +163,59 @@ class ImageCheckTests(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertEqual("image-check: fail: docker is not on PATH, nor at ~/.docker/bin/docker, where Docker "
                          "Desktop installs it.", last_line(result.stderr))
+
+
+# A docker that answers every call the script makes, with no daemon behind it. Its image runs as a
+# non-root user, and its container logs an unhandled exception and then is gone: the first `logs`
+# call prints the exception and every later one fails as a removed container does. COUNTER is
+# replaced with a file the case owns; the script's PATH holds no tool this needs.
+FAKE_DOCKER = """#!/bin/bash
+case "$1" in
+  image) [ "$2" = inspect ] && echo 1654; exit 0 ;;
+  run) echo fake-container; exit 0 ;;
+  inspect) echo false; exit 0 ;;
+  logs)
+    calls=0
+    [ -f COUNTER ] && read -r calls < COUNTER
+    calls=$((calls + 1))
+    echo "$calls" > COUNTER
+    if [ "$calls" -eq 1 ]; then
+      echo "Unhandled exception. System.UnauthorizedAccessException: Access to the path '/app/appsettings.json' is denied."
+      exit 0
+    fi
+    echo "Error response from daemon: No such container: $2" >&2
+    exit 3 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+class ImageCheckWithAFakeDockerTests(unittest.TestCase):
+    def test_a_logs_call_that_fails_after_the_wait_still_ends_on_the_verdict(self):
+        # The script's header promises that its last line is its verdict and never a bare set -e exit.
+        # The container's last lines, printed before the verdict, come from a second `logs` call, and a
+        # container that has gone by then makes that call fail.
+        tree = Tree(self)
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        bin_dir = pathlib.Path(scratch.name) / "bin"
+        bin_dir.mkdir()
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep"):
+            found = shutil.which(tool)
+            self.assertIsNotNone(found, f"{tool} is not on PATH")
+            (bin_dir / tool).symlink_to(found)
+        counter = pathlib.Path(scratch.name) / "logs-calls"
+        docker = bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER.replace("COUNTER", shlex.quote(str(counter))))
+        docker.chmod(0o755)
+
+        env = {"PATH": str(bin_dir), "HOME": scratch.name, "LC_ALL": "C"}
+        result = subprocess.run(["/bin/bash", str(SCRIPT)], cwd=tree.dir, env=env, capture_output=True,
+                                text=True, stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual("2", counter.read_text().strip(), result.stdout + result.stderr)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: the gateway failed before it started; a file the runtime user "
+                         "cannot read is one cause, which the Dockerfile's chmod clears.", last_line(result.stderr))
 
 
 if __name__ == "__main__":
