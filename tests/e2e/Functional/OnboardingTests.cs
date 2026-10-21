@@ -41,7 +41,10 @@ public sealed class OnboardingTests
 
             // Served: its own shell, after a login with its own client to its own callback.
             Assert.Equal("app3", await user.Page.Locator("#app").GetAttributeAsync("data-app"));
-            Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
+            // A failure prints the navigations only as Redacted does: they carry the provider's state.
+            Uri[] authorizations = [.. navigations.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
+            Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests in {Redacted.Urls(navigations)}");
+            Uri authorize = authorizations[0];
             Assert.Equal(app3.ClientId, QueryHelpers.ParseQuery(authorize.Query)["client_id"].ToString());
             Assert.Equal(app3.Url("/signin-oidc").ToString(), QueryHelpers.ParseQuery(authorize.Query)["redirect_uri"].ToString());
 

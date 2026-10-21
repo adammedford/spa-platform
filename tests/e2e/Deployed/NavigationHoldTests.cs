@@ -1,5 +1,6 @@
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Playwright;
 
 namespace Gateway.E2ETests.Deployed;
@@ -23,9 +24,10 @@ public sealed class NavigationHoldTests
         // provider, which a Playwright route would not see.
         Uri held = await NavigationHold.HoldAsync(profile.Page, callback, () => profile.Page.GotoAsync(app.Url("/bff/login").ToString()));
 
-        Assert.StartsWith(callback + "?", held.ToString(), StringComparison.Ordinal);
-        Assert.Contains("code=", held.Query, StringComparison.Ordinal);
-        Assert.Contains("state=", held.Query, StringComparison.Ordinal);
+        // Asserted without printing the code or the state (Redacted).
+        Assert.Equal(callback, Redacted.Url(held));
+        Dictionary<string, Microsoft.Extensions.Primitives.StringValues> query = QueryHelpers.ParseQuery(held.Query);
+        Assert.True(query.ContainsKey("code") && query.ContainsKey("state"), "the held callback carries no code or no state");
         Assert.Equal(NavigationHold.HeldTitle, await profile.Page.TitleAsync());
         Assert.DoesNotContain(stack.LoadBalancer.Exchanges, exchange => exchange.Url.AbsolutePath == "/signin-oidc");
         Assert.Equal(2, (await profile.CookiesOfAsync(app)).Count);

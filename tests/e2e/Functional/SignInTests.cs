@@ -50,15 +50,19 @@ public sealed class SignInTests
             navigations.Clear();
             await profile.SignInAsync(app);
 
-            Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
+            // The navigations carry the provider's state and the callback's code, so a failure prints
+            // them only as Redacted does, never as xUnit's dump of the list.
+            Uri[] authorizations = [.. navigations.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
+            Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests in {Redacted.Urls(navigations)}");
+            Uri authorize = authorizations[0];
             Dictionary<string, Microsoft.Extensions.Primitives.StringValues> query = QueryHelpers.ParseQuery(authorize.Query);
             Assert.Equal(app.ClientId, query["client_id"].ToString());
             Assert.Equal(app.Url("/signin-oidc").ToString(), query["redirect_uri"].ToString());
 
             // The browser came back to this app's own callback, after the provider and before the shell.
             int callback = navigations.FindIndex(url => url.GetLeftPart(UriPartial.Path) == app.Url("/signin-oidc").ToString());
-            Assert.True(callback > navigations.IndexOf(authorize), string.Join(" -> ", navigations));
-            Assert.Equal(app.Url("/"), navigations[^1]);
+            Assert.True(callback > navigations.IndexOf(authorize), Redacted.Urls(navigations));
+            Assert.True(navigations[^1] == app.Url("/"), $"the last navigation went to {Redacted.Url(navigations[^1])}, not {app.Url("/")}");
         }
     }
 }

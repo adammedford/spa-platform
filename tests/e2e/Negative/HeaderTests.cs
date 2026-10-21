@@ -39,17 +39,17 @@ public sealed class HeaderTests
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/logout");
         Exchange session = Assert.Single(bff, exchange => exchange.Url.AbsolutePath == "/bff/session" && exchange.Status == 200);
 
-        // The search can fail: the session body is in it, csrfToken and all.
+        // The search can fail: the session body is in it, csrfToken and all. No message prints the bodies
+        // or a token found in them: on the cell they are real (AGENTS.md).
         string bodies = string.Join("\n", bff.Select(exchange => exchange.BodyText));
-        Assert.Contains("csrfToken", bodies, StringComparison.Ordinal);
-        Assert.Contains(session.BodyText, bodies, StringComparison.Ordinal);
+        Assert.True(bodies.Contains("csrfToken", StringComparison.Ordinal), "the BFF bodies hold no csrfToken, so the search could not fail.");
+        Assert.True(bodies.Contains(session.BodyText, StringComparison.Ordinal), "the BFF bodies do not hold the session body, so the search could not fail.");
 
-        Assert.DoesNotMatch(TokenShape.Jwt(), bodies);
+        TokenShape.AssertNoJwtIn(bodies, "a BFF response body");
         if (local is not null)
         {
             // In H, none of the token values the provider issued either.
-            Assert.NotEmpty(TokenShape.IssuedBy(local.Harness.Idp));
-            Assert.All(TokenShape.IssuedBy(local.Harness.Idp), token => Assert.DoesNotContain(token, bodies, StringComparison.Ordinal));
+            TokenShape.AssertNoneIssuedIn(local.Harness.Idp, bodies, "a BFF response body");
         }
     }
 

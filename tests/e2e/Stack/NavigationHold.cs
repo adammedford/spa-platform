@@ -73,7 +73,7 @@ public static class NavigationHold
             }
             catch (TimeoutException)
             {
-                throw new TimeoutException($"no request to {prefix} came within {wait ?? DefaultWait}; the page is at {page.Url}.");
+                throw new TimeoutException($"no request to {prefix} came within {wait ?? DefaultWait}; the page is at {Redacted.Url(page.Url)}.");
             }
         }
         finally

@@ -34,7 +34,8 @@ public sealed class HostTests
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
 
         // Neither started a login: an unknown host has no app to sign in to.
-        Assert.DoesNotContain(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
+        // A failure prints the navigations only as Redacted does: an authorize request carries the provider's state.
+        Assert.False(navigations.Any(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint), Redacted.Urls(navigations));
         if (stack is LocalStack local)
         {
             Assert.Empty(local.Harness.Idp.Authorizations); // In H the provider saw no authorization either.

@@ -1,5 +1,6 @@
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Playwright;
 
 namespace Gateway.E2ETests.Functional;
@@ -67,11 +68,13 @@ public sealed class SessionLifecycleTests
 
         // The navigation back to the app after the provider's logout went to the provider's login, for
         // this app's client, and did not reach the shell.
+        // A failure prints the navigations only as Redacted does: they carry the provider's state.
         int endSession = navigations.FindIndex(url => url.GetLeftPart(UriPartial.Path) == stack.EndSessionEndpoint);
         Uri[] after = [.. navigations.Skip(endSession + 1)];
-        Assert.True(endSession >= 0, string.Join(" -> ", navigations));
-        Uri authorize = Assert.Single(after, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
-        Assert.Contains("client_id=" + app.ClientId, authorize.Query, StringComparison.Ordinal);
+        Assert.True(endSession >= 0, Redacted.Urls(navigations));
+        Uri[] authorizations = [.. after.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
+        Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests after the logout in {Redacted.Urls(navigations)}");
+        Assert.Equal(app.ClientId, QueryHelpers.ParseQuery(authorizations[0].Query)["client_id"].ToString());
 
         // The session is gone at the gateway, not only from the browser: the cookie it held before
         // logout, put back, is anonymous.

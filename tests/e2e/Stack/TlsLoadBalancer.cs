@@ -265,5 +265,6 @@ public sealed record Exchange(
 
     public string BodyText => System.Text.Encoding.UTF8.GetString(Body);
 
-    public override string ToString() => $"{Method} {Url} -> {Status}";
+    /// <summary>What an assertion over the exchanges prints for this one: the URL with no query (<see cref="Redacted"/>).</summary>
+    public override string ToString() => $"{Method} {Redacted.Url(Url)} -> {Status}";
 }

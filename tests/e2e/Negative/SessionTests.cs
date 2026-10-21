@@ -1,5 +1,6 @@
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Playwright;
 using Platform.Abstractions;
 
@@ -47,8 +48,9 @@ public sealed class SessionTests
         // browser from app 1's login and sends it straight back to that callback.
         List<Uri> navigations = profile.RecordNavigations();
         await profile.StopAtCallbackAsync(app2, () => profile.Page.GotoAsync(app2.Url("/").ToString()));
-        Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
-        Assert.Contains("client_id=" + app2.ClientId, authorize.Query, StringComparison.Ordinal);
+        Uri[] authorizations = [.. navigations.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
+        Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests in {Redacted.Urls(navigations)}");
+        Assert.Equal(app2.ClientId, QueryHelpers.ParseQuery(authorizations[0].Query)["client_id"].ToString());
         Assert.DoesNotContain(await stack.ExchangesAsync(), exchange => exchange.Url == app2.Url("/") && exchange.Status == 200);
 
         // Control: the same cookie is a session on app 1.

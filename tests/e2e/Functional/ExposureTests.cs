@@ -61,7 +61,9 @@ public sealed class ExposureTests
         StringBuilder dump = new();
         foreach (Exchange exchange in await stack.ExchangesAsync())
         {
-            dump.AppendLine(exchange.ToString());
+            // The whole URL, query included, written out: Exchange.ToString prints none (Redacted), and a
+            // token in a URL is one the browser holds.
+            dump.Append(exchange.Method).Append(' ').Append(exchange.Url).Append(" -> ").Append(exchange.Status).AppendLine();
             foreach ((string name, string value) in exchange.Headers)
             {
                 dump.Append(name).Append(": ").AppendLine(value);
@@ -79,15 +81,17 @@ public sealed class ExposureTests
         string text = dump.ToString();
 
         // The dump holds what the browser received, so the searches below can fail: the API's answer and
-        // the session cookie's value are in it.
-        Assert.Contains(app.ClientId, text, StringComparison.Ordinal);
-        Assert.Contains(cookies.First(cookie => cookie.Name == Contract.PlatformCookie("-session")).Value, text, StringComparison.Ordinal);
+        // the session cookie's value are in it. No message prints the dump, the cookie or a token found in
+        // it: on the cell they are real (AGENTS.md).
+        Assert.True(text.Contains(app.ClientId, StringComparison.Ordinal), "the dump does not hold the API's answer, so the searches below could not fail.");
+        Assert.True(
+            text.Contains(cookies.First(cookie => cookie.Name == Contract.PlatformCookie("-session")).Value, StringComparison.Ordinal),
+            "the dump does not hold the session cookie's value, so the searches below could not fail.");
 
-        Assert.DoesNotMatch(TokenShape.Jwt(), text);
+        TokenShape.AssertNoJwtIn(text, "what the browser holds");
         if (local is not null)
         {
-            Assert.NotEmpty(TokenShape.IssuedBy(local.Harness.Idp));
-            Assert.All(TokenShape.IssuedBy(local.Harness.Idp), token => Assert.DoesNotContain(token, text, StringComparison.Ordinal));
+            TokenShape.AssertNoneIssuedIn(local.Harness.Idp, text, "what the browser holds");
         }
     }
 }

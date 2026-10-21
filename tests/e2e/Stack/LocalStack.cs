@@ -196,7 +196,7 @@ public sealed class LocalStack : IBrowserStack
         }
 
         return LoadBalancer.Held.Skip(before).SingleOrDefault()
-            ?? throw new InvalidOperationException($"the login to {app} never reached its callback; the page is at {profile.Page.Url}.");
+            ?? throw new InvalidOperationException($"the login to {app} never reached its callback; the page is at {Redacted.Url(profile.Page.Url)}.");
     }
 
     /// <summary>Served by the load balancer, on loopback like the apps (<see cref="TlsLoadBalancer.ServeForeign"/>).</summary>
