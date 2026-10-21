@@ -99,7 +99,7 @@ public sealed class SignedInApiTests
         Assert.Equal(HttpStatusCode.OK, app2Own.StatusCode);
 
         // reports binds no audience, so app 1's token validates and is refused as the wrong client.
-        Assert.Equal(HttpStatusCode.Forbidden, app1OnReports.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, app1OnReports.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         Assert.Contains("\"error\":\"client_not_admitted\"", app1OnReports.Body, StringComparison.Ordinal);
 
         // orders binds its audience, and app 2 asks for no resource: its token fails validation there.
@@ -107,7 +107,7 @@ public sealed class SignedInApiTests
         // it: app 1 named a resource (its token's aud), app 2 named none (no aud for orders to accept).
         Assert.NotNull(harness.Idp.Authorizations.Last(authorization => authorization.ClientId == harness.App("app1").ClientId).Resource);
         Assert.Null(harness.Idp.Authorizations.Last(authorization => authorization.ClientId == harness.App("app2").ClientId).Resource);
-        Assert.Equal(HttpStatusCode.Unauthorized, app2OnOrders.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, app2OnOrders.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         Assert.Contains("\"error\":\"invalid_token\"", app2OnOrders.Body, StringComparison.Ordinal);
         Assert.Contains("\"api\":\"orders\"", app2OnOrders.Body, StringComparison.Ordinal);
     }

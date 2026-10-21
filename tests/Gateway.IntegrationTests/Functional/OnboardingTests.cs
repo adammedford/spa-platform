@@ -47,7 +47,7 @@ public sealed class OnboardingTests
         Assert.Equal(app3.Url("/signin-oidc").ToString(), QueryHelpers.ParseQuery(authorize.Query)["redirect_uri"].ToString());
 
         // The API owner has not admitted app 3's client: the gateway sent a good token and the API said no.
-        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         using (JsonDocument body = JsonDocument.Parse(refused.Body))
         {
             Assert.Equal("client_not_admitted", body.RootElement.GetProperty("error").GetString());

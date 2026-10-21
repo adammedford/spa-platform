@@ -124,7 +124,7 @@ public sealed class AssetPathTests : IAsyncLifetime
 
         RawResponse response = await Get("/index%00.html");
 
-        Assert.Equal(400, response.StatusCode);
+        Assert.Equal(400, response.StatusCode); // Not an Errors row: Kestrel's own 400, before any stage.
         Assert.Empty(recorder.RequestsSince(readsBefore));
         Assert.Equal(lines, await Observed.SettledCountAsync(harness, Suite.Ct));
     }
@@ -175,7 +175,7 @@ public sealed class AssetPathTests : IAsyncLifetime
 
         RawResponse response = await Get("/assets/not-shipped.js");
 
-        Assert.Equal(404, response.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, response.StatusCode);
         string key = Assert.Single(recorder.RequestsSince(readsBefore));
         Assert.StartsWith(ReleasePrefix("app1"), key, StringComparison.Ordinal);
     }
@@ -193,7 +193,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         int servedBefore = recorder.RequestReads.Count;
         Assert.Equal(200, (await Get("/index.html")).StatusCode);
         Assert.Equal(200, (await Get("/index.html", "app2")).StatusCode);
-        Assert.Equal(404, (await Get("/missing.js")).StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, (await Get("/missing.js")).StatusCode);
 
         string[] allowed = [ReleasePrefix("app1"), ReleasePrefix("app2")];
 

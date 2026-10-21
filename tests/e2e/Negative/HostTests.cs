@@ -23,12 +23,12 @@ public sealed class HostTests
 
         int mark = stack.RequestLines.Count;
         IResponse? unknown = await profile.Page.GotoAsync($"https://unknown.{LocalStack.Domain}:{app.Origin.Port}/");
-        Assert.Equal(404, unknown?.Status);
+        Assert.Equal(Contract.Error("not_found").Status, unknown?.Status);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
 
         mark = stack.RequestLines.Count;
         IResponse? wrongPort = await profile.Page.GotoAsync(new UriBuilder(app.Origin) { Port = app.Origin.Port + 1000 }.Uri.ToString());
-        Assert.Equal(404, wrongPort?.Status);
+        Assert.Equal(Contract.Error("not_found").Status, wrongPort?.Status);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
 
         // Neither started a login: an unknown host has no app to sign in to.
@@ -61,6 +61,6 @@ public sealed class HostTests
         using HttpRequestMessage unknown = new(HttpMethod.Get, $"https://unknown.{LocalStack.Domain}:{app1.Origin.Port}/");
         unknown.Headers.Add("X-Forwarded-Host", app1.Host);
         using HttpResponseMessage answer = await stack.SendRawAsync(unknown);
-        Assert.Equal(404, (int)answer.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, (int)answer.StatusCode);
     }
 }

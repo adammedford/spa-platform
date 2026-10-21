@@ -130,7 +130,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
 
         BrowserResponse onApp2 = await browser.GetAsync($"/api/{name}/thing", ct: Suite.Ct);
 
-        Assert.Equal(HttpStatusCode.NotFound, onApp2.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unknown_api").Status, onApp2.StatusCode);
         Assert.Equal(RuleIds.ApiUnknown, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
         Assert.Equal(echoed, harness.Echo.Requests.Count);
         Assert.DoesNotContain("\"api\":", onApp2.Body, StringComparison.Ordinal);
@@ -177,7 +177,7 @@ public sealed class UnknownApiTests(UnknownApiTests.Cell cell) : IClassFixture<U
             Harness.GatewayAddress, "GET", "/api/echo/x%00y", Harness.App("app1").Host,
             [("Sec-Fetch-Site", FetchMetadata.SameOrigin)], Suite.Ct);
 
-        Assert.Equal(400, response.StatusCode);
+        Assert.Equal(400, response.StatusCode); // Not an Errors row: Kestrel's own 400, before any stage.
         Assert.Equal(upstreams, Harness.Echo.Requests.Count);
 
         // No stage ran, so no request line was written. Read after the assertions above, by which

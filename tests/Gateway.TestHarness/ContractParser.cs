@@ -8,13 +8,14 @@ namespace Gateway.TestHarness;
 /// the one table, list or block <see cref="Contract"/> exposes, or throws naming the file and the
 /// section when that shape is not there. Internal, and open to <c>Gateway.IntegrationTests</c> only so
 /// <c>Harness/ContractTests</c> can feed them planted text (#139: "the parsers take text ... each is
-/// proven on planted input that breaks it before it is asserted against the live tree"). Six are
-/// proven that way: <see cref="ErrorRows"/>, <see cref="Error"/>, <see cref="CookieNames"/>,
-/// <see cref="BaselineCspTemplate"/>, <see cref="ForbiddenHeaderPrefix"/> and
-/// <see cref="TelemetryNames"/>. <see cref="FixedResponseHeaders"/> and <see cref="BaselineCsp"/> are
-/// fed only unbroken text there, and <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are
-/// read only from the live contract. Nothing here reads a file; <see cref="Contract"/> does, once per
-/// member.
+/// proven on planted input that breaks it before it is asserted against the live tree"). Seven are
+/// proven that way: <see cref="ErrorRows"/> (a second table and a table without its separator among
+/// the breaks, which prove <see cref="ContractSection.Rows"/> reads every table in a section),
+/// <see cref="Error"/>, <see cref="CookieNames"/>, <see cref="BaselineCspTemplate"/>,
+/// <see cref="FixedResponseHeaders"/> (an empty value), <see cref="ForbiddenHeaderPrefix"/> and
+/// <see cref="TelemetryNames"/>. <see cref="BaselineCsp"/> is fed only unbroken text there, and
+/// <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are read only from the live contract.
+/// Nothing here reads a file; <see cref="Contract"/> does, once per member.
 ///
 /// <para>No function returns empty. A shape that is missing throws an
 /// <see cref="InvalidOperationException"/>, because an empty list would make every assertion built on
@@ -78,6 +79,8 @@ internal static class ContractParser
     /// The response headers with a fixed value: the "Response headers" bullets whose backquotes hold
     /// <c>Name: value</c>, names compared case-insensitively. The policy bullet backquotes only its
     /// name, and the forbidding bullet is <see cref="ForbiddenHeaderPrefix"/>'s, so neither is here.
+    /// A bullet whose backquotes hold a colon but not a header name and a value after it throws: an
+    /// empty value read as fixed would have the suites assert the gateway sends the header empty.
     /// </summary>
     internal static ImmutableDictionary<string, string> FixedResponseHeaders(string browserContract)
     {
@@ -85,8 +88,14 @@ internal static class ContractParser
         ImmutableDictionary<string, string> fixedHeaders = headers.Bullets()
             .Where(bullet => bullet.StartsWith('`'))
             .Select(bullet => ContractSection.Backquoted(bullet).FirstOrDefault() ?? string.Empty)
+            .Where(pair => pair.Contains(':', StringComparison.Ordinal))
             .Select(pair => pair.Split(": ", 2))
-            .Where(pair => pair.Length == 2 && pair[0].Length > 0 && pair[0].All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+            .Select(pair => pair.Length == 2
+                && pair[0].Length > 0
+                && pair[0].All(c => char.IsAsciiLetterOrDigit(c) || c == '-')
+                && pair[1].Trim().Length > 0
+                    ? pair
+                    : throw headers.Broken($"the bullet '{string.Join(": ", pair)}' is not of the form `Name: value` with a value"))
             .ToImmutableDictionary(pair => pair[0], pair => pair[1], StringComparer.OrdinalIgnoreCase);
         return fixedHeaders.Count > 0 ? fixedHeaders : throw headers.Broken("no bullet of the form `Name: value`");
     }
@@ -256,20 +265,33 @@ internal sealed class ContractSection
         new($"{File} -> {Heading}: {what}. The contract reader reads it from there.");
 
     /// <summary>
-    /// The data rows of the section's first table, each as its trimmed cells: the header row and the
-    /// separator row under it are not data. A section with no table row throws.
+    /// The data rows of every table in the section, in order, each as its trimmed cells: a table is a
+    /// run of consecutive lines that begin <c>|</c>, and its header row and the separator row under
+    /// it are not data. A run whose second line is not a separator is not a table and throws, rather
+    /// than have its lines read as rows or skipped. A section with no table row throws.
     /// </summary>
     public IReadOnlyList<IReadOnlyList<string>> Rows()
     {
-        string[] table = [.. lines
-            .SkipWhile(line => !line.StartsWith('|'))
-            .TakeWhile(line => line.StartsWith('|'))];
+        List<IReadOnlyList<string>> rows = [];
+        List<string> table = [];
+        foreach (string line in lines.Append(string.Empty))
+        {
+            if (line.StartsWith('|'))
+            {
+                table.Add(line);
+                continue;
+            }
 
-        IReadOnlyList<string>[] rows = table.Length >= 2 && Cells(table[1]).All(IsSeparator)
-            ? [.. table.Skip(2).Select(Cells)]
-            : [];
+            if (table.Count > 0)
+            {
+                rows.AddRange(table.Count >= 2 && Cells(table[1]).All(IsSeparator)
+                    ? table.Skip(2).Select(Cells)
+                    : throw Broken($"the table that begins '{table[0]}' has no separator row under its header"));
+                table.Clear();
+            }
+        }
 
-        return rows.Length > 0 ? rows : throw Broken("no table rows");
+        return rows.Count > 0 ? rows : throw Broken("no table rows");
     }
 
     /// <summary>The backquoted names in <paramref name="text"/>, in order, without their backquotes.</summary>

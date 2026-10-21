@@ -43,7 +43,7 @@ public sealed class OnboardingTests
 
         // The mock API refuses app 3's call: its owner has not admitted that client.
         FetchResult refused = await user.FetchAsync("/api/reports/whoami");
-        Assert.Equal(403, refused.Status);
+        Assert.Equal(403, refused.Status); // Not an Errors row: the mock API's own answer, passed back.
         using (JsonDocument body = JsonDocument.Parse(refused.Body))
         {
             Assert.Equal("client_not_admitted", body.RootElement.GetProperty("error").GetString());

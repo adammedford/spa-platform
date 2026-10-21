@@ -164,7 +164,7 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
         [
             // The session cookie, under the platform's own name, on an asset request. It names no
             // session, so the cookie handler reads it and the shell gate refuses it under auth.session.
-            ("/index.html", [("Cookie", $"{SignedIn.SessionCookieName}={Canaries.Cookie}")], 401),
+            ("/index.html", [("Cookie", $"{SignedIn.SessionCookieName}={Canaries.Cookie}")], Contract.Error("unauthenticated").Status),
 
             // A bearer token and the antiforgery header on an API call that is refused, so the
             // refusal's own Warning line is swept as well as the request line.
@@ -173,7 +173,7 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
                 ("Sec-Fetch-Site", FetchMetadata.CrossSite),
                 ("Authorization", $"Bearer {Canaries.Token}"),
                 ("X-CSRF-TOKEN", Canaries.Csrf),
-            ], 403),
+            ], Contract.Error("origin_rejected").Status),
 
             // The same two on an API call that is not refused, which reaches an upstream.
             ("/api/echo/thing",
@@ -186,13 +186,13 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
 
             // A code and a state in a query string, on the callback path the contract names. No login
             // is in flight, so the callback is refused with the failure page.
-            ($"/signin-oidc?code={Canaries.Code}&state={Canaries.State}", [], 400),
+            ($"/signin-oidc?code={Canaries.Code}&state={Canaries.State}", [], 400), // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
 
             // And on an asset path, where the framework's own request log would have carried them.
             ($"/index.html?code={Canaries.Code}&state={Canaries.State}", [session], 200),
 
             // And on the app's root with no session, which the shell gate refuses.
-            ($"/?code={Canaries.Code}&state={Canaries.State}", [], 401),
+            ($"/?code={Canaries.Code}&state={Canaries.State}", [], Contract.Error("unauthenticated").Status),
         ];
 
         foreach ((string target, (string, string)[] headers, int status) in requests)
@@ -205,6 +205,6 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
         RawResponse unknown = await RawHttp.SendAsync(
             Harness.GatewayAddress, "GET", $"/?code={Canaries.Code}&state={Canaries.State}",
             "nobody.spa-poc.test:8443", ct: Suite.Ct);
-        Assert.Equal(404, unknown.StatusCode);
+        Assert.Equal(Contract.Error("not_found").Status, unknown.StatusCode);
     }
 }

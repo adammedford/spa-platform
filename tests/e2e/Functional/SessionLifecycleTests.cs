@@ -83,7 +83,7 @@ public sealed class SessionLifecycleTests
         await profile.OnOriginOfAsync(app);
         await profile.Context.AddCookiesAsync([Replant(session)]);
         FetchResult replay = await profile.FetchAsync("/bff/session");
-        Assert.Equal(401, replay.Status);
+        Assert.Equal(Contract.Error("unauthenticated").Status, replay.Status);
     }
 
     /// <summary>A cookie as the browser held it, to put back in the jar under the same name, host and attributes.</summary>

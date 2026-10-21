@@ -52,7 +52,7 @@ public sealed class ApiTests
 
         // Sent as written: the browser did not resolve it into something else first.
         Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url.PathAndQuery == path);
-        Assert.Contains(escaped.Status, new[] { 400, 404 });
+        Assert.Contains(escaped.Status, new[] { Contract.Error("invalid_request").Status, Contract.Error("unknown_api").Status, Contract.Error("not_found").Status });
         Assert.Empty(stack.Harness.Echo.Requests);
 
         // Control: the echo upstream is reachable by its own name, so an empty record means something.
@@ -73,12 +73,12 @@ public sealed class ApiTests
         FetchResult app2OnOrders = await profile.FetchAsync($"/api/{app2Second}/whoami");
 
         // reports binds no audience, so app 1's token validates there and is refused as the wrong client.
-        Assert.Equal(403, app1OnReports.Status);
+        Assert.Equal(403, app1OnReports.Status); // Not an Errors row: the mock API's own answer, passed back.
         Assert.Contains("\"error\":\"client_not_admitted\"", app1OnReports.Body, StringComparison.Ordinal);
 
         // orders binds its audience, and app 2 names no resource, so its token has no audience orders accepts.
         Assert.Null(stack.Harness.Idp.Authorizations.Last(authorization => authorization.ClientId == stack.App("app2").ClientId).Resource);
-        Assert.Equal(401, app2OnOrders.Status);
+        Assert.Equal(401, app2OnOrders.Status); // Not an Errors row: the mock API's own answer, passed back.
         Assert.Contains("\"error\":\"invalid_token\"", app2OnOrders.Body, StringComparison.Ordinal);
 
         // Controls: each token is good at its own API.
