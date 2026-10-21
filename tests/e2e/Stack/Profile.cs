@@ -48,28 +48,13 @@ public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage 
     }
 
     /// <summary>
-    /// Starts a login to the app and stops it at the callback: the provider approves and redirects the
-    /// browser to <c>/signin-oidc</c> with a code and state, and the load balancer holds that one
-    /// request instead of passing it on. The browser keeps the login-state cookies the gateway set; the
-    /// code is unredeemed. Returns the callback URL.
+    /// Starts a login to the app (a navigation to <c>/bff/login</c>, unless <paramref name="start"/> says
+    /// otherwise) and stops it at the callback (<see cref="IBrowserStack.StopAtCallbackAsync"/>): the
+    /// browser keeps the login-state cookies the gateway set, and the code is unredeemed. Returns the
+    /// callback URL.
     /// </summary>
-    public async Task<Uri> StopAtCallbackAsync(HarnessApp app)
-    {
-        string callback = app.Url("/signin-oidc").ToString();
-        int before = Local.LoadBalancer.Held.Count;
-        Local.LoadBalancer.Hold(url => url.ToString().StartsWith(callback, StringComparison.Ordinal));
-        try
-        {
-            await Page.GotoAsync(app.Url("/bff/login").ToString());
-        }
-        finally
-        {
-            Local.LoadBalancer.Release();
-        }
-
-        return Local.LoadBalancer.Held.Skip(before).SingleOrDefault()
-            ?? throw new InvalidOperationException($"the login to {app} never reached its callback; the page is at {Page.Url}.");
-    }
+    public Task<Uri> StopAtCallbackAsync(HarnessApp app, Func<Task>? start = null) =>
+        Stack.StopAtCallbackAsync(this, app, start ?? (() => Page.GotoAsync(app.Url("/bff/login").ToString())));
 
     /// <summary>
     /// <c>fetch()</c> from the current page, as an SPA's script makes it, and what the script can read
@@ -126,23 +111,12 @@ public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage 
     public async Task<bool> HoldsAsync(HarnessApp app, string name) =>
         (await CookiesOfAsync(app)).Any(cookie => cookie.Name == name);
 
-    /// <summary>
-    /// Opens a page some other party controls at <paramref name="url"/> (<see cref="TlsLoadBalancer.ServeForeign"/>):
-    /// a hostile sibling under the app domain, or <see cref="LocalStack.ForeignSite"/>. Every request the
-    /// page makes leaves the browser as usual.
-    /// </summary>
-    public async Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>")
-    {
-        Local.LoadBalancer.ServeForeign(url, html);
-        await Page.GotoAsync(url.ToString());
-    }
+    /// <summary>Opens a page some other party controls at <paramref name="url"/> (<see cref="IBrowserStack.OpenForeignPageAsync"/>).</summary>
+    public Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>") =>
+        Stack.OpenForeignPageAsync(this, url, html);
 
     /// <summary>The stack this profile is on.</summary>
     public IBrowserStack Stack { get; } = stack;
-
-    /// <summary>The stack, for what only the local stand-in load balancer can do: hold a request, serve a foreign page.</summary>
-    private LocalStack Local => Stack as LocalStack
-        ?? throw new NotSupportedException("this step needs the local stack's stand-in load balancer, which the deployed cell has no counterpart of.");
 
     public ValueTask DisposeAsync() => Context.DisposeAsync();
 }

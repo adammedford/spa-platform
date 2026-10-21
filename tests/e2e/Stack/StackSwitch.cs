@@ -1,6 +1,6 @@
 namespace Gateway.E2ETests.Stack;
 
-/// <summary>Which stack the functional rows run against.</summary>
+/// <summary>Which stack the functional rows and the deployed negative subset run against.</summary>
 public enum StackKind
 {
     /// <summary>The hermetic cell behind the stand-in load balancer (<see cref="LocalStack"/>): the default, and what CI runs.</summary>

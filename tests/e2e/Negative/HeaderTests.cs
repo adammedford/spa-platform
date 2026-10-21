@@ -4,29 +4,37 @@ using Gateway.TestHarness;
 namespace Gateway.E2ETests.Negative;
 
 /// <summary>
-/// N-23 and N-24 in a real browser (docs/plan/04-tests.md, tier D): what the browser received from
-/// <c>/bff</c>, and the framing and embedding headers, read off the load balancer's record of what it
-/// sent the browser, with the browser's own enforcement of <c>frame-ancestors</c> beside them.
+/// N-23 and N-24 in a real browser (docs/plan/04-tests.md, tier D), on the stack
+/// <see cref="StackSwitch"/> chooses: what the browser received from <c>/bff</c>, and the framing and
+/// embedding headers, read off the stack's record of what the browser received, with the browser's own
+/// enforcement of <c>frame-ancestors</c> beside them.
 /// </summary>
 public sealed class HeaderTests
 {
     [Fact]
     public async Task N23_no_bff_response_the_browser_received_holds_a_token_or_a_token_shaped_string()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
+        LocalStack? local = stack as LocalStack;
 
-        // Login, the session read, an API call that refreshes, and logout: every /bff endpoint.
-        stack.Harness.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(-10);
-        await profile.SignInAsync(app);
-        stack.Harness.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(5);
+        // Login, the session read, an API call, and logout: every /bff endpoint. Locally the call
+        // refreshes, so the rotated tokens are among those searched for; on the cell a token cannot be
+        // issued expired, and waiting one out is F-03's (ExposureTests does the same).
+        if (local is not null)
+        {
+            await local.SignInWithExpiredAccessTokenAsync(profile, app);
+        }
+        else
+        {
+            await profile.SignInAsync(app);
+        }
+
         Assert.Equal(200, (await profile.FetchAsync("/api/orders/whoami")).Status);
-        stack.LoadBalancer.Hold(url => url.AbsolutePath == "/signin-oidc");
-        await profile.Page.ClickAsync("form[action='/bff/logout'] button");
-        await Microsoft.Playwright.Assertions.Expect(profile.Page).ToHaveTitleAsync(TlsLoadBalancer.HeldTitle);
+        await stack.StopAtProviderLoginAsync(profile, () => profile.Page.ClickAsync("form[action='/bff/logout'] button"));
 
-        Exchange[] bff = [.. stack.LoadBalancer.Exchanges.Where(exchange => exchange.Url.AbsolutePath.StartsWith("/bff/", StringComparison.Ordinal))];
+        Exchange[] bff = [.. (await stack.ExchangesAsync()).Where(exchange => exchange.Url.AbsolutePath.StartsWith("/bff/", StringComparison.Ordinal))];
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/login");
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/logout");
         Exchange session = Assert.Single(bff, exchange => exchange.Url.AbsolutePath == "/bff/session" && exchange.Status == 200);
@@ -37,25 +45,30 @@ public sealed class HeaderTests
         Assert.Contains(session.BodyText, bodies, StringComparison.Ordinal);
 
         Assert.DoesNotMatch(TokenShape.Jwt(), bodies);
-        Assert.NotEmpty(TokenShape.IssuedBy(stack.Harness.Idp));
-        Assert.All(TokenShape.IssuedBy(stack.Harness.Idp), token => Assert.DoesNotContain(token, bodies, StringComparison.Ordinal));
+        if (local is not null)
+        {
+            // In H, none of the token values the provider issued either.
+            Assert.NotEmpty(TokenShape.IssuedBy(local.Harness.Idp));
+            Assert.All(TokenShape.IssuedBy(local.Harness.Idp), token => Assert.DoesNotContain(token, bodies, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
     public async Task N24_a_shell_an_asset_a_bff_response_and_an_api_error_all_carry_the_framing_and_embedding_headers()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
         Assert.Equal(Contract.Error("unknown_api").Status, (await profile.FetchAsync("/api/unlisted/x")).Status);
 
+        IReadOnlyList<Exchange> exchanges = await stack.ExchangesAsync();
         Exchange[] four =
         [
-            stack.LoadBalancer.Exchanges.Last(exchange => exchange.Url == app.Url("/") && exchange.Status == 200),
-            stack.LoadBalancer.Exchanges.Last(exchange => exchange.Url.AbsolutePath.StartsWith("/assets/", StringComparison.Ordinal) && exchange.Status == 200),
-            stack.LoadBalancer.Exchanges.Last(exchange => exchange.Url.AbsolutePath == "/bff/session"),
-            stack.LoadBalancer.Exchanges.Last(exchange => exchange.Url.AbsolutePath == "/api/unlisted/x"),
+            exchanges.Last(exchange => exchange.Url == app.Url("/") && exchange.Status == 200),
+            exchanges.Last(exchange => exchange.Url.AbsolutePath.StartsWith("/assets/", StringComparison.Ordinal) && exchange.Status == 200),
+            exchanges.Last(exchange => exchange.Url.AbsolutePath == "/bff/session"),
+            exchanges.Last(exchange => exchange.Url.AbsolutePath == "/api/unlisted/x"),
         ];
 
         foreach (Exchange exchange in four)
@@ -69,15 +82,14 @@ public sealed class HeaderTests
     [Fact]
     public async Task N24_the_browser_refuses_to_frame_the_shell_in_another_page()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
 
         // A sibling page frames the shell. The browser requests it (the frame's request reaches the
         // gateway) and then refuses to render it, so the frame holds no document from the app.
-        Uri sibling = new($"https://evil.{LocalStack.Domain}:{app.Origin.Port}/");
-        await profile.OpenForeignPageAsync(sibling, $"<!doctype html><title>framer</title><iframe id=\"frame\" src=\"{app.Url("/")}\"></iframe>");
+        await profile.OpenForeignPageAsync(stack.Sibling, $"<!doctype html><title>framer</title><iframe id=\"frame\" src=\"{app.Url("/")}\"></iframe>");
         Microsoft.Playwright.IFrame? frame = null;
         for (int attempt = 0; attempt < 100 && frame is null; attempt++)
         {
@@ -87,7 +99,7 @@ public sealed class HeaderTests
 
         Assert.NotNull(frame);
         await frame.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.Load);
-        Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url == app.Url("/") && exchange.Sent("Sec-Fetch-Dest") == "iframe");
+        Assert.Contains(await stack.ExchangesAsync(), exchange => exchange.Url == app.Url("/") && exchange.Sent("Sec-Fetch-Dest") == "iframe");
         Assert.Equal(0, await frame.Locator("#marker").CountAsync());
     }
 }
