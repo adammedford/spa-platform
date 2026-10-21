@@ -19,8 +19,11 @@ to close under #100's rule. #77 to #87, the workflow specs, could be built nowhe
 Two things decided the shape of the fix. A negation cannot reach inside an ignored directory, so
 the exception has to be written against the directory's contents. And the script is not a plain
 script: the Workflow tool wraps its body in an async function, so the file begins with
-`export const meta` and uses `return` at its top level; `node --check` refuses the one and a bare
-function wrapper refuses the other (the grilling record, under node v26.8.1).
+`export const meta` and uses `return` at its top level. A parser must model that function body
+rather than parse the unmodified file. An ambiguous `.js` wrapper also lets Node's module detection
+mask a stray import or export and subsequent syntax errors on Node 22. The check uses an explicit
+`.cjs` extension, which Node treats as CommonJS, to avoid that detection path
+(https://nodejs.org/api/packages.html#determining-module-system).
 
 ## Decision
 
@@ -39,8 +42,8 @@ function wrapper refuses the other (the grilling record, under node v26.8.1).
    `scriptPath` from an unlanded copy (Q5).
 4. **CI parses each workflow script.** The Documents job runs `.github/workflow-parse.py`, which
    rewrites `export const meta` to `const meta`, wraps the body in an async function it never
-   calls, and asks node to parse the result, naming the file on a `SyntaxError`; its companion
-   `.github/workflow_parse_tests.py` proves a good script passes and a broken one fails. The check
+   calls, and asks node to parse a `.cjs` copy, naming the original file on a syntax error. Its
+   companion `.github/workflow_parse_tests.py` proves a good script passes and a broken one fails. The check
    uses the node the `ubuntu-latest` image ships and prints its version; the macOS job does not run
    it (Q6, Q7). `tools/check.sh` is unchanged here (Q8).
 
@@ -52,8 +55,10 @@ function wrapper refuses the other (the grilling record, under node v26.8.1).
   the project skills under `.claude/skills/` are tracked is a decision of its own (Q11).
 - **Make the script a steering document.** Its rules are already held where they are stated: the
   ADRs and `docs/agents/` it quotes.
-- **`node --check` on the file as it is.** It rejects the top-level `return`.
-- **A function wrapper without the `export` rewrite.** It rejects line 1.
+- **`node --check` on the file as it is.** It does not model the Workflow tool's async body, and
+  module detection on ambiguous `.js` input can hide errors.
+- **A function wrapper without the `export` rewrite.** It leaves the metadata export inside the
+  function, where it is invalid. An explicit CommonJS parse reports that error.
 
 ## Consequences
 

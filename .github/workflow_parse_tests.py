@@ -25,8 +25,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHECK = ROOT / ".github" / "workflow-parse.py"
 OVERNIGHT = ROOT / ".claude" / "workflows" / "overnight.js"
 
-# The two features of a workflow script that a plain parse refuses: the export on line 1, and a
-# return at the top level. Both must pass here.
+# The Workflow tool accepts the metadata export, top-level await and top-level return.
+# The check must accept that shape without executing it.
 SHAPE = "export const meta = { name: 'shape', description: 'the shape the tool accepts' }\n" \
         "const answer = await Promise.resolve(42)\n" \
         "if (answer !== 42) return { failed: true }\n" \
@@ -111,6 +111,24 @@ class WorkflowParseTests(unittest.TestCase):
         repository = Repository(self)
         repository.write(".claude/workflows/twice.js", "export const meta = {}\nexport const other = 1\n")
         self.assertRefuses(repository.check(), ".claude/workflows/twice.js")
+
+    def test_module_syntax_cannot_hide_another_syntax_error(self):
+        # On Node 22, an ambiguous .js copy can return success on module syntax before
+        # reporting an unclosed block. Exercise the actual CLI, not a mocked node result.
+        for statement in ("export const other = 1", "import { other } from './missing.js'"):
+            with self.subTest(statement=statement):
+                repository = Repository(self)
+                name = repository.write(".claude/workflows/broken.js",
+                                        "export const meta = {}\n" + statement + "\nif (true) {\n")
+                result = repository.check()
+                self.assertRefuses(result, name)
+                self.assertIn("SyntaxError", result.stderr)
+
+    def test_parsing_does_not_execute_the_workflow(self):
+        repository = Repository(self)
+        name = repository.write(".claude/workflows/never-run.js",
+                                "export const meta = {}\nthrow new Error('workflow body executed')\n")
+        self.assertParses(repository.check(), 1, name)
 
     def test_what_is_not_a_tracked_workflow_script_is_not_parsed(self):
         repository = Repository(self)

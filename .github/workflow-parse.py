@@ -3,13 +3,14 @@
 
 A workflow script is a tracked `.claude/workflows/*.js`, which the Workflow tool runs (ADR-0026).
 The tool wraps the file's body in an async function of its own, so the file may use `return` and
-`await` at its top level and begins with `export const meta`. Neither parses as a plain script:
-`node --check` refuses the top-level `return`, and the same body wrapped in a function refuses
-the `export` on line 1 (#135's grilling record, under node v26.8.1). So this check rewrites that
-one line to `const meta`, wraps the body in an async function it never calls, and asks node to
-parse the result and run nothing (`node --check`). A script that does not parse fails at the push
-that broke it, naming the file and node's message, rather than at the launch that would have run
-it that night.
+`await` at its top level and begins with `export const meta`. This check rewrites that one export
+to `const meta`, wraps the body in an async function it never calls, and asks node to parse the
+result and run nothing (`node --check`). The temporary copy ends in `.cjs` to select CommonJS
+explicitly: an ambiguous `.js` copy can incorrectly pass a stray import or export under Node 22,
+masking other syntax errors too. Node documents the explicit marker and syntax detection at
+https://nodejs.org/api/packages.html#determining-module-system.
+A script that does not parse fails at the push that broke it, naming the file and node's message,
+rather than at the launch that would have run it that night.
 
 Finding no script at all fails, since a check that found nothing to read would pass having read
 nothing. CI runs it on `ubuntu-latest` with the node that image ships and prints `node --version`
@@ -60,7 +61,7 @@ def parse(root: str, name: str) -> subprocess.CompletedProcess:
     with open(os.path.join(root, name), encoding="utf-8") as handle:
         source = handle.read()
     with tempfile.TemporaryDirectory() as scratch:
-        copy = os.path.join(scratch, os.path.basename(name))
+        copy = os.path.join(scratch, os.path.basename(name) + ".cjs")
         with open(copy, "w", encoding="utf-8") as handle:
             handle.write(wrapped(source))
         return subprocess.run(["node", "--check", copy], capture_output=True, text=True)
