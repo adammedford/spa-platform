@@ -29,7 +29,7 @@ public sealed class ApiRouteTests
             candidate => candidate.EndsWith("/read", StringComparison.Ordinal) && candidate.Contains(api, StringComparison.Ordinal));
         string? audience = oauth["resource"]?.GetValue<string>();
 
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         await profile.SignInAsync(stack.App(appId));
 
