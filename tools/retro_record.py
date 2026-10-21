@@ -31,8 +31,9 @@ is a **side log**: it is listed and its verdict is "", never read as GREEN or RE
 lane-written side logs follow no shape). A file in the directory that is not `.txt` (a `-body.md`, a
 `-comment.md`) is not a log at all and is listed under notLogs.
 
-**A log's name** is `<task>-<stage>.txt`, where task is a plan row id (`1.6a`, `I-4`, `P2-7`) or
-`issue-<n>`, and stage the rest (`implement`, `review-terraform-test`). A re-run renames the earlier
+**A log's name** is `<task>-<stage>.txt`, where task is a plan row id (`1.6a`, `I-4`, `P2-7`),
+`issue-<n>`, or `ticket-<n>`, the archived tickets' ids the 2026-10-16 night named its logs by
+(`ticket-71-implement.txt`), and stage the rest (`implement`, `review-terraform-test`). A re-run renames the earlier
 log with a date suffix, `-YYYY-MM-DD` or `.YYYY-MM-DD` before `.txt`; that log is an **earlier round**
 of the same task and stage, and `logs` pairs it under rounds.
 
@@ -86,7 +87,7 @@ SUMMARY = re.compile(r"^\s*(total|failed|succeeded|skipped|duration):\s*(.*?)\s*
 COUNTED = ("total", "failed", "succeeded", "skipped")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SUFFIX = re.compile(r"[.-](\d{4}-\d{2}-\d{2})$")
-NAME = re.compile(r"^(?P<task>issue-\d+|I-\d+|P2-\d+|[^-]+)-(?P<stage>.+)$")
+NAME = re.compile(r"^(?P<task>issue-\d+|ticket-\d+|I-\d+|P2-\d+|[^-]+)-(?P<stage>.+)$")
 LAST_LINES = 5
 
 # OWNERSHIP.md's roles, as the overnight collect step names them (tools/overnight_collect.py ROLES).

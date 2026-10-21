@@ -149,10 +149,13 @@ class Logs(unittest.TestCase):
         self.write("2.1b-implement.2026-10-18.txt", GREEN_LOG)
         self.write("2.1b-implement.txt", GREEN_LOG)
         self.write("3.9-review.txt", GREEN_LOG)
+        # The archive's 2026-10-16 night named its logs by ticket id; the task is the whole id.
+        self.write("ticket-71-implement.txt", GREEN_LOG)
+        self.write("ticket-71-implement-2026-10-16.txt", RED_LOG)
         status, out, err = reader("logs", self.dir)
         self.assertEqual(status, 0, err)
         rounds = {(r["task"], r["stage"]): r for r in out["rounds"]}
-        self.assertEqual(set(rounds), {("6.2", "implement"), ("2.1b", "implement")},
+        self.assertEqual(set(rounds), {("6.2", "implement"), ("2.1b", "implement"), ("ticket-71", "implement")},
                          "only a task with a date-suffixed log has an earlier round")
         self.assertEqual(os.path.basename(rounds[("6.2", "implement")]["current"]), "6.2-implement.txt")
         self.assertEqual([os.path.basename(p) for p in rounds[("6.2", "implement")]["earlier"]],
@@ -160,7 +163,8 @@ class Logs(unittest.TestCase):
         self.assertEqual([os.path.basename(p) for p in rounds[("2.1b", "implement")]["earlier"]],
                          ["2.1b-implement.2026-10-18.txt"])
         dated = [e for e in out["logs"] if e["round"]]
-        self.assertEqual(sorted(e["round"] for e in dated), ["2026-10-16", "2026-10-18"])
+        self.assertEqual(sorted(e["round"] for e in dated), ["2026-10-16", "2026-10-16", "2026-10-18"])
+        self.assertEqual(os.path.basename(rounds[("ticket-71", "implement")]["current"]), "ticket-71-implement.txt")
 
 
 class Reports(unittest.TestCase):

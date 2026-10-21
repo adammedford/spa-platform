@@ -30,8 +30,8 @@ export const meta = {
 //   repo            required  the main checkout, an absolute path. Read-only, except the scratch directory.
 //   wt              optional  that night's worktree root, when its worktrees still exist; read, never touched.
 //   maxParallel     optional  positive integer, default 4: agents in flight at once. #77 puts the session
-//                             guideline at "about ten agents per run"; a five-lane night runs ten in all
-//                             (the read, Gather, five lanes, two more, Rank, File: eleven with the read).
+//                             guideline at "about ten agents per run"; a five-lane night runs #77's ten
+//                             (Gather, five lanes, two more, Rank, File), and eleven with the read.
 //   maxLaneAgents   optional  positive integer, default 5: owner-lane agents. Lanes beyond it are grouped,
 //                             the smallest together, so fan-out is bounded by this and not by the night.
 //   maxTickets      optional  positive integer, default 6: sub-issues filed. #77: "no human retrospective
@@ -117,7 +117,7 @@ const run = (prompt, opts) => slot(() => { agentsRun++; return agent(prompt, opt
 // Agents are fresh contexts that know only their prompt (#77 -> "One workflow script"), so the rules,
 // the record's shape, the taxonomy and the evidence rules are in each one in full.
 const HOUSE = (scratch) => `Read-only rules (a retro; you change nothing you read):
-- The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset, build, test or run anything from it. git is read-only: log, show, diff, rev-parse, reflog, status, ls-files.
+- The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset, build or test in it, and run nothing from it but the record reader named below, which reads files and prints JSON. git is read-only: log, show, diff, rev-parse, reflog, status, ls-files.
 - GitHub is read until the File phase, and only the File phase writes to it. Before then use only \`gh issue view\`, \`gh issue list\`, \`gh search issues\` and GET \`gh api\` calls. Run every \`gh\` command with \`cd ${REPO} &&\` in front.
 - The only place you may write is ${scratch}/, the retro's scratch directory under the night's git-ignored log directory. Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file.
 - The archived ticket directories (.scratch/<slug>/issues/) are read-only (ADR-0020 decision 5). Never write there.
@@ -352,15 +352,19 @@ const laneUnits = (index) => {
 }
 
 // A RED verdict line always yields at least one repeated-failure finding (#77): a RED log no finding
-// cites gets one here, so the rule does not rest on an agent remembering it.
+// cites gets one here, so the rule does not rest on an agent remembering it. A lane may cite the log
+// by any path to it (EVIDENCE: "a path and line"), so a citation is matched on the file's name. The
+// quote is the verdict line alone and the rest of the last lines are cited by range: a record line
+// can carry a secret, and this finding is the one no agent reads before it reaches a ticket.
+const fileOf = (ref) => String(ref).replace(/:[\d-]+$/, '').split('/').pop()
 const redFindings = (index, findings) => {
-  const cited = (path) => findings.some((f) => f.type === 'repeated-failure' && f.evidence.some((e) => String(e.ref).startsWith(path)))
+  const cited = (path) => findings.some((f) => f.type === 'repeated-failure' && f.evidence.some((e) => fileOf(e.ref) === fileOf(path)))
   const ownerOf = (task) => (index.lanes.find((l) => l.tasks.some((t) => t.id === task)) || { owner: 'integrator' }).owner
   return index.logs.filter((l) => !l.side && l.verdict === 'RED' && !cited(l.path)).map((l) => ({
     type: 'repeated-failure',
     title: `${l.task} ${l.stage || 'check'} ended RED`,
     noun: l.path.split('/').pop(),
-    evidence: [{ kind: 'check-log', ref: `${l.path}:${l.lines}`, lines: `${Math.max(1, l.lines - l.lastLines.length + 1)}-${l.lines}`, quote: l.lastLines.join('\n') }],
+    evidence: [{ kind: 'check-log', ref: `${l.path}:${l.lines}`, lines: `${Math.max(1, l.lines - l.lastLines.length + 1)}-${l.lines}`, quote: l.verdictLine || 'RED' }],
     cost: { red: 1, attempts: 1, nights: 1, lanes: 1 },
     fix: { kind: 'check', owner: OWNERS.includes(ownerOf(l.task)) ? ownerOf(l.task) : 'integrator', summary: 'Read the failure in the log\'s last lines and make the check pass, or record why it cannot.', diff: '' },
     confidence: 'verified',
@@ -377,9 +381,11 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(DATE || '')) return { halted: `the night's date 
 const SCRATCH = scratchFor(DATE)
 const files = new Map((state.phaseFiles || []).map((f) => [f.name, f]))
 const reused = []
-const reuse = (name, inputs) => {
+// done: whether a phase file's result is a finished phase. File's is not when GitHub could not be
+// reached or the run refused, so a relaunch dispatches File again rather than replaying the stop.
+const reuse = (name, inputs, done = () => true) => {
   const f = files.get(name)
-  if (f && f.inputs === inputs) { reused.push(name); return f.result }
+  if (f && f.inputs === inputs && f.result && done(f.result)) { reused.push(name); return f.result }
   return null
 }
 log(`retro ${DATE}${ISSUE ? ` (#${ISSUE})` : ''}: scratch ${SCRATCH}${DRY ? '; dry run' : ''}`)
@@ -426,7 +432,7 @@ if (open.length) {
   return result
 }
 const fileKey = key({ rank: key(rank), maxTickets: MAX_TICKETS, dryRun: DRY })
-const filed = reuse('file', fileKey) || await run(filePrompt(SCRATCH, DATE, ISSUE, index, rank, toFile, fileKey), { label: 'file', phase: 'File', schema: FILED })
+const filed = reuse('file', fileKey, (r) => r.dryRun || (!r.refused && !r.unreachable && r.parent && r.parent.number > 0)) || await run(filePrompt(SCRATCH, DATE, ISSUE, index, rank, toFile, fileKey), { label: 'file', phase: 'File', schema: FILED })
 if (!filed) return { ...result, agents: agentsRun, halted: 'File returned nothing; check GitHub for a partial Retro issue before relaunching' }
 result.filed = !DRY && !filed.refused && !filed.unreachable && filed.parent.number > 0
 result.parent = filed.parent

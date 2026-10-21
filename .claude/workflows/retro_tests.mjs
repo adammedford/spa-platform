@@ -115,7 +115,9 @@ function stub(env, scriptArgs, served) {
         const list = m ? JSON.parse(m[1]) : []
         const dry = /This is a dry run/.test(prompt)
         const files = [...prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)].map((x) => x[1])
-        out = {
+        out = served.fileUnreachable ? {
+          parent: { number: 0, url: '', title: `Retro ${DATE}`, file: files[0] || '' }, tickets: [], dryRun: false, refused: '', unreachable: true,
+        } : {
           parent: { number: dry ? 0 : 900, url: dry ? '' : 'https://github.com/o/r/issues/900', title: `Retro ${DATE}`, file: files[0] || '' },
           tickets: list.map((f, i) => ({ number: dry ? 0 : 901 + i, url: dry ? '' : `https://github.com/o/r/issues/${901 + i}`, title: `${f.type}: ${f.title}`, label: 'ready-for-agent', noun: f.noun, file: files[i + 1] || '', blockedBy: [] })),
           dryRun: dry, refused: '', unreachable: false,
@@ -190,6 +192,8 @@ try {
   // A real run's File prompt carries the write commands, so check 8's search for them can fail.
   const fileCall = calls.find((c) => c.label === 'file')
   if (!fileCall || !GH_WRITE.test(fileCall.prompt) || !/--parent/.test(fileCall.prompt)) fail('a real run\'s File prompt carries no gh issue create --parent command')
+  // ...and no other phase's prompt carries one, since File is the only writer (#77).
+  for (const c of calls) if (c.label !== 'file' && GH_WRITE.test(c.prompt)) fail(`a real run: the ${c.label} prompt carries a gh write: ${GH_WRITE.exec(c.prompt)[0]}`)
 
   // 5. Everything the run wrote is under its scratch directory, and git sees no change.
   checks++
@@ -271,12 +275,17 @@ try {
   //     lines; a RED log a lane did cite gets no second one.
   checks++
   const RED = '/x/log/ws1-infra-t0-implement.txt'
+  // A record line can carry a secret (AGENTS.md: N-16's canaries); the script's own finding quotes the
+  // verdict line and cites the rest by range, so a canary in the last lines never reaches a ticket.
+  const CANARY = 'retro-canary-7f3a91'
+  const redEntry = logEntry(RED, 'ws1-infra-t0', 'RED', { lastLines: ['  failed: 1', `Set-Cookie: __Host-spa=${CANARY}`, 'GATE: RED'] })
   env = newRepo();
-  ({ calls } = await execute(env, { date: DATE }, { index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED'), logEntry('/x/log/g.txt', 'ws3-identity-t0', 'GREEN')]) }))
+  ({ calls } = await execute(env, { date: DATE }, { index: indexFor(THREE, [redEntry, logEntry('/x/log/g.txt', 'ws3-identity-t0', 'GREEN')]) }))
   const rankCall = calls.find((c) => c.label === 'rank')
   const addedM = /one for each RED verdict line no lane cited; rank them with the rest: (\[.*\])$/m.exec(rankCall ? rankCall.prompt : '')
   const addedList = addedM ? JSON.parse(addedM[1]) : []
   if (addedList.length !== 1 || addedList[0].type !== 'repeated-failure' || addedList[0].evidence[0].ref !== `${RED}:60` || !/GATE: RED/.test(addedList[0].evidence[0].quote)) fail(`a RED log no lane cited: Rank was handed ${JSON.stringify(addedList)}`)
+  if (calls.some((c) => c.label !== 'state' && c.label !== 'gather' && !c.label.startsWith('lane:') && c.prompt.includes(CANARY))) fail('a canary in a RED log\'s last lines reached the Rank or File prompt')
   if (!/ws1-infra-t0-implement\.txt/.test((calls.find((c) => c.label === 'lane:ws1-infra') || {}).prompt || '')) fail('the RED log is not named in its lane\'s prompt')
   env = newRepo();
   ({ calls } = await execute(env, { date: DATE }, {
@@ -285,6 +294,14 @@ try {
   }))
   const again = /rank them with the rest: (\[.*\])$/m.exec((calls.find((c) => c.label === 'rank') || {}).prompt || '')
   if (!again || again[1] !== '[]') fail(`a RED log a lane cited was given a second finding: ${again && again[1]}`)
+  // The evidence rules let a ref be any path:line, so a lane citing the log by a relative path has cited it.
+  env = newRepo();
+  ({ calls } = await execute(env, { date: DATE }, {
+    index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED')]),
+    laneFindings: { 'ws1-infra': [finding('red', { type: 'repeated-failure', evidence: [{ kind: 'check-log', ref: 'log/ws1-infra-t0-implement.txt:60', lines: '56-60', quote: 'GATE: RED' }] })] },
+  }))
+  const relative = /rank them with the rest: (\[.*\])$/m.exec((calls.find((c) => c.label === 'rank') || {}).prompt || '')
+  if (!relative || relative[1] !== '[]') fail(`a RED log a lane cited by a relative path was given a second finding: ${relative && relative[1]}`)
 
   // 14. issue alone: the date comes from the state read, and names the scratch directory.
   checks++
@@ -292,6 +309,14 @@ try {
   ({ result, labels } = await execute(env, { issue: 226 }, { index: indexFor(THREE), stateDate: '2026-10-21' }))
   if (result.date !== '2026-10-21' || !String(result.scratch).endsWith('/retro-2026-10-21')) fail(`issue alone: date ${result.date}, scratch ${result.scratch}`)
   if (labels[0] !== 'state') fail('issue alone: the state read did not run first')
+
+  // 15. A File run GitHub could not reach is not a finished phase: a relaunch dispatches File again.
+  checks++
+  env = newRepo()
+  const cut = await execute(env, { date: DATE }, { index: indexFor(THREE), fileUnreachable: true })
+  if (cut.result.unreachable !== true || cut.result.filed !== false) fail(`unreachable: returned unreachable ${cut.result.unreachable}, filed ${cut.result.filed}`)
+  const retry = await execute(env, { date: DATE }, { index: indexFor(THREE) })
+  if (!retry.labels.includes('file') || retry.result.filed !== true) fail(`relaunched after an unreachable File: dispatched ${retry.labels.join(', ')}, filed ${retry.result.filed}`)
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
 } catch (e) {
