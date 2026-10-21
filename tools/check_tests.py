@@ -200,10 +200,15 @@ def bash_version() -> str:
         env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True).stdout
 
 
-def setUpModule():
-    full = subprocess.run([BASH, "-c", 'printf "%s" "$BASH_VERSION"'], env={"PATH": "/usr/bin:/bin"},
+def bash_full_version() -> str:
+    """The whole version string of the bash every case runs, such as 3.2.57(1)-release, as that
+    bash reports it."""
+    return subprocess.run([BASH, "-c", 'printf "%s" "$BASH_VERSION"'], env={"PATH": "/usr/bin:/bin"},
                           capture_output=True, text=True, check=True).stdout
-    print(f"check_tests: tools/check.sh runs under {BASH} {full}", file=sys.stderr)
+
+
+def setUpModule():
+    print(f"check_tests: tools/check.sh runs under {BASH} {bash_full_version()}", file=sys.stderr)
 
 
 class Result:
@@ -324,10 +329,13 @@ class Case:
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
 
     def run(self, *args: str, hook: bool = False, through_shebang: bool = False,
-            cwd: pathlib.Path | None = None) -> Result:
+            cwd: pathlib.Path | None = None, umask: int = 0o022) -> Result:
+        # The file-mode mask is the child's own, set between fork and exec, so the cases running
+        # at the same time on other threads keep theirs; os.umask would change the whole process's.
+        # 022 by default, what a checkout and CI have, whatever mask runs this companion.
         target = HOOK if hook else SCRIPT
         command = [str(target), *args] if through_shebang else [BASH, str(target), *args]
-        completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(),
+        completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(), umask=umask,
                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
         return Result(completed)
 
@@ -598,6 +606,47 @@ class FullModeTests(CheckTestCase):
         self.assertEqual(["python3", "-I", ".github/path-ownership.py", fork, "HEAD"], case.calls()[0])
         # The steering check's authority rule judges the same range A-05 does (#102).
         self.assertEqual(STEERING + ["--base", fork], case.calls()[1])
+
+    def environment(self, mask: str) -> list[str]:
+        """The two lines the full check's log opens with (#230): the bash that runs it, by path and
+        by version as that bash reports it, and the file-mode mask as `umask` prints it."""
+        return [f"check: shell: {BASH}, bash {bash_full_version()}", f"check: file-mode mask: {mask}"]
+
+    def test_the_log_opens_with_the_shell_and_the_file_mode_mask(self):
+        # #230: a lane's "already red on the fork point" is compared with main by its environment,
+        # so the log names it before any check has run or said anything.
+        case = Case(self, change="docs/notes.md")
+        result = self.full(case)
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}.")
+        self.assertEqual(self.environment("0022"), result.stdout.splitlines()[:2])
+
+    def test_a_mask_that_is_not_the_default_is_printed_as_it_is(self):
+        # An agent session's 077, the mask #205's lane had: printed, not normalised, and not judged,
+        # since the file modes check judges the files themselves.
+        for mask, printed in ((0o077, "0077"), (0o027, "0027"), (0o002, "0002")):
+            with self.subTest(mask=printed):
+                case = Case(self, change="docs/notes.md")
+                result = case.run("--full", "--port", PORT, umask=mask)
+                self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}.")
+                self.assertEqual(self.environment(printed), result.stdout.splitlines()[:2])
+
+    def test_the_environment_is_logged_when_the_first_check_fails(self):
+        # Printed before the author email, the first thing the check refuses, so a log that stops
+        # there still says which shell and mask it stopped under.
+        case = Case(self, change="docs/notes.md")
+        case.git("config", "--unset", "user.email", cwd=case.work)
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: git config user.email is unset.")
+        self.assertEqual(self.environment("0022"), result.stdout.splitlines())
+        self.assertEqual([], case.calls())
+
+    def test_the_hook_does_not_log_the_environment(self):
+        # The hook's lines are #68's, unchanged; HookTests asserts them whole.
+        case = Case(self, change="docs/notes.md")
+        result = case.run(hook=True, umask=0o077)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertNotIn("shell:", result.stdout + result.stderr)
+        self.assertNotIn("mask", result.stdout + result.stderr)
 
     def test_failures_end_on_the_verdict_and_stop_there(self):
         cases = {
