@@ -1,7 +1,9 @@
 # Session storage for Phase 2: Valkey against DynamoDB, and the field ranked
 
-- **Raised by:** a research session on 2026-10-20, for Phase 2 package P2-1 (`docs/plan/06-phase-2-and-risks.md:11`).
-  Revised on 2026-10-21 against the review on PR #189, with every price re-read from the AWS Price List.
+- **Raised by:** #249, "Whether Valkey should displace DynamoDB as the Phase 2 session store", under
+  the #215 map, for Phase 2 package P2-1 (`docs/plan/06-phase-2-and-risks.md:11`). Drafted on
+  2026-10-20; revised on 2026-10-21 against the review on PR #189, with every price re-read from the
+  AWS Price List.
 - **Status:** a finding with a recommendation, not a decision; the integrator decides. The plan names
   DynamoDB (ADR-0004, plan row P2-1, roadmap S8, `contracts/platform-config.schema.json` ->
   `Session:Store`), and change request `contracts/changes/p2-1-dynamodb-session-store.md` is written
