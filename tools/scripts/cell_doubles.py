@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """The doubles and the case harness of seed_tests.py, deploy_tests.py, rollback_tests.py and
 teardown_tests.py. Owner: workstream 1. Not a companion itself: each of the four loads it by path.
+Its own companion, cell_doubles_tests.py, runs the four and holds SECRETS to every credential the
+aws double hands out (#201).
 
 Task 1.7 (#58). The row's done-when, each script running unattended against a gateway build that
 answers /readyz, needs the applied cell and Docker, and is sitting C's (C1 and C2 in
