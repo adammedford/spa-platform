@@ -42,6 +42,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0021](0021-pre-accepted-answers-are-provisional.md) | A pre-accepted answer is provisional: a scripted session commits only to confirmed answers, to the documents a session steers by, and the human lands | — |
 | [0022](0022-review-at-the-merge-path.md) | Hold review at `tools/land.sh`: merge only a head whose latest review record says merge, pinned to it, never `--admin`; no gate tag over an open review; required approving reviews rejected while one person holds the only account | — |
 | [0023](0023-lane-code-may-rest-on-a-pre-accepted-answer.md) | A lane's code may rest on a pre-accepted answer; a steering document changes only on a cited authority, which the steering check requires and the reviewer weighs | — |
+| [0024](0024-track-the-workflow-scripts.md) | The workflow scripts under `.claude/workflows/` are tracked, as integrator code and not a steering document; every edit lands before the launch it is for, and CI parses each script the way the Workflow tool reads it | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's
