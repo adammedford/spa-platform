@@ -9,7 +9,8 @@ namespace Gateway.E2ETests.Negative;
 /// N-25 and N-26 (docs/plan/04-tests.md): their deciding run is in a real browser, because they rest
 /// on the browser enforcing the <c>__Host-</c> prefix, which the hermetic test browser does not do
 /// (R-D3). The sibling is app 2's own shell, its script under the attacker's control, as an XSS in a
-/// sibling SPA would put it: it plants cookies for the parent domain with <c>document.cookie</c>.
+/// sibling SPA would put it: it plants cookies for the parent domain with <c>document.cookie</c>. On the
+/// stack <see cref="StackSwitch"/> chooses, so in a sitting the browser is the cell's (#211).
 /// </summary>
 public sealed class CookiePlantingTests
 {
@@ -22,7 +23,7 @@ public sealed class CookiePlantingTests
     [Fact]
     public async Task N25_a_sibling_cannot_set_a_platform_cookie_for_the_parent_domain_in_any_letter_case()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         await profile.SignInAsync(stack.App("app1"));
         await profile.SignInAsync(stack.App("app2"));
@@ -35,12 +36,12 @@ public sealed class CookiePlantingTests
             .Distinct(StringComparer.Ordinal)];
         foreach (string name in names.Append(Control))
         {
-            await PlantAsync(profile, name);
+            await PlantAsync(stack, profile, name);
         }
 
         // The control was set for the parent domain, so planting works; every platform name was refused.
         IReadOnlyList<BrowserContextCookiesResult> cookies = await profile.Context.CookiesAsync();
-        Assert.Contains(cookies, cookie => cookie.Name == Control && cookie.Domain == "." + LocalStack.Domain);
+        Assert.Contains(cookies, cookie => cookie.Name == Control && cookie.Domain == "." + stack.ParentDomain);
         Assert.DoesNotContain(cookies, cookie => cookie.Value == Planted && cookie.Name != Control);
 
         // Chromium refuses the other letter cases as well, so no browser request can carry one. The
@@ -49,7 +50,7 @@ public sealed class CookiePlantingTests
         string prefix = Contract.PlatformCookiePrefix;
         foreach (string variant in new[] { prefix.ToLowerInvariant(), prefix.ToUpperInvariant() })
         {
-            int mark = stack.RequestLines.Count;
+            LogMark mark = stack.MarkLog();
             using HttpRequestMessage request = new(HttpMethod.Get, app.Url("/bff/session"));
             request.Headers.Add("Sec-Fetch-Site", "same-origin");
             request.Headers.Add("Cookie", variant + "session=" + Planted);
@@ -65,34 +66,34 @@ public sealed class CookiePlantingTests
     [Fact]
     public async Task N26_login_csrf_a_siblings_login_state_cookies_are_never_set_so_the_planted_callback_is_rejected()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile attacker = await stack.OpenAsync();
         await using Profile victim = await stack.OpenAsync();
         HarnessApp app1 = stack.App("app1");
 
         // The attacker starts their own login to app 1 and stops at the callback: their code, their
         // state, and the login-state cookies that state is bound to.
-        stack.Harness.Idp.DefaultSubject = "mallory";
+        stack.SignInAs(DeployedStack.OtherUser);
         Uri callback = await attacker.StopAtCallbackAsync(app1);
         IReadOnlyList<BrowserContextCookiesResult> loginState = await attacker.CookiesOfAsync(app1);
         Assert.Equal(2, loginState.Count);
 
         // In the victim's browser, the attacker's script on a sibling SPA plants those cookies for the
         // parent domain, then sends the victim to app 1's callback with the attacker's code and state.
-        stack.Harness.Idp.DefaultSubject = "alice";
+        stack.SignInAs(DeployedStack.User);
         await victim.SignInAsync(stack.App("app2"));
         foreach (BrowserContextCookiesResult cookie in loginState)
         {
-            await PlantAsync(victim, cookie.Name, cookie.Value);
+            await PlantAsync(stack, victim, cookie.Name, cookie.Value);
         }
 
-        await PlantAsync(victim, Control);
+        await PlantAsync(stack, victim, Control);
         Assert.Contains(await victim.Context.CookiesAsync(), cookie => cookie.Name == Control);
 
         // The cookies are never set: not for the parent domain, and not for app 1's host.
         Assert.DoesNotContain(await victim.Context.CookiesAsync(), cookie => loginState.Any(planted => planted.Name == cookie.Name));
 
-        int mark = stack.RequestLines.Count;
+        LogMark mark = stack.MarkLog();
         IResponse? rejected = await victim.Page.RunAndWaitForResponseAsync(
             () => victim.Page.EvaluateAsync("(url) => { window.location.assign(url); }", callback.ToString()),
             response => response.Url == callback.ToString());
@@ -100,18 +101,23 @@ public sealed class CookiePlantingTests
         // So the callback is rejected, and no session is created: not the attacker's, not anyone's.
         Assert.Equal(400, rejected.Status); // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
         await stack.AssertRuleLoggedAsync(mark, RuleIds.AuthCallback, app1.AppId);
-        Assert.DoesNotContain(stack.Harness.Idp.Grants, grant => grant.GrantType == "authorization_code" && grant.ClientId == app1.ClientId);
         Assert.False(await victim.HoldsAsync(app1, Contract.PlatformCookie("-session")));
+        if (stack is LocalStack local)
+        {
+            Assert.DoesNotContain(local.Harness.Idp.Grants, grant => grant.GrantType == "authorization_code" && grant.ClientId == app1.ClientId); // In H no code was redeemed.
+        }
 
         // Control: the attacker's own callback, in the attacker's browser with the cookies it was bound
-        // to, is a login. The victim's refusal was the missing cookies, not a broken code.
+        // to, is a login. The victim's refusal was the missing cookies, not a broken code. Cognito's code
+        // is good once (https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html), and
+        // the victim's sign-in and the refusal took seconds and spent none, so on the cell it is still good here.
         await attacker.Page.GotoAsync(callback.ToString());
         await attacker.WaitSignedInAsync(app1);
     }
 
     /// <summary>The sibling's script sets a cookie for the parent domain, with every attribute the <c>__Host-</c> prefix would otherwise accept.</summary>
-    private static Task PlantAsync(Profile sibling, string name, string value = Planted) =>
+    private static Task PlantAsync(IBrowserStack stack, Profile sibling, string name, string value = Planted) =>
         sibling.Page.EvaluateAsync(
             "([name, value, domain]) => { document.cookie = `${name}=${value}; Domain=${domain}; Path=/; Secure; SameSite=Lax`; }",
-            new object[] { name, value, LocalStack.Domain });
+            new object[] { name, value, stack.ParentDomain });
 }

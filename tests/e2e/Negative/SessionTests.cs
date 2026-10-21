@@ -4,13 +4,16 @@ using Microsoft.Playwright;
 
 namespace Gateway.E2ETests.Negative;
 
-/// <summary>N-01, N-19 and N-27 in a real browser (docs/plan/04-tests.md, tier D).</summary>
+/// <summary>
+/// N-01, N-19 and N-27 in a real browser (docs/plan/04-tests.md, tier D), on the stack
+/// <see cref="StackSwitch"/> chooses: the local one by default, the cell in a sitting (#211).
+/// </summary>
 public sealed class SessionTests
 {
     [Fact]
     public async Task N01_app1s_session_cookie_presented_to_app2_gets_401_on_the_api_and_a_fresh_challenge_on_navigation()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app1 = stack.App("app1");
         HarnessApp app2 = stack.App("app2");
@@ -34,15 +37,14 @@ public sealed class SessionTests
             Assert.Equal(Contract.Error("unauthenticated").Code, refused.Code);
         }
 
-        // A navigation is challenged afresh: to the provider, for app 2's own client. The load balancer
-        // holds the callback, so the browser stops after the provider.
+        // A navigation is challenged afresh: to the provider, for app 2's own client. The login is held at
+        // its callback, so the browser never reaches app 2's shell. On the cell the provider knows this
+        // browser from app 1's login and sends it straight back to that callback.
         List<Uri> navigations = profile.RecordNavigations();
-        stack.LoadBalancer.Hold(url => url.AbsolutePath == "/signin-oidc");
-        await profile.Page.GotoAsync(app2.Url("/").ToString());
-        Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.Harness.Idp.AuthorizeEndpoint);
+        await profile.StopAtCallbackAsync(app2, () => profile.Page.GotoAsync(app2.Url("/").ToString()));
+        Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint);
         Assert.Contains("client_id=" + app2.ClientId, authorize.Query, StringComparison.Ordinal);
-        Assert.DoesNotContain(stack.LoadBalancer.Exchanges, exchange => exchange.Url == app2.Url("/") && exchange.Status == 200);
-        stack.LoadBalancer.Release();
+        Assert.DoesNotContain(await stack.ExchangesAsync(), exchange => exchange.Url == app2.Url("/") && exchange.Status == 200);
 
         // Control: the same cookie is a session on app 1.
         await profile.OnOriginOfAsync(app1);
@@ -52,7 +54,7 @@ public sealed class SessionTests
     [Fact]
     public async Task N19_an_unauthenticated_api_call_and_session_read_are_401_problems_and_never_redirects()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.OnOriginOfAsync(app);
@@ -72,7 +74,7 @@ public sealed class SessionTests
     [Fact]
     public async Task N27_get_and_post_to_signout_oidc_with_a_live_session_are_404_and_the_session_survives()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);

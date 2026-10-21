@@ -22,6 +22,12 @@ namespace Gateway.E2ETests.Stack;
 /// Terraform state. The tunnel's port is <c>SPA_TUNNEL_PORT</c>, else 8443, the default
 /// <c>tunnel.sh</c> forwards and every registry host carries.</para>
 ///
+/// <para>What the stand-in load balancer does locally the browser does here (#211): a login is held at
+/// its callback inside the browser (<see cref="NavigationHold"/>), a foreign page comes from this run's
+/// own listener on loopback (<see cref="ForeignSites"/>), and the exchanges are the browser's own
+/// record (<see cref="BrowserExchanges"/>). The raw client goes through the tunnel
+/// (<see cref="RawClient"/>).</para>
+///
 /// <para>One cell serves every test, so one deployed stack runs at a time in a process: the gateway
 /// log and the provider's session are the cell's, and a row that counts a log line must see only its
 /// own test's traffic. A stack reads the log from the moment it started.</para>
@@ -37,8 +43,11 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>The platform configuration file for <c>spactl release activate --config</c>.</summary>
     public const string PlatformConfigVariable = "SPA_E2E_PLATFORM_CONFIG";
 
-    /// <summary>The test user every profile signs in as (fixtures/cognito/pool.json).</summary>
+    /// <summary>The test user a profile signs in as unless a row names another (fixtures/cognito/pool.json).</summary>
     public const string User = "alice";
+
+    /// <summary>The other test user, for a row that needs a second person: another user's token (N-06), an attacker's login (N-04, N-26).</summary>
+    public const string OtherUser = "bob";
 
     /// <summary>
     /// The apps root's access-token life, five minutes (infra/envs/poc/apps/main.tf,
@@ -49,22 +58,42 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>How long a log line may take to reach CloudWatch and be returned by a filter.</summary>
     private static readonly TimeSpan LogArrival = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// How far back of the workstation's clock a log mark reaches, so a clock a little ahead of AWS's
+    /// loses no line. A line inside that margin from before the mark is kept out by <see cref="Claimed"/>.
+    /// </summary>
+    private static readonly TimeSpan ClockMargin = TimeSpan.FromSeconds(5);
+
     private static readonly SemaphoreSlim OneAtATime = new(1, 1);
+
+    /// <summary>
+    /// The request lines a rule assertion has already matched, by trace and span, in this process: a
+    /// second refusal with the same rule must find its own line, not the first one's (N-06 asserts
+    /// four in a row), and the next test on the cell must not find the last test's.
+    /// </summary>
+    private static readonly HashSet<string> Claimed = [];
 
     private readonly IBrowser browser;
     private readonly CellAws aws;
+    private readonly ForeignSites foreign;
     private readonly string outputsPath;
+    private readonly int tunnelPort;
     private readonly DateTimeOffset started;
-    private readonly List<Task<Exchange?>> exchanges = [];
-    private Password? password;
+    private readonly BrowserExchanges exchanges;
+    private readonly Dictionary<string, Password> passwords = [];
+    private string user = User;
+    private HttpClient? raw;
 
-    private DeployedStack(Cell cell, CellAws aws, IBrowser browser, string outputsPath, DateTimeOffset started)
+    private DeployedStack(Cell cell, CellAws aws, IBrowser browser, ForeignSites foreign, string outputsPath, int tunnelPort, DateTimeOffset started)
     {
         Cell = cell;
         this.aws = aws;
         this.browser = browser;
+        this.foreign = foreign;
         this.outputsPath = outputsPath;
+        this.tunnelPort = tunnelPort;
         this.started = started;
+        exchanges = new BrowserExchanges(cell.Domain);
     }
 
     public StackKind Kind => StackKind.Deployed;
@@ -103,18 +132,27 @@ public sealed class DeployedStack : IBrowserStack
         await TunnelIsUpAsync(port, ct);
 
         await OneAtATime.WaitAsync(ct);
+        ForeignSites? foreign = null;
         try
         {
-            // Every app host goes to the tunnel, whatever the hosts file says; the provider is reached
-            // on the internet as it is. The context trusts only what the workstation trusts, so the
-            // ALB's certificate must chain to the authority certs.sh installed.
-            IBrowser browser = await Chromium.LaunchAsync("--host-resolver-rules=" + cell.ResolverRule(port));
+            // Every app host goes to the tunnel, whatever the hosts file says, except the sibling, which
+            // goes with the site elsewhere to this run's own foreign listener; the provider is reached on
+            // the internet as it is. The context trusts only what the workstation trusts, and the foreign
+            // listener's key, so the ALB's certificate must chain to the authority certs.sh installed.
+            foreign = await ForeignSites.StartAsync(cell.Domain, ct);
+            IBrowser browser = await Chromium.LaunchAsync(
+                $"--host-resolver-rules={foreign.ResolverRules}, {cell.ResolverRule(port)}",
+                ForeignSites.TrustSwitch(foreign.Spki));
 
-            // A few seconds back, so a workstation clock a little ahead of AWS's loses no line.
-            return new DeployedStack(cell, new CellAws(cell, new ProcessCommandRunner()), browser, outputsPath, DateTimeOffset.UtcNow.AddSeconds(-5));
+            return new DeployedStack(cell, new CellAws(cell, new ProcessCommandRunner()), browser, foreign, outputsPath, port, DateTimeOffset.UtcNow - ClockMargin);
         }
         catch
         {
+            if (foreign is not null)
+            {
+                await foreign.DisposeAsync();
+            }
+
             OneAtATime.Release();
             throw;
         }
@@ -127,47 +165,44 @@ public sealed class DeployedStack : IBrowserStack
         // No IgnoreHTTPSErrors: Chromium must trust the cell's certificate through the local authority.
         IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = false });
 
-        // There is no stand-in load balancer to keep the exchanges, so the browser's own responses are
-        // kept as they arrive. A listener only observes: the requests are the browser's own, with the
-        // Fetch Metadata a route would have lost (TlsLoadBalancer).
-        context.Response += (_, response) =>
-        {
-            lock (exchanges)
-            {
-                exchanges.Add(RecordAsync(response));
-            }
-        };
+        // There is no stand-in load balancer to keep the exchanges, so the browser keeps them (BrowserExchanges).
         IPage page = await context.NewPageAsync();
+        await exchanges.AttachAsync(page);
         return new Profile(this, context, page);
     }
 
-    public async Task<IReadOnlyList<Exchange>> ExchangesAsync()
-    {
-        Task<Exchange?>[] pending;
-        lock (exchanges)
-        {
-            pending = [.. exchanges];
-        }
-
-        return [.. (await Task.WhenAll(pending)).OfType<Exchange>()];
-    }
+    public Task<IReadOnlyList<Exchange>> ExchangesAsync() => exchanges.AllAsync();
 
     /// <summary>
     /// Cognito's managed login, filled as a person fills it: the user name, then the password if the
     /// page asks for it on a second step. When Cognito still holds a session for this browser it sends
     /// the browser straight back to the callback and there is no form.
     /// </summary>
-    public async Task CompleteLoginAsync(Profile profile, HarnessApp app)
+    public Task CompleteLoginAsync(Profile profile, HarnessApp app)
+    {
+        string shell = app.Url("/").ToString();
+        return FillLoginFormIfShownAsync(profile, url => url == shell);
+    }
+
+    /// <summary>
+    /// Waits until the page is at the provider or where the login ends without it
+    /// (<paramref name="arrived"/>), and at the provider fills the managed login form as
+    /// <see cref="SignInAs"/> last named.
+    /// </summary>
+    private async Task FillLoginFormIfShownAsync(Profile profile, Func<string, bool> arrived)
     {
         IPage page = profile.Page;
-        string shell = app.Url("/").ToString();
-        await page.WaitForURLAsync(url => url == shell || new Uri(url).Host == ProviderHost);
+        await page.WaitForURLAsync(url => arrived(url) || new Uri(url).Host == ProviderHost);
         if (new Uri(page.Url).Host != ProviderHost)
         {
             return;
         }
 
-        password ??= await aws.PasswordAsync(User, TestContext.Current.CancellationToken);
+        if (!passwords.TryGetValue(user, out Password? password))
+        {
+            password = await aws.PasswordAsync(user, TestContext.Current.CancellationToken);
+            passwords[user] = password;
+        }
 
         // Managed login's fields carry the names Cognito's hosted pages always used, username and
         // password (https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-managed-login.html).
@@ -175,7 +210,7 @@ public sealed class DeployedStack : IBrowserStack
         ILocator secret = page.Locator("input[name='password']:visible").First;
         ILocator submit = page.Locator("button[type='submit']:visible").First;
 
-        await username.FillAsync(User);
+        await username.FillAsync(user);
         if (!await secret.IsVisibleAsync())
         {
             await submit.ClickAsync();
@@ -200,21 +235,72 @@ public sealed class DeployedStack : IBrowserStack
         return await LogLinesAsync(message);
     }
 
+    public string ParentDomain => Cell.Domain;
+
+    public void SignInAs(string user) => this.user = user;
+
+    public LogMark MarkLog() => new(0, DateTimeOffset.UtcNow - ClockMargin);
+
     /// <summary>
-    /// The request lines since <paramref name="since"/>; waits for one that carries
-    /// <paramref name="rule"/> (for <paramref name="appId"/>, when given), and fails if none comes.
-    /// The rule id is in the log line and nowhere a browser can see (contracts/request-gate.md -> "Rule
-    /// ids"), so the rows that assert one read it from CloudWatch here.
+    /// Read from CloudWatch: the request lines since the mark, one of which carries the rule and no
+    /// earlier assertion has matched (<see cref="Claimed"/>).
     /// </summary>
-    public Task<JsonElement> AssertRuleLoggedAsync(DateTimeOffset since, string rule, string? appId = null) =>
-        aws.WaitForGatewayLineAsync(
-            since,
+    public async Task AssertRuleLoggedAsync(LogMark after, string rule, string? appId = null)
+    {
+        JsonElement line = await aws.WaitForGatewayLineAsync(
+            after.At,
             line => line.TryGetProperty("msg", out JsonElement msg) && msg.GetString() == "request"
                 && line.TryGetProperty("rule", out JsonElement value) && value.GetString() == rule
-                && (appId is null || (line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == appId)),
+                && (appId is null || (line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == appId))
+                && !IsClaimed(line),
             LogArrival,
-            $"a request line with rule {rule}{(appId is null ? "" : " for " + appId)}",
+            $"a request line with rule {rule}{(appId is null ? "" : " for " + appId)} that no earlier assertion matched",
             TestContext.Current.CancellationToken);
+        lock (Claimed)
+        {
+            Claimed.Add(ClaimOf(line));
+        }
+    }
+
+    /// <summary>Through the tunnel, validating the ALB's certificate as the workstation does (<see cref="RawClient"/>).</summary>
+    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
+    {
+        raw ??= RawClient.To($"127.0.0.1:{tunnelPort}");
+        return raw.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Held in the browser (<see cref="NavigationHold"/>), since nothing between the browser and the
+    /// ALB is the test's. Cognito shows its form unless it already knows this browser, and then sends
+    /// it straight to the callback.
+    /// </summary>
+    public Task<Uri> StopAtCallbackAsync(Profile profile, HarnessApp app, Func<Task> start)
+    {
+        string callback = app.Url("/signin-oidc").ToString();
+        return NavigationHold.HoldAsync(profile.Page, callback, async () =>
+        {
+            await start();
+            await FillLoginFormIfShownAsync(profile, url => url.StartsWith(callback, StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>Served by this run's foreign listener, on loopback like the tunnel (<see cref="ForeignSites"/>).</summary>
+    public async Task OpenForeignPageAsync(Profile profile, Uri url, string html)
+    {
+        foreign.Serve(url, html);
+        await profile.Page.GotoAsync(url.ToString());
+    }
+
+    private static string ClaimOf(JsonElement line) =>
+        $"{(line.TryGetProperty("trace_id", out JsonElement trace) ? trace.GetString() : "")}/{(line.TryGetProperty("span_id", out JsonElement span) ? span.GetString() : "")}";
+
+    private static bool IsClaimed(JsonElement line)
+    {
+        lock (Claimed)
+        {
+            return Claimed.Contains(ClaimOf(line));
+        }
+    }
 
     /// <summary>
     /// The access token Cognito issues lives <see cref="AccessTokenLifetime"/>, and nothing can issue
@@ -280,43 +366,6 @@ public sealed class DeployedStack : IBrowserStack
             : runner.RunAsync("dotnet", ["run", "--project", Path.Combine(FixtureFiles.RepositoryRoot, "tools", "spactl"), "--", .. arguments], TestContext.Current.CancellationToken);
     }
 
-    private async Task<Exchange?> RecordAsync(IResponse response)
-    {
-        Uri url = new(response.Url);
-        if (!url.Host.EndsWith("." + Cell.Domain, StringComparison.OrdinalIgnoreCase))
-        {
-            return null; // The provider's own pages are not the cell's exchanges.
-        }
-
-        try
-        {
-            IReadOnlyList<Header> received = await response.HeadersArrayAsync();
-            IReadOnlyList<Header> sent = await response.Request.HeadersArrayAsync();
-            byte[] body;
-            try
-            {
-                body = await response.BodyAsync();
-            }
-            catch (PlaywrightException)
-            {
-                body = []; // A redirect's body is not kept by the browser.
-            }
-
-            return new Exchange(
-                response.Request.Method,
-                url,
-                sent.GroupBy(header => header.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(group => group.Key, group => string.Join(", ", group.Select(header => header.Value)), StringComparer.OrdinalIgnoreCase),
-                response.Status,
-                [.. received.Select(header => KeyValuePair.Create(header.Name, header.Value))],
-                body);
-        }
-        catch (PlaywrightException)
-        {
-            return null; // The page closed before the response could be read.
-        }
-    }
-
     private static bool MessageStarts(JsonElement line, string message) =>
         line.TryGetProperty("msg", out JsonElement msg) && msg.GetString()?.StartsWith(message, StringComparison.Ordinal) == true;
 
@@ -347,7 +396,9 @@ public sealed class DeployedStack : IBrowserStack
     {
         try
         {
+            raw?.Dispose();
             await browser.DisposeAsync();
+            await foreign.DisposeAsync();
         }
         finally
         {

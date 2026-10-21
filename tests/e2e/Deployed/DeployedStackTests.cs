@@ -27,12 +27,15 @@ public sealed partial class DeployedStackTests
     }
 
     [Fact]
-    public void The_test_user_is_one_the_identity_root_creates()
+    public void Both_test_users_are_ones_the_identity_root_creates_and_they_differ()
     {
         System.Text.Json.Nodes.JsonNode pool = System.Text.Json.Nodes.JsonNode.Parse(
             File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "fixtures", "cognito", "pool.json")))!;
+        string[] users = [.. pool["users"]!.AsArray().Select(user => user!["username"]!.GetValue<string>())];
 
-        Assert.Contains(DeployedStack.User, pool["users"]!.AsArray().Select(user => user!["username"]!.GetValue<string>()));
+        Assert.Contains(DeployedStack.User, users);
+        Assert.Contains(DeployedStack.OtherUser, users); // N-04, N-06 and N-26 sign the second person in as this one (#211).
+        Assert.NotEqual(DeployedStack.User, DeployedStack.OtherUser);
     }
 
     [GeneratedRegex(@"^\s*access_token_validity\s*=\s*(\d+)", RegexOptions.Multiline)]
