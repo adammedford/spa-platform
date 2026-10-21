@@ -142,13 +142,16 @@ const recordsIn = (inv) => {
 let agentsRun = 0
 let running = 0
 const waiting = []
+// A freed slot passes straight to the first waiter, and running drops only when nobody waits. A
+// waiter that took its own slot on waking would leave a gap between the free and the take, in which
+// another caller sees a slot open and takes it too: one over maxParallel (#86, review check 22).
 const slot = async (fn) => {
   if (running >= MAX_PAR) await new Promise((resolve) => waiting.push(resolve))
-  running++
+  else running++
   try { return await fn() } finally {
-    running--
     const next = waiting.shift()
     if (next) next()
+    else running--
   }
 }
 const run = (prompt, opts) => slot(() => { agentsRun++; return agent(prompt, opts) })
@@ -609,10 +612,11 @@ const reviewOne = async (n, res, at) => {
   const v = await run(verdictPrompt(n, inv, mut, d), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) return failed(res, 'verdict: the verdict agent returned nothing')
   v.earlierFindings = v.earlierFindings || []
-  // The script holds on what it can judge itself: an axis that returned nothing, a mutation row
-  // under the hold rules, or a held record's finding the range leaves unanswered. The verdict agent
-  // can hold on more, never on less. An empty earlierFindings after a hold holds too: a hold always
-  // had a reason, and a list with none in it is that reason left unchecked (A check fails closed).
+  // The script holds on what it can judge itself: a mutation row under the hold rules, or a held
+  // record's finding the range leaves unanswered (an axis that returned nothing failed the pull
+  // request above). The verdict agent can hold on more, never on less. An empty earlierFindings after
+  // a hold holds too: a hold always had a reason, and a list with none in it is that reason left
+  // unchecked (A check fails closed).
   const unanswered = d && d.verdict === 'hold' && (!v.earlierFindings.length || v.earlierFindings.some((f) => f.answered === false))
   const verdict = mut.holds.length || unanswered ? 'hold' : v.verdict
   // The record names the head the inventory read, whatever the post agent finds later.

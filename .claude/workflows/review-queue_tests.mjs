@@ -126,6 +126,8 @@ function run(scriptArgs, served, behave = {}) {
     // behave.delay: how many milliseconds an agent takes, by label, so agents overlap in time.
     const ms = behave.delay ? behave.delay(opts.label) : 0
     if (ms) await new Promise((resolve) => setTimeout(resolve, ms))
+    // behave.hold: a promise, by label, that the agent waits on, so a check decides when it ends.
+    if (behave.hold) await behave.hold(opts.label)
     // behave.kill: { [label]: 'throw' | 'null' }, an agent killed mid-run, by throwing as the strict
     // parallel() above surfaces it, or by returning nothing as the Workflow tool's agent() does.
     const killed = (behave.kill || {})[opts.label]
@@ -740,6 +742,33 @@ try {
         if (other !== alone) fail(`${what}: PR 402's result changed: ${other}, alone it is ${alone}`)
       }
     }
+  }
+
+  // 22. The slot's hand-off (#86). Two agents that end in one macrotask, a few microtasks apart, while
+  //     a third pull request waits for a slot: a waiter that takes its own slot on waking leaves a gap
+  //     between the free and the take, and the first pull request's axes, asked for in that gap, take
+  //     the freed slot too. Two slots, three pull requests; the inventories of 501 and 502 hold the
+  //     slots and end k microtasks apart, for each k up to 24, and no more than two agents are ever in
+  //     flight. The agent stub's timers end one agent per macrotask, which is why check 20 cannot see it.
+  checks++
+  {
+    const TRIO = { 501: pr(501, ['docs/a.md']), 502: pr(502, ['docs/b.md']), 503: pr(503, ['docs/c.md']) }
+    const over = []
+    for (let k = 0; k <= 24; k++) {
+      const gate = {}
+      const hold = (label) => (label === 'inventory:501' || label === 'inventory:502' ? new Promise((resolve) => { gate[label] = resolve }) : undefined)
+      env = run({ prs: [501, 502, 503], maxParallel: 2, maxMutationsPerPr: 1 }, TRIO, { hold })
+      const done = execute(env)
+      for (let i = 0; i < 50 && !(gate['inventory:501'] && gate['inventory:502']); i++) await new Promise((resolve) => setTimeout(resolve, 0))
+      if (!(gate['inventory:501'] && gate['inventory:502'])) { fail(`the hand-off, k ${k}: the two inventories never both held a slot`); break }
+      gate['inventory:501']()
+      for (let i = 0; i < k; i++) await null
+      gate['inventory:502']()
+      result = await done
+      if (env.flight.max > 2) over.push(`k ${k}: ${env.flight.max} in flight`)
+      if ((result.prs || []).some((r) => r.outcome !== 'recorded')) fail(`the hand-off, k ${k}: outcomes ${(result.prs || []).map((r) => r.outcome).join(', ')}`)
+    }
+    if (over.length) fail(`the hand-off: more agents in flight than the 2 slots, at ${over.length} of 25 offsets: ${over.join('; ')}`)
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
