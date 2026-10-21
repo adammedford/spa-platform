@@ -12,8 +12,8 @@ namespace Gateway.E2ETests.Stack;
 /// gateway service's running task from ECS (F-07, #212). Each goes through the AWS CLI v2, the tool
 /// <c>tools/scripts/</c> already reach the cell with (docs/dependencies.md), because the project's
 /// profile signs in with <c>login_session</c>, which the CLI resolves on its own and the .NET SDK
-/// resolves only with an assembly no project references yet (#206). Every call names the cell's
-/// Region from the outputs document.
+/// resolves only through the AWSSDK.Signin assembly (#206), and the CLI needs no package here. Every
+/// call names the cell's Region from the outputs document.
 /// </summary>
 public sealed partial class CellAws(Cell cell, ICommandRunner runner)
 {
@@ -210,10 +210,23 @@ public sealed class CommandFailedException(string program, IReadOnlyList<string>
 /// own session (the <c>spa-platform</c> profile, with <c>tools/aws-project.env</c> sourced), and with
 /// the AWS CLI's pager off, as the scripts set it
 /// (https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-pagination.html#cli-usage-pagination-clientside).
-/// Nothing it reads is written anywhere but the returned string.
+/// Nothing it reads is written anywhere but the returned string. A cancelled run gives its program
+/// <see cref="StopGrace"/> to stop by itself, then kills it and everything it started, before the
+/// cancellation reaches the caller.
 /// </summary>
 public sealed class ProcessCommandRunner : ICommandRunner
 {
+    /// <summary>
+    /// How long a cancelled run's program has to stop by itself before it is killed. Ctrl-C in a
+    /// terminal interrupts the whole foreground process group, the program included
+    /// (https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap11.html#tag_11_01_09), and an
+    /// interrupted Terraform stops at its own pace and gives its state lock back, where a killed one
+    /// leaves the lock behind for <c>force-unlock</c> (infra/bootstrap/README.md). A run cancelled any
+    /// other way sends the program nothing, so it is killed once this has passed rather than left
+    /// running with the lock after its test has gone.
+    /// </summary>
+    public TimeSpan StopGrace { get; init; } = TimeSpan.FromSeconds(30);
+
     public async Task<string> RunAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         ProcessStartInfo start = new(program)
@@ -232,9 +245,50 @@ public sealed class ProcessCommandRunner : ICommandRunner
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"{program} did not start.");
         Task<string> output = process.StandardOutput.ReadToEndAsync(ct);
         Task<string> error = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        try
+        {
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await StopAsync(process);
+            throw;
+        }
+
         return process.ExitCode == 0
             ? await output
             : throw new CommandFailedException(program, arguments, process.ExitCode, await error);
+    }
+
+    /// <summary>
+    /// Waits <see cref="StopGrace"/> for the program to exit, then kills it with everything it started:
+    /// disposing the Process alone leaves it running
+    /// (https://learn.microsoft.com/dotnet/api/system.diagnostics.process.kill#system-diagnostics-process-kill(system-boolean)).
+    /// </summary>
+    private async Task StopAsync(Process process)
+    {
+        using (CancellationTokenSource grace = new(StopGrace))
+        {
+            try
+            {
+                await process.WaitForExitAsync(grace.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Still running when the grace ran out.
+            }
+        }
+
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // It exited between the grace and the kill.
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
     }
 }

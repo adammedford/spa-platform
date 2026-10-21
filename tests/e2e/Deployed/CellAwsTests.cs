@@ -172,6 +172,132 @@ public sealed class CellAwsTests
         Assert.Equal(["app2", "app1"], registry.AppIds);
     }
 
+    [Fact]
+    public async Task A_cancelled_run_gives_its_program_the_grace_to_stop_by_itself()
+    {
+        // Ctrl-C interrupts the program too, and an interrupted terraform apply gives its state lock back
+        // if it is let finish; a kill the moment the run is cancelled would leave the lock behind.
+        using TempDir dir = new();
+        string pid = dir.File("pid"), marker = dir.File("stopped");
+        using CancellationTokenSource cancel = new();
+        ProcessCommandRunner runner = new() { StopGrace = TimeSpan.FromSeconds(10) };
+        Task<string> run = runner.RunAsync("/bin/sh", ["-c", $"echo $$ > '{pid}'; sleep 1; echo stopped > '{marker}'"], cancel.Token);
+
+        await PidOfAsync(pid);
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+
+        Assert.True(File.Exists(marker), "the program was killed before it could stop by itself");
+    }
+
+    [Fact]
+    public async Task A_cancelled_run_whose_program_does_not_stop_kills_it_and_what_it_started_after_the_grace()
+    {
+        // A run cancelled other than from a terminal sends the program nothing, and a terraform apply
+        // left running would keep the apps root's state lock after its test had gone.
+        using TempDir dir = new();
+        string pid = dir.File("pid"), child = dir.File("child");
+        using CancellationTokenSource cancel = new();
+        ProcessCommandRunner runner = new() { StopGrace = TimeSpan.FromMilliseconds(200) };
+        Task<string> run = runner.RunAsync("/bin/sh", ["-c", $"sleep 60 & echo $! > '{child}'; echo $$ > '{pid}'; wait"], cancel.Token);
+
+        int program = await PidOfAsync(pid);
+        int started = await PidOfAsync(child);
+        try
+        {
+            // The cancellation reaches the caller long before the program would have ended by itself.
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+            Assert.True(await GoneWithinAsync(program), $"the program, pid {program}, is still running");
+            Assert.True(await GoneWithinAsync(started), $"what the program started, pid {started}, is still running");
+        }
+        finally
+        {
+            foreach (int left in new[] { program, started }.Where(Running))
+            {
+                using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(left);
+                process.Kill();
+            }
+        }
+    }
+
+    /// <summary>A directory of the test's own, removed with everything in it.</summary>
+    private sealed class TempDir : IDisposable
+    {
+        private readonly DirectoryInfo directory = Directory.CreateTempSubdirectory("process-runner-");
+
+        public string File(string name) => Path.Combine(directory.FullName, name);
+
+        public void Dispose() => directory.Delete(recursive: true);
+    }
+
+    private static async Task<int> PidOfAsync(string file)
+    {
+        for (int attempt = 0; attempt < 200; attempt++)
+        {
+            if (File.Exists(file) && int.TryParse(await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), out int pid))
+            {
+                return pid;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException($"the program never wrote {file}");
+    }
+
+    private static async Task<bool> GoneWithinAsync(int pid)
+    {
+        System.Diagnostics.Stopwatch waited = System.Diagnostics.Stopwatch.StartNew();
+        while (Running(pid) && waited.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        return !Running(pid);
+    }
+
+    /// <summary>
+    /// Whether a process runs. Where there is a /proc, a zombie, state Z, is not running: a killed
+    /// grandchild is reparented, and the parent it gets (a container's first process, say) may never
+    /// reap it (https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
+    /// </summary>
+    private static bool Running(int pid)
+    {
+        if (Directory.Exists("/proc"))
+        {
+            string stat = $"/proc/{pid}/stat";
+            if (!File.Exists(stat))
+            {
+                return false;
+            }
+
+            string text;
+            try
+            {
+                text = File.ReadAllText(stat);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+
+            // The state follows the command's closing parenthesis, which the command itself may contain.
+            return text[(text.LastIndexOf(')') + 2)..].FirstOrDefault() != 'Z';
+        }
+
+        try
+        {
+            using System.Diagnostics.Process found = System.Diagnostics.Process.GetProcessById(pid);
+            return !found.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>The AWS CLI's <c>filter-log-events</c> answer, merged across pages as the CLI does by default.</summary>
     private static string Events(params (string Stream, string Message)[] events) => JsonSerializer.Serialize(new
     {

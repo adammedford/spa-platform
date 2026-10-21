@@ -389,8 +389,17 @@ public sealed class DeployedStack : IBrowserStack
         return LastOnboarding.App;
     }
 
-    public Task OffboardAsync(string appId) =>
-        Onboarding("taking an onboarded app off runs spactl app remove").OffboardAsync(appId, TestContext.Current.CancellationToken);
+    /// <summary>
+    /// Takes the app off under a bound of its own rather than the test's token: F-07 takes app 3 off when
+    /// its row fails, a cancelled row included, and a clean-up cancelled with the row would leave app 3's
+    /// client, branding and secret live on the cell. The bound covers spactl's 300-second wait and the
+    /// apps root's plan and apply.
+    /// </summary>
+    public async Task OffboardAsync(string appId)
+    {
+        using CancellationTokenSource cleanup = new(TimeSpan.FromMinutes(15));
+        await Onboarding("taking an onboarded app off runs spactl app remove").OffboardAsync(appId, cleanup.Token);
+    }
 
     /// <summary>The last onboarding on this stack: the app, the plan read before its apply, and the revision that named it.</summary>
     public Onboarded? LastOnboarding { get; private set; }
