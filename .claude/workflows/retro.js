@@ -47,8 +47,12 @@ export const meta = {
 // return>}` to its phase file under the scratch directory before the next phase starts. The script has
 // no filesystem, so its first agent, the read, lists those files (tools/retro_record.py state) and the
 // open `Retro <date>` issue; a phase whose file carries the key this run computes for it is not
-// dispatched again. A key is a hash of the phase's inputs: the launch arguments for Gather, the index
-// for a lane, the findings and knownIssues for Rank, the ranking, maxTickets and dryRun for File.
+// dispatched again. A key is a hash of the phase's inputs: for Gather, the launch arguments and the
+// record's fingerprint the read takes (the log directory's and report directory's files and the
+// overnight script, by content, the Overnight issue's updatedAt and the integration branch's tip), so a
+// changed record re-runs Gather and, through the index, every phase after it; the index for a lane, the
+// findings and knownIssues for Rank, the ranking, maxTickets and dryRun for File. Lane tickets'
+// comments and lane worktrees are not in the fingerprint: they change the key only through the index.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'maxParallel', 'maxLaneAgents', 'maxTickets', 'dryRun', 'overnightScript', 'knownIssues']
 const badArguments = (a) => {
@@ -152,9 +156,10 @@ const STATE = {
     date: { type: 'string' }, issue: { type: 'integer' }, issueUrl: { type: 'string' },
     openRetro: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, text: { type: 'string' } }, required: ['number', 'title', 'url', 'text'] } },
     phaseFiles: { type: 'array', items: PHASE_FILE },
+    record: { type: 'object', properties: { files: { type: 'string' }, issueUpdatedAt: { type: 'string' }, branch: { type: 'string' } }, required: ['files', 'issueUpdatedAt', 'branch'] },
     error: { type: 'string' },
   },
-  required: ['date', 'issue', 'issueUrl', 'openRetro', 'phaseFiles', 'error'],
+  required: ['date', 'issue', 'issueUrl', 'openRetro', 'phaseFiles', 'record', 'error'],
 }
 // The record index (#77 user story 22): the one input every later phase reads. Its shape, for a
 // sibling workflow that reads the same record:
@@ -243,10 +248,11 @@ const statePrompt = () => `Read the retro's durable state before anything runs. 
 ${HOUSE(`${NIGHT_LOG}/retro-<date>`)}
 
 1. The night. ${A.date ? `date is ${A.date}.` : 'date is not given.'} ${A.issue ? `issue is #${A.issue}.` : 'issue is not given.'}
-   ${A.issue ? `Read it: \`cd ${REPO} && gh issue view ${A.issue} --json number,title,url\`. Its title must be "Overnight <date>"; the date is that one.${A.date ? ` It must equal ${A.date}; if not, set error to say both.` : ''}` : `Find it: \`cd ${REPO} && gh issue list --state all --search "Overnight ${A.date} in:title" --json number,title,url\`, the issue titled exactly "Overnight ${A.date}". A night of the archive shape has none: issue 0, issueUrl "".`}
+   ${A.issue ? `Read it: \`cd ${REPO} && gh issue view ${A.issue} --json number,title,url,updatedAt\`. Its title must be "Overnight <date>"; the date is that one.${A.date ? ` It must equal ${A.date}; if not, set error to say both.` : ''}` : `Find it: \`cd ${REPO} && gh issue list --state all --search "Overnight ${A.date} in:title" --json number,title,url,updatedAt\`, the issue titled exactly "Overnight ${A.date}". A night of the archive shape has none: issue 0, issueUrl "".`}
    If neither resolves, set error to say which.
 2. The phase files: \`${READER} state ${NIGHT_LOG}/retro-<date>\` with the date from step 1. phaseFiles is its output, verbatim (an empty list when the directory does not exist).
-3. An open retro of this night: \`cd ${REPO} && gh issue list --state open --search "Retro <date> in:title" --json number,title,url,body\`. openRetro is every issue whose title is exactly "Retro <date>", with text its body followed by the bodies of its sub-issues (\`cd ${REPO} && gh api repos/{owner}/{repo}/issues/<n>/sub_issues\`). An empty list when there is none.
+3. The record's fingerprint, which decides whether a saved Gather is reused: record.files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT}\`; record.issueUpdatedAt is the Overnight issue's updatedAt from step 1 ("" when there is none); record.branch is \`git -C ${REPO} rev-parse --verify -q overnight/<date>\` ("" when it does not resolve). Copy each value exactly.
+4. An open retro of this night: \`cd ${REPO} && gh issue list --state open --search "Retro <date> in:title" --json number,title,url,body\`. openRetro is every issue whose title is exactly "Retro <date>", with text its body followed by the bodies of its sub-issues (\`cd ${REPO} && gh api repos/{owner}/{repo}/issues/<n>/sub_issues\`). An empty list when there is none.
 error is "" when nothing stopped you.`
 
 const gatherPrompt = (scratch, date, issue, phaseKey) => `Gather: build the record index of the overnight run of ${date}${issue ? ` (Overnight issue #${issue})` : ''}. You judge nothing; you index.
@@ -390,7 +396,7 @@ const reuse = (name, inputs, done = () => true) => {
 }
 log(`retro ${DATE}${ISSUE ? ` (#${ISSUE})` : ''}: scratch ${SCRATCH}${DRY ? '; dry run' : ''}`)
 
-const gatherKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT, overnightScript: OVERNIGHT })
+const gatherKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT, overnightScript: OVERNIGHT, record: state.record || null })
 const index = reuse('gather', gatherKey) || await run(gatherPrompt(SCRATCH, DATE, ISSUE, gatherKey), { label: 'gather', phase: 'Gather', schema: INDEX })
 if (!index) return { halted: 'Gather returned nothing; no later phase ran', scratch: SCRATCH }
 const indexKey = key(index)

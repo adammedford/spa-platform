@@ -16,6 +16,7 @@ without an agent in the loop and its companion, tools/retro_record_tests.py, can
     python3 -I tools/retro_record.py body-check < body.md       a ticket body's shape
     python3 -I tools/retro_record.py state DIR             the retro's phase files under its scratch directory
     python3 -I tools/retro_record.py script FILE           a workflow script's path, sha256 and mtime
+    python3 -I tools/retro_record.py fingerprint PATH...   one digest of the record's files, for reuse
 
 Every command prints JSON on standard output. It exits 0 when it read its input; 1 when the input is
 not what the command reads (a report with no date, a body not in the ticket shape), with the reason
@@ -65,6 +66,13 @@ or `## What to build`), and an `## Acceptance` section with at least one `- [ ]`
 **The record index** (#77 user story 22) is the Gather phase's JSON, built by an agent from these
 commands and from git and gh; .claude/workflows/retro.js -> INDEX is its schema and its comment the
 shape's documentation. `logs` output is its logs, sideLogs, notLogs and rounds members verbatim.
+
+**A fingerprint** is the digest the retro keys its Gather phase on, so a saved record index is reused
+only while the files it was built from are unchanged (#77 -> "Durable state"). Each PATH is a file or
+a directory; a directory contributes its top-level files only, by name and content, so the retro's own
+scratch directory, a subdirectory of the night's log directory, never moves it. A path that does not
+exist contributes no file, as an empty directory does: the retro's first launch creates the log
+directory it fingerprints, and that alone is no change to the record.
 """
 
 from __future__ import annotations
@@ -287,6 +295,24 @@ def script(path: str) -> dict:
     return {"path": path, "sha256": digest, "mtime": utc(os.stat(path).st_mtime)}
 
 
+def fingerprint(paths: list) -> dict:
+    digest = hashlib.sha256()
+    count = 0
+    for path in paths:
+        if os.path.isdir(path):
+            members = [os.path.join(path, n) for n in sorted(os.listdir(path))]
+            members = [m for m in members if os.path.isfile(m)]
+        else:
+            members = [path] if os.path.isfile(path) else []
+        digest.update(f"path\0{path}\0".encode())
+        for member in members:
+            with open(member, "rb") as handle:
+                content = hashlib.sha256(handle.read()).hexdigest()
+            digest.update(f"file\0{member}\0{content}\0".encode())
+            count += 1
+    return {"digest": digest.hexdigest(), "files": count}
+
+
 def emit(value: object) -> None:
     json.dump(value, sys.stdout, ensure_ascii=False, indent=1)
     sys.stdout.write("\n")
@@ -322,6 +348,9 @@ def main(argv: list) -> int:
         return 0
     if command == "state" and len(rest) == 1:
         emit(state(rest[0]))
+        return 0
+    if command == "fingerprint" and rest:
+        emit(fingerprint(rest))
         return 0
     if command == "script" and len(rest) == 1:
         emit(script(rest[0]))

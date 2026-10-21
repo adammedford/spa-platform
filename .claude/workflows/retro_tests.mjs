@@ -5,7 +5,7 @@
 //
 // Runs retro.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed where the
 // script reaches it: through the durable-state read, which serves the open `Retro <date>` listing as
-// gh would and the phase files as tools/retro_record.py reads them, and through the File agent, which
+// gh would and the phase files and the record's fingerprint as tools/retro_record.py reads them, and through the File agent, which
 // reports the issues it was asked to file instead of filing them. No agent, gh or network call is
 // made. The main checkout the script is given is a throwaway git repository with this repository's
 // .gitignore; a stubbed agent writes every OUTPUT FILE and PHASE FILE its prompt names into it, so
@@ -103,7 +103,10 @@ function stub(env, scriptArgs, served) {
       if (label === 'state') {
         const scratch = path.join(env.repo, SCRATCH_REL)
         const files = JSON.parse(execFileSync('python3', ['-I', READER, 'state', scratch], { encoding: 'utf8' }))
-        out = { date: served.stateDate || DATE, issue: 0, issueUrl: '', openRetro: served.openRetro || [], phaseFiles: files, error: '' }
+        // The record's fingerprint, by the reader command the prompt names, on this repository's paths.
+        const fp = /retro_record\.py fingerprint ([^`\n]+)`/.exec(prompt)
+        const digest = fp ? JSON.parse(execFileSync('python3', ['-I', READER, 'fingerprint', ...fp[1].trim().split(/\s+/)], { encoding: 'utf8' })).digest : ''
+        out = { date: served.stateDate || DATE, issue: 0, issueUrl: '', openRetro: served.openRetro || [], phaseFiles: files, record: { files: digest, issueUpdatedAt: '', branch: '' }, error: '' }
       } else if (label === 'gather') out = served.index
       else if (label.startsWith('lane:')) {
         const k = label.slice(5)
@@ -317,6 +320,24 @@ try {
   if (cut.result.unreachable !== true || cut.result.filed !== false) fail(`unreachable: returned unreachable ${cut.result.unreachable}, filed ${cut.result.filed}`)
   const retry = await execute(env, { date: DATE }, { index: indexFor(THREE) })
   if (!retry.labels.includes('file') || retry.result.filed !== true) fail(`relaunched after an unreachable File: dispatched ${retry.labels.join(', ')}, filed ${retry.result.filed}`)
+
+  // 16. Gather is reused only while the record is unchanged (#77 -> "Durable state": "a phase file
+  //     whose inputs are unchanged"). A RED log arriving between two identical launches re-runs Gather
+  //     and every phase downstream of it; with nothing changed since, the next launch reuses them all.
+  checks++
+  env = newRepo()
+  await execute(env, { date: DATE }, { index: indexFor(THREE) })
+  const same = await execute(env, { date: DATE }, { index: indexFor(THREE) })
+  if (same.labels.join() !== 'state') fail(`an unchanged record: dispatched ${same.labels.join(', ')}, expected only state`)
+  const logDir = path.join(env.repo, '.scratch/overnight/log')
+  fs.writeFileSync(path.join(logDir, 'ws1-infra-t0-implement.txt'), `HEAD=${sha('a')}\n  failed: 1\nGATE: RED\n`)
+  const newer = await execute(env, { date: DATE }, { index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED')]) })
+  // File is keyed on Rank's result, which the stub serves unchanged, so File alone may be reused.
+  const upstream = want.filter((l) => l !== 'file')
+  if ([...newer.labels].filter((l) => l !== 'file').sort().join() !== [...upstream].sort().join()) fail(`a RED log added between identical launches: dispatched ${newer.labels.join(', ')}; expected ${upstream.join(', ')} (and file unless Rank's result is unchanged)`)
+  if ((newer.result.reused || []).some((n) => n !== 'file')) fail(`a changed record: reused ${JSON.stringify(newer.result.reused)}, expected no phase before File reused`)
+  const settled = await execute(env, { date: DATE }, { index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED')]) })
+  if (settled.labels.join() !== 'state') fail(`the changed record, launched again unchanged: dispatched ${settled.labels.join(', ')}, expected only state`)
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
 } catch (e) {

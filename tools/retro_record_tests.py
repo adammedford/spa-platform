@@ -311,6 +311,36 @@ class State(unittest.TestCase):
             self.assertEqual(out["sha256"], hashlib.sha256(b"export const meta = {}\n").hexdigest())
             self.assertRegex(out["mtime"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
+    def test_the_record_fingerprint_moves_with_the_record_only(self) -> None:
+        with tempfile.TemporaryDirectory() as top:
+            logs = os.path.join(top, "log")
+            os.makedirs(logs)
+            with open(os.path.join(logs, "1.6a-implement.txt"), "w", encoding="utf-8") as handle:
+                handle.write(GREEN_LOG)
+            script = os.path.join(top, "overnight.js")
+            with open(script, "w", encoding="utf-8") as handle:
+                handle.write("export const meta = {}\n")
+            paths = (logs, script, os.path.join(top, "absent.md"))
+            first = reader("fingerprint", *paths)
+            self.assertEqual(first[0], 0, first[2])
+            self.assertEqual(first[1]["files"], 2)
+            self.assertEqual(reader("fingerprint", *paths)[1], first[1], "an unchanged record keeps its digest")
+            empty = os.path.join(top, "empty")
+            before = reader("fingerprint", empty)[1]
+            os.makedirs(empty)
+            self.assertEqual(reader("fingerprint", empty)[1], before, "a directory made with no files in it is no change")
+            os.makedirs(os.path.join(logs, "retro-2026-10-17"))
+            with open(os.path.join(logs, "retro-2026-10-17", "gather.json"), "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            self.assertEqual(reader("fingerprint", *paths)[1], first[1], "the retro's own scratch files are not the record")
+            with open(os.path.join(logs, "I-4-implement.txt"), "w", encoding="utf-8") as handle:
+                handle.write(RED_LOG)
+            added = reader("fingerprint", *paths)[1]
+            self.assertNotEqual(added["digest"], first[1]["digest"], "a new log changes the digest")
+            with open(script, "a", encoding="utf-8") as handle:
+                handle.write("// edited\n")
+            self.assertNotEqual(reader("fingerprint", *paths)[1]["digest"], added["digest"], "an edited script changes it")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
