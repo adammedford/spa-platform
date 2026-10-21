@@ -267,8 +267,9 @@ script's exit code and key lines on #58.
 **C2, #63 for G3.** The browser suite through the tunnel (`SPA_E2E_STACK=deployed dotnet test
 --project tests/e2e`, with what `tests/e2e/Stack/DeployedStack.cs`'s summary says a sitting has
 before the run), `verify-release-immutability.sh` as P-04, P-06 (a
-connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -w 5
--z <address> 8080; echo "exit=$?"`, expecting non-zero), then `teardown.sh` and P-05 (the tag query
+connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -G 5
+-z <address> 8080; echo "exit=$?"`, expecting non-zero; on macOS `-G` is the connect timeout,
+while `-w` is an idle timeout that leaves the probe waiting about 75 seconds), then `teardown.sh` and P-05 (the tag query
 empty, the roles gone by name, #118), then seed and deploy again from nothing. Post per test id on
 #63.
 
