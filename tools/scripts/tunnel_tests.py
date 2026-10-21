@@ -528,7 +528,13 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         # The CLI's status for a service error (`aws help return-codes`), passed on.
         self.assertEqual(254, result.status, result.output)
         self.assertEqual(1, len(case.start_sessions()), result.output)
-        self.assertIn("AccessDeniedException", result.stderr)
+        # The code alone, on a line of its own, as tunnel.sh's header promises: the account mask
+        # would pass the universal by itself, and leave the operator's role and the policy text in
+        # the line (#191).
+        self.assertIn("tunnel: the session through task 0123456789abcdef0123456789abcdef: AccessDeniedException",
+                      result.stderr.splitlines())
+        for principal in ("is not authorized", "assumed-role", "spa-platform-operator", "arn:aws:"):
+            self.assertNotIn(principal, result.stderr)
 
     def test_any_other_line_on_the_session_s_stderr_reaches_it_with_the_account_masked(self):
         # Not a line the CLI or the plugin is known to print: whatever else reaches the session's
