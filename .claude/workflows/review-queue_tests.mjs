@@ -98,6 +98,8 @@ function run(scriptArgs, served, behave = {}) {
   git('add', '-A')
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'start')
   const args = { repo, wt: path.join(os.tmpdir(), 'review-queue-tests-wt'), date: '2026-10-21', ...scriptArgs }
+  // A prs of undefined is a launch with no list: the key is left out, as an operator would.
+  if (args.prs === undefined) delete args.prs
 
   globalThis.args = args
   globalThis.phase = () => {}
@@ -107,13 +109,35 @@ function run(scriptArgs, served, behave = {}) {
   // dies (the workflow-authoring reference, "Script body hooks"). The stub is strict on purpose, so
   // the script's own guard turns a dying mutation agent into a row and no check rests on that promise.
   globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
+  // Agents in flight now and at most, across the run: what the slot count bounds.
+  // events: every agent's start and end, in order, as `start <label>` and `end <label>`.
+  const flight = { now: 0, max: 0 }
+  const events = []
   globalThis.agent = async (prompt, opts) => {
+    flight.now++
+    flight.max = Math.max(flight.max, flight.now)
+    events.push(`start ${opts.label}`)
+    try { return await answer(prompt, opts) } finally { flight.now--; events.push(`end ${opts.label}`) }
+  }
+  const answer = async (prompt, opts) => {
     const [kind, n] = opts.label.split(':')
     calls.push(opts.label)
     prompts[opts.label] = prompt
+    // behave.delay: how many milliseconds an agent takes, by label, so agents overlap in time.
+    const ms = behave.delay ? behave.delay(opts.label) : 0
+    if (ms) await new Promise((resolve) => setTimeout(resolve, ms))
+    // behave.kill: { [label]: 'throw' | 'null' }, an agent killed mid-run, by throwing as the strict
+    // parallel() above surfaces it, or by returning nothing as the Workflow tool's agent() does.
+    const killed = (behave.kill || {})[opts.label]
+    if (killed === 'throw') throw new Error(`the agent ${opts.label} was killed`)
+    if (killed === 'null') return null
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
+    }
+    if (kind === 'queue') {
+      // gh pr list as the queue agent reports it: behave.queue, or no open pull request.
+      return behave.queue === 'null' ? null : (behave.queue || { baseTip: sha('c'), prs: [], error: '' })
     }
     if (kind === 'inventory') {
       const inv = served[n]
@@ -155,7 +179,7 @@ function run(scriptArgs, served, behave = {}) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, prompts, git }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events }
 }
 
 // A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
@@ -613,6 +637,109 @@ try {
     if (r.range !== null || r.earlierRecord !== null) fail(`PR 207 with ${what}: range ${JSON.stringify(r.range)}, earlierRecord ${JSON.stringify(r.earlierRecord)}, expected null`)
     const full = commentOf(env, 207).split('\n').find((l) => l.startsWith('Full review:')) || ''
     if (!full.includes(OLD_RECORD('merge').html_url)) fail(`PR 207 with ${what}: no "Full review:" line naming the earlier record`)
+  }
+
+  // 18. The open queue (#86), empty: launched with no list, the queue agent runs, the stubbed gh lists
+  //     no open pull request into main, and the run returns an empty list, posts nothing and starts
+  //     no other agent. The return still says what the run saw: date, base tip, agents, log directory.
+  checks++
+  {
+    env = run({ prs: undefined }, PRS, { queue: { baseTip: sha('c'), prs: [], error: '' } })
+    result = await execute(env)
+    if (!result || result.halted) fail(`an empty queue: the run halted or returned nothing: ${JSON.stringify(result)}`)
+    else {
+      if (JSON.stringify(result.prs) !== '[]') fail(`an empty queue: prs ${JSON.stringify(result.prs)}, expected []`)
+      if (env.posted.length) fail(`an empty queue: ${env.posted.length} comment(s) posted`)
+      if (JSON.stringify(env.calls) !== '["queue"]') fail(`an empty queue: agents ${JSON.stringify(env.calls)}, expected the queue agent alone`)
+      if (result.agents !== 1) fail(`an empty queue: agents ${result.agents}, expected 1, the queue agent`)
+      if (result.date !== '2026-10-21' || result.baseTip !== sha('c') || result.logDir !== `${env.repo}/.scratch/review-queue/log/2026-10-21`) fail(`an empty queue: date ${result.date}, baseTip ${result.baseTip}, logDir ${result.logDir}`)
+    }
+  }
+
+  // 19. The open queue, with pull requests in it: each one into main is reviewed and posted, a row of
+  //     another base is not, and the base tip reported is the one the queue read. With a named list
+  //     the base tip is the inventory's. A queue agent that returns nothing is not an empty queue: the
+  //     run halts saying so and posts nothing.
+  checks++
+  {
+    const TIP = sha('9')
+    const queue = { baseTip: TIP, prs: [{ number: 101, head: sha('1'), baseRef: 'main' }, { number: 102, head: sha('2'), baseRef: 'main' }, { number: 999, head: sha('3'), baseRef: 'develop' }], error: '' }
+    env = run({ prs: undefined }, PRS, { queue })
+    result = await execute(env)
+    const got = (result.prs || []).map((r) => `${r.number} ${r.outcome}`).sort()
+    if (JSON.stringify(got) !== '["101 recorded","102 recorded"]') fail(`a queue of 101, 102 and a develop-based 999: results ${JSON.stringify(got)}, expected 101 and 102 recorded`)
+    if (env.calls.some((c) => c.endsWith(':999'))) fail('a queue row whose base is not main was reviewed')
+    if (env.posted.map((p) => p.n).sort().join(',') !== '101,102') fail(`a queue of 101 and 102: comments on ${env.posted.map((p) => p.n).join(',')}`)
+    if (result.baseTip !== TIP) fail(`a queue: baseTip ${result.baseTip}, expected the queue's ${TIP}`)
+    env = run({ prs: [101] }, PRS)
+    result = await execute(env)
+    if (result.baseTip !== sha('c')) fail(`a named list: baseTip ${result.baseTip}, expected the inventory's ${sha('c')}`)
+    if (env.calls.includes('queue')) fail('a named list ran the queue agent')
+    env = run({ prs: undefined }, PRS, { queue: 'null' })
+    result = await execute(env)
+    if (!result || !result.halted || JSON.stringify(result.prs) !== '[]' || env.posted.length || env.calls.length !== 1) fail(`a queue agent that returned nothing: ${JSON.stringify(result)}, ${env.calls.length} agent(s), ${env.posted.length} comment(s); expected a halt naming the queue, no review and no post`)
+  }
+
+  // 20. The agent budget (#86). Three pull requests with four candidates each, a mutation cap of 2 and
+  //     agents that take different times, so the pipelines overlap. Per pull request that is one
+  //     inventory, two axes, two mutations, one verdict and one post: 7, so 21 named and 22 with the
+  //     queue. The return reports exactly the agents that ran, and no more than the slot count are ever
+  //     in flight at once. One pull request's mutations start while another is still under review.
+  checks++
+  {
+    const four = (n) => pr(n, ['tests/q.cs'], { candidates: [cand(`Q${n}a`), cand(`Q${n}b`), cand(`Q${n}c`), cand(`Q${n}d`)] })
+    const WIDE3 = { 301: four(301), 302: four(302), 303: four(303) }
+    // 301 reviews fast, 302 slowly, 303 in between; every other agent takes a few milliseconds.
+    const delay = (label) => {
+      const [kind, n] = label.split(':')
+      if (kind === 'standards' || kind === 'spec') return { 301: 2, 302: 40, 303: 15 }[n] || 1
+      return kind === 'mutate' ? 5 + Number(label.split(':')[2]) : 3
+    }
+    for (const [slots, queued, want] of [[2, false, 21], [1, false, 21], [3, true, 22], [5, false, 21]]) {
+      env = run({ prs: queued ? undefined : [301, 302, 303], maxParallel: slots, maxMutationsPerPr: 2 }, WIDE3,
+        { delay, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
+      result = await execute(env)
+      const what = `three pull requests, ${slots} slot(s)${queued ? ', from the queue' : ''}`
+      if (result.agents !== env.calls.length) fail(`${what}: the return reports ${result.agents} agents, ${env.calls.length} ran`)
+      if (env.calls.length !== want) fail(`${what}: ${env.calls.length} agents ran, expected ${want}`)
+      if (env.flight.max > slots) fail(`${what}: ${env.flight.max} agents in flight at once, over the slot count`)
+      if ((result.prs || []).some((r) => r.outcome !== 'recorded')) fail(`${what}: outcomes ${(result.prs || []).map((r) => r.outcome).join(', ')}`)
+      if (slots >= 3) {
+        // Overlap: 301's first mutation starts while 302's Standards axis is still running.
+        const at = (e) => env.events.indexOf(e)
+        if (!(at('start mutate:301:1') >= 0 && at('start standards:302') >= 0 && at('start standards:302') < at('start mutate:301:1') && at('start mutate:301:1') < at('end standards:302'))) fail(`${what}: PR 301's mutations did not start while PR 302 was under review: ${env.events.join(', ')}`)
+      }
+    }
+  }
+
+  // 21. A killed agent (#86). Two pull requests, 401 and 402, reviewed together; one of 401's agents is
+  //     killed mid-run, at each stage that fails a pull request, by throwing and by returning nothing.
+  //     401 alone fails, naming its stage; no comment for it reaches the stubbed gh; and 402's result is
+  //     what 402 gets reviewed on its own. A killed mutation agent is the could-not-run row of check 10.
+  checks++
+  {
+    const PAIR = { 401: pr(401, ['tests/k.cs'], { candidates: [cand('K1')] }), 402: pr(402, ['tests/l.cs'], { candidates: [cand('L1')] }) }
+    // A result with the throwaway checkout's path taken out, so two runs' results compare.
+    const plain = (env, r) => JSON.stringify(r).split(env.repo).join('<repo>')
+    const solo = run({ prs: [402] }, PAIR, { gh: ghStub() })
+    const alone = plain(solo, resultOf(402, await execute(solo)))
+    for (const stage of ['inventory', 'standards', 'spec', 'verdict', 'post']) {
+      for (const how of ['throw', 'null']) {
+        const gh = ghStub()
+        env = run({ prs: [401, 402] }, PAIR, { gh, kill: { [`${stage}:401`]: how }, delay: (l) => (l.endsWith(':401') ? 1 : 2) })
+        const what = `PR 401's ${stage} agent killed (${how})`
+        try { result = await execute(env) } catch (e) { fail(`${what}: the run itself failed: ${e && e.message}`); continue }
+        const r = resultOf(401, result)
+        if (r.outcome !== 'failed') fail(`${what}: outcome ${r.outcome}, expected failed`)
+        const where = stage === 'standards' || stage === 'spec' ? 'review' : stage
+        if (!(r.stage || '').startsWith(where)) fail(`${what}: stage ${JSON.stringify(r.stage)}, expected it to name ${where}`)
+        if (r.verdict || r.recordUrl) fail(`${what}: verdict ${JSON.stringify(r.verdict)}, recordUrl ${JSON.stringify(r.recordUrl)}; a failed pull request records nothing`)
+        if (gh.store.some((c) => c.n === 401) || env.posted.some((p) => p.n === 401)) fail(`${what}: a comment for 401 reached the stubbed gh`)
+        if (stage !== 'post' && env.calls.includes('post:401')) fail(`${what}: a post agent ran for 401`)
+        const other = plain(env, resultOf(402, result))
+        if (other !== alone) fail(`${what}: PR 402's result changed: ${other}, alone it is ${alone}`)
+      }
+    }
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
