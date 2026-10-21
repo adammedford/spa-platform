@@ -88,7 +88,7 @@ public sealed class ForeignSites : IAsyncDisposable
     {
         if (!pages.TryGetValue(context.Request.Host.Host, out string? html))
         {
-            context.Response.StatusCode = 404;
+            context.Response.StatusCode = 404; // Not an Errors row: a foreign site's own answer for a host it serves no page on.
             return;
         }
 
