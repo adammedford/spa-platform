@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/main_checkout_guard.py (#114). Owner: integrator.
+"""Test companion for tools/main_checkout_guard.py (#114, #200). Owner: integrator.
 
 **What runs is the hook itself**, as Claude Code runs it: the tracked file, given a PreToolUse
 event's JSON on standard input, answering with its exit code and standard error. Each case builds
@@ -8,6 +8,10 @@ the tool input a session's Bash call would send, so the cases are the commands t
 **Real git in a throwaway directory.** One fixture serves every case, because the hook only reads:
 a repository whose first commit holds copies of the guard and of the tracked `.claude/settings.json`,
 a linked worktree of it, a symbolic link to it, a second repository, and a directory that is in none.
+The main worktree holds an untracked file and is otherwise a clean `main`; six more repositories,
+each with its own guard, are a `main` with a changed, a staged and a deleted tracked file, a `main`
+whose index git cannot read, a detached HEAD and another branch, for the fast-forward's refusals
+(#200).
 The throwaway directory keeps the path the system gives it, which on macOS runs through a symbolic
 link (/var is /private/var). HOME is that directory, so `~` names it; PWD is the main checkout, as a
 hook started by a session there inherits it; and git reads the fixture's own configuration and no
@@ -84,13 +88,72 @@ READ_ONLY = (
     "git stash show -p stash@{0}",
 )
 
-# `git checkout` with a path after `--` restores that path and moves no branch, whichever commit it
-# reads it from.
+# The commands #200 refuses because they change the checkout's files or index, each in every form:
+# its dry runs and `apply`'s reports included (#226 Q16), and `git am`, which commits on the
+# checkout's branch (Q18).
+FILE_WORK = (
+    "git rm README.md",
+    "git rm --dry-run README.md",
+    "git rm -n --cached README.md",
+    # The spelling that deleted a tracked test file on 2026-10-20 (#187).
+    "git rm tests/Platform.Security.Tests/SharedRuleIdsTests.cs",
+    "git mv README.md READ.md",
+    "git add README.md",
+    "git add -n .",
+    "git add --dry-run -A",
+    "git restore README.md",
+    "git restore --staged --worktree README.md",
+    "git clean -fdx",
+    "git clean -n",
+    "git clean --dry-run -d",
+    "git apply fix.patch",
+    "git apply --check fix.patch",
+    "git apply --stat fix.patch",
+    "git am fix.mbox",
+    "git am --abort",
+)
+
+# `git checkout` with a path after `--` overwrites that path in the working tree and the index, as
+# `git restore --staged --worktree` does, so #200 refuses it too, reversing #114's pass (#226 Q17).
 PATH_CHECKOUTS = (
     "git checkout -- README.md",
     "git checkout HEAD -- README.md",
     "git checkout origin/main -- docs/agents/landing-work.md",
 )
+
+# The one merge the main checkout admits, on a clean `main` (#226 Q15, Q20): exactly the arguments
+# `--ff-only` and `origin/main`, in either order, after the `git fetch origin` that makes it current.
+FAST_FORWARDS = (
+    "git merge --ff-only origin/main",
+    "git merge origin/main --ff-only",
+    "git fetch origin && git merge --ff-only origin/main",
+)
+
+# Every other spelling of a fast-forward, refused on a clean `main` as before (#226 Q15, Q20).
+OTHER_MERGES = (
+    "git pull",
+    "git pull --ff-only",
+    "git pull --ff-only origin main",
+    "git merge origin/main",
+    "git merge --ff-only",
+    "git merge --ff-only refs/remotes/origin/main",
+    "git merge --ff-only FETCH_HEAD",
+    "git merge --ff-only @{u}",
+    "git merge --ff-only origin/master",
+    "git merge --ff-only task/linked",
+    "git merge --ff-only origin/main task/linked",
+    "git merge --ff-only --ff-only origin/main",
+    "git merge -q --ff-only origin/main",
+    "git merge --ff-only --no-edit origin/main",
+    "git merge --ff-only --stat origin/main",
+    "git merge --ff-only=origin/main",
+    "git -c merge.ff=false merge --ff-only origin/main",
+    'git merge --ff-only "$BRANCH"',
+)
+
+# The line a refused fast-forward adds, naming which condition of a clean `main` failed (#226 Q22).
+NOT_MAIN = "HEAD is not `main`"
+CHANGED = "tracked files have changes"
 
 
 def settings_entry():
@@ -135,16 +198,10 @@ class Fixture:
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(top), "LC_ALL": "C",
                     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config)}
 
-        self.main = top / "repo"
+        self.main = self.checkout("repo")
         self.env["PWD"] = str(self.main)
-        for name in (GUARD, SETTINGS):
-            target = self.main / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / name, target)
-        (self.main / "README.md").write_text("fixture\n")
-        git(self.main, "init", "-q", env=self.env)
-        git(self.main, "add", ".", env=self.env)
-        git(self.main, "commit", "-qm", "fixture", env=self.env)
+        # An untracked file, as the real main checkout holds Adam's: a clean `main` allows them (#226 Q19).
+        (self.main / "untracked.txt").write_text("not tracked\n")
         self.linked = top / "linked"
         git(self.main, "worktree", "add", "-q", "-b", "task/linked", str(self.linked), env=self.env)
 
@@ -160,6 +217,44 @@ class Fixture:
         self.alias = top / "alias"
         self.alias.symlink_to(self.main)
 
+        # Main checkouts of their own, one for each way a `main` is not clean (#226 Q19). Each holds
+        # its own guard, which keeps that repository, so the shared one above stays a clean `main`.
+        self.dirty = self.checkout("dirty")
+        (self.dirty / "README.md").write_text("changed\n")
+        self.staged = self.checkout("staged")
+        (self.staged / "README.md").write_text("changed\n")
+        git(self.staged, "add", "README.md", env=self.env)
+        self.deleted = self.checkout("deleted")
+        (self.deleted / "README.md").unlink()
+        self.detached = self.checkout("detached")
+        git(self.detached, "checkout", "-q", "--detach", env=self.env)
+        self.branch = self.checkout("branch")
+        git(self.branch, "switch", "-q", "-c", "task/other", env=self.env)
+        # An index git cannot read: `git status` fails while `rev-parse` still finds the repository,
+        # so the guard reaches its status read and must take the failure as not clean, failing closed
+        # (CODING_STANDARDS.md "A check fails closed").
+        self.unreadable = self.checkout("unreadable")
+        (self.unreadable / ".git" / "index").write_bytes(b"not an index")
+        self.unclean = {"a changed tracked file": (self.dirty, CHANGED),
+                        "an unreadable index": (self.unreadable, CHANGED),
+                        "a staged change": (self.staged, CHANGED),
+                        "a deleted tracked file": (self.deleted, CHANGED),
+                        "a detached HEAD": (self.detached, NOT_MAIN),
+                        "another branch": (self.branch, NOT_MAIN)}
+
+    def checkout(self, name):
+        """A repository on `main` whose first commit holds the guard, the settings and a README."""
+        path = self.top / name
+        for tracked in (GUARD, SETTINGS):
+            target = path / tracked
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / tracked, target)
+        (path / "README.md").write_text("fixture\n")
+        git(path, "init", "-q", env=self.env)
+        git(path, "add", ".", env=self.env)
+        git(path, "commit", "-qm", "fixture", env=self.env)
+        return path
+
     def event(self, command, cwd):
         """A PreToolUse event for one Bash call, in the shape https://code.claude.com/docs/en/hooks gives."""
         return json.dumps({
@@ -174,11 +269,13 @@ class Fixture:
             "tool_use_id": "toolu_guard_test",
         })
 
-    def hook(self, command, cwd):
-        """Run the guard the fixture's main worktree holds on one Bash call; (exit code, stderr)."""
+    def hook(self, command, cwd, repository=None):
+        """Run the guard a main worktree holds, the shared one by default, on one Bash call; (exit
+        code, stderr)."""
         # Started from the plain directory, so the guard reads where the command runs from the
         # event, never from its own working directory.
-        result = subprocess.run([sys.executable, "-I", str(self.main / GUARD)], input=self.event(command, cwd),
+        guard = (repository or self.main) / GUARD
+        result = subprocess.run([sys.executable, "-I", str(guard)], input=self.event(command, cwd),
                                 cwd=self.plain, env=self.env, text=True, capture_output=True, timeout=60)
         return result.returncode, result.stderr
 
@@ -203,13 +300,14 @@ class GuardCase(unittest.TestCase):
     def tearDownClass(cls):
         cls.fx.close()
 
-    def assertRefused(self, command, cwd):
-        status, stderr = self.fx.hook(command, cwd)
+    def assertRefused(self, command, cwd, repository=None):
+        status, stderr = self.fx.hook(command, cwd, repository)
         self.assertEqual(2, status, f"{command!r} in {cwd} was let through: {stderr}")
         self.assertIn(ROUTE, stderr)
+        return stderr
 
-    def assertPasses(self, command, cwd):
-        status, stderr = self.fx.hook(command, cwd)
+    def assertPasses(self, command, cwd, repository=None):
+        status, stderr = self.fx.hook(command, cwd, repository)
         self.assertEqual(0, status, f"{command!r} in {cwd} was refused: {stderr}")
         self.assertEqual("", stderr)
 
@@ -397,10 +495,75 @@ class Passes(GuardCase):
             with self.subTest(command=command):
                 self.assertPasses(command, self.fx.main)
 
-    def test_a_path_checkout_passes_in_the_main_checkout(self):
-        for command in PATH_CHECKOUTS:
+
+class FileWork(GuardCase):
+    """#200's second box: the commands that change the main checkout's files or index."""
+
+    def test_each_file_or_index_command_is_refused_in_the_main_checkout_and_told_the_route(self):
+        for command in FILE_WORK + PATH_CHECKOUTS:
             with self.subTest(command=command):
+                self.assertRefused(command, self.fx.main)
+
+    def test_git_C_or_cd_reaches_the_main_checkout_for_them_too(self):
+        for command in FILE_WORK + PATH_CHECKOUTS:
+            with self.subTest(command=command, route="-C"):
+                self.assertRefused(command.replace("git ", f"git -C {self.fx.main} ", 1), self.fx.plain)
+        # The #187 incident's shape: a cd in one call, the git rm in the next, which the Bash tool runs
+        # back in the main checkout.
+        with self.subTest(route="cd"):
+            self.assertRefused(f"cd {self.fx.main} && git rm tests/Platform.Security.Tests/SharedRuleIdsTests.cs",
+                               self.fx.plain)
+
+    def test_each_passes_in_a_linked_worktree(self):
+        for command in FILE_WORK + PATH_CHECKOUTS:
+            with self.subTest(command=command, cwd="linked"):
+                self.assertPasses(command, self.fx.linked)
+            with self.subTest(command=command, route="-C into linked, from the main checkout"):
+                self.assertPasses(command.replace("git ", f"git -C {self.fx.linked} ", 1), self.fx.main)
+
+
+class FastForward(GuardCase):
+    """#200's third and fourth boxes: the one merge a clean `main` admits, and its refusals."""
+
+    def test_the_fast_forward_passes_on_a_clean_main_with_an_untracked_file(self):
+        self.assertTrue((self.fx.main / "untracked.txt").exists())
+        for command in FAST_FORWARDS:
+            with self.subTest(command=command, route="cwd"):
                 self.assertPasses(command, self.fx.main)
+            with self.subTest(command=command, route="-C"):
+                self.assertPasses(command.replace("git merge", f"git -C {self.fx.main} merge"), self.fx.plain)
+            with self.subTest(command=command, route="cd"):
+                self.assertPasses(f"cd {self.fx.main} && {command}", self.fx.linked)
+
+    def test_every_other_merge_and_pull_is_refused_on_a_clean_main(self):
+        for command in OTHER_MERGES:
+            with self.subTest(command=command):
+                stderr = self.assertRefused(command, self.fx.main)
+                # Not the admitted spelling, so no line says the checkout was the reason.
+                self.assertNotIn(NOT_MAIN, stderr)
+                self.assertNotIn(CHANGED, stderr)
+
+    def test_the_fast_forward_is_refused_on_a_main_that_is_not_clean_and_says_why(self):
+        for state, (repository, reason) in self.fx.unclean.items():
+            for command in FAST_FORWARDS[:2]:
+                with self.subTest(state=state, command=command, route="cwd"):
+                    stderr = self.assertRefused(command, repository, repository)
+                    self.assertIn(reason, stderr)
+                    self.assertNotIn(CHANGED if reason == NOT_MAIN else NOT_MAIN, stderr)
+                with self.subTest(state=state, command=command, route="-C"):
+                    stderr = self.assertRefused(command.replace("git merge", f"git -C {repository} merge"),
+                                                self.fx.plain, repository)
+                    self.assertIn(reason, stderr)
+
+    def test_the_merges_pass_in_a_linked_worktree(self):
+        for command in FAST_FORWARDS + OTHER_MERGES:
+            with self.subTest(command=command):
+                self.assertPasses(command, self.fx.linked)
+
+    def test_the_refusal_still_run_line_names_the_fast_forward_and_not_the_path_checkout(self):
+        stderr = self.assertRefused("git commit -m 'work'", self.fx.main)
+        self.assertIn("`git merge --ff-only origin/main` on a clean `main`", stderr)
+        self.assertNotIn("git checkout -- <path>", stderr)
 
 
 class Settings(GuardCase):
