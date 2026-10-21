@@ -48,24 +48,33 @@ public sealed class ApiTests
 
     [Theory]
     [MemberData(nameof(EscapePaths))]
-    public async Task N10_a_path_built_to_escape_the_prefix_is_400_or_404_and_no_upstream_sees_it(string template)
+    public async Task N10_a_path_built_to_escape_the_prefix_is_400_path_invalid_and_no_upstream_sees_it(string template)
     {
         await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
-        await profile.SignInAsync(stack.App("app1"));
+        HarnessApp app = stack.App("app1");
+        await profile.SignInAsync(app);
 
         // Locally the target is the harness's echo upstream, which records what reaches it. The cell has
         // none, so there the target is app 1's second API, which answers app 1's whoami 403 (N-17): a
-        // path that escaped would come back 403, not 400 or 404.
+        // path that escaped would come back 403, not 400.
         LocalStack? local = stack as LocalStack;
         string target = local?.Harness.Options.EchoApi ?? SecondApi("app1");
         string path = template.Replace("{api}", target, StringComparison.Ordinal);
 
+        LogMark mark = stack.MarkLog();
         FetchResult escaped = await profile.FetchAsync(path);
 
         // Sent as written: the browser did not resolve it into something else first.
         Assert.Contains(await stack.ExchangesAsync(), exchange => exchange.Url.PathAndQuery == path);
-        Assert.Contains(escaped.Status, new[] { Contract.Error("invalid_request").Status, Contract.Error("unknown_api").Status, Contract.Error("not_found").Status });
+
+        // Each path carries an encoded slash, which the request gate refuses before routing as
+        // path.invalid (contracts/request-gate.md; the hermetic UnknownApiTests send the same through a
+        // raw socket). The row allows 400 or 404 for an escape; these are the gate's 400, under its rule.
+        Contract.ErrorRow expected = Contract.Error("invalid_request");
+        Assert.Equal(expected.Status, escaped.Status);
+        Assert.Equal(expected.Code, escaped.Code);
+        await stack.AssertRuleLoggedAsync(mark, RuleIds.PathInvalid, app.AppId);
 
         // Control: the target is reachable by its own name, so what the escape got means something.
         FetchResult direct = await profile.FetchAsync($"/api/{target}/whoami");
