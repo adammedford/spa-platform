@@ -45,10 +45,11 @@ DOCKERIGNORE = ROOT / ".dockerignore"
 # gateway's line for line, so a difference between them is a difference in the startup floor (#173).
 DOCKERFILES = ("src/Gateway/Dockerfile", "tools/bench/floor/Dockerfile")
 
-# Tracked Dockerfiles whose permission step is another owner's to add. #204 names
-# fixtures/MockApi/Dockerfile as workstream 5's (OWNERSHIP.md), and A-05 keeps one branch to one
-# owner, so it is held to the context cases only until its own change lands and moves it up.
-OTHER_OWNERS = {"fixtures/MockApi/Dockerfile": "ws5-fixtures"}
+# Tracked Dockerfiles another owner writes, held to the context cases only: this file is the
+# integrator's, and A-05 keeps one branch to one owner, so a case here cannot ask for a line in a
+# file the same branch may not edit. #204 names fixtures/MockApi/Dockerfile as workstream 5's
+# (OWNERSHIP.md).
+OTHER_OWNERS = ("fixtures/MockApi/Dockerfile",)
 
 # One path for each thing #204's first box says the context must not carry, at the depths the
 # workstation puts them. Paths, not files: the matcher reads names, so none needs to exist.
@@ -166,7 +167,7 @@ def copied_from_context(dockerfile: str) -> list[str]:
     for keyword, rest in instructions(dockerfile):
         if keyword not in ("COPY", "ADD"):
             continue
-        words = [w for w in shlex.split(rest)]
+        words = shlex.split(rest)
         if any(w.startswith("--from") for w in words):
             continue
         words = [w for w in words if not w.startswith("--")]
