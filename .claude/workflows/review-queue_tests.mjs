@@ -6,7 +6,9 @@
 // Runs review-queue.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed
 // where the script reaches it: through the inventory agent, which serves canned pull requests as gh
 // would list them, and the post agent, which records the comment it was asked to post instead of
-// posting it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
+// posting it. A check that needs more of GitHub gives the run ghStub(): a store of posted comments
+// that outlives one run, a head that moves before posting, and a GitHub that cannot be reached at
+// posting time (#85). A stubbed range agent reports the delta range a check gives it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
 // throwing or returning nothing, and records the worktree its prompt names. No agent, gh or network
 // call is made. The main checkout the script is given is a
 // throwaway git repository with this repository's .gitignore, and a stubbed agent writes every file
@@ -72,16 +74,21 @@ const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 
 // A candidate invariant test as the inventory reports it, and a mutation the body states.
-const cand = (test, project = 'tests/Platform.Registry.Tests') => ({ test, project, guards: `what ${test} guards`, breaks: `src/${test}.cs` })
+const cand = (test, project = 'tests/Platform.Registry.Tests') => ({ test, project, file: `${project}/${test}.cs`, guards: `what ${test} guards`, breaks: `src/${test}.cs` })
 const stated = (test, failed, total, project = 'tests/Platform.Registry.Tests') => ({ test, project, mutation: `break what ${test} guards`, failed, total, quote: `breaking it failed ${failed} of ${total}` })
 // What a stubbed mutation agent reports: reproduced, did-not-fail or could-not-run, with counts.
 const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({ result, failed, total })
 
-// behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold' }
+// behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold',
+//           range: { [n]: what the range agent reports }, earlier: { [n]: the verdict's earlierFindings },
+//           gh: a stubbed GitHub (ghStub below) }
+// Without behave.gh the post agent posts and reports the head unchanged; with it, the stubbed gh
+// decides, and its store of posted comments outlives the run, so a rerun reads what a run posted.
 function run(scriptArgs, served, behave = {}) {
   const calls = []
   const posted = []
   const mutations = []
+  const prompts = {}
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'review-queue-tests-'))
   made.push(repo)
   const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' })
@@ -103,11 +110,22 @@ function run(scriptArgs, served, behave = {}) {
   globalThis.agent = async (prompt, opts) => {
     const [kind, n] = opts.label.split(':')
     calls.push(opts.label)
+    prompts[opts.label] = prompt
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
     }
-    if (kind === 'inventory') return served[n]
+    if (kind === 'inventory') {
+      const inv = served[n]
+      const gh = behave.gh
+      // The store is read when the inventory runs, as gh would serve it; serveStore false is a resumed
+      // run whose inventory was replayed from before the post.
+      return gh && gh.serveStore !== false ? { ...inv, comments: [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] } : inv
+    }
+    if (kind === 'range') {
+      const r = (behave.range || {})[n]
+      return r === 'null' ? null : (r || { from: '', ancestor: false, commits: [], merges: [], changedFiles: [], error: '' })
+    }
     if (kind === 'standards' || kind === 'spec') {
       const nominations = kind === 'standards' ? ((behave.nominations || {})[n] || []) : []
       return { axis: kind, sourcesRead: ['CODING_STANDARDS.md'], findings: [], claims: [], nominations }
@@ -121,15 +139,48 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's' }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [] }
     if (kind === 'post') {
-      const body = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
-      posted.push({ n: Number(n), body: body ? body[1] : null })
-      return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: '' }
+      const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
+      const body = m ? m[1] : null
+      const file = (/^OUTPUT FILE: (\S+)$/m.exec(prompt) || [])[1]
+      // Step 1 of the post prompt: the body goes to the log before gh is reached.
+      if (file && body !== null) fs.writeFileSync(file, body)
+      const gh = behave.gh
+      if (!gh) {
+        posted.push({ n: Number(n), body })
+        return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: file }
+      }
+      return gh.post(Number(n), prompt, body, file, posted, served[n])
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, git }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git }
+}
+
+// A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
+// head gh serves when the post agent re-reads it. The post agent follows its prompt's step 3 as
+// written: a comment carrying the record line, among every comment gh serves, counts as this run's
+// only when its URL is not among those the prompt lists as read by the inventory.
+function ghStub(opts = {}) {
+  const gh = { store: [], failPost: false, headNow: null, serveStore: true, ...opts }
+  let next = 0
+  gh.post = (n, prompt, body, file, posted, pull) => {
+    const headNow = gh.headNow || pull.head
+    if (gh.failPost) return { posted: false, url: '', headNow: '', unreachable: true, bodyFile: file }
+    const record = (body || '').split('\n').pop()
+    const read = new Set([...prompt.matchAll(/^READ BY THE INVENTORY: (\S+)$/gm)].map((x) => x[1]))
+    // Every comment gh serves now: those the pull request came with, then those posted since.
+    const all = [...pull.comments, ...gh.store.filter((c) => c.n === n).map((c) => c.entry)]
+    const mine = all.find((c) => !read.has(c.html_url) && c.body.split('\n').includes(record))
+    if (mine) return { posted: false, url: mine.html_url, headNow, unreachable: false, bodyFile: file }
+    next++
+    const entry = { author_association: 'OWNER', created_at: `2026-10-21T10:${String(next).padStart(2, '0')}:00Z`, html_url: `https://github.com/o/r/pull/${n}#issuecomment-${100 + next}`, body }
+    gh.store.push({ n, entry })
+    posted.push({ n, body })
+    return { posted: true, url: entry.html_url, headNow, unreachable: false, bodyFile: file }
+  }
+  return gh
 }
 
 async function execute() {
@@ -402,6 +453,166 @@ try {
     if (noTotal.countsMatched !== true) fail(`PR 206: a stated "failed 4" with no total reproduced as 4 of 153 has countsMatched ${noTotal.countsMatched}`)
     const said = (env.mutations[0] || {}).prompt || ''
     if (!said.includes('(failed 4).')) fail('PR 206: the mutation prompt does not give the stated "failed 4" alone, with no total')
+  }
+
+  // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
+  //     still posted, its record names the head the inventory read, and the return flags the move,
+  //     per pull request and at run level, so the operator runs again.
+  checks++
+  {
+    const gh = ghStub({ headNow: sha('e') })
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    const r = resultOf(101, result)
+    if (r.outcome !== 'recorded' || gh.store.length !== 1) fail(`PR 101 with a moved head: outcome ${r.outcome}, ${gh.store.length} comment(s); a moved head must still be posted`)
+    const last = commentOf(env, 101).split('\n').pop()
+    if (last !== `Reviewed ${sha('1')} against ${FORK}: merge`) fail(`PR 101 with a moved head: the record is ${JSON.stringify(last)}, expected the head the inventory read`)
+    if (r.headMoved !== true) fail(`PR 101 with a moved head: headMoved ${r.headMoved}, expected true`)
+    if (JSON.stringify(result.headMoved) !== '[101]') fail(`a moved head is not flagged at run level: headMoved ${JSON.stringify(result.headMoved)}, expected [101]`)
+    env = run({ prs: [101] }, PRS, { gh: ghStub() })
+    result = await execute(env)
+    if (resultOf(101, result).headMoved !== false || JSON.stringify(result.headMoved) !== '[]') fail(`PR 101 with the head unchanged: headMoved ${resultOf(101, result).headMoved}, run level ${JSON.stringify(result.headMoved)}`)
+  }
+
+  // 15. GitHub unreachable at posting time (#85): the outcome is unposted naming the file, the file
+  //     holds the comment body, and nothing was posted. A rerun with gh reachable posts it once; a
+  //     third run finds the record and posts nothing.
+  checks++
+  {
+    const gh = ghStub({ failPost: true })
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    const r = resultOf(101, result)
+    const file = `${env.repo}/.scratch/review-queue/log/2026-10-21/pr-101/comment.md`
+    if (r.outcome !== 'unposted') fail(`PR 101 with GitHub unreachable: outcome ${r.outcome}, expected unposted`)
+    if (r.commentFile !== file || !(r.stage || '').includes(file)) fail(`PR 101 unposted: commentFile ${r.commentFile}, stage ${JSON.stringify(r.stage)}; neither names ${file}`)
+    const kept = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+    if (!kept.startsWith('## Review') || kept.split('\n').pop() !== `Reviewed ${sha('1')} against ${FORK}: merge`) fail(`PR 101 unposted: ${file} does not hold the comment body: ${JSON.stringify(kept.slice(0, 60))}`)
+    if (gh.store.length) fail(`PR 101 unposted: ${gh.store.length} comment(s) reached GitHub`)
+    // Nothing is retried: the post agent ran once, and the stub's failure stood.
+    const postRuns = env.calls.filter((l) => l === 'post:101').length
+    if (postRuns !== 1) fail(`PR 101 unposted: the post agent ran ${postRuns} time(s); an unreachable GitHub is never retried`)
+    // An unreachable gh served no head, so no move is reported on it.
+    if (r.headMoved !== false || JSON.stringify(result.headMoved) !== '[]') fail(`PR 101 unposted: headMoved ${r.headMoved}, run level ${JSON.stringify(result.headMoved)}; an unread head is not a moved one`)
+    gh.failPost = false
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    if (resultOf(101, result).outcome !== 'recorded' || gh.store.length !== 1) fail(`PR 101's rerun with GitHub reachable: outcome ${resultOf(101, result).outcome}, ${gh.store.length} comment(s), expected recorded and one`)
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    if (resultOf(101, result).outcome !== 'skipped' || gh.store.length !== 1) fail(`PR 101's third run: outcome ${resultOf(101, result).outcome}, ${gh.store.length} comment(s), expected skipped and one`)
+    // A resumed run: its inventory was replayed from before the post, so it does not see the record,
+    // and its post agent runs again. It finds this run's record and posts nothing.
+    gh.serveStore = false
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    const resumed = resultOf(101, result)
+    if (gh.store.length !== 1 || resumed.outcome !== 'recorded' || resumed.recordUrl !== gh.store[0].entry.html_url) fail(`PR 101 resumed after its post: ${gh.store.length} comment(s), outcome ${resumed.outcome}, recordUrl ${resumed.recordUrl}; a resumed run posted twice or lost the record`)
+  }
+  // A post agent that posts nothing and names no comment has not recorded anything.
+  {
+    const gh = ghStub()
+    gh.post = () => ({ posted: false, url: '', headNow: sha('1'), unreachable: false, bodyFile: '' })
+    env = run({ prs: [101] }, PRS, { gh })
+    result = await execute(env)
+    if (resultOf(101, result).outcome !== 'failed') fail(`PR 101 with nothing posted and no URL: outcome ${resultOf(101, result).outcome}, expected failed`)
+  }
+
+  // 16. A held head re-run with skipRecorded off (#85): a new record is posted on it even when the
+  //     verdict is hold again, the line the earlier record wrote, and the latest line decides.
+  checks++
+  {
+    const HELD = { author_association: 'OWNER', created_at: '2026-10-20T09:00:00Z', html_url: 'https://github.com/o/r/pull/101#issuecomment-50', body: `## Review\n\nReviewed ${sha('1')} against ${FORK}: hold` }
+    const served = { 101: { ...PRS[101], comments: [HELD] } }
+    let gh = ghStub()
+    env = run({ prs: [101], skipRecorded: false }, served, { gh, verdict: 'hold' })
+    result = await execute(env)
+    if (resultOf(101, result).outcome !== 'recorded' || gh.store.length !== 1) fail(`held PR 101 re-run with skipRecorded off and held again: outcome ${resultOf(101, result).outcome}, ${gh.store.length} new comment(s), expected one new record`)
+    gh = ghStub()
+    env = run({ prs: [101], skipRecorded: false }, served, { gh })
+    result = await execute(env)
+    if (gh.store.length !== 1 || gh.store[0].entry.body.split('\n').pop() !== `Reviewed ${sha('1')} against ${FORK}: merge`) fail(`held PR 101 re-run with skipRecorded off: ${gh.store.length} new comment(s), expected one merge record`)
+    env = run({ prs: [101] }, served, { gh })
+    result = await execute(env)
+    const r = resultOf(101, result)
+    if (r.outcome !== 'skipped' || r.verdict !== 'merge' || r.recordUrl !== (gh.store[0] || { entry: {} }).entry.html_url) fail(`PR 101 with a hold and a later merge on its head: ${r.outcome} ${r.verdict} ${r.recordUrl}; the latest line must decide`)
+    // And the other way round: a merge then a later hold holds.
+    const MERGED = { ...HELD, body: HELD.body.replace(': hold', ': merge') }
+    const LATER = { ...HELD, created_at: '2026-10-21T09:00:00Z', html_url: 'u/later' }
+    env = run({ prs: [101] }, { 101: { ...PRS[101], comments: [MERGED, LATER] } })
+    result = await execute(env)
+    if (resultOf(101, result).verdict !== 'hold' || resultOf(101, result).recordUrl !== 'u/later') fail(`PR 101 with a merge and a later hold: ${resultOf(101, result).verdict} ${resultOf(101, result).recordUrl}; the latest line must decide`)
+  }
+
+  // 17. The delta review (#85). The latest record names an ancestor of the head: both axes are given
+  //     the range and the whole diff for context, with each merge in it to audit on its own; only the
+  //     candidates the range touches are mutated, the rest named; the comment names the earlier record
+  //     and the range after the head line; the new record names the current head.
+  checks++
+  const H_OLD = sha('a')
+  const H_NEW = sha('d')
+  const MERGE_SHA = sha('f')
+  const OLD_RECORD = (verdict) => ({ author_association: 'OWNER', created_at: '2026-10-20T09:00:00Z', html_url: 'https://github.com/o/r/pull/207#issuecomment-70', body: `## Review\n\nReviewed ${H_OLD} against ${FORK}: ${verdict}` })
+  const DELTA = (verdict) => ({ 207: pr(207, ['tests/Platform.Registry.Tests/Touched.cs', 'tests/Platform.Registry.Tests/Untouched.cs', 'src/Fixed.cs'], {
+    head: H_NEW, commits: [H_NEW, MERGE_SHA, H_OLD], comments: [OLD_RECORD(verdict)],
+    candidates: [cand('Touched'), cand('Untouched'), { ...cand('ViaSource'), breaks: 'src/Fixed.cs' }],
+  }) })
+  const RANGE = { 207: { from: H_OLD, ancestor: true, commits: [H_NEW, MERGE_SHA], merges: [MERGE_SHA], changedFiles: ['tests/Platform.Registry.Tests/Touched.cs', 'src/Fixed.cs'], error: '' } }
+  {
+    const gh = ghStub()
+    env = run({ prs: [207] }, DELTA('merge'), { gh, range: RANGE })
+    result = await execute(env)
+    const r = resultOf(207, result)
+    if (!env.calls.includes('range:207')) fail('PR 207: no range agent ran for a record of an earlier head')
+    if (r.outcome !== 'recorded') fail(`PR 207 delta: outcome ${r.outcome}`)
+    const ran = env.mutations.map((m) => m.test).sort()
+    if (JSON.stringify(ran) !== '["Touched","ViaSource"]') fail(`PR 207 delta: mutated ${JSON.stringify(ran)}, expected only the candidates the range touches, ["Touched","ViaSource"]`)
+    const body = commentOf(env, 207)
+    const lines = body.split('\n')
+    if (lines.pop() !== `Reviewed ${H_NEW} against ${FORK}: merge`) fail('PR 207 delta: the new record does not name the current head')
+    const headAt = lines.findIndex((l) => l.startsWith(`Head ${H_NEW}`))
+    const deltaAt = lines.findIndex((l) => l.startsWith('Delta review:'))
+    if (deltaAt < 0 || deltaAt !== headAt + 1) fail(`PR 207 delta: no "Delta review:" line straight after the head line (head at ${headAt}, delta at ${deltaAt})`)
+    else {
+      const d = lines[deltaAt]
+      for (const want of [OLD_RECORD('merge').html_url, `${H_OLD}..${H_NEW}`, MERGE_SHA]) if (!d.includes(want)) fail(`PR 207 delta: the delta line ${JSON.stringify(d)} does not name ${want}`)
+    }
+    const outside = lines.find((l) => /^Not mutated, outside the range/.test(l)) || ''
+    if (!outside.includes('Untouched') || outside.includes('Touched,') || /\bTouched\b/.test(outside.replace('Untouched', ''))) fail(`PR 207 delta: the outside-the-range line ${JSON.stringify(outside)} does not name Untouched alone`)
+    if (JSON.stringify(r.outsideRange) !== '["Untouched"]') fail(`PR 207 delta: outsideRange ${JSON.stringify(r.outsideRange)}`)
+    if (!r.earlierRecord || r.earlierRecord.url !== OLD_RECORD('merge').html_url || r.earlierRecord.head !== H_OLD) fail(`PR 207 delta: earlierRecord ${JSON.stringify(r.earlierRecord)}`)
+    if (!r.range || r.range.from !== H_OLD || r.range.to !== H_NEW) fail(`PR 207 delta: range ${JSON.stringify(r.range)}`)
+    for (const axis of ['standards', 'spec']) {
+      const p = env.prompts[`${axis}:207`] || ''
+      for (const want of [`${H_OLD}..${H_NEW}`, `${FORK}...${H_NEW}`, MERGE_SHA, OLD_RECORD('merge').html_url]) if (!p.includes(want)) fail(`PR 207 delta: the ${axis} prompt does not name ${want}`)
+    }
+  }
+  // A held earlier record: its findings are checked for an answer in the range; one left unanswered holds.
+  {
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', answered: true, how: 'fixed in ' + H_NEW }] } })
+    result = await execute(env)
+    const p = env.prompts['verdict:207'] || ''
+    if (!/held/.test(p) || !p.includes(OLD_RECORD('hold').html_url)) fail('PR 207 after a hold: the verdict is not told to check the held record\'s findings for an answer')
+    if (resultOf(207, result).verdict !== 'merge') fail(`PR 207 with the earlier hold answered: verdict ${resultOf(207, result).verdict}, expected merge`)
+    if (!/the cap is off by one/.test(commentOf(env, 207))) fail('PR 207 after a hold: the comment does not carry the earlier finding and its answer')
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', answered: false, how: 'nothing in the range touches it' }] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 with the earlier hold unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
+    // A verdict that lists none of the held record's findings has checked none of them: it holds.
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 after a hold with no earlier finding listed: verdict ${resultOf(207, result).verdict}, expected hold`)
+    if (!/listed none, so the hold stands/.test(commentOf(env, 207))) fail('PR 207 after a hold with no earlier finding listed: the comment does not say the hold stands')
+  }
+  // Not an ancestor (a force-push), or no range at all: a full review, and the comment says why.
+  for (const [what, range] of [['not an ancestor', { 207: { ...RANGE[207], ancestor: false } }], ['the range agent returned nothing', { 207: 'null' }]]) {
+    env = run({ prs: [207] }, DELTA('merge'), { range })
+    result = await execute(env)
+    const r = resultOf(207, result)
+    if (env.mutations.length !== 3) fail(`PR 207 with ${what}: ${env.mutations.length} mutations, expected the full review's 3`)
+    if (r.range !== null || r.earlierRecord !== null) fail(`PR 207 with ${what}: range ${JSON.stringify(r.range)}, earlierRecord ${JSON.stringify(r.earlierRecord)}, expected null`)
+    const full = commentOf(env, 207).split('\n').find((l) => l.startsWith('Full review:')) || ''
+    if (!full.includes(OLD_RECORD('merge').html_url)) fail(`PR 207 with ${what}: no "Full review:" line naming the earlier record`)
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
