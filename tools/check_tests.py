@@ -88,8 +88,9 @@ BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
 # The real tools the script and the classifier use, reached from the case's bin directory, which
-# is the whole of the case's PATH. find runs dirname itself, through PATH.
-TOOLS = ("git", "find", "sort", "head", "dirname", "basename", "grep")
+# is the whole of the case's PATH. find runs dirname itself, through PATH; xargs runs find for the
+# file modes (#205).
+TOOLS = ("git", "find", "xargs", "sort", "head", "dirname", "basename", "grep")
 
 PORT = "5299"
 
@@ -138,8 +139,10 @@ ROOTS = ["infra/modules/m", "infra/roots/a", "infra/roots/b"]
 TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
-# half now names the version it ran, in a line of its own and in the last line.
-HOOK_RAN = "A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts"
+# half now names the version it ran, in a line of its own and in the last line. #205 added a check,
+# the file modes, and so a name to the list of what ran.
+HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, "
+            "the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -267,6 +270,10 @@ class Case:
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
+            # The mode a checkout under umask 022 gives, whatever the umask of the process running
+            # this companion: under an agent session's 077, write_text leaves 600, which the file
+            # modes check refuses (#205), and every case would fail on that instead of its own point.
+            path.chmod(0o644)
         self.git("add", ".", cwd=self.work)
         self.git("commit", "-q", "-m", "Start", cwd=self.work)
         if origin:
@@ -287,6 +294,7 @@ class Case:
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(path.read_text() + "changed\n" if path.exists() else "new\n")
+            path.chmod(0o644)
             self.git("add", name, cwd=self.work)
             self.git("commit", "-q", "-m", f"Change {name}", cwd=self.work)
 
@@ -433,6 +441,77 @@ class HookTests(CheckTestCase):
             HOOK_FIX,
         ], result.stderr)
 
+    def test_a_tracked_file_only_its_owner_can_read(self):
+        # #205: git records only the exec bit, so a file written under umask 077 is 600 with no
+        # diff to show it, and an image built from the tree keeps the mode. The check names the
+        # file, the fix and why, and judges the working tree, so the file needs no change of its own.
+        case = Case(self, change="docs/notes.md")
+        (case.work / "src" / "App" / "App.cs").chmod(0o600)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines([
+            "pre-push: tracked files that group and others cannot read:",
+            "src/App/App.cs",
+            "pre-push: git does not record these modes, but an image built from this tree keeps them. "
+            "Make them readable:",
+            "  git ls-files -z | xargs -0 chmod go+r",
+            "pre-push: a tracked file only its owner can read is a file the gateway's container cannot "
+            "read; run chmod go+r on it.",
+            HOOK_FIX,
+        ], result.stderr)
+        # Refused before the build, which would have carried the mode into what it wrote.
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_a_file_the_group_can_read_but_others_cannot(self):
+        # 640 is group-readable and still not readable by a container user outside the group.
+        case = Case(self, change="docs/notes.md")
+        (case.work / "README.md").chmod(0o640)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(["pre-push: tracked files that group and others cannot read:", "README.md"],
+                         result.stderr.splitlines()[:2])
+
+    def test_more_than_ten_such_files_are_counted_past_the_tenth(self):
+        names = [f"docs/owner-only-{n:02}.md" for n in range(12)]
+        case = Case(self, change="docs/notes.md", extra={name: "x\n" for name in names})
+        for name in names:
+            (case.work / name).chmod(0o600)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        lines = result.stderr.splitlines()
+        self.assertEqual(sorted(names)[:10], lines[1:11])
+        self.assertEqual("... and 2 more", lines[11])
+
+    def test_files_that_are_not_tracked_or_not_there_are_not_judged(self):
+        # An untracked owner-only file, a key under .certs/ say, is meant to be 600, and a tracked
+        # file deleted from the working tree has no mode to judge.
+        case = Case(self, change="docs/notes.md")
+        untracked = case.work / "notes.local"
+        untracked.write_text("private\n")
+        untracked.chmod(0o600)
+        (case.work / "README.md").unlink()
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"pre-push: {HOOK_RAN} pass.", result.last_line(result.stdout))
+
+    def test_a_tracked_executable_and_a_tracked_symlink_pass(self):
+        # The link gets the mode a umask 077 gives it on macOS, where a link has a mode of its own:
+        # chmod go+r follows a link, so a check that judged the link's mode could not be cleared.
+        # Linux has no lchmod and keeps every link 777.
+        case = Case(self, change="docs/notes.md")
+        script = case.work / "run.sh"
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755)
+        link = case.work / "link.md"
+        link.symlink_to("README.md")
+        if hasattr(os, "lchmod"):
+            os.lchmod(link, 0o700)
+        case.git("add", "run.sh", "link.md", cwd=case.work)
+        case.git("commit", "-q", "-m", "Add a script and a link", cwd=case.work)
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"pre-push: {HOOK_RAN} pass.", result.last_line(result.stdout))
+
     def test_the_hook_ignores_what_git_passes_it(self):
         # git runs a pre-push hook with the remote's name and URL as arguments and the refs on
         # standard input (https://git-scm.com/docs/githooks#_pre_push); none of it is an option.
@@ -523,6 +602,24 @@ class FullModeTests(CheckTestCase):
                 self.assertVerdict(result, 1, verdict)
                 self.assertEqual(calls, case.calls())
                 self.assertNotIn("--no-verify", result.stderr)
+
+    def test_an_owner_only_file_fails_the_verdict_with_the_fix(self):
+        case = Case(self, change="src/App/App.cs")
+        (case.work / "src" / "App" / "App.cs").chmod(0o600)
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: a tracked file only its owner can read is a file the "
+                                      "gateway's container cannot read; run chmod go+r on it.")
+        self.assertIn("src/App/App.cs", result.stderr.splitlines())
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_the_file_modes_fail_rather_than_pass_when_they_cannot_be_read(self):
+        # Without xargs nothing is judged, and an empty list is what a clean tree gives: the check
+        # must say it judged nothing rather than pass (#205's review).
+        case = Case(self, change="docs/notes.md")
+        (case.bin / "xargs").unlink()
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: the file modes were not judged: git ls-files or "
+                                      "xargs failed.")
 
     def test_a_missing_tool_fails_rather_than_skipping(self):
         # The hook skips a check whose tool is missing and passes; a verdict must not hide that.
