@@ -602,6 +602,26 @@ class CommandLine(unittest.TestCase):
         self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: "), done.stdout)
         self.assertIn("could not reach GitHub", done.stdout)
 
+    def test_a_broken_check_exits_2_on_a_verdict(self):
+        # A copy of the script and the two it reuses, laid out as in the repository, with one part
+        # missing each time. Python ends an uncaught error on exit 1, the code of a failed rule,
+        # which the workflow would answer with a relabel and a traceback for its reason.
+        parts = ("tools/ticket_shape.py", "tools/overnight_collect.py", ".github/path-ownership.py",
+                 "OWNERSHIP.md")
+        for missing in parts[1:]:
+            with self.subTest(missing=missing):
+                tree = self.directory / f"tree-{len(missing)}"
+                for part in parts:
+                    if part != missing:
+                        (tree / part).parent.mkdir(parents=True, exist_ok=True)
+                        (tree / part).write_bytes((ROOT / part).read_bytes())
+                done = subprocess.run([sys.executable, "-I", str(tree / parts[0]), "-"],
+                                      input=json.dumps(raw(198, FILED[198])), capture_output=True,
+                                      text=True, env=self.env, cwd=self.directory, check=False)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: nothing "
+                                                                "judged: "), done.stdout)
+
     def test_no_argument_exits_2(self):
         for args in ((), ("204", "206"), ("not-a-number",)):
             with self.subTest(args):
@@ -642,6 +662,12 @@ class Workflow(unittest.TestCase):
         # Exit 2 judged nothing: the job fails and the issue is left as it was.
         self.assertRegex(self.code, r"\[ \"\$status\" -eq 1 \]")
         self.assertRegex(self.code, r"(?s)\[ \"\$status\" -eq 1 \] \|\| exit \"\$status\"")
+
+    def test_only_a_judged_verdict_relabels(self):
+        # Exit 1 is also Python's code for an uncaught error. The script catches every error, and
+        # the workflow relabels only on the verdict line of a judged failure as well.
+        guard = self.code.index('"ticket-shape: fail: "[#]*" breaks "*)')
+        self.assertLess(guard, self.code.index("gh issue edit"))
 
 
 if __name__ == "__main__":

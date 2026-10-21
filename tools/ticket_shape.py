@@ -27,11 +27,14 @@ partial instead of never starting. This reads one issue and fails it, naming the
 The JSON is `gh issue view <n> --json number,body,labels,subIssuesSummary,blockedBy`, the fields
 FIELDS names. Each failure is a line `ticket-shape: <rule>: <what>`, and the last line is the
 verdict: `ticket-shape: pass: ...` with exit 0, or `ticket-shape: fail: ...` with exit 1 when a rule
-failed and exit 2 when the issue could not be read, so .github/workflows/ticket-shape.yml relabels
-only a ticket that was judged.
+failed and exit 2 when nothing was judged: the issue could not be read, or the check itself broke
+(a script it reuses or OWNERSHIP.md missing, or any other error). Python's own exit for an uncaught
+error is 1, the code of a failed rule, so main() lets no error escape, and
+.github/workflows/ticket-shape.yml relabels only a ticket that was judged.
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import pathlib
@@ -53,8 +56,16 @@ def load(name: str, path: pathlib.Path):
     return module
 
 
-ownership = load("path_ownership", ROOT / ".github" / "path-ownership.py")
-collect = load("overnight_collect", ROOT / "tools" / "overnight_collect.py")
+# Loaded on first use, inside main()'s handler, so that a missing or broken sibling is a verdict of
+# nothing judged (exit 2) and not a traceback on Python's exit 1, which reads as a failed rule.
+@functools.cache
+def ownership():
+    return load("path_ownership", ROOT / ".github" / "path-ownership.py")
+
+
+@functools.cache
+def collect():
+    return load("overnight_collect", ROOT / "tools" / "overnight_collect.py")
 
 READY = "ready-for-agent"
 
@@ -141,13 +152,13 @@ def owner_of(path: str, parsed: list[tuple[str, str]]) -> str | None:
     directory is read as that directory."""
     bare = path.strip().lstrip("/").rstrip("/")
     if any(pattern.lstrip("/") == bare + "/" for pattern, _ in parsed):
-        return ownership.owner_of(bare + "/", parsed)
-    return ownership.owner_of(bare, parsed)
+        return ownership().owner_of(bare + "/", parsed)
+    return ownership().owner_of(bare, parsed)
 
 
 def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Failure]:
     """Every rule the issue breaks, in the order the docstring lists them."""
-    parsed = ownership.rules() if parsed is None else parsed
+    parsed = ownership().rules() if parsed is None else parsed
     failures: list[Failure] = []
 
     by_owner: dict[str, list[str]] = {}
@@ -196,10 +207,10 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Fai
 def roles_named(body: str) -> list[str]:
     """The roles the Owner line names, in the line's order, read by the collect step's ROLES so
     that both read one line alike."""
-    line = collect.OWNER.search(body)
+    line = collect().OWNER.search(body)
     value = line.group("value").strip().lower() if line else ""
     places = []
-    for role, pattern in collect.ROLES:
+    for role, pattern in collect().ROLES:
         found = re.search(pattern, value)
         if found:
             places.append((found.start(), role))
@@ -242,9 +253,12 @@ def main(argv: list[str]) -> int:
     try:
         issue = read(argv[0])
         failures = judge(issue)
-    except (Unreadable, SystemExit) as error:
-        # SystemExit is path-ownership.py's refusal of an OWNERSHIP.md with no rules.
-        print(f"ticket-shape: fail: nothing judged: {error}")
+    except (Exception, SystemExit) as error:
+        # Unreadable is a read that failed; SystemExit is path-ownership.py's refusal of an
+        # OWNERSHIP.md with no rules; anything else is the check broken. None of them judged the
+        # issue, and each ends here on exit 2 with its verdict line (CODING_STANDARDS.md, "A check
+        # fails closed").
+        print(f"ticket-shape: fail: nothing judged: {type(error).__name__}: {error}")
         return 2
     for failure in failures:
         print(f"ticket-shape: {failure.rule}: {failure.detail}")
