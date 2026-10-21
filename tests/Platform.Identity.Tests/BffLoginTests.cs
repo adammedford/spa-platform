@@ -170,12 +170,14 @@ public sealed class BffLoginTests
     }
 
     [Fact]
-    public async Task A_relogin_over_a_cookie_for_no_session_still_challenges_and_is_noted_under_auth_session()
+    public async Task A_relogin_over_a_cookie_for_no_session_still_challenges_and_carries_no_rule_id()
     {
-        // #166: a cookie that resolves to no session for this app is auth.session (contracts/request-gate.md),
-        // noted by AppSessions.KeyOf as the shell gate's challenge notes it; the login still goes to the
-        // provider, and nothing is removed, since there is nothing to discard. Mutation: pass
-        // refusesDeadSession: false to the login's KeyOf call; the rule stays null and this fails.
+        // #199 (#185 Q18 b): a re-login over a cookie that resolves to no session is answered as the login
+        // was asked, with the challenge to the provider, so it ends in no rejection, and contracts/telemetry.md
+        // has the rule id written only by the stage that ends the request with one; its session_ref still
+        // names the session the cookie named, as the logout's does. Nothing is removed, since there is
+        // nothing to discard. Mutation: let the login's KeyOf call note a dead cookie as the refusing
+        // callers' do (drop refusesDeadSession: false); the login carries auth.session, and this fails.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         IdentityGateway.Login first = await gateway.LoginAsync(App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
@@ -185,7 +187,7 @@ public sealed class BffLoginTests
 
         Assert.Equal(302, login.Status);
         Assert.StartsWith(gateway.Idp.AuthorizeEndpoint, login.Location, StringComparison.Ordinal);
-        Assert.Equal("auth.session", login.Rule);
+        Assert.Null(login.Rule);
         Assert.Equal(SessionRef.Of(key), login.SessionRef);
 
         // The one removal the store saw is this test's own, above: the login's sign-out found no session

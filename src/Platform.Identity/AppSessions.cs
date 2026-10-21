@@ -157,7 +157,7 @@ internal sealed class AppSessions(ISessionStore store)
     /// <param name="authenticated">This request's authentication of the pinned app's cookie scheme.</param>
     /// <param name="refusesDeadSession">
     /// False for a caller that answers a dead cookie with something other than a rejection, as
-    /// <c>/bff/logout</c> does: contracts/telemetry.md has the rule id written only by the stage that ends
+    /// <c>/bff/login</c> and <c>/bff/logout</c> do: contracts/telemetry.md has the rule id written only by the stage that ends
     /// the request with a rejection, and <c>security.rejections</c> counts what it writes.
     /// </param>
     public string? KeyOf(HttpContext httpContext, AuthenticateResult authenticated, bool refusesDeadSession = true)
