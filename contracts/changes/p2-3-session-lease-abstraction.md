@@ -5,7 +5,7 @@
 - **Tasks:** P2-3; P2-1, whose store carries the lease when it sits on the item; 6.2 and 6.3, whose
   composed suites prove it again (#60)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** decided, 2026-10-20. See the Decision section below.
 
 ## The gap
 
@@ -165,3 +165,70 @@ The decision between (a) and (c) blocks the ticket split on the Phase 2 spec iss
 under (a) workstream 6 gets a two-host composed ticket over doubles; under (c) the fake's move to
 `src/Platform.Testing` becomes an item of the P2-1 request. The deployed acceptance, two real tasks,
 waits on P2-4 and on the gate runs of #63 reaching G5.
+
+## Decision
+
+Integrator, 2026-10-20, on Adam's answers to the ten questions of
+https://github.com/adammedford/spa-platform/issues/218 (all accepted as recommended). **Option (a).**
+
+1. **A contract type.** `IRefreshLeases` and `RefreshLease(string Token, DateTimeOffset ExpiresAt)`
+   go into `src/Platform.Abstractions`: `Task<RefreshLease?> TryAcquireAsync(string sessionKey,
+   TimeSpan ttl, CancellationToken ct)` and `Task ReleaseAsync(string sessionKey, RefreshLease
+   lease, CancellationToken ct)`, and no other member: no extend, no renew, no "is held" query. The
+   record carries no session key, because a positional record's `ToString()` prints every member
+   and the key is on the never-logged list (N-16); the key travels as a parameter. The names differ
+   from the request's `ISessionLeases` / `SessionLease` for the glossary reason in item 8.
+2. **The lease is independent of the session record.** Acquiring on a key with no record succeeds;
+   the contract suite proves the lease with no store in the test. Where the DynamoDB store keeps it
+   is the store ticket's choice (#221): a lease item of its own, or the session item under
+   `UpdateItem` for both the versioned replace and the lease, with the rule that an item with no
+   `ticket` never reads as a session.
+3. **Time to live** is one derived value, `AccessTokenSourceOptions.ProviderDeadline +
+   AccessTokenSourceOptions.LeaseMargin`, 10 s + 5 s today. The margin covers the versioned write
+   after the refresh returns and clock skew between tasks, since the acquiring task's clock is
+   compared with the holder's. A holder that dies mid-refresh frees the session after at most
+   15 s, under T-D10's caveat that the refresh it gave up on may still have run.
+4. **The loser's loop.** A caller that cannot take the lease re-reads the record every 250 ms,
+   under `CancellationToken.None` like every store call on this path (T-B15, T-B16), until the
+   version moves or the lease expires. A record that vanishes mid-loop answers
+   `AccessTokenResult.Unauthenticated`, as the re-read after a lost replace does today. A lease that
+   expires with the version unmoved is taken over and the refresh made: the T-D10 case, the grace
+   window's job, never `ProviderUnavailable` on a lease alone. The re-read before a refusal (T-B8)
+   stays as it is.
+5. **Release** is fenced by the token (a stale token changes nothing), made in a `finally` on every
+   outcome, `Refreshed`, `Unavailable` and `Ended` alike, and a failed release is logged at Warning
+   by outcome, without the token, and never reaches the caller: the lease expires on its own. The
+   token fences one release and authenticates nobody, so it joins no never-logged list, and no log
+   line carries it.
+6. **Landing.** Between gates as the added-type case (`contracts/README.md`), frozen as soon as it
+   lands with no marker, as `IRequestTelemetryFeature` did under change request 6.4; the two names
+   join `PublicSurfaceTests.Contracted`; `src/Platform.Testing` gains `InMemoryRefreshLeases` over
+   `TimeProvider` and an abstract `RefreshLeasesContract` asserting: a free key can be taken, a held
+   key cannot, a released key can, an expired lease can be taken over, a stale release changes
+   nothing, two keys are independent, and no store is needed. All of it is one integrator ticket on
+   the Phase 2 spec issue. This four-part landing is the pattern the session index of
+   `p2-6-pingfederate-profile.md` item 7 copies (#224): a new type beside `ISessionStore`, never a
+   member of it.
+7. **Proof, in order of weight.** Workstream 3 first: two `IdentityGateway`s in
+   `tests/Platform.Identity.Tests` over one `InMemorySessionStore` and one `InMemoryRefreshLeases`
+   (`IdentityGateway.StartAsync` builds its own store today, so sharing one is a parameter of its
+   own), and the DynamoDB lease against the fake of `p2-1-dynamodb-session-store.md`, whose
+   evaluator gains the two lease conditions. Workstream 6 second: a two-gateway composed harness in
+   `tests/Gateway.TestHarness` sharing the store, the leases and one key repository, with the two
+   acceptance tests. Both run the fifty-call test **at grace zero** asserting exactly one grant (the
+   mutation "two lease tables" then fails it) and a second case at the 10 s grace proving the
+   backstop; the one-host F-10 keeps its replay tolerance. **The fake therefore stays in
+   `tests/Platform.Identity.Tests`**, which answers item 5 of the P2-1 request. The G6 split is two
+   tickets, one per workstream, as named.
+8. **Vocabulary.** The in-process gate is `AppSessions` (`src/Platform.Identity/AppSessions.cs`,
+   whose header at lines 35-36 states the in-process limit this request quoted as
+   `SessionGates.cs:18-19`; no such file exists), and it stays as the in-process half: fifty calls
+   on one task take one lease, and waiters share the holder's outcome (T-D6). Its held handle is
+   today a type named `AppSessions.Lease`; workstream 3 renames it in the P2-3 ticket so that
+   "lease" means one thing. `GLOSSARY.md` gains **Session gate** and **Refresh lease**, with holder
+   and loser defined inside the latter; "lease token" is a member name, not a term.
+9. **An ADR of its own**, ADR-0024, carries the (a)/(b)/(c) table, item 2 and item 3 as its
+   decisions, with a status-line pointer on ADR-0017 and no edit to its body.
+
+Two citations in the request are corrected by this record: `ProviderDeadline` is
+`AccessTokenSource.cs:298`, and `SessionEnd` ends the session under the gate at lines 33-48.

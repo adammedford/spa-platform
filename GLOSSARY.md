@@ -8,10 +8,23 @@ export; a term that changes meaning should be changed here and in the ADR that m
 
 ## The unit of deployment and the unit of tenancy
 
-**Cell** — the whole stack: ALB, service, bucket, registry, secrets prefix and session store. The
-deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, and the name is part
-of every resource name and of the data-protection application name. Phase 1 runs one cell. See
-ADR-0012.
+**Cell** — the whole stack: ALB, service, bucket, registry, secrets prefix, session store and key
+ring. The deployment unit. Every module takes a cell name (`Platform:Cell`) from day one, and the
+name is part of every resource name. Every task of a cell shares one key ring, and no two cells
+share one. Phase 1 runs one cell. See ADR-0012 and ADR-0025.
+
+**Key ring** — the set of keys under which a cell's gateway protects what it hands to browsers and
+stores: session cookies, login state, antiforgery tokens and, from Phase 2, stored session tickets.
+Every task of a cell shares one ring and no two cells share one; a value protected under one ring is
+unreadable under another. In Phase 1 each task has a ring of its own, the "key durability" gap P2-2
+closes. See ADR-0025.
+_Avoid_: "keys" alone, which also means client secrets and KMS keys.
+
+**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task of
+the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered, and
+a wait for a revision covers every instance a cell runs (change request P2-5).
+_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is
+not the unit when two hosts share one test process.
 
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
@@ -115,6 +128,23 @@ unique within an app.
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
 identifier. One audience per app in Phase 1.
 
+**Client credential style** — how the gateway, as the confidential client, authenticates to the
+provider's backchannel endpoints: a form-body secret, a Basic header, or a client assertion. One per
+IdP profile, governing every backchannel call. See ADR-0017 and change request P2-6.
+_Avoid_: "auth method", "token endpoint auth".
+
+**Client assertion** — the signed JWT the gateway presents in place of a client secret under
+`private_key_jwt`, signed with the cell's key for that issuer.
+_Avoid_: "client JWT", "key assertion".
+
+**Pushed authorization** — the login's authorize parameters sent to the provider over the backchannel
+before the browser is redirected, so the browser carries a reference and not the parameters.
+_Avoid_: "PAR" alone in prose.
+
+**Login-state cookies** — the correlation and nonce cookies a login leaves until its callback,
+`__Host-spa-corr.*` and `__Host-spa-nonce.*`, minutes long and deleted by the callback. See ADR-0007.
+_Avoid_: "OIDC cookies", "auth cookies".
+
 **Stage** — one entry point in the middleware table of `contracts/pipeline.md`, in the position that
 table gives it. The number is the position and nothing more: it is normative only in that table, and
 it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is named by its entry
@@ -149,6 +179,16 @@ because the session cookie is not read on the callback path.
 **session_ref** — the first 12 hex characters of a SHA-256 of the session key, used in logs. It
 correlates a session's requests without being usable as a credential. Log this, never the session
 key.
+
+**Session gate** — the in-process, per-session-key serialisation of refreshes: one holder reads,
+decides, refreshes and writes, and the callers queued behind it take its outcome. In process only;
+two tasks share no gate. See ADR-0017 and ADR-0024.
+_Avoid_: "lock", and "lease" for this.
+
+**Refresh lease** — the cross-task claim on one session's refresh, held by one task for a bounded
+time and given back when its refresh is written. The **holder** is the task that took it; a
+**loser** is a task that could not, and re-reads the record instead. See ADR-0024.
+_Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
 
 ## Work, gates and evidence
 

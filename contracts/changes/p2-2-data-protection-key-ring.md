@@ -6,7 +6,7 @@
 - **Tasks:** P2-2; P2-1, whose ticket encryption needs the ring to be shared; P2-9, whose read-only
   root filesystem needs no key on disk
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** item 3 decided, 2026-10-20; items 1, 2 and 5 open, on https://github.com/adammedford/spa-platform/issues/222. See the Decision section below.
 
 ## The gap
 
@@ -177,3 +177,68 @@ in the first session that has one: that the package takes a registered
 `Microsoft.AspNetCore.DataProtection` restores cleanly beside the 10.0.12 shared framework; and
 that a data-protection key element fits a standard-tier parameter, since
 `TierStorageMode.StandardOnly`, the package's default, refuses to exceed it.
+
+## Decision
+
+Integrator, 2026-10-20, on Adam's answers to the ten questions of
+https://github.com/adammedford/spa-platform/issues/219 (all accepted as recommended). This decides
+item 3 and what follows from it; the pin, the section's keys, `TierStorageMode` and the P2-9
+listing (items 1, 2, 5 and 6) are decided on #222, now that
+https://github.com/adammedford/spa-platform/issues/216 has verified the package facts this request
+listed under Blocking.
+
+1. **Workstream 2 owns P2-2**, and the ring is registered in **`AddPlatformHosting`**. Workstream 3
+   owns the two-gateway proof as a ticket of its own, blocked by workstream 2's.
+2. **Why Hosting and not Registry.** This request's sentence "workstream 2 already registers the
+   SSM client" is true of the owner and false of the project: the client is registered in
+   `src/Platform.Registry/PlatformRegistryExtensions.cs`, `AddPlatformHosting` is a one-line stub,
+   `Platform.Hosting` references `Platform.Abstractions` only, and A-03's closure rule
+   (`tests/Gateway.ArchitectureTests/ReferenceRules.cs`) refuses a Hosting → Registry reference even
+   inside one workstream. `AddPlatformRegistry` was the third candidate: it carries the SDK and the
+   client already, but `tools/spactl` references `Platform.Registry`, and a command-line tool would
+   gain ASP.NET Core data protection and the key-ring package in its graph. `Platform.Hosting` is
+   referenced by the gateway and its own tests only.
+3. **The references.** `Platform.Hosting.csproj` gains `Amazon.AspNetCore.DataProtection.SSM` (the
+   pin is #222's) and a direct `AWSSDK.SimpleSystemsManagement` reference: #216 showed that without
+   it Hosting's graph resolves the SDK at the key-ring package's 4.0.7.3 floor. The ring uses the
+   client `AddPlatformRegistry` registered: the package calls `TryAddAWSService` and resolves with
+   `GetService` (#216), so the gateway's `TryAddSingleton` wins and the ring and the client-secret
+   source share one client and one credential chain; in a hermetic host whatever stub is registered
+   is the seam. #216 also found that the package's repository disposes the client it is given, so
+   workstream 2's ticket verifies that disposal fires only with the container at shutdown, and
+   registers a client instance of its own if it can fire earlier. The fallback this request's item
+   3 named does not exist: `SSMXmlRepository` is internal.
+4. **The application name is `spa-platform-{cell}`**, derived from `Platform:Cell` by a constant in
+   `Platform.Hosting`, never configurable, and not a shared constant in `Platform.Abstractions`
+   (ADR-0015: only Hosting reads it). A `DataProtection` section present with no `Platform:Cell`
+   fails the start, because an unnamed application silently protects under the framework's default
+   discriminator. Renaming the application later unprotects every live cookie, login state and,
+   after P2-1, stored ticket at once, so the string is fixed now.
+5. **With the section absent, nothing is registered**: hermetic hosts and `tools/smoke.sh` keep the
+   framework's default ring, and `AddPlatformHosting` logs one Information line saying so, so a
+   deployed cell that forgot the section says so in its first log lines. Not the ephemeral
+   provider: a behaviour change to every Phase 1 host for a reason none has.
+6. **Workstream 2's proof** lives in `tests/Platform.Hosting.Tests` over a stub SSM client written
+   there, overriding the operations the ring sends (`GetParametersByPathAsync`,
+   `PutParameterAsync`; `DeleteParameterAsync` exists too). `StubParameterStore` in
+   `tests/Platform.Registry.Tests` is internal and overrides `GetParameterAsync` only, so "extends a
+   double it has" was wrong. The control's two hosts each set an explicit repository
+   (`UseEphemeralDataProtectionProvider` or two in-memory repositories), because two hosts with
+   nothing registered share the user-profile key ring by accident and "cannot read each other's
+   payloads" would not be what the test proved.
+7. **Workstream 3's proof**: `IdentityGateway.StartAsync` gains an `IXmlRepository` parameter
+   defaulting to a fresh in-memory repository per gateway, so the control can fail and the identity
+   suite stops writing a key ring under the user's profile; the two-gateway test passes one instance
+   to both. The sentence in section 4 that a `StageHost` would serve this test is struck: #140 keeps
+   `IdentityGateway` off the stage host. The composed two-host harness is workstream 6's ticket
+   under P2-3's decision and repeats this proof there.
+8. **Who owns the invariant.** "Two tasks of one cell share one ring" is workstream 2's, by the
+   derived name and the hermetic test. "Two cells never share one" is workstream 1's per-cell
+   `ParameterPrefix` convention, `/spa-platform/{cell}/data-protection/`, scoped by the task role's
+   grant as client secrets are; the gateway does not check that the prefix names the cell, and a
+   guard, if workstream 1 wants one, is plan policy in the shape of ADR-0016. The deployed G6
+   browser-suite row proves the same-cell half only.
+9. **Vocabulary and record.** `GLOSSARY.md` gains **Key ring** and `Cell` is sharpened to state the
+   invariant rather than the mechanism; "application name" gets no entry. ADR-0025 records the
+   durable facts (one ring per cell, the derived name, Parameter Store under a per-cell prefix,
+   registered by hosting), with the entry point under its Consequences and a pointer from ADR-0012.

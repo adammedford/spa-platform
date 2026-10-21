@@ -1,6 +1,10 @@
 # ADR-0007: Defend across apps with __Host- cookies, Fetch Metadata and antiforgery, not SameSite
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-20 by change request P2-6
+  (`contracts/changes/p2-6-pingfederate-profile.md`): under the `pingfederate` profile the callback
+  is `form_post` and the two login-state cookies are `SameSite=None`, because T13's cost outweighs a
+  cross-site `POST` that `__Host-` already covers; `query` and `Lax` stay the default, and the four
+  defences below are unchanged.**
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D7 (Doc revision 36)
@@ -23,8 +27,9 @@ Cross-app defence is four mechanisms together, and `SameSite` is not one of them
 
 Four framework defaults are overridden to make this hold: `ResponseType = code` with
 `ResponseMode = query` (a form-post callback is a cross-site POST that arrives without
-`SameSite=Lax` login cookies); correlation and nonce cookies renamed to `__Host-spa-corr.` and
-`__Host-spa-nonce.` with `Path=/` and `SameSite=Lax`; `RemoteSignOutPath` cleared, so logout is the
+`SameSite=Lax` login cookies; since 2026-10-20 the `pingfederate` profile overrides this to
+`form_post` with those two cookies at `SameSite=None`, change request P2-6); correlation and nonce
+cookies renamed to `__Host-spa-corr.` and `__Host-spa-nonce.` with `Path=/` and `SameSite=Lax`; `RemoteSignOutPath` cleared, so logout is the
 same-origin `POST /bff/logout` only; and the antiforgery cookie's `SecurePolicy = Always`, applied
 after forwarded headers, because a `__Host-` cookie sent without `Secure` is discarded.
 
@@ -40,7 +45,7 @@ after forwarded headers, because a `__Host-` cookie sent without `Secure` is dis
 - `__Host-` requires `Path=/` and `Secure`, which rules out scoping login cookies to the callback path.
 - One app's cookie is never sent to another host, and a sibling cannot plant one. This invariant is enforced by the browser, not by gateway code, and is checked in a real browser (N-25).
 - ADR-0008's "session before any asset" forces `SameSite=Lax`, which this decision already assumes.
-- The authorization code still appears in URLs and ALB access logs, accepted in Phase 1: codes are single-use, client-bound and PKCE-protected, and Cognito documents no `form_post` mode. PingFederate supports `form_post`, which Phase 2 can use.
+- The authorization code still appears in URLs and ALB access logs, accepted in Phase 1: codes are single-use, client-bound and PKCE-protected, and Cognito documents no `form_post` mode. PingFederate supports `form_post`, which Phase 2 can use. Since 2026-10-20 the `pingfederate` profile uses it (change request P2-6): the code leaves the URL and the access logs for that provider, and the two login-state cookies ride the cross-site `POST` as `SameSite=None`, still `__Host-`, `Secure`, `HttpOnly` and minutes long.
 
 ### Logging rules this forces
 
