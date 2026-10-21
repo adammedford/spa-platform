@@ -289,6 +289,44 @@ if [ -n "$duplicates" ]; then
   fail "duplicated build artifacts make the build report errors that are not in the source."
 fi
 
+# --- tracked files their owner alone can read ------------------------------------------------
+#
+# Git records one bit of a file's mode, the exec bit, so a tracked file written under `umask 077`
+# is mode 600 on this machine while nothing in the repository shows it: no diff, no status line.
+# An image built from this tree keeps the mode, unless its Dockerfile resets it, and a container
+# that runs as anyone but the owner cannot read the file. On 2026-10-21 97 such files under src/,
+# contracts/ and fixtures/ made the gateway's container die at WebApplication.CreateBuilder with
+# UnauthorizedAccessException on /app/appsettings.json (#58, #205). CI checks out with 644 and
+# never sees it, so the hook and the overnight lanes are the only places this can be caught.
+#
+# Read by group and others both, because the fix is `chmod go+r` and a container user is usually
+# neither the owner nor in its group: a 640 file breaks the image as surely as a 600 one. A tracked
+# path missing from the working tree is not a file to judge, so find's complaint about it is
+# dropped; the `./` git puts in front of every path keeps one that begins with `-` a path to find.
+# xargs appends what it reads after the command it runs, and find wants its paths before its
+# expression, so a bash between them puts them first. Never skipped, because no diff shows a mode.
+unreadable="$(git ls-files -z --format='./%(path)' \
+  | xargs -0 -r "$BASH" -c 'find "$@" -prune ! -perm -044 -print 2> /dev/null' file-modes || true)"
+
+if [ -n "$unreadable" ]; then
+  echo "$me: tracked files that group and others cannot read:" >&2
+  shown=0
+  total=0
+  while IFS= read -r path; do
+    total=$((total + 1))
+    if [ "$shown" -lt 10 ]; then
+      echo "${path#./}" >&2
+      shown=$((shown + 1))
+    fi
+  done << EOF
+$unreadable
+EOF
+  [ "$total" -le "$shown" ] || echo "... and $((total - shown)) more" >&2
+  echo "$me: git does not record these modes, but an image built from this tree keeps them. Make them readable:" >&2
+  echo "  git ls-files -z | xargs -0 chmod go+r" >&2
+  fail "a tracked file only its owner can read is a file the gateway's container cannot read; run chmod go+r on it."
+fi
+
 # --- the build, and in full the tests and the smoke test ----------------------------------------
 #
 # Warnings are errors, so this catches what a reviewer should never have to. Skipped when nothing
@@ -298,7 +336,7 @@ fi
 # test project, where 8 is Microsoft Testing Platform's "zero tests" and expected of a project that
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
