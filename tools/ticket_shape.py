@@ -8,6 +8,10 @@ partial instead of never starting. This reads one issue and fails it, naming the
 
 - one-owner: its `**Touches:**` paths have more than one owner in OWNERSHIP.md (rules 1 and 5),
   read with A-05's own `rules` and `owner_of`;
+- touches: a `**Touches:**` line with no path in it, which read as absent would leave only the
+  Owner line judged (CODING_STANDARDS.md, "A check fails closed"). A path is read from a code span
+  or bare, as a token with a `/` or a `.` in a name (`.gitignore`, `tools/check.sh`), so the prose
+  the build tickets mix in ("and, if a ... is added,") is not taken for one;
 - owner-line: its `**Owner:**` line names other than exactly the role those paths derive, by
   tools/overnight_collect.py's ROLES. A body with no Touches line derives no role, so its Owner line
   must name exactly one; the tickets filed before #227 have none, and they are judged by what they
@@ -104,7 +108,12 @@ NUMBER = re.compile(r"#(\d+)")
 FOREGROUND = re.compile(r"(?m)^\*\*Session:\*\*[ \t]*foreground\b", re.IGNORECASE)
 
 TOUCHES = re.compile(r"(?m)^\*\*Touches:\*\*[ \t]*(?P<value>[^\n]*)$")
-CODE_SPAN = re.compile(r"`([^`\n]+)`")
+# A code span, or the text between two.
+SPAN_OR_TEXT = re.compile(r"`([^`\n]+)`|([^`]+)")
+# A bare token that names a path: a directory separator, or a dot inside or leading a name. "e.g."
+# and "i.e." are words, not paths; a URL's colon keeps it out.
+BARE_PATH = re.compile(r"^(?=[^/]*/|\.?[\w-]*[\w-]\.[\w-]|\.[\w-])[\w./*-]+$")
+NOT_PATHS = {"e.g", "i.e"}
 
 
 class Unreadable(Exception):
@@ -140,10 +149,22 @@ def issue_of(raw: object) -> Issue:
         raise Unreadable(f"the issue's JSON has no readable {error}") from error
 
 
-def touches(body: str) -> list[str]:
-    """The paths of the Touches line: its code spans, or none when there is no line."""
+def touches(body: str) -> list[str] | None:
+    """The paths of the Touches line, in its order: its code spans and its bare tokens that look
+    like paths. None when there is no line, and [] when there is one with no path in it."""
     line = TOUCHES.search(body)
-    return CODE_SPAN.findall(line.group("value")) if line else []
+    if not line:
+        return None
+    paths = []
+    for span, text in SPAN_OR_TEXT.findall(line.group("value")):
+        if span:
+            paths.append(span)
+            continue
+        for token in re.split(r"[\s,;()]+", text):
+            token = token.rstrip(".:")
+            if token not in NOT_PATHS and BARE_PATH.match(token):
+                paths.append(token)
+    return paths
 
 
 def owner_of(path: str, parsed: list[tuple[str, str]]) -> str | None:
@@ -161,8 +182,12 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Fai
     parsed = ownership().rules() if parsed is None else parsed
     failures: list[Failure] = []
 
+    paths = touches(issue.body)
+    if paths == []:
+        failures.append(Failure("touches", "the Touches line names no path, so no owner is "
+                                "derived from it"))
     by_owner: dict[str, list[str]] = {}
-    for path in touches(issue.body):
+    for path in paths or []:
         by_owner.setdefault(owner_of(path, parsed) or "no owner", []).append(path)
     if len(by_owner) > 1:
         failures.append(Failure("one-owner", "the Touches paths have " + "; ".join(

@@ -395,6 +395,66 @@ class OneOwner(unittest.TestCase):
         self.assertIn("one-owner", rules_broken(204, body))
 
 
+# Touches lines as the build tickets of 2026-10-21 write them, bare and with prose: #269's and
+# #260's verbatim, #261's in a code span. Rule 5 on #227 asks for the paths, not for backticks.
+TOUCHES_269 = ("**Touches:** .claude/workflows/pins-sweep.js, tools/pins_inventory.py, "
+               "tools/pins_inventory_tests.py, .github/workflows/ci.yml; and, if a script test "
+               "companion is added, .claude/workflows/pins-sweep_tests.mjs and .gitignore")
+TOUCHES_260 = ("**Touches:** .claude/workflows/retro.js, tools/retro_record.py, "
+               "tools/retro_record_tests.py, .github/workflows/ci.yml; and, if a script test "
+               "companion is added, .claude/workflows/retro_tests.mjs and .gitignore")
+TOUCHES_261 = "**Touches:** `.claude/skills/wiz/SKILL.md`"
+
+
+def build_ticket(touches_line: str, owner: str = "integrator") -> str:
+    return (f"**Raised by:** #213 (confirmed)\n**Owner:** {owner}\n{touches_line}\n\n"
+            "## What to build\n\nA script.\n\n## Acceptance\n\n- [ ] Its tests pass.\n")
+
+
+class BareTouches(unittest.TestCase):
+    """Rule 5 derives the owner from the Touches paths however they are written: bare, as #260 and
+    #269 write them among prose, or in code spans as #261 does."""
+
+    def broken(self, body: str) -> list[str]:
+        return rules_broken(204, body, labels=("ready-for-agent",))
+
+    def test_bare_paths_read_as_paths(self):
+        self.assertEqual(shape.touches(build_ticket(TOUCHES_269)), [
+            ".claude/workflows/pins-sweep.js", "tools/pins_inventory.py",
+            "tools/pins_inventory_tests.py", ".github/workflows/ci.yml",
+            ".claude/workflows/pins-sweep_tests.mjs", ".gitignore"])
+
+    def test_bare_paths_of_two_owners_fail(self):
+        body = build_ticket("**Touches:** src/Platform.Identity/, src/Platform.Registry/")
+        self.assertIn("one-owner", self.broken(body))
+
+    def test_bare_and_spanned_paths_of_two_owners_fail(self):
+        body = build_ticket("**Touches:** `src/Gateway/Dockerfile`, fixtures/MockApi/Dockerfile")
+        self.assertIn("one-owner", self.broken(body))
+
+    def test_bare_paths_of_one_owner_pass(self):
+        for line in (TOUCHES_269, TOUCHES_260):
+            with self.subTest(line=line[:50]):
+                self.assertEqual(self.broken(build_ticket(line)), [])
+
+    def test_bare_paths_owned_by_other_than_the_owner_line_fail(self):
+        body = build_ticket("**Touches:** src/Platform.Identity/, tests/Platform.Identity.Tests/")
+        self.assertIn("owner-line", self.broken(body))
+        body = build_ticket("**Touches:** src/Platform.Identity/, tests/Platform.Identity.Tests/",
+                            owner="workstream 3")
+        self.assertEqual(self.broken(body), [])
+
+    def test_spanned_paths_are_read_as_before(self):
+        self.assertEqual(shape.touches(build_ticket(TOUCHES_261)), [".claude/skills/wiz/SKILL.md"])
+        self.assertEqual(self.broken(build_ticket(TOUCHES_261)), [])
+
+    def test_a_touches_line_with_no_readable_path_fails(self):
+        # A check fails closed: a Touches line read as absent would judge only the Owner line.
+        for line in ("**Touches:** to be decided", "**Touches:**", "**Touches:** see #213"):
+            with self.subTest(line=line):
+                self.assertIn("touches", self.broken(build_ticket(line)))
+
+
 class OwnerLine(unittest.TestCase):
     """The Owner line names exactly the derived role, by tools/overnight_collect.py's ROLES."""
 
