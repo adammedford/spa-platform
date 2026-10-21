@@ -7,9 +7,10 @@
 // Defaults: overnight.js beside this file, and fixtures/2026-10-20-tickets.json; a later fixture sits
 // beside that one and is named as the second argument. It is wall-clock timed: a 1 ms tick against
 // sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed) or when
-// the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent returns the fixture's tickets; implement, review and
-// integrate succeed after a delay that depends on the owner, so the integrator lane is the slow one, as it
-// is on a real night. No agent, gh or git call is made.
+// the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent
+// returns the fixture's tickets; implement, review and integrate succeed after a delay that depends on the
+// owner, so the integrator lane is the slow one, as it is on a real night. No agent, gh or git call is
+// made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,8 +49,9 @@ globalThis.agent = async (prompt, opts) => {
 }
 
 // A scheduler that deadlocks (a lane waiting on a ticket queued behind itself) never settles, and the tick
-// alone would keep the process alive, so the run is bounded. Every mock agent of the 2026-10-20 fixture run
-// one after another sleeps about 7.5 s; 30 s is four times that and some 25 times a normal run (#213).
+// alone would keep the process alive, so the run is bounded. Every mock agent of a passing run on the
+// 2026-10-20 fixture, run one after another, sleeps 3.63 s (23 tickets' implement, review and integrate);
+// 30 s is eight times that and over twenty times a normal run of about 1.3 s (#213).
 const LIMIT_MS = 30000
 const STALLED = Symbol('stalled')
 let limit
