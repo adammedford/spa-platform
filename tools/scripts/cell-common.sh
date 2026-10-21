@@ -314,7 +314,8 @@ wait_and_assert() {
 
   # Every running task's gateway container, by the digest ECS resolved when it started it, and the
   # task's private address, which is its target's id: the task runs in awsvpc mode and the target
-  # group's target type is ip (infra/modules/cell/ecs.tf, alb.tf).
+  # group's target type is ip (infra/modules/cell/ecs.tf, alb.tf), whose target id is the address.
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetDescription.html
   # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Container.html (imageDigest,
   # networkInterfaces)
   aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
