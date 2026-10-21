@@ -21,8 +21,9 @@
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced. It needs the AWS CLI and python3. It never prints the account id or a client id.
 #
-# Exit status: 0 when the read finished (or was followed until Control-C, 130); 1 when AWS refused
-# the read, named by its error code; 2 when it did not start (no outputs document among the reasons).
+# Exit status: 0 when the read finished; 130 when Control-C ended it, as it ends --follow; 1 when
+# AWS refused the read, named by its error code; 2 when it did not start (no outputs document among
+# the reasons).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.

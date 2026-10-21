@@ -123,6 +123,17 @@ class LogsReadsTheGroupThroughTheRedaction(cell.CompanionTestCase):
         result, _ = self.read(world)
         self.assertIn("client <client-id:app1> and aXbbbc1 stay apart", result.stdout)
 
+    def test_a_client_id_inside_another_leaves_no_remainder_of_the_longer(self):
+        # cell_documents.py clients lists the longest first: replaced in the document's order, app1's
+        # id inside app2's would leave app2's ends in the line.
+        world = logged_world()
+        world["roots"]["apps"]["clients"]["app1"]["clientId"] = "Qz7vQ"
+        world["roots"]["apps"]["clients"]["app2"]["clientId"] = "KkQz7vQKk"
+        world["log_events"] = [[f"{cell.MOCK_API}/{cell.MOCK_API}/t", "app1 Qz7vQ app2 KkQz7vQKk"]]
+        result, _ = self.read(world)
+        self.assertIn("app1 <client-id:app1> app2 <client-id:app2>", result.stdout)
+        self.assertNotIn("Kk", result.stdout)
+
 
 class LogsRefuses(cell.CompanionTestCase):
 
