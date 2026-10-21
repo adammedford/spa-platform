@@ -126,9 +126,10 @@ const TICKET = {
     owner: { type: 'string' }, blockedBy: { type: 'array', items: { type: 'string' } }, why: { type: 'string' },
     openBoxes: { type: 'integer' },
     // tools/overnight_collect.py's forecast (#228): why a lane cannot finish this ticket, [] when nothing says so.
+    // Since #248 each entry is a tools/ticket_shape.py failure: the rule's name and the line the check prints for it.
     willEndPartial: { type: 'array', items: { type: 'object', properties: {
-      reason: { type: 'string' }, owner: { type: 'string' }, box: { type: 'string' }, names: { type: 'array', items: { type: 'string' } },
-    }, required: ['reason'] } },
+      rule: { type: 'string' }, reason: { type: 'string' },
+    }, required: ['rule', 'reason'] } },
   },
   required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'willEndPartial'],
 }
@@ -237,18 +238,19 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
 - n: the ticket's ordinal, 1.. in plan order (rows in the plan's order first, then \`issue-<number>\` tickets by number). It picks the lane's port, so every ticket needs a distinct one.
 Then, for every id in "landed", say in "reason" if an open issue still carries that plan row (Adam closes it; do not close it yourself).
 
-NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and not present as an issue (\`cd ${REPO} && gh issue list --state all --limit 500 --json number,body --jq '.[] | select(.body | test("\\\\*\\\\*Plan row:\\\\*\\\\* ")) | .number'\` and read their Plan row lines; any state counts) gets one, as a sub-issue of #${PARENT_ISSUE}:
-  cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file - <<'EOF'
+NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and not present as an issue (\`cd ${REPO} && gh issue list --state all --limit 500 --json number,body --jq '.[] | select(.body | test("\\\\*\\\\*Plan row:\\\\*\\\\* ")) | .number'\` and read their Plan row lines; any state counts) gets one, as a sub-issue of #${PARENT_ISSUE}, in three steps:
+  1. Write its body to ${LOG}/new-ticket-<id>.md (the Write tool, or a quoted heredoc \`cat > ${LOG}/new-ticket-<id>.md <<'EOF'\`):
   **Owner:** <role>
   **Plan row:** <id>
 
   **What to build:** the row's What, the contracts/ rows and test ids that name it (cite paths), and its Done when.
   ## Acceptance
   - [ ] one box per Done-when clause and per test id
-  EOF
+  2. Check its shape under the label and blockers you will file it with, by the rules the ticket-shape workflow holds at creation and tools/overnight_collect.py forecasts from (#248): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' ${LOG}/new-ticket-<id>.md <label> <each --blocked-by number, or none> | python3 -I tools/ticket_shape.py -\`
+  3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
 Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>"). An open change request (contracts/changes/*.md with Status open) is not a ticket of its own tonight: name it in "reason" and in the "why" of every ticket it holds up.
 
-FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, the task branches and the roadmap). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry names the other owner its Owner line names, or the open box that names a sitting, the deployed cell, #63, a pushed branch or a landing, with the #227 rule it breaks: the shapes that end a ticket partial. Do not judge a ticket by reading it: the tool's list is the forecast. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run.
+FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, the task branches, the roadmap and OWNERSHIP.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run.
 
 Return outcome "ok", tickets (sorted by n), landed, reason, base: the base's full sha (on "dirty-start", whatever HEAD is), and shell and shellCommand from SETUP 0.`
 

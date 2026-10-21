@@ -30,15 +30,19 @@ The rules, as the collect step states them:
   repeating until nothing changes. An issue carrying two of the labels is one ticket, under the
   label this order puts first.
 - openBoxes: the `- [ ]` lines in the body, or -1 when it has no checkbox at all.
-- willEndPartial (#228): why a lane cannot finish the ticket, [] when nothing says so. One entry
-  per other role the Owner line names ({"owner", "reason"}), then one per open box whose text names
-  a sitting, the deployed cell, #63, a pushed branch or a landing ({"box", "names", "reason"}): the
-  shapes #227's confirmed rules forbid, which ended seven of the 2026-10-21 run's tickets partial.
-  The launch plan forecasts from it.
+- willEndPartial (#228): why a lane cannot finish the ticket, [] when nothing says so. Since #248
+  each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket
+  is written: {"rule", "reason"}, the rule's name and the line the check prints for it, in the
+  check's order. The ticket is judged under the label it is listed by, so the rules that read
+  `ready-for-agent` alone (sitting-or-landing, foreground) flag only a lane's ticket. A spec is a
+  parent and never judged. One grammar, then, at creation and at launch: a ticket the check fails
+  is a ticket the launch plan forecasts as partial. The launch plan forecasts from it.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
 Two tickets with one id stop it: exit 1, stdout empty, both issues named on stderr. A read that fails
-also exits 1, because a partial answer would send a lane at the wrong work. In JSON mode everything
+also exits 1, because a partial answer would send a lane at the wrong work, and so does a
+ticket-shape check that cannot load or judge (its script, .github/path-ownership.py or
+OWNERSHIP.md missing or broken), because a forecast with nothing judged would read as none flagged. In JSON mode everything
 but the answer goes to stderr.
 
 --from DIR reads ready-for-agent.json, ready-for-human.json and needs-triage.json (each the JSON of
@@ -48,6 +52,8 @@ line) and roadmap.json (`tools/roadmap.py --json`). Absent ones are read live.
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib.util
 import json
 import pathlib
 import re
@@ -72,21 +78,6 @@ PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
-OPEN_BOX_TEXT = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
-
-# What an open box names that a lane cannot do, so the ticket will end partial (#228): each term,
-# the rule of #227's confirmed five (https://github.com/adammedford/spa-platform/issues/227
-# #issuecomment-6323543713) it breaks, and its pattern. Rule 2: a box that needs a sitting is its
-# own ready-for-human ticket; #63 is where a sitting posts its runs. Rule 3: no box depends on a push
-# or a landing. The guards keep a term inside a path or a longer word out: landing-work.md, the
-# pre-push hook, the cell scripts, #63a, issues/63; a full stop that ends the sentence is no path. #248 replaces this table with ticket_shape's.
-PARTIAL_TERMS = (
-    ("a sitting", 2, re.compile(r"\bsittings?\b", re.IGNORECASE)),
-    ("the deployed cell", 2, re.compile(r"\bdeployed cell\b", re.IGNORECASE)),
-    ("#63", 2, re.compile(r"(?<![\w/])#63\b")),
-    ("a pushed branch", 3, re.compile(r"(?<![\w-])pushed\b", re.IGNORECASE)),
-    ("a landing", 3, re.compile(r"(?<![\w-])land(?:ing|ed|s)\b(?![-/]|\.\w)", re.IGNORECASE)),
-)
 
 # The roles of OWNERSHIP.md, each with the ways an Owner line names it. The first role the line
 # names is the owner, so "ws1-infra, run by the human" is workstream 1's and "integrator (anyone may
@@ -216,28 +207,41 @@ def others_land_apart(others: list[str]) -> str:
             "own pull requests")
 
 
-def joined(words: list[str]) -> str:
-    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+@functools.cache
+def ticket_shape():
+    """tools/ticket_shape.py, the check #247 runs where a ticket is written (#248). Loaded by path:
+    under -I the script's own directory is not on sys.path. It loads this script in turn, for
+    OWNER and ROLES, on its first judgement; that second copy is read-only and loads nothing back,
+    so the two never recurse."""
+    path = pathlib.Path(__file__).resolve().parent / "ticket_shape.py"
+    spec = importlib.util.spec_from_file_location("ticket_shape", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def will_end_partial(body: str, others: list[str]) -> list[dict]:
-    """Why a lane cannot finish the ticket, as #227's rules say: an entry per other owner the Owner
-    line names, then one per open box naming what only a sitting, a push or a landing does."""
-    flags = [{"owner": role,
-              "reason": f"its Owner line also names {role}, and a lane writes one owner's paths "
-                        "(#227 rule 1)"} for role in others]
-    for found in OPEN_BOX_TEXT.finditer(body):
-        text = found.group("text").strip()
-        hits = [(name, rule) for name, rule, pattern in PARTIAL_TERMS if pattern.search(text)]
-        if not hits:
-            continue
-        names = [name for name, _ in hits]
-        rules = sorted({rule for _, rule in hits})
-        cited = (f"#227 rule {rules[0]}" if len(rules) == 1
-                 else f"#227 rules {joined([str(rule) for rule in rules])}")
-        flags.append({"box": text, "names": names,
-                      "reason": f"an open box names {joined(names)}, which no lane does ({cited})"})
-    return flags
+def ownership_rules() -> list[tuple[str, str]]:
+    """OWNERSHIP.md as A-05 reads it, through the check that judges by it. Read once a run."""
+    try:
+        return ticket_shape().ownership().rules()
+    except (Exception, SystemExit) as error:
+        # SystemExit is path-ownership.py's refusal of an OWNERSHIP.md with no rules.
+        raise Refused(f"the ticket-shape check could not load: {type(error).__name__}: "
+                      f"{error}") from error
+
+
+def will_end_partial(issue: Issue, rules: list[tuple[str, str]]) -> list[dict]:
+    """Why a lane cannot finish the ticket: ticket_shape's failures, judged under its label."""
+    try:
+        shape = ticket_shape()
+        judged = shape.Issue(number=issue.number, body=issue.body, labels=(issue.label,),
+                             sub_issues=issue.sub_issues, blockers=issue.blockers)
+        failures = shape.judge(judged, rules)
+    except (Exception, SystemExit) as error:
+        raise Refused(f"the ticket-shape check could not judge #{issue.number}: "
+                      f"{type(error).__name__}: {error}") from error
+    return [{"rule": failure.rule, "reason": f"{failure.rule}: {failure.detail}"}
+            for failure in failures]
 
 
 def open_boxes(body: str) -> int:
@@ -259,8 +263,11 @@ def landed_ids(road: dict) -> set[str]:
     return found
 
 
-def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict) -> dict:
-    """The answer, from what was read. Raises Refused when two tickets share an id."""
+def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict,
+            rules: list[tuple[str, str]] | None = None) -> dict:
+    """The answer, from what was read. Raises Refused when two tickets share an id, or when the
+    ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
+    with the rest of the input; None reads it here."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
     parents, tickets = [], []
@@ -282,6 +289,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         ) + ". Every run keys a ticket by its id, so one would overwrite the other: give one its "
             "own **Plan row:** (none, for an issue that is not a plan row) and run again.")
 
+    rules = ownership_rules() if rules is None else rules
     by_number = {issue.number: issue for issue in tickets}
     id_of = {issue.number: ticket_id(issue) for issue in tickets}
 
@@ -342,7 +350,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "owner": owner, "blockedBy": [blocker_id(b) for b in issue.blockers],
             "why": why[issue.number] + others_land_apart(others),
             "openBoxes": open_boxes(issue.body),
-            "willEndPartial": will_end_partial(issue.body, others),
+            "willEndPartial": will_end_partial(issue, rules),
         })
     return {
         "tickets": resolved,
@@ -386,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         branch_names = text.split() if text is not None else branches(root)
         text = kept("roadmap.json")
         road = json.loads(text) if text is not None else roadmap(root)
-        answer = resolve(listings, branch_names, road)
+        answer = resolve(listings, branch_names, road, ownership_rules())
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1
