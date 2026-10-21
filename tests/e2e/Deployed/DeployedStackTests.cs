@@ -65,6 +65,24 @@ public sealed partial class DeployedStackTests
         Assert.True(DeployedStack.Quiet > 2 * DeployedStack.ClockMargin, $"{DeployedStack.Quiet} is not more than twice {DeployedStack.ClockMargin}.");
     }
 
+    [Fact]
+    public void The_wait_for_a_switched_release_outlasts_twice_the_cells_registry_poll()
+    {
+        string module = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "infra", "modules", "cell", "variables.tf"));
+        string platform = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "platform", "main.tf"));
+
+        Match poll = RegistryPollDefault().Match(module);
+        Assert.True(poll.Success, "infra/modules/cell/variables.tf no longer gives registry_poll_seconds a default.");
+        // The cell runs the module's default: the platform root does not set its own.
+        Assert.DoesNotContain("registry_poll_seconds", platform, StringComparison.Ordinal);
+
+        TimeSpan interval = TimeSpan.FromSeconds(int.Parse(poll.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        Assert.True(DeployedStack.CellRegistryPropagation >= 2 * interval, $"{DeployedStack.CellRegistryPropagation} is less than twice the cell's {interval} poll.");
+    }
+
+    [GeneratedRegex(@"variable ""registry_poll_seconds"" \{.*?default\s*=\s*(\d+)", RegexOptions.Singleline)]
+    private static partial Regex RegistryPollDefault();
+
     [GeneratedRegex(@"^\s*access_token_validity\s*=\s*(\d+)", RegexOptions.Multiline)]
     private static partial Regex AccessTokenValidity();
 

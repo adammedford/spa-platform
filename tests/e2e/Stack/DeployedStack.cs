@@ -129,7 +129,14 @@ public sealed class DeployedStack : IBrowserStack
 
     public string EndSessionEndpoint => Cell.EndSessionEndpoint;
 
-    public TimeSpan RegistryPropagation => TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// The cell's wait for a switched release: two minutes. The gateway's next poll comes within one
+    /// interval, which the jitter only shortens (<c>RegistryPoller.NextDelay</c>), and the cell runs the
+    /// module's <c>registry_poll_seconds</c> default; a test holds this to twice that default.
+    /// </summary>
+    internal static readonly TimeSpan CellRegistryPropagation = TimeSpan.FromMinutes(2);
+
+    public TimeSpan RegistryPropagation => CellRegistryPropagation;
 
     public static async Task<DeployedStack> StartAsync()
     {

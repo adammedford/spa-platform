@@ -85,9 +85,9 @@ public sealed class ShellTests
     }
 
     /// <summary>
-    /// Reloads until the shell's heading reads <paramref name="marker"/>, for up to one registry poll:
-    /// the cell's gateway picks a new revision up on its next poll, where the local harness polls as it
-    /// writes.
+    /// Reloads until the shell's heading reads <paramref name="marker"/>, for up to the stack's
+    /// <see cref="IBrowserStack.RegistryPropagation"/>: the cell's gateway picks a new revision up on its
+    /// next poll, where the local harness polls as it writes.
     /// </summary>
     private static async Task ReloadUntilMarkerAsync(IBrowserStack stack, Profile profile, string marker)
     {

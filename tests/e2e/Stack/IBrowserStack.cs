@@ -126,7 +126,11 @@ public interface IBrowserStack : IAsyncDisposable
     /// <summary>Takes an onboarded app off again, whatever part of <see cref="OnboardAsync"/> ran, so the stack is left as it was.</summary>
     Task OffboardAsync(string appId);
 
-    /// <summary>How long after <see cref="SwitchReleaseAsync"/> the gateway may take to serve it: one registry poll (docs/plan/05-infrastructure-and-cost.md, Deployment and rollback).</summary>
+    /// <summary>
+    /// How long after <see cref="SwitchReleaseAsync"/> a row waits for the gateway to serve the switched
+    /// release before it fails. The gateway takes up to one registry poll (docs/plan/05-infrastructure-and-cost.md,
+    /// Deployment and rollback), and each stack's value outlasts its own.
+    /// </summary>
     TimeSpan RegistryPropagation { get; }
 }
 
