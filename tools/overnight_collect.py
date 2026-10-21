@@ -18,8 +18,7 @@ A pre-launch audit is the same command.
 
 The rules, as the collect step states them:
 - A ticket is an open issue carrying `ready-for-agent`, `ready-for-human` or `needs-triage`. An issue
-  with sub-issues is a spec, listed under "parents", and never a ticket. An issue whose body has a
-  `**Session:** foreground` line is worked in a foreground session, listed under "foreground".
+  with sub-issues is a spec, listed under "parents", and never a ticket.
 - id: the `**Plan row:** X` value when it is a plan row id, else `issue-<number>`.
 - owner: the first role the `**Owner:**` line names, by its place in the line, mapped to
   OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
@@ -66,7 +65,6 @@ PLAN_ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
 PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
-FOREGROUND = re.compile(r"(?m)^\*\*Session:\*\*[ \t]*foreground\b")
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
 
@@ -221,13 +219,11 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     """The answer, from what was read. Raises Refused when two tickets share an id."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
-    parents, foreground, tickets = [], [], []
+    parents, tickets = [], []
     for issue in issues_of(listings):
         if issue.sub_issues > 0:
             parents.append({"issue": issue.number, "title": issue.title, "label": issue.label,
                             "subIssues": issue.sub_issues})
-        elif FOREGROUND.search(issue.body):
-            foreground.append({"issue": issue.number, "title": issue.title, "label": issue.label})
         else:
             tickets.append(issue)
 
@@ -306,7 +302,6 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     return {
         "tickets": resolved,
         "parents": parents,
-        "foreground": foreground,
         "landed": sorted(landed),
         "landedButOpen": [{"id": t["id"], "issue": t["issue"]} for t in resolved
                           if t["id"] in landed],
@@ -320,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Resolve tonight's overnight tickets from GitHub Issues, by the collect rules.",
     )
     parser.add_argument("--json", action="store_true", required=True,
-                        help="print the tickets, parents and foreground issues as JSON")
+                        help="print the tickets and parents as JSON")
     parser.add_argument("--from", dest="saved", metavar="DIR",
                         help="read saved gh listings (and optionally branches.txt, roadmap.json) "
                              "from DIR instead of asking GitHub")
@@ -360,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         counts[ticket["status"]] = counts.get(ticket["status"], 0) + 1
     print(f"overnight_collect: {len(answer['tickets'])} tickets "
           f"({', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}), "
-          f"{len(answer['parents'])} parents, {len(answer['foreground'])} foreground.",
+          f"{len(answer['parents'])} parents.",
           file=sys.stderr)
     print(json.dumps(answer, indent=2))
     return 0
