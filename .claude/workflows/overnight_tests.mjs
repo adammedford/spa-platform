@@ -1,12 +1,15 @@
-// Runs overnight.js end to end with every agent mocked, on a fixed ticket set, and checks how the lanes
-// schedule. Owner: integrator. Git-ignored with the script until #135 tracks .claude/workflows/.
+// The overnight script's test companion: runs overnight.js end to end with every agent mocked, on a fixed
+// ticket set, and checks how the lanes schedule. Owner: integrator. Tracked beside the script, with its
+// fixtures under fixtures/, and run by CI's Documents job on every push (#213, ADR-0027).
 //
-//   node .claude/workflows/overnight_harness.mjs [script] [fixture]
+//   node .claude/workflows/overnight_tests.mjs [script] [fixture]
 //
-// Defaults: overnight.js beside this file, and fixtures/2026-10-20-tickets.json. Exits 0 when every check
-// holds, 1 when one fails (each failure printed), 2 when the script cannot run. The mock collect agent
-// returns the fixture's tickets; implement, review and integrate succeed after a delay that depends on the
-// owner, so the integrator lane is the slow one, as it is on a real night. No agent, gh or git call is made.
+// Defaults: overnight.js beside this file, and fixtures/2026-10-20-tickets.json; a later fixture sits
+// beside that one and is named as the second argument. It is wall-clock timed: a 1 ms tick against
+// sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed), 2 when
+// the script cannot run. The mock collect agent returns the fixture's tickets; implement, review and
+// integrate succeed after a delay that depends on the owner, so the integrator lane is the slow one, as it
+// is on a real night. No agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,9 +34,9 @@ globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
 globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
-  if (kind === 'collect') return { outcome: 'ok', reason: 'harness', tickets, landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-  if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'harness' }
-  if (kind === 'route') return { flow: 'agent', reason: 'harness' }
+  if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets, landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+  if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'companion' }
+  if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
   events.push({ at: tick, kind, id, edge: 'start' })
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
@@ -50,7 +53,7 @@ try {
   result = await new Function('return (async () => {' + src + '\n})()')()
 } catch (e) {
   clearInterval(clock)
-  console.error(`harness: the script did not run: ${e && e.stack ? e.stack : e}`)
+  console.error(`overnight_tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)
 }
 clearInterval(clock)
@@ -96,8 +99,8 @@ for (const l of logs) {
 }
 
 if (failures.length) {
-  console.log(`harness: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
+  console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
   process.exit(1)
 }
-console.log(`harness: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, on ${path.basename(scriptPath)}`)
+console.log(`overnight_tests: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, on ${path.basename(scriptPath)}`)
