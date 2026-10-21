@@ -27,6 +27,12 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
 
+    def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
+        # The build half builds the gateway's image too, and .dockerignore decides its context (#210).
+        self.assertEqual(0, self.classify("build", [".dockerignore"]))
+        self.assertEqual(1, self.classify("terraform", [".dockerignore"]))
+        self.assertEqual(1, self.classify("build", ["docs/.dockerignore"]))
+
     def test_documentation_alone_triggers_neither_half(self):
         for half in ("build", "terraform"):
             with self.subTest(half=half):
@@ -116,6 +122,11 @@ class WorkflowDecisionTests(unittest.TestCase):
     def test_a_change_in_both_halves_runs_both_jobs(self):
         self.assertEqual({"build": "true", "terraform": "true"},
                          self.decide(["src/Example.cs", "infra/main.tf"]))
+
+    def test_a_change_to_the_image_check_runs_both_jobs(self):
+        # Only the build job runs tools/image-check.sh, so no half's paths can vouch for it (#210).
+        self.assertEqual({"build": "true", "terraform": "true"},
+                         self.decide(["tools/image-check.sh"], event="pull_request"))
 
     def test_an_unresolvable_base_runs_both_jobs(self):
         self.assertEqual({"build": "true", "terraform": "true"},
