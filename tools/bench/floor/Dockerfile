@@ -19,6 +19,9 @@ RUN dotnet restore tools/bench/floor/Bench.Floor.csproj -a "$TARGETARCH"
 COPY tools/bench/floor/ tools/bench/floor/
 RUN dotnet publish tools/bench/floor/Bench.Floor.csproj -a "$TARGETARCH" --no-restore -c Release -o /app
 
+# The gateway's permission step, for the same reason: the final stage runs as $APP_UID (#204).
+RUN chmod -R a+rX,go-w /app
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS final
 WORKDIR /app
 

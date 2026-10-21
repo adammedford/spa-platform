@@ -28,6 +28,12 @@ backend.hcl
 *.tfplan
 *.tfplan.json
 
+# The infrastructure outputs document (contracts/infra-outputs.schema.json), written by seed.sh,
+# deploy.sh and rollback.sh after every apply. The bucket, the repositories and the gateway image
+# in it carry the account id, and the apps' client ids are in it too (change requests 1.5 and 1.7
+# item 1, #204).
+infra/envs/poc/outputs.json
+
 # Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
 *.pem
 *.key

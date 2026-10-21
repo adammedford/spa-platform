@@ -1,0 +1,68 @@
+# What no image build may send to the builder (#204). Owner: integrator.
+#
+# Every Dockerfile here builds from the repository root (src/Gateway/Dockerfile,
+# fixtures/MockApi/Dockerfile, tools/bench/floor/Dockerfile), so without this file a workstation's
+# build sent its whole working tree: the local certificate authority's private key, the scratch
+# directory, Terraform's git-ignored variables, and its own bin/ and obj/, which `COPY src/ src/`
+# laid over the image's linux-arm64 restore so that `dotnet publish --no-restore` failed with
+# NETSDK1047 (#58, sitting C, stage C1). A clean CI checkout has none of these, which is why only a
+# workstation showed it.
+#
+# A denylist that follows .gitignore, plus what git keeps out of the tree by other means. When
+# .gitignore gains a secret, this file gains it too; tools/image_build_tests.py names one path for
+# each thing below and holds this file to Docker's matching rules over them, and over every tracked
+# file a Dockerfile copies.
+#
+# Docker matches each line with Go's filepath.Match from the context's root, so a bare `*.pem`
+# matches only at the root and the patterns meant for any depth begin `**/`; a line also matches
+# everything below a directory it names.
+# https://docs.docker.com/build/concepts/context/#dockerignore-files
+
+# git's own directory, and the .git file a linked worktree has instead.
+.git
+
+# Host build output. The image restores and publishes for its own architecture.
+**/bin
+**/obj
+**/artifacts
+**/TestResults
+**/*.trx
+
+# The local certificate authority and its keys (tools/scripts/certs.sh). Never send a private key.
+.certs
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.srl
+
+# Terraform's working directories, state, variables, backends and plans: they carry the account id,
+# role ARNs, generated passwords and client secrets (.gitignore says which carries what).
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+**/backend.hcl
+**/*.tfplan
+**/*.tfplan.json
+
+# The infrastructure outputs document the deployment scripts write: the account id and both apps'
+# client ids (contracts/infra-outputs.schema.json).
+infra/envs/poc/outputs.json
+
+# Local settings and secrets.
+**/.env
+**/.env.*
+**/*.local.env
+**/*.local.json
+
+# Agent and session scratch: the tracker archive, overnight logs, worktrees.
+.scratch
+.claude
+
+# Editors and the OS.
+**/.vs
+**/.idea
+**/*.user
+**/.DS_Store
