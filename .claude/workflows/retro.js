@@ -3,7 +3,7 @@ export const meta = {
   description: 'Read one overnight run\'s record, find what cost time or went wrong, and file evidence-bearing follow-up tickets under one Retro <date> issue',
   whenToUse: 'The morning after an overnight run, launched by scriptPath with the night\'s date or its Overnight <date> issue; dryRun first to see what it would file',
   phases: [
-    { title: 'Gather', detail: 'one agent builds the record index: the report, the lane tickets, the check logs, the integration branch, the overnight script read, the earlier nights; a read of the durable state and the open Retro issue comes first' },
+    { title: 'Gather', detail: 'one agent builds the record index on every launch: the report, the lane tickets, the check logs, the integration branch, the overnight script read, the earlier nights; a read of the durable state and the open Retro issue comes first' },
     { title: 'Lanes', detail: 'one agent per owner lane that ran (beyond maxLaneAgents grouped, smallest together), one for integration and report, one for the workflow\'s own prompts; each returns typed findings or "nothing found" with a reason' },
     { title: 'Rank', detail: 'one agent merges findings by noun, ranks by cost times recurrence, drops what an open issue or origin/main already covers, and writes the coverage block; it writes nothing to GitHub' },
     { title: 'File', detail: 'one agent, the only writer: the Retro <date> parent and up to maxTickets sub-issues in rank order, or, with dryRun, the same as files in the scratch directory' },
@@ -47,12 +47,13 @@ export const meta = {
 // return>}` to its phase file under the scratch directory before the next phase starts. The script has
 // no filesystem, so its first agent, the read, lists those files (tools/retro_record.py state) and the
 // open `Retro <date>` issue; a phase whose file carries the key this run computes for it is not
-// dispatched again. A key is a hash of the phase's inputs: for Gather, the launch arguments and the
-// record's fingerprint the read takes (the log directory's and report directory's files and the
-// overnight script, by content, the Overnight issue's updatedAt and the integration branch's tip), so a
-// changed record re-runs Gather and, through the index, every phase after it; the index for a lane, the
-// findings and knownIssues for Rank, the ranking, maxTickets and dryRun for File. Lane tickets'
-// comments and lane worktrees are not in the fingerprint: they change the key only through the index.
+// dispatched again. Gather is the exception: its inputs are the record itself (the issues and their
+// comments, the logs, the branches, the lane worktrees, the earlier nights), which only a read can
+// compare, so it runs on every launch, and its index carries versions (every file's digest and every
+// issue's updatedAt) so that a changed record changes the index. A key is a hash of the phase's
+// inputs: the index for a lane, and with it the findings and knownIssues for Rank, the ranking,
+// maxTickets and dryRun for File, both of which read the index too. An unchanged record gives an
+// unchanged index, and every phase after Gather is reused.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'maxParallel', 'maxLaneAgents', 'maxTickets', 'dryRun', 'overnightScript', 'knownIssues']
 const badArguments = (a) => {
@@ -156,10 +157,9 @@ const STATE = {
     date: { type: 'string' }, issue: { type: 'integer' }, issueUrl: { type: 'string' },
     openRetro: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, text: { type: 'string' } }, required: ['number', 'title', 'url', 'text'] } },
     phaseFiles: { type: 'array', items: PHASE_FILE },
-    record: { type: 'object', properties: { files: { type: 'string' }, issueUpdatedAt: { type: 'string' }, branch: { type: 'string' } }, required: ['files', 'issueUpdatedAt', 'branch'] },
     error: { type: 'string' },
   },
-  required: ['date', 'issue', 'issueUrl', 'openRetro', 'phaseFiles', 'record', 'error'],
+  required: ['date', 'issue', 'issueUrl', 'openRetro', 'phaseFiles', 'error'],
 }
 // The record index (#77 user story 22): the one input every later phase reads. Its shape, for a
 // sibling workflow that reads the same record:
@@ -175,6 +175,10 @@ const STATE = {
 //   overnightScript {path, sha256, mtime}: `retro_record.py script` on the script read
 //   history        [{date, report, questions}]: earlier nights' report and questions paths, for recurrence
 //   missing        [string]: every record item the night lacks; the parent issue repeats it verbatim
+//   versions       {files, issues: [{number, updatedAt}]}: files is `retro_record.py fingerprint` over every
+//                  file the index names and the log directory; issues the Overnight issue and each lane
+//                  ticket with its updatedAt, which a new comment moves. A changed record changes these,
+//                  so the phases after Gather, keyed on the index, run again.
 const LOG_ENTRY = {
   type: 'object',
   properties: { path: { type: 'string' }, task: { type: 'string' }, stage: { type: 'string' }, round: { type: 'string' }, sha: { type: 'string' }, verdict: { type: 'string' }, verdictLine: { type: 'string' }, lastLines: { type: 'array', items: { type: 'string' } }, lines: { type: 'integer' }, mtime: { type: 'string' }, side: { type: 'boolean' } },
@@ -197,8 +201,9 @@ const INDEX = {
     overnightScript: { type: 'object', properties: { path: { type: 'string' }, sha256: { type: 'string' }, mtime: { type: 'string' } }, required: ['path', 'sha256', 'mtime'] },
     history: { type: 'array', items: { type: 'object', properties: { date: { type: 'string' }, report: { type: 'string' }, questions: { type: 'string' } }, required: ['date', 'report', 'questions'] } },
     missing: { type: 'array', items: { type: 'string' } },
+    versions: { type: 'object', properties: { files: { type: 'string' }, issues: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, updatedAt: { type: 'string' } }, required: ['number', 'updatedAt'] } } }, required: ['files', 'issues'] },
   },
-  required: ['night', 'report', 'questions', 'lanes', 'logs', 'sideLogs', 'notLogs', 'rounds', 'integration', 'worktrees', 'returnJson', 'pending', 'untracked', 'overnightScript', 'history', 'missing'],
+  required: ['night', 'report', 'questions', 'lanes', 'logs', 'sideLogs', 'notLogs', 'rounds', 'integration', 'worktrees', 'returnJson', 'pending', 'untracked', 'overnightScript', 'history', 'missing', 'versions'],
 }
 const TYPES = ['time-sink', 'repeated-failure', 'misleading-instruction', 'reversed-decision', 'late-found-unfailable-assertion', 'guardrail-gap', 'tracker-hygiene']
 const OWNERS = ['ws1-infra', 'ws2-hosting', 'ws3-identity', 'ws4-proxy', 'ws5-fixtures', 'ws6-verification', 'integrator']
@@ -248,11 +253,10 @@ const statePrompt = () => `Read the retro's durable state before anything runs. 
 ${HOUSE(`${NIGHT_LOG}/retro-<date>`)}
 
 1. The night. ${A.date ? `date is ${A.date}.` : 'date is not given.'} ${A.issue ? `issue is #${A.issue}.` : 'issue is not given.'}
-   ${A.issue ? `Read it: \`cd ${REPO} && gh issue view ${A.issue} --json number,title,url,updatedAt\`. Its title must be "Overnight <date>"; the date is that one.${A.date ? ` It must equal ${A.date}; if not, set error to say both.` : ''}` : `Find it: \`cd ${REPO} && gh issue list --state all --search "Overnight ${A.date} in:title" --json number,title,url,updatedAt\`, the issue titled exactly "Overnight ${A.date}". A night of the archive shape has none: issue 0, issueUrl "".`}
+   ${A.issue ? `Read it: \`cd ${REPO} && gh issue view ${A.issue} --json number,title,url\`. Its title must be "Overnight <date>"; the date is that one.${A.date ? ` It must equal ${A.date}; if not, set error to say both.` : ''}` : `Find it: \`cd ${REPO} && gh issue list --state all --search "Overnight ${A.date} in:title" --json number,title,url\`, the issue titled exactly "Overnight ${A.date}". A night of the archive shape has none: issue 0, issueUrl "".`}
    If neither resolves, set error to say which.
 2. The phase files: \`${READER} state ${NIGHT_LOG}/retro-<date>\` with the date from step 1. phaseFiles is its output, verbatim (an empty list when the directory does not exist).
-3. The record's fingerprint, which decides whether a saved Gather is reused: record.files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT}\`; record.issueUpdatedAt is the Overnight issue's updatedAt from step 1 ("" when there is none); record.branch is \`git -C ${REPO} rev-parse --verify -q overnight/<date>\` ("" when it does not resolve). Copy each value exactly.
-4. An open retro of this night: \`cd ${REPO} && gh issue list --state open --search "Retro <date> in:title" --json number,title,url,body\`. openRetro is every issue whose title is exactly "Retro <date>", with text its body followed by the bodies of its sub-issues (\`cd ${REPO} && gh api repos/{owner}/{repo}/issues/<n>/sub_issues\`). An empty list when there is none.
+3. An open retro of this night: \`cd ${REPO} && gh issue list --state open --search "Retro <date> in:title" --json number,title,url,body\`. openRetro is every issue whose title is exactly "Retro <date>", with text its body followed by the bodies of its sub-issues (\`cd ${REPO} && gh api repos/{owner}/{repo}/issues/<n>/sub_issues\`). An empty list when there is none.
 error is "" when nothing stopped you.`
 
 const gatherPrompt = (scratch, date, issue, phaseKey) => `Gather: build the record index of the overnight run of ${date}${issue ? ` (Overnight issue #${issue})` : ''}. You judge nothing; you index.
@@ -273,6 +277,7 @@ Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE
 7. overnightScript: \`${READER} script ${OVERNIGHT}\`.
 8. history: every earlier night's report and questions, resolved by first line as in step 1, and each earlier Overnight <date> issue (\`cd ${REPO} && gh issue list --state all --search "Overnight in:title" --json number,title\`), newest first.
 9. missing: one line for every record item the night lacks (no return JSON, no worktrees left, no transcripts and no tool-call counts, which the record never holds, a pending-writes file absent or present-and-unreplayed, a lane with no check log).
+10. versions, which decide whether the phases after you are reused, so copy each value exactly: files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT} <every other file path the index names>\`; issues is the Overnight issue and every lane ticket that is an issue, each {number, updatedAt} from \`cd ${REPO} && gh issue view <n> --json number,updatedAt\`, in number order ([] when there are none).
 Return the index.`
 
 const lanePrompt = (unit, scratch, date, index, phaseKey) => `Lanes: find what cost time or went wrong in ${unit.title} on the overnight run of ${date}.
@@ -396,8 +401,9 @@ const reuse = (name, inputs, done = () => true) => {
 }
 log(`retro ${DATE}${ISSUE ? ` (#${ISSUE})` : ''}: scratch ${SCRATCH}${DRY ? '; dry run' : ''}`)
 
-const gatherKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT, overnightScript: OVERNIGHT, record: state.record || null })
-const index = reuse('gather', gatherKey) || await run(gatherPrompt(SCRATCH, DATE, ISSUE, gatherKey), { label: 'gather', phase: 'Gather', schema: INDEX })
+// Gather runs on every launch: its inputs are the record, which only a read can compare (see above).
+const gatherKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT, overnightScript: OVERNIGHT })
+const index = await run(gatherPrompt(SCRATCH, DATE, ISSUE, gatherKey), { label: 'gather', phase: 'Gather', schema: INDEX })
 if (!index) return { halted: 'Gather returned nothing; no later phase ran', scratch: SCRATCH }
 const indexKey = key(index)
 
@@ -413,7 +419,8 @@ const added = redFindings(index, laneFindings)
 if (added.length) log(`${added.length} RED log(s) no lane cited, each given a repeated-failure finding`)
 
 phase('Rank')
-const rankKey = key({ lanes: laneResults.map((r) => (r ? key(r) : null)), added, knownIssues: KNOWN })
+// Rank and File read the index too (its history, missing list and base), so their keys carry it.
+const rankKey = key({ index: indexKey, lanes: laneResults.map((r) => (r ? key(r) : null)), added, knownIssues: KNOWN })
 const rank = reuse('rank', rankKey) || await run(rankPrompt(SCRATCH, DATE, rankKey, added), { label: 'rank', phase: 'Rank', schema: RANK })
 if (!rank) return { halted: 'Rank returned nothing; nothing was filed', scratch: SCRATCH, overnightScript: index.overnightScript }
 
@@ -437,7 +444,7 @@ if (open.length) {
   log(`Retro ${DATE} is already open (#${existing.number}): nothing filed; ${result.delta.length} finding(s) it does not carry`)
   return result
 }
-const fileKey = key({ rank: key(rank), maxTickets: MAX_TICKETS, dryRun: DRY })
+const fileKey = key({ index: indexKey, rank: key(rank), maxTickets: MAX_TICKETS, dryRun: DRY })
 const filed = reuse('file', fileKey, (r) => r.dryRun || (!r.refused && !r.unreachable && r.parent && r.parent.number > 0)) || await run(filePrompt(SCRATCH, DATE, ISSUE, index, rank, toFile, fileKey), { label: 'file', phase: 'File', schema: FILED })
 if (!filed) return { ...result, agents: agentsRun, halted: 'File returned nothing; check GitHub for a partial Retro issue before relaunching' }
 result.filed = !DRY && !filed.refused && !filed.unreachable && filed.parent.number > 0

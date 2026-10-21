@@ -5,7 +5,10 @@
 //
 // Runs retro.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed where the
 // script reaches it: through the durable-state read, which serves the open `Retro <date>` listing as
-// gh would and the phase files and the record's fingerprint as tools/retro_record.py reads them, and through the File agent, which
+// gh would and the phase files as tools/retro_record.py reads them; through the Gather agent, which
+// serves the index it is given with the parts a live record moves read live (each lane worktree's
+// status and reflog under wt, and versions: the log directory's digest by the real reader and the
+// issues' updatedAt the case serves); and through the File agent, which
 // reports the issues it was asked to file instead of filing them. No agent, gh or network call is
 // made. The main checkout the script is given is a throwaway git repository with this repository's
 // .gitignore; a stubbed agent writes every OUTPUT FILE and PHASE FILE its prompt names into it, so
@@ -103,11 +106,19 @@ function stub(env, scriptArgs, served) {
       if (label === 'state') {
         const scratch = path.join(env.repo, SCRATCH_REL)
         const files = JSON.parse(execFileSync('python3', ['-I', READER, 'state', scratch], { encoding: 'utf8' }))
-        // The record's fingerprint, by the reader command the prompt names, on this repository's paths.
-        const fp = /retro_record\.py fingerprint ([^`\n]+)`/.exec(prompt)
-        const digest = fp ? JSON.parse(execFileSync('python3', ['-I', READER, 'fingerprint', ...fp[1].trim().split(/\s+/)], { encoding: 'utf8' })).digest : ''
-        out = { date: served.stateDate || DATE, issue: 0, issueUrl: '', openRetro: served.openRetro || [], phaseFiles: files, record: { files: digest, issueUpdatedAt: '', branch: '' }, error: '' }
-      } else if (label === 'gather') out = served.index
+        out = { date: served.stateDate || DATE, issue: 0, issueUrl: '', openRetro: served.openRetro || [], phaseFiles: files, error: '' }
+      } else if (label === 'gather') {
+        // What a live Gather reads afresh: the worktrees under wt, the log directory's files, and each
+        // issue's updatedAt (a new comment moves it), which the case serves since gh is not reached.
+        const wt = globalThis.args.wt
+        const worktrees = wt && fs.existsSync(wt) ? fs.readdirSync(wt).sort().map((d) => path.join(wt, d)).map((p) => ({
+          path: p,
+          status: execFileSync('git', ['-C', p, 'status', '--short'], { encoding: 'utf8' }),
+          reflog: execFileSync('git', ['-C', p, 'reflog', '-20'], { encoding: 'utf8' }),
+        })) : served.index.worktrees
+        const files = JSON.parse(execFileSync('python3', ['-I', READER, 'fingerprint', path.join(env.repo, '.scratch/overnight/log')], { encoding: 'utf8' })).digest
+        out = { ...served.index, worktrees, versions: { files, issues: served.issues || [] } }
+      }
       else if (label.startsWith('lane:')) {
         const k = label.slice(5)
         const found = (served.laneFindings || {})[k] || []
@@ -268,11 +279,13 @@ try {
   env = newRepo()
   const first = await execute(env, { date: DATE }, { index: indexFor(THREE) })
   const second = await execute(env, { date: DATE }, { index: indexFor(THREE) })
-  if (second.labels.join() !== 'state') fail(`resumed with unchanged inputs: dispatched ${second.labels.join(', ')}`)
+  // Gather always reads the record again, since only a read can say it is unchanged; every phase
+  // after it is reused when the fresh index equals the saved one.
+  if (second.labels.join() !== 'state,gather') fail(`resumed with unchanged inputs: dispatched ${second.labels.join(', ')}, expected state and gather`)
   if (JSON.stringify(second.result.tickets) !== JSON.stringify(first.result.tickets)) fail('resumed: the reused File result differs from the first run\'s')
-  if ((second.result.reused || []).length !== 9 - 1) fail(`resumed: reused ${JSON.stringify(second.result.reused)}, expected all eight phase files`)
+  if ((second.result.reused || []).length !== 9 - 2) fail(`resumed: reused ${JSON.stringify(second.result.reused)}, expected the seven phase files after Gather`)
   const third = await execute(env, { date: DATE, knownIssues: [68] }, { index: indexFor(THREE) })
-  if (third.labels.sort().join() !== 'file,rank,state') fail(`knownIssues changed: dispatched ${third.labels.join(', ')}, expected state, rank and file`)
+  if (third.labels.sort().join() !== 'file,gather,rank,state') fail(`knownIssues changed: dispatched ${third.labels.join(', ')}, expected state, gather, rank and file`)
 
   // 13. A RED verdict no lane cites reaches Rank as a repeated-failure finding citing the log's last
   //     lines; a RED log a lane did cite gets no second one.
@@ -321,23 +334,47 @@ try {
   const retry = await execute(env, { date: DATE }, { index: indexFor(THREE) })
   if (!retry.labels.includes('file') || retry.result.filed !== true) fail(`relaunched after an unreachable File: dispatched ${retry.labels.join(', ')}, filed ${retry.result.filed}`)
 
-  // 16. Gather is reused only while the record is unchanged (#77 -> "Durable state": "a phase file
-  //     whose inputs are unchanged"). A RED log arriving between two identical launches re-runs Gather
-  //     and every phase downstream of it; with nothing changed since, the next launch reuses them all.
+  // 16-18. Gather reads the record on every launch, and the phases after it are reused only while
+  //     the index it builds is unchanged (#77 -> "Durable state": "a phase file whose inputs are
+  //     unchanged"; Gather's inputs are the record, which only a read can compare). Each case: two
+  //     identical launches, the second re-running Gather alone; a record input changed; a third
+  //     identical launch re-running every phase, since each after Gather reads the index; a fourth
+  //     re-running Gather alone.
+  const changedRecord = async (what, scriptArgs, served, change, setup = () => {}) => {
+    checks++
+    env = newRepo()
+    setup(env)
+    const s = served()
+    await execute(env, scriptArgs, s)
+    const same = await execute(env, scriptArgs, s)
+    if (same.labels.join() !== 'state,gather') fail(`${what}, before the change: dispatched ${same.labels.join(', ')}, expected state and gather`)
+    change(env, s)
+    const newer = await execute(env, scriptArgs, s)
+    if ([...newer.labels].sort().join() !== [...want].sort().join()) fail(`${what}: dispatched ${newer.labels.join(', ')}; expected ${want.join(', ')}`)
+    if ((newer.result.reused || []).length) fail(`${what}: reused ${JSON.stringify(newer.result.reused)}, expected nothing reused`)
+    const settled = await execute(env, scriptArgs, s)
+    if (settled.labels.join() !== 'state,gather') fail(`${what}, launched again unchanged: dispatched ${settled.labels.join(', ')}, expected state and gather`)
+  }
+  // 16. A RED log arriving in the log directory.
+  await changedRecord('a RED log added between identical launches', { date: DATE }, () => ({ index: indexFor(THREE) }), (e) => {
+    fs.writeFileSync(path.join(e.repo, '.scratch/overnight/log', 'ws1-infra-t0-implement.txt'), `HEAD=${sha('a')}\n  failed: 1\nGATE: RED\n`)
+  })
+  // 17. A tracked file edited in a lane's linked worktree, which `git status` then shows.
+  const wtRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-wt-'))
+  made.push(wtRoot)
+  await changedRecord('a lane worktree file changed between identical launches', { date: DATE, wt: wtRoot }, () => ({ index: indexFor(THREE) }), (e) => {
+    fs.appendFileSync(path.join(wtRoot, 'ws1-infra', 'README.md'), 'edited by the lane\n')
+  }, (e) => e.git('worktree', 'add', '-q', '-b', 'lane', path.join(wtRoot, 'ws1-infra')))
+  // 18. A new comment on a lane ticket, which moves the ticket's updatedAt.
+  await changedRecord('a new comment on a lane ticket between identical launches', { date: DATE }, () => ({ index: indexFor(THREE), issues: [{ number: 301, updatedAt: '2026-10-18T06:00:00Z' }] }), (e, s) => {
+    s.issues = [{ number: 301, updatedAt: '2026-10-18T09:30:00Z' }]
+  })
+  // The live Gather is asked for what the stub serves: each lane ticket's updatedAt and the worktrees' status.
   checks++
-  env = newRepo()
-  await execute(env, { date: DATE }, { index: indexFor(THREE) })
-  const same = await execute(env, { date: DATE }, { index: indexFor(THREE) })
-  if (same.labels.join() !== 'state') fail(`an unchanged record: dispatched ${same.labels.join(', ')}, expected only state`)
-  const logDir = path.join(env.repo, '.scratch/overnight/log')
-  fs.writeFileSync(path.join(logDir, 'ws1-infra-t0-implement.txt'), `HEAD=${sha('a')}\n  failed: 1\nGATE: RED\n`)
-  const newer = await execute(env, { date: DATE }, { index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED')]) })
-  // File is keyed on Rank's result, which the stub serves unchanged, so File alone may be reused.
-  const upstream = want.filter((l) => l !== 'file')
-  if ([...newer.labels].filter((l) => l !== 'file').sort().join() !== [...upstream].sort().join()) fail(`a RED log added between identical launches: dispatched ${newer.labels.join(', ')}; expected ${upstream.join(', ')} (and file unless Rank's result is unchanged)`)
-  if ((newer.result.reused || []).some((n) => n !== 'file')) fail(`a changed record: reused ${JSON.stringify(newer.result.reused)}, expected no phase before File reused`)
-  const settled = await execute(env, { date: DATE }, { index: indexFor(THREE, [logEntry(RED, 'ws1-infra-t0', 'RED')]) })
-  if (settled.labels.join() !== 'state') fail(`the changed record, launched again unchanged: dispatched ${settled.labels.join(', ')}, expected only state`)
+  const gatherCall = (await execute(newRepo(), { date: DATE, wt: '/w' }, { index: indexFor(THREE) })).calls.find((c) => c.label === 'gather')
+  const gp = gatherCall ? gatherCall.prompt : ''
+  if (!/versions/.test(gp) || !/updatedAt/.test(gp) || !/retro_record\.py fingerprint/.test(gp)) fail('the Gather prompt does not ask for versions: the files\' digest and each lane ticket\'s updatedAt')
+  if (!/git -C <path> status --short/.test(gp)) fail('the Gather prompt does not read each lane worktree\'s status')
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
 } catch (e) {

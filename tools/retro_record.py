@@ -16,7 +16,7 @@ without an agent in the loop and its companion, tools/retro_record_tests.py, can
     python3 -I tools/retro_record.py body-check < body.md       a ticket body's shape
     python3 -I tools/retro_record.py state DIR             the retro's phase files under its scratch directory
     python3 -I tools/retro_record.py script FILE           a workflow script's path, sha256 and mtime
-    python3 -I tools/retro_record.py fingerprint PATH...   one digest of the record's files, for reuse
+    python3 -I tools/retro_record.py fingerprint PATH...   one digest of the record's files, for the index
 
 Every command prints JSON on standard output. It exits 0 when it read its input; 1 when the input is
 not what the command reads (a report with no date, a body not in the ticket shape), with the reason
@@ -67,8 +67,8 @@ or `## What to build`), and an `## Acceptance` section with at least one `- [ ]`
 commands and from git and gh; .claude/workflows/retro.js -> INDEX is its schema and its comment the
 shape's documentation. `logs` output is its logs, sideLogs, notLogs and rounds members verbatim.
 
-**A fingerprint** is the digest the retro keys its Gather phase on, so a saved record index is reused
-only while the files it was built from are unchanged (#77 -> "Durable state"). Each PATH is a file or
+**A fingerprint** is the digest of the record's files that Gather writes into the index's versions,
+so that a changed file changes the index and the phases keyed on it run again (#77 -> "Durable state"). Each PATH is a file or
 a directory; a directory contributes its top-level files only, by name and content, so the retro's own
 scratch directory, a subdirectory of the night's log directory, never moves it. A path that does not
 exist contributes no file, as an empty directory does: the retro's first launch creates the log
