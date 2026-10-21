@@ -172,6 +172,10 @@ def default_world() -> dict:
         "tasks": [task],
         "target_group": {"path": "/", "targets": [{"id": task_ip(task), "state": "healthy"}]},
         "tagged": [],
+        # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
+        # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
+        # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
+        "log_events": [],
         "faults": {},
         "next_task": 1,
     }
@@ -236,10 +240,16 @@ def objects_listing(world: dict, prefix: str) -> list:
     return [entry for entry in world["objects"] if entry["Key"].startswith(prefix)]
 
 
+def command_words(words: list[str]) -> list[str]:
+    """The service and operation, without the one positional argument two calls take after them:
+    get-object's file it writes, and logs tail's group name."""
+    return words[:2] if words[:2] in (["s3api", "get-object"], ["logs", "tail"]) else words
+
+
 def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path, stdout):
-    # get-object is the one call with a positional argument after the command: the file it writes.
     outfile = words[2:] if words[:2] == ["s3api", "get-object"] else []
-    words = words[:2] if outfile else words
+    positional = words[2:]
+    words = command_words(words)
     command = " ".join(words)
     query = options.get("query")
     fault = world["faults"].get(command)
@@ -249,6 +259,19 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         return [ACCOUNT, world["caller"]]
     if command == "ecr get-login-password":
         stdout.write(PASSWORD)
+        return None
+    if command == "logs tail":
+        # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html: one
+        # positional group name; the detailed format prints each event as its timestamp, its stream
+        # and its message.
+        if positional != [world["roots"]["platform"]["log_group"]]:
+            raise ServiceError("ResourceNotFoundException", "FilterLogEvents", "The specified log group does not exist.")
+        if query is not None or options.get("format") != "detailed" or options.get("color") != "off":
+            raise Unexpected(f"logs tail {options}")
+        prefix = options.get("log-stream-name-prefix", "")
+        for stream, message in world["log_events"]:
+            if stream.startswith(prefix):
+                stdout.write(f"2026-10-21T02:14:07.123000+00:00 {stream} {message}\n")
         return None
     if command == "ecr describe-images":
         repository = world["repositories"].get(options["repository-name"])
@@ -425,7 +448,7 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
     status = 0
     try:
         words, options = parse_aws(argv)
-        record.update(command=" ".join(words[:2] if words[:2] == ["s3api", "get-object"] else words),
+        record.update(command=" ".join(command_words(words)), positional=words[len(command_words(words)):],
                       options=options)
         if options.get("region") != world["region"]:
             raise Unexpected(f"--region {options.get('region')!r}, not the case's {world['region']}")
