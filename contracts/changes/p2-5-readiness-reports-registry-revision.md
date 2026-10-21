@@ -5,7 +5,7 @@
 - **Tasks:** P2-5; 2.3 (health) and 2.6 (`spactl wait`); 1.7 (`deploy.sh`, open under #58); 6.1
   (the harness) and 6.9 (the deployed gate runs, #63)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** decided, 2026-10-20. See the Decision section below.
 
 ## The gap
 
@@ -148,3 +148,57 @@ P2-3 is not on this path: no refresh happens inside a login.
 
 `contracts/` is the integrator's (`AGENTS.md`, `OWNERSHIP.md`), and `contracts/pipeline.md` froze
 at G1a.
+
+## Decision
+
+Integrator, 2026-10-20, on Adam's answers to the ten questions of
+https://github.com/adammedford/spa-platform/issues/220 (all accepted as recommended). **Option (d)**,
+applied to `contracts/pipeline.md` → Health endpoints in the same commit as this decision, with one
+word changed: the member names a **gateway instance**, not a process. The hermetic proof this request
+designs runs two gateway hosts in one test process, so "process" is the wrong unit, and "task" is
+right only in a cell.
+
+1. **The member is `instance`.** Its value is the ECS task id in a cell (the last path segment of
+   the task ARN, lowercase hex, never the ARN, which carries the account id and the Region and would
+   sit on an unauthenticated path) and, anywhere else, an id unique to that instance. The id is not
+   a credential and names nothing an attacker could reach (P-06), so it may sit on `/readyz`.
+2. **The source is workstream 2's design**, in `Platform.Hosting`: the task metadata endpoint
+   (`${ECS_CONTAINER_METADATA_URI_V4}/task`, `TaskARN`'s last segment), read once at start-up with
+   a short timeout, never blocking readiness or failing the start; when the variable is absent or
+   the read fails, an id generated per host at registration, never the machine name or the pid, with
+   one Information line saying the endpoint was not present. No `Platform:Instance` configuration
+   key: the harness injects a deterministic id through test services.
+3. **Only the 200 body of `/readyz` carries it.** `/healthz` stays bodiless, and the 503 before a
+   snapshot stays bodiless: a task answering 503 is out of ALB rotation and no reader sees it.
+4. **The contract text** is the row and the sentence as applied, with "gateway instance" and
+   "instances"; "a reader takes the members it names and ignores the rest" is the rule that makes
+   the next additive member prose too. `contracts/http-contract.md` reserves the path and does not
+   change.
+5. **`spactl wait --instances <id,id,...>`**: one comma-separated option, optional, no AWS package.
+   A repeated option would silently keep its last value on today's parser, and an in-`spactl`
+   `list-tasks` would need `AWSSDK.ECS`, which is not pinned, and ECS credentials in a command the
+   hermetic tests run with none. With the option, the wait ends with 0 when every listed id has
+   answered 200 at `N` or later; the timeout names each listed id not yet seen at `N` or later with
+   its last answer; an answer from an unlisted id is printed and is neither required nor fatal (a
+   task that started mid-wait read the registry at start); a listed task that stops mid-wait times
+   the wait out naming it. The 2-second poll and 5-minute default stay.
+6. **The caller.** `deploy.sh` does not call `spactl wait` today; its step 5 waits for ECS stability.
+   The wait P2-5 names belongs to onboarding and rotation, which have no script, and a deployment
+   changes the image, not the registry. So workstream 1 adds a `cell-common.sh` convergence helper
+   that lists the running tasks (`list-tasks --desired-status RUNNING`) and runs
+   `spactl wait --instances <ids> --revision N`; `deploy.sh` step 5 (#58) is its first caller, with
+   the revision of the document step 1 read, and `deploy_tests.py` proves a task never sampled fails
+   it; the deployed onboarding and rotation runs (#63) and any later rotate script call the same
+   helper. It lands after #207, which touches the same step. The helper knows nothing of ECS
+   states: a task ECS is stopping has desired status `STOPPED` and leaves the list, and a draining
+   target receives no new requests; if that reading is wrong the helper also drops targets whose
+   health is `draining`.
+7. **Between gates**, as the additive case beside change request 6.4: every reader parses
+   `revision` by name and ignores the rest (`spactl`'s `ReadyRevision`, `HarnessBootTests`,
+   `RegistryRejectionTests`, `ReleaseSwitchTests`, `HealthTests`), and the ALB matches on status
+   alone, so nothing built against the frozen row changes.
+8. **Nothing in `contracts/telemetry.md`.** The `registry.revision` gauge stays owed to MR-6 and
+   P2-7, the swap line's field names are MR-6's, and the log line gains no instance field because
+   the `awslogs` stream is already named per task and `cell` is on every line.
+9. **`GLOSSARY.md` gains Instance**; no ADR: an additive member and a CLI option are cheap to
+   reverse, and the decision follows from ADR-0012 and P-06 rather than committing to anything new.

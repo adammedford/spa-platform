@@ -20,6 +20,12 @@ unreadable under another. In Phase 1 each task has a ring of its own, the "key d
 closes. See ADR-0025.
 _Avoid_: "keys" alone, which also means client secrets and KMS keys.
 
+**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task of
+the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered, and
+a wait for a revision covers every instance a cell runs (change request P2-5).
+_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is
+not the unit when two hosts share one test process.
+
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
 account does. Not "the account", "the real project", "the right project" or "the project made for
