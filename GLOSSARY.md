@@ -258,7 +258,9 @@ to one.
 
 **Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
 common directory. Concurrent sessions share it, so a session's branch work happens in a linked
-worktree of its own (`docs/agents/landing-work.md`, "Take a task").
+worktree of its own (`docs/agents/landing-work.md`, "Take a task"); the one change a session makes
+there is a fast-forward of a clean `main` to what has landed, `git merge --ff-only origin/main`
+(#200).
 
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
