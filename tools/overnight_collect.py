@@ -30,6 +30,11 @@ The rules, as the collect step states them:
   repeating until nothing changes. An issue carrying two of the labels is one ticket, under the
   label this order puts first.
 - openBoxes: the `- [ ]` lines in the body, or -1 when it has no checkbox at all.
+- willEndPartial (#228): why a lane cannot finish the ticket, [] when nothing says so. One entry
+  per other role the Owner line names ({"owner", "reason"}), then one per open box whose text names
+  a sitting, the deployed cell, #63, a pushed branch or a landing ({"box", "names", "reason"}): the
+  shapes #227's confirmed rules forbid, which ended seven of the 2026-10-21 run's tickets partial.
+  The launch plan forecasts from it.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
 Two tickets with one id stop it: exit 1, stdout empty, both issues named on stderr. A read that fails
@@ -67,6 +72,21 @@ PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
+OPEN_BOX_TEXT = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
+
+# What an open box names that a lane cannot do, so the ticket will end partial (#228): each term,
+# the rule of #227's confirmed five (https://github.com/adammedford/spa-platform/issues/227
+# #issuecomment-6323543713) it breaks, and its pattern. Rule 2: a box that needs a sitting is its
+# own ready-for-human ticket; #63 is where a sitting posts its runs. Rule 3: no box depends on a push
+# or a landing. The guards keep a term inside a path or a longer word out: landing-work.md, the
+# pre-push hook, the cell scripts, #63a, issues/63. #248 replaces this table with ticket_shape's.
+PARTIAL_TERMS = (
+    ("a sitting", 2, re.compile(r"\bsittings?\b", re.IGNORECASE)),
+    ("the deployed cell", 2, re.compile(r"\bdeployed cell\b", re.IGNORECASE)),
+    ("#63", 2, re.compile(r"(?<![\w/])#63\b")),
+    ("a pushed branch", 3, re.compile(r"(?<![\w-])pushed\b", re.IGNORECASE)),
+    ("a landing", 3, re.compile(r"(?<![\w-])land(?:ing|ed|s)\b(?![-./])", re.IGNORECASE)),
+)
 
 # The roles of OWNERSHIP.md, each with the ways an Owner line names it. The first role the line
 # names is the owner, so "ws1-infra, run by the human" is workstream 1's and "integrator (anyone may
@@ -196,6 +216,30 @@ def others_land_apart(others: list[str]) -> str:
             "own pull requests")
 
 
+def joined(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+def will_end_partial(body: str, others: list[str]) -> list[dict]:
+    """Why a lane cannot finish the ticket, as #227's rules say: an entry per other owner the Owner
+    line names, then one per open box naming what only a sitting, a push or a landing does."""
+    flags = [{"owner": role,
+              "reason": f"its Owner line also names {role}, and a lane writes one owner's paths "
+                        "(#227 rule 1)"} for role in others]
+    for found in OPEN_BOX_TEXT.finditer(body):
+        text = found.group("text").strip()
+        hits = [(name, rule) for name, rule, pattern in PARTIAL_TERMS if pattern.search(text)]
+        if not hits:
+            continue
+        names = [name for name, _ in hits]
+        rules = sorted({rule for _, rule in hits})
+        cited = (f"#227 rule {rules[0]}" if len(rules) == 1
+                 else f"#227 rules {joined([str(rule) for rule in rules])}")
+        flags.append({"box": text, "names": names,
+                      "reason": f"an open box names {joined(names)}, which no lane does ({cited})"})
+    return flags
+
+
 def open_boxes(body: str) -> int:
     return len(OPEN_BOX.findall(body)) if ANY_BOX.search(body) else -1
 
@@ -298,6 +342,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "owner": owner, "blockedBy": [blocker_id(b) for b in issue.blockers],
             "why": why[issue.number] + others_land_apart(others),
             "openBoxes": open_boxes(issue.body),
+            "willEndPartial": will_end_partial(issue.body, others),
         })
     return {
         "tickets": resolved,
@@ -355,7 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         counts[ticket["status"]] = counts.get(ticket["status"], 0) + 1
     print(f"overnight_collect: {len(answer['tickets'])} tickets "
           f"({', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}), "
-          f"{len(answer['parents'])} parents.",
+          f"{len(answer['parents'])} parents; "
+          f"{sum(1 for t in answer['tickets'] if t['willEndPartial'])} will end partial.",
           file=sys.stderr)
     print(json.dumps(answer, indent=2))
     return 0
