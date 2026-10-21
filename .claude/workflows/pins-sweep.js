@@ -66,6 +66,9 @@ const badArguments = (a) => {
     else {
       for (const [f, v] of Object.entries(a.moves)) {
         if (![...FAMILIES, TERRAFORM].includes(f)) bad.push(`moves: ${f} is not a family`)
+        // The SDK is report-only (#82 -> "Families"): no trial installs one, so a move for it would be
+        // dropped without a word (#269's review).
+        else if (f === 'sdk') bad.push('moves: sdk is report-only; no move of the SDK is trialled')
         const ok = (s) => typeof s === 'string' && /^\d+(\.\d+){1,3}(-[0-9A-Za-z.-]+)?$/.test(s)
         if (!(ok(v) || (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length && Object.values(v).every(ok)))) bad.push(`moves: ${f} needs a version such as "4.0.104.4", or {"<package id>": "<version>"}`)
       }
@@ -464,7 +467,8 @@ for (const id of scoped) {
   const d = { family: id, fam, check: c, trial: trial || null, green: !!trial && trial.outcome === 'green' && trial.verdictLine === 'TRIAL: GREEN', moves, advisories, ties, holds, pins: fam.pins }
   d.reasons = reasonsAgainst(d)
   d.label = d.reasons.length ? 'ready-for-human' : 'ready-for-agent'
-  d.title = id === 'sdk' ? `Pins: The SDK: runtime ${ctx.sdkRow.frameworkRuntime} → ${ctx.sdkRow.securityRelease} security release` : titleOf(d)
+  // The title goes inside a double-quoted gh argument, so it loses what titleOf strips too.
+  d.title = id === 'sdk' ? `Pins: The SDK: runtime ${ctx.sdkRow.frameworkRuntime} → ${ctx.sdkRow.securityRelease} security release`.replace(/[`$"\\]/g, '') : titleOf(d)
   d.move = norm(id === 'sdk' ? `runtime ${ctx.sdkRow.frameworkRuntime} -> ${ctx.sdkRow.securityRelease}` : moveLine(d.moves))
   d.advisory = advisories.length > 0
   d.distance = distanceOf(moves)

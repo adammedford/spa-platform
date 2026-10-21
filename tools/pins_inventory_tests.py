@@ -251,6 +251,22 @@ class Advisories(Case):
         self.assertEqual("advisory", yarp["status"])
         self.assertEqual("2.0.1", yarp["advisories"][0]["fixed"])
 
+    def test_a_prerelease_bound_orders_below_its_release_and_an_unread_range_holds_the_pin(self):
+        # GitHub writes .NET ranges with prerelease bounds; read as unparseable, 2.0.0 inside
+        # ">= 2.0.0-preview.1, < 2.0.1" was reported clean (#269's review).
+        def adv(spec):
+            return [{"ghsa_id": GHSA, "severity": "high", "html_url": f"https://github.com/advisories/{GHSA}",
+                     "vulnerabilities": [{"package": {"ecosystem": "nuget", "name": "Yarp.ReverseProxy"},
+                                          "vulnerable_version_range": spec, "first_patched_version": "2.0.1"}]}]
+        lists = {"Yarp.ReverseProxy": ["2.0.0", "2.3.0"]}
+        r = self.repo()
+        self.assertEqual("current", self.pin(self.inventory(r, lists, advisories=adv("< 2.0.1-rc.1")), "Yarp.ReverseProxy")["status"])
+        self.assertEqual("advisory", self.pin(self.inventory(r, lists, advisories=adv("< 2.3.1-rc.1")), "Yarp.ReverseProxy")["status"])
+        self.assertEqual("current", self.pin(self.inventory(r, lists, advisories=adv("<= 2.3.0-rc.1")), "Yarp.ReverseProxy")["status"])
+        self.assertEqual("advisory", self.pin(self.inventory(r, lists, advisories=adv("unreadable 2.x")), "Yarp.ReverseProxy")["status"])
+        r.write(PROPS, r.read(PROPS).replace('"Yarp.ReverseProxy" Version="2.3.0"', '"Yarp.ReverseProxy" Version="2.0.0"'))
+        self.assertEqual("advisory", self.pin(self.inventory(r, lists, advisories=adv(">= 2.0.0-preview.1, < 2.0.1")), "Yarp.ReverseProxy")["status"])
+
 
 class EvidenceTies(Case):
     def test_a_document_naming_the_pinned_version_is_reported_with_its_line(self):

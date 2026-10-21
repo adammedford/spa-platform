@@ -161,18 +161,33 @@ def distance(pinned: str, newest: str) -> str:
     return "behind-patch" if a[:2] == b[:2] else "behind-minor"
 
 
+def range_key(text: str):
+    """A version as a range bound orders it: a prerelease sorts below its own release, so a range
+    ">= 2.0.0-preview.1, < 2.0.1" holds 2.0.0 and "< 2.0.1-rc.1" does not hold 2.0.1. None when
+    unparseable. Prereleases order among themselves by their parts, which a stable pin never needs."""
+    core, _, pre = text.strip().split("+", 1)[0].partition("-")
+    nums = parse_version(core)
+    if nums is None:
+        return None
+    return (nums, 0, tuple(pre.split("."))) if pre else (nums, 1, ())
+
+
 def in_range(version: str, spec: str) -> bool:
-    """GitHub's vulnerable_version_range: comma-separated clauses such as ">= 2.0.0, < 2.0.1"."""
-    v = parse_version(version)
+    """GitHub's vulnerable_version_range: comma-separated clauses such as ">= 2.0.0, < 2.0.1".
+
+    A clause this cannot read counts as holding the pin: the cost of a false advisory is a Check
+    agent reading it, the cost of a false clean is a warning nobody sees (CODING_STANDARDS.md, "A
+    check fails closed"; #269's review)."""
+    v = range_key(version)
     if v is None:
-        return False
+        return True
     for clause in [c.strip() for c in spec.split(",") if c.strip()]:
         m = re.match(r"^(>=|<=|>|<|=)?\s*(\S+)$", clause)
         if not m:
-            return False
-        op, other = m.group(1) or "=", parse_version(m.group(2))
+            return True
+        op, other = m.group(1) or "=", range_key(m.group(2))
         if other is None:
-            return False
+            return True
         ok = {">=": v >= other, "<=": v <= other, ">": v > other, "<": v < other, "=": v == other}[op]
         if not ok:
             return False
@@ -194,15 +209,20 @@ class Tree:
             raise Bad(f"git ls-tree failed in {repo}")
         self.paths = [p for p in listing.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
         self._set = set(self.paths)
+        self._read = {}
 
     def has(self, path: str) -> bool:
         return path in self._set
 
     def read(self, path: str) -> str:
-        done = subprocess.run(["git", "-C", self.repo, "show", f"{self.commit}:{path}"], capture_output=True)
-        if done.returncode != 0:
-            raise Bad(f"cannot read {path} at {self.commit}")
-        return done.stdout.decode("utf-8", "replace")
+        # Kept per path: mentions() reads every tracked Markdown file once per pin, which was 21 x 209
+        # git processes and 14 seconds at #269's fork; a commit's blob never changes.
+        if path not in self._read:
+            done = subprocess.run(["git", "-C", self.repo, "show", f"{self.commit}:{path}"], capture_output=True)
+            if done.returncode != 0:
+                raise Bad(f"cannot read {path} at {self.commit}")
+            self._read[path] = done.stdout.decode("utf-8", "replace")
+        return self._read[path]
 
 
 def local(tag: str) -> str:

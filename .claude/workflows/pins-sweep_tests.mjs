@@ -269,6 +269,7 @@ try {
       ['terraform as a string', (e) => argsFor(e, { terraform: 'yes' })],
       ['moves not an object', (e) => argsFor(e, { families: ['yarp'], moves: ['yarp'] })],
       ['moves naming a family out of scope', (e) => argsFor(e, { families: ['yarp'], moves: { 'aws-sdk': '4.0.104.4' } })],
+      ['moves naming the report-only SDK', (e) => argsFor(e, { families: ['sdk'], moves: { sdk: '10.0.402' } })],
     ]) {
       const env = newEnv()
       const { result, calls } = await execute(env, a(env))
