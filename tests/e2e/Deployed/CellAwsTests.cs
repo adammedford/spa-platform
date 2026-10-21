@@ -114,6 +114,22 @@ public sealed class CellAwsTests
         Assert.Contains("254", failed.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task The_release_an_app_serves_is_read_from_the_live_registry_in_the_cells_bucket()
+    {
+        RecordedRunner runner = new(_ => """{"revision":3,"apps":[{"appId":"app2","release":"r-2"},{"appId":"app1","release":"r-1"}]}""");
+        CellAws aws = new(Cell, runner);
+
+        Assert.Equal("r-1", await aws.ReleaseOfAsync("app1", TestContext.Current.CancellationToken));
+        (string program, string[] arguments) = Assert.Single(runner.Calls);
+        Assert.Equal("aws", program);
+        Assert.Equal(
+            ["s3", "cp", "s3://spa-platform-poc-111122223333-us-east-1-an/registry/registry.json", "-", "--region", "us-east-1"],
+            arguments);
+        Assert.Contains("app3", (await Assert.ThrowsAsync<InvalidOperationException>(
+            () => aws.ReleaseOfAsync("app3", TestContext.Current.CancellationToken))).Message, StringComparison.Ordinal);
+    }
+
     /// <summary>The AWS CLI's <c>filter-log-events</c> answer, merged across pages as the CLI does by default.</summary>
     private static string Events(params (string Stream, string Message)[] events) => JsonSerializer.Serialize(new
     {

@@ -101,6 +101,24 @@ public sealed partial class CellAws(Cell cell, ICommandRunner runner)
         }
     }
 
+    /// <summary>
+    /// The registry object's key in the bucket: contracts/platform-config.schema.json -> Registry.Key,
+    /// "registry/registry.json in every environment so far".
+    /// </summary>
+    public const string RegistryKey = "registry/registry.json";
+
+    /// <summary>The release the live registry in the cell's bucket gives the app.</summary>
+    public async Task<string> ReleaseOfAsync(string appId, CancellationToken ct)
+    {
+        // https://docs.aws.amazon.com/cli/latest/reference/s3/cp.html: "-" streams the object to stdout.
+        string document = await runner.RunAsync("aws",
+            ["s3", "cp", $"s3://{cell.Bucket}/{RegistryKey}", "-", "--region", cell.Region], ct);
+        System.Text.Json.Nodes.JsonArray apps = System.Text.Json.Nodes.JsonNode.Parse(document)?["apps"]?.AsArray()
+            ?? throw new InvalidOperationException($"s3://{cell.Bucket}/{RegistryKey} has no apps.");
+        return apps.SingleOrDefault(entry => entry?["appId"]?.GetValue<string>() == appId)?["release"]?.GetValue<string>()
+            ?? throw new InvalidOperationException($"the live registry names no release for {appId}.");
+    }
+
     /// <summary>A twelve-digit run, which is how an account id appears in an AWS error.</summary>
     [GeneratedRegex("[0-9]{12}")]
     internal static partial Regex AccountId();

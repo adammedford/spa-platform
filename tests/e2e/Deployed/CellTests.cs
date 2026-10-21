@@ -78,4 +78,14 @@ public sealed class CellTests
         InvalidOperationException refused = Assert.Throws<InvalidOperationException>(() => Cell.Parse(withoutLogGroup));
         Assert.Contains("logGroup", refused.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void A_name_given_as_an_object_is_refused_rather_than_read_as_empty()
+    {
+        System.Text.Json.Nodes.JsonObject document = System.Text.Json.Nodes.JsonNode.Parse(Example)!.AsObject();
+        document["region"] = new System.Text.Json.Nodes.JsonObject();
+
+        InvalidOperationException refused = Assert.Throws<InvalidOperationException>(() => Cell.Parse(document.ToJsonString()));
+        Assert.Contains("region", refused.Message, StringComparison.Ordinal);
+    }
 }

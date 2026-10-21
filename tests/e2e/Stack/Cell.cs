@@ -24,8 +24,8 @@ public sealed class Cell
         Bucket = Field("bucket");
         LogGroup = Field("logGroup");
         ProviderHost = Field("cognitoDomain");
-        _ = Field("clients");
-        _ = Field("testUsers");
+        Section("clients");
+        Section("testUsers");
     }
 
     /// <summary>The cell's Region, which every AWS CLI call names (docs/agents/aws-rules.md: one Region).</summary>
@@ -88,10 +88,17 @@ public sealed class Cell
 
     private static string HostOf(string appId) => FixtureFiles.AppDefinition(appId)["host"]!.GetValue<string>();
 
-    private string Field(string name) => document[name] switch
+    /// <summary>A name the document gives as a string; anything else there (an object, a number) is refused, never read as empty.</summary>
+    private string Field(string name) => document[name] is JsonValue value && value.TryGetValue(out string? text) && text.Length > 0
+        ? text
+        : throw new InvalidOperationException($"the infrastructure outputs document has no {name}.");
+
+    /// <summary>A section the document gives as an object, keyed by app or by user.</summary>
+    private void Section(string name)
     {
-        JsonValue value when value.TryGetValue(out string? text) => text,
-        JsonObject => "",
-        _ => throw new InvalidOperationException($"the infrastructure outputs document has no {name}."),
-    };
+        if (document[name] is not JsonObject)
+        {
+            throw new InvalidOperationException($"the infrastructure outputs document has no {name}.");
+        }
+    }
 }

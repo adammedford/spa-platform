@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Gateway.TestHarness;
 using Microsoft.Playwright;
 
@@ -235,15 +234,8 @@ public sealed class DeployedStack : IBrowserStack
         await Assertions.Expect(profile.Page.Locator("input[name='username']:visible").First).ToBeVisibleAsync();
     }
 
-    /// <summary>The release the live registry gives the app, read from the bucket (registry/registry.json, contracts/platform-config.schema.json -> Registry.Key).</summary>
-    public async Task<string> ReleaseOfAsync(string appId)
-    {
-        // https://docs.aws.amazon.com/cli/latest/reference/s3/cp.html: "-" streams the object to stdout.
-        string document = await new ProcessCommandRunner().RunAsync("aws",
-            ["s3", "cp", $"s3://{Cell.Bucket}/registry/registry.json", "-", "--region", Cell.Region], TestContext.Current.CancellationToken);
-        JsonArray apps = JsonNode.Parse(document)!["apps"]!.AsArray();
-        return apps.Single(entry => entry!["appId"]!.GetValue<string>() == appId)!["release"]!.GetValue<string>();
-    }
+    /// <summary>The release the live registry gives the app, read from the bucket (<see cref="CellAws.ReleaseOfAsync"/>).</summary>
+    public Task<string> ReleaseOfAsync(string appId) => aws.ReleaseOfAsync(appId, TestContext.Current.CancellationToken);
 
     /// <summary>
     /// <c>spactl release publish</c> from a directory of the files. A release prefix is written once
