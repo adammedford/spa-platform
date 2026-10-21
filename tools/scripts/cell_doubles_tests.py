@@ -77,11 +77,16 @@ ROOT = HERE.parent.parent
 #     https://docs.aws.amazon.com/STS/latest/APIReference/API_Credentials.html
 #   ECR: get-login-password prints the registry password, and GetAuthorizationToken answers the
 #     token it is made from, https://docs.aws.amazon.com/cli/latest/reference/ecr/get-login-password.html
-#   Secrets Manager: GetSecretValue answers SecretString or SecretBinary.
+#     and https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_GetAuthorizationToken.html
+#   Secrets Manager: GetSecretValue answers SecretString or SecretBinary,
+#     https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
 #   Systems Manager: GetParameter, GetParameters and GetParametersByPath answer Value, decrypted on
-#     --with-decryption: counted either way, since a script that reads one wants its value.
-#   IAM: CreateAccessKey answers AccessKey's SecretAccessKey.
-#   Cognito: InitiateAuth and AdminInitiateAuth answer AuthenticationResult's tokens.
+#     --with-decryption: counted either way, since a script that reads one wants its value,
+#     https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html
+#   IAM: CreateAccessKey answers AccessKey's SecretAccessKey,
+#     https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateAccessKey.html
+#   Cognito: InitiateAuth and AdminInitiateAuth answer AuthenticationResult's tokens,
+#     https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html
 CREDENTIAL_CALLS = frozenset({
     "sts assume-role", "sts assume-role-with-saml", "sts assume-role-with-web-identity", "sts assume-root",
     "sts get-session-token", "sts get-federation-token",
