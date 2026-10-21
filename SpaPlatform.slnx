@@ -33,6 +33,7 @@
     <Project Path="tests/Spactl.Tests/Spactl.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/bench/floor/Bench.Floor.csproj" />
     <Project Path="tools/spactl/spactl.csproj" />
   </Folder>
 </Solution>
