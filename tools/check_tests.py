@@ -495,11 +495,17 @@ class HookTests(CheckTestCase):
         self.assertEqual(f"pre-push: {HOOK_RAN} pass.", result.last_line(result.stdout))
 
     def test_a_tracked_executable_and_a_tracked_symlink_pass(self):
+        # The link gets the mode a umask 077 gives it on macOS, where a link has a mode of its own:
+        # chmod go+r follows a link, so a check that judged the link's mode could not be cleared.
+        # Linux has no lchmod and keeps every link 777.
         case = Case(self, change="docs/notes.md")
         script = case.work / "run.sh"
         script.write_text("#!/bin/sh\n")
         script.chmod(0o755)
-        (case.work / "link.md").symlink_to("README.md")
+        link = case.work / "link.md"
+        link.symlink_to("README.md")
+        if hasattr(os, "lchmod"):
+            os.lchmod(link, 0o700)
         case.git("add", "run.sh", "link.md", cwd=case.work)
         case.git("commit", "-q", "-m", "Add a script and a link", cwd=case.work)
         result = case.run(hook=True)
@@ -605,6 +611,15 @@ class FullModeTests(CheckTestCase):
                                       "gateway's container cannot read; run chmod go+r on it.")
         self.assertIn("src/App/App.cs", result.stderr.splitlines())
         self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_the_file_modes_fail_rather_than_pass_when_they_cannot_be_read(self):
+        # Without xargs nothing is judged, and an empty list is what a clean tree gives: the check
+        # must say it judged nothing rather than pass (#205's review).
+        case = Case(self, change="docs/notes.md")
+        (case.bin / "xargs").unlink()
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: the file modes were not judged: git ls-files or "
+                                      "xargs failed.")
 
     def test_a_missing_tool_fails_rather_than_skipping(self):
         # The hook skips a check whose tool is missing and passes; a verdict must not hide that.

@@ -300,13 +300,20 @@ fi
 # never sees it, so the hook and the overnight lanes are the only places this can be caught.
 #
 # Read by group and others both, because the fix is `chmod go+r` and a container user is usually
-# neither the owner nor in its group: a 640 file breaks the image as surely as a 600 one. A tracked
-# path missing from the working tree is not a file to judge, so find's complaint about it is
-# dropped; the `./` git puts in front of every path keeps one that begins with `-` a path to find.
-# xargs appends what it reads after the command it runs, and find wants its paths before its
-# expression, so a bash between them puts them first. Never skipped, because no diff shows a mode.
-unreadable="$(git ls-files -z --format='./%(path)' \
-  | xargs -0 -r "$BASH" -c 'find "$@" -prune ! -perm -044 -print 2> /dev/null' file-modes || true)"
+# neither the owner nor in its group: a 640 file breaks the image as surely as a 600 one. Only
+# regular files are judged: a symlink's own mode is not what a container reads (its tracked target
+# is judged in its own right), macOS gives a link the umask's mode, and `chmod go+r` follows the
+# link, so judging one would refuse a push that the named fix cannot clear (#205's review). A
+# tracked path missing from the working tree is not a file to judge, so find's complaint and status
+# about it are dropped inside the bash, and only there: a git or xargs that fails still fails the
+# check under pipefail rather than passing it with nothing judged. xargs appends what it reads after
+# the command it runs, and find wants its paths before its expression, so a bash between them puts
+# them first, each behind a `./` that keeps a path beginning with `-` a path to find. Never skipped,
+# because no diff shows a mode.
+unreadable="$(git ls-files -z \
+  | xargs -0 -r "$BASH" -c 'for p; do shift; set -- "$@" "./$p"; done
+      find "$@" -prune -type f ! -perm -044 -print 2> /dev/null; :' file-modes)" \
+  || fail "the file modes were not judged: git ls-files or xargs failed."
 
 if [ -n "$unreadable" ]; then
   echo "$me: tracked files that group and others cannot read:" >&2
