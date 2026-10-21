@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/scripts/cell_doubles.py, the doubles of the four cell-script companions.
+"""Test companion for tools/scripts/cell_doubles.py, the doubles of the cell-script companions.
 Owner: workstream 1.
 
 #201. The 1.7 doubles handed the teardown role's secret and session token to teardown.sh as bare
@@ -8,7 +8,7 @@ added the two). This companion makes that omission one a run catches: it reads e
 doubles hand out and holds each companion's search list to it.
 
 **Which companions.** Every `*_tests.py` beside this file that loads cell_doubles.py, read from the
-files rather than listed here, so a fifth one is held too. Each loads its own copy of cell_doubles,
+files rather than listed here, so one added later is held too. Each loads its own copy of cell_doubles,
 and Case.run searches every run's output for that copy's SECRETS: that tuple is the companion's
 search list.
 

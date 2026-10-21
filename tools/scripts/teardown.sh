@@ -30,7 +30,7 @@
 #      three resources carry spa-platform-bootstrap and do not answer; they, and the state bucket,
 #      are removed by hand. The cell's two IAM roles (infra/modules/cell/iam.tf) carry the platform
 #      tag and never answer either, because the tagging API cannot list IAM roles: they go with the
-#      platform root's destroy, and nothing here proves them gone by name yet (#118).
+#      platform root's destroy, and the tag query cannot show them gone (#118).
 #
 # --yes is required: nothing here can be undone.
 #
