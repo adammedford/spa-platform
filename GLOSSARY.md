@@ -205,6 +205,12 @@ independence is counted. A sub-agent belongs to the session that dispatched it. 
 the integrator, may be many agent sessions. _Avoid_: bare "session" wherever the gateway's sessions
 (session record, session key) could be meant.
 
+**Claude Code process** — one launch of Claude Code, from a terminal or an editor, with every agent
+session it hosts: the foreground conversation, its subagents and the agents a workflow starts. It
+reads the checkout's settings when it starts, so a change to them reaches only a process launched
+afterwards. _Avoid_: "fresh session" or "new session" for this; a new agent session can run in an
+old process.
+
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
 

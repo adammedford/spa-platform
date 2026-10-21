@@ -25,6 +25,11 @@ checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_che
 before each Bash call, and it refuses the branch-moving git commands in the main checkout and names
 this route (#114). A person's terminal runs no such hook.
 
+The same file sets `CLAUDE_CODE_SHELL=/bin/bash`, which a Claude Code process reads when it starts:
+after a change to `.claude/settings.json` or after trusting a checkout, restart Claude Code (the
+editor, for the extension), and confirm with `ps -p $$ -o comm=` in the Bash tool, which should
+print `/bin/bash` (#183).
+
 ## Build it
 
 Write only inside your owner's paths. `OWNERSHIP.md` lists them, and `.githooks/pre-push` fails a
