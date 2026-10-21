@@ -449,6 +449,8 @@ class WillEndPartial(unittest.TestCase):
             ("- [ ] Ticked at the landing", ["a landing"]),
             ("- [ ] Once #200 has landed", ["a landing"]),
             ("- [ ] Met when the change lands", ["a landing"]),
+            ("- [ ] Ticked at the landing.", ["a landing"]),
+            ("- [ ] Once #200 has landed.", ["a landing"]),
         ):
             with self.subTest(box=box):
                 self.assertEqual([(box[6:], names)], self.boxes(self.flags(7, body(boxes=box))))
@@ -458,6 +460,7 @@ class WillEndPartial(unittest.TestCase):
         a longer token or by its URL, or say a landings table or unpushed, and still be buildable."""
         for box in (
             "- [ ] `docs/agents/landing-work.md` names the step",
+            "- [ ] `landing.md` names the step",
             "- [ ] The pre-push hook refuses it",
             "- [ ] The cell scripts' companions search for it",
             "- [ ] It cites #63a and x#63",

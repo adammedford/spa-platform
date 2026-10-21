@@ -141,8 +141,11 @@ const COLLECT = {
     landed: { type: 'array', items: { type: 'string' } },
     base: { type: 'string' },
     shell: { type: 'string' }, shellCommand: { type: 'string' },
+    // '' when tools/overnight_collect.py's forecast ran (#228), else its stderr's last line, so a forecast that did not
+    // run never reads as one that flagged nothing.
+    forecastFailed: { type: 'string' },
   },
-  required: ['outcome', 'reason', 'tickets', 'landed', 'base', 'shell', 'shellCommand'],
+  required: ['outcome', 'reason', 'tickets', 'landed', 'base', 'shell', 'shellCommand', 'forecastFailed'],
 }
 const ROUTE = {
   type: 'object',
@@ -245,7 +248,7 @@ NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and no
   EOF
 Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>"). An open change request (contracts/changes/*.md with Status open) is not a ticket of its own tonight: name it in "reason" and in the "why" of every ticket it holds up.
 
-FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, the task branches and the roadmap). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry names the other owner its Owner line names, or the open box that names a sitting, the deployed cell, #63, a pushed branch or a landing, with the #227 rule it breaks: the shapes that end a ticket partial. Do not judge a ticket by reading it: the tool's list is the forecast. If the tool exits non-zero, give every ticket [] and say in "reason" that the forecast did not run, quoting its stderr's last line.
+FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, the task branches and the roadmap). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry names the other owner its Owner line names, or the open box that names a sitting, the deployed cell, #63, a pushed branch or a landing, with the #227 rule it breaks: the shapes that end a ticket partial. Do not judge a ticket by reading it: the tool's list is the forecast. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run.
 
 Return outcome "ok", tickets (sorted by n), landed, reason, base: the base's full sha (on "dirty-start", whatever HEAD is), and shell and shellCommand from SETUP 0.`
 
@@ -364,7 +367,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
 1. The report issue, created once at the end of this step with \`cd ${REPO} && gh issue create --title "Overnight ${DATE}" --body-file - <<'EOF' ... EOF\` (no label, no parent; if an open issue titled "Overnight ${DATE}" already exists from a resumed run, edit its body with \`gh issue edit <n> --body-file -\` instead of creating a second). Its body holds no question text: the questions are comments, step 1b below (#104). The body, for Adam first thing in the morning:
    - first line: "Standing answer: ${STANDING_LINE}." Adam confirms pre-accepted answers with one comment on this issue beginning "Confirm" (overrides as "Q<n>: <answer>" lines); until then they are provisional;
    - one line: N integrated, N partial, N skipped, N failed, N need you, N blocked;
-   - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty. This section comes before Integrated, so the forecast reads as made before the lanes ran;
+   - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty and "forecastFailed" is "". When "forecastFailed" is not empty, the section says the forecast did not run and quotes it, never "none". This section comes before Integrated, so the forecast reads as made before the lanes ran;
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Close in the morning: every ticket whose result's "why" is "every acceptance box is ticked; close it in the morning": no lane ran, because collect found no open acceptance box on its issue (#129); cite each as #<issue> so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
@@ -460,9 +463,12 @@ agentT.filter((t) => t.openBoxes === 0).forEach((t) => {
 // The forecast (#228), before any lane starts: a lane ticket whose shape collect says will end partial (another owner
 // on its Owner line, or an open box only a sitting, a push or a landing can tick). A ticket with no list (a collect
 // result from before the field) counts as unflagged.
+// A forecast that did not run says so (CODING_STANDARDS.md, "A check fails closed"): its count would read as zero flagged.
+const forecastFailed = col.forecastFailed || ''
 const willEndPartial = Object.values(lanes).flat().filter((t) => (t.willEndPartial || []).length)
   .map((t) => ({ id: t.id, issue: t.issue, reasons: t.willEndPartial.map((w) => w.reason) }))
-log(`forecast: ${willEndPartial.length} of ${Object.values(lanes).flat().length} lane tickets will end partial`
+log(forecastFailed ? `forecast: did not run: ${forecastFailed}`
+  : `forecast: ${willEndPartial.length} of ${Object.values(lanes).flat().length} lane tickets will end partial`
   + willEndPartial.map((w) => `\n  ${w.id} (#${w.issue}): ${w.reasons.join('; ')}`).join(''))
 
 const work = async (t) => {
@@ -525,7 +531,7 @@ const summary = {
   blocked: tickets.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, issue: t.issue, waitsOn: t.blockedBy, why: t.why })),
   claimed: tickets.filter((t) => t.status === 'claimed').map((t) => t.id),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
-  willEndPartial,
+  willEndPartial, forecastFailed,
   results,
 }
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
@@ -539,7 +545,7 @@ return {
   failed: ids((r) => r.outcome === 'failed'),
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
-  willEndPartial: willEndPartial.map((w) => w.id),
+  willEndPartial: willEndPartial.map((w) => w.id), forecastFailed,
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   reportIssue: rep ? rep.issue : null,

@@ -79,13 +79,13 @@ OPEN_BOX_TEXT = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
 # #issuecomment-6323543713) it breaks, and its pattern. Rule 2: a box that needs a sitting is its
 # own ready-for-human ticket; #63 is where a sitting posts its runs. Rule 3: no box depends on a push
 # or a landing. The guards keep a term inside a path or a longer word out: landing-work.md, the
-# pre-push hook, the cell scripts, #63a, issues/63. #248 replaces this table with ticket_shape's.
+# pre-push hook, the cell scripts, #63a, issues/63; a full stop that ends the sentence is no path. #248 replaces this table with ticket_shape's.
 PARTIAL_TERMS = (
     ("a sitting", 2, re.compile(r"\bsittings?\b", re.IGNORECASE)),
     ("the deployed cell", 2, re.compile(r"\bdeployed cell\b", re.IGNORECASE)),
     ("#63", 2, re.compile(r"(?<![\w/])#63\b")),
     ("a pushed branch", 3, re.compile(r"(?<![\w-])pushed\b", re.IGNORECASE)),
-    ("a landing", 3, re.compile(r"(?<![\w-])land(?:ing|ed|s)\b(?![-./])", re.IGNORECASE)),
+    ("a landing", 3, re.compile(r"(?<![\w-])land(?:ing|ed|s)\b(?![-/]|\.\w)", re.IGNORECASE)),
 )
 
 # The roles of OWNERSHIP.md, each with the ways an Owner line names it. The first role the line
