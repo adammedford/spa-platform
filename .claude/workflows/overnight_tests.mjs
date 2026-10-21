@@ -6,8 +6,8 @@
 //
 // Defaults: overnight.js beside this file, and fixtures/2026-10-20-tickets.json; a later fixture sits
 // beside that one and is named as the second argument. It is wall-clock timed: a 1 ms tick against
-// sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed), 2 when
-// the script cannot run. The mock collect agent returns the fixture's tickets; implement, review and
+// sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed) or when
+// the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent returns the fixture's tickets; implement, review and
 // integrate succeed after a delay that depends on the owner, so the integrator lane is the slow one, as it
 // is on a real night. No agent, gh or git call is made.
 import fs from 'node:fs'
@@ -47,16 +47,40 @@ globalThis.agent = async (prompt, opts) => {
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
+// A scheduler that deadlocks (a lane waiting on a ticket queued behind itself) never settles, and the tick
+// alone would keep the process alive, so the run is bounded. Every mock agent of the 2026-10-20 fixture run
+// one after another sleeps about 7.5 s; 30 s is four times that and some 25 times a normal run (#213).
+const LIMIT_MS = 30000
+const STALLED = Symbol('stalled')
+let limit
 let result
 try {
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
-  result = await new Function('return (async () => {' + src + '\n})()')()
+  const run = new Function('return (async () => {' + src + '\n})()')()
+  result = await Promise.race([run, new Promise((res) => { limit = setTimeout(() => res(STALLED), LIMIT_MS) })])
 } catch (e) {
+  clearTimeout(limit)
   clearInterval(clock)
   console.error(`overnight_tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)
 }
+clearTimeout(limit)
 clearInterval(clock)
+
+if (result === STALLED) {
+  const ended = new Set(events.filter((e) => e.edge === 'end').map((e) => `${e.kind}:${e.id}`))
+  const open = events.filter((e) => e.edge === 'start' && !ended.has(`${e.kind}:${e.id}`)).map((e) => `${e.kind}:${e.id}`)
+  const waiting = {}
+  for (const l of logs) { const m = /^(\S+): nothing ready; waiting on (.+)$/.exec(l.text); if (m) waiting[m[1]] = m[2] }
+  console.log(`overnight_tests: FAILED, the script did not finish within ${LIMIT_MS / 1000} s, on ${path.basename(scriptPath)}:`)
+  console.log(`  - agents started and never ended: ${open.length ? open.join(', ') : 'none'}`)
+  for (const [lane, ids] of Object.entries(waiting)) console.log(`  - ${lane} last logged waiting on ${ids}`)
+  const begun = new Set(events.filter((e) => e.kind === 'implement').map((e) => e.id))
+  const unbegun = fixture.expect.integrated.filter((id) => !begun.has(id)).map((id) => byId[id])
+  console.log(`  - ${begun.size} implements had started; of those the fixture expects to integrate, these had not:`)
+  for (const t of unbegun) console.log(`      ${t.id} (${t.owner}), blocked by ${t.blockedBy.length ? t.blockedBy.join(', ') : 'nothing'}`)
+  process.exit(1)
+}
 
 const failures = []
 const fail = (msg) => failures.push(msg)
