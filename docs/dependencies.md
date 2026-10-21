@@ -30,6 +30,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Chromium for Playwright | Comes with Microsoft.Playwright 1.63.0 | Installed by the test suite | 5.2, 6.5 | Playwright needs macOS 14 or later. See the note below. |
 | GitHub repository with Actions | n/a | n/a | I-5 | The plan's default CI. It needs a read-only AWS role to run Terraform plans, which task 1.0 creates. |
 | A Cognito domain prefix | n/a | n/a | 1.1 | Must be unique in the region |
+| Node.js, to parse the workflow scripts | The node GitHub's `ubuntu-latest` image ships; CI's step prints `node --version` beside its result | n/a for CI. Locally: `brew install node` | #135 | `.github/workflow-parse.py` and its companion. Parses explicit CommonJS `.cjs` copies. Not pinned with `actions/setup-node`, and not run in the macOS bash 3.2 job (ADR-0026) |
 
 **Playwright's browser installer.** The documented step is `pwsh bin/Debug/net10.0/playwright.ps1 install`, which needs PowerShell. That script only calls `Microsoft.Playwright.Program.Main`. If the suite makes the same call, PowerShell stays off this list. Neither route has been tried here.
 

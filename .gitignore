@@ -65,12 +65,19 @@ spikes/g0/real-handler/vendor/ref/
 # transcript rather than a spec.
 .scratch/*/log/
 
-# Agent session scratch: worktrees and anything else a session leaves behind.
-# settings.json is the exception: the permission allowlist is shared, like CI config is.
+# Agent session scratch: worktrees and anything else a session leaves behind. Two exceptions:
+# settings.json, because the permission allowlist is shared, like CI config is; and the workflow
+# scripts under workflows/, because a workflow change is a branch, a review and a landing like any
+# other integrator change (ADR-0026). The mock harness and its fixtures beside them stay ignored
+# until #133's follow-up tracks the harness as the script's test companion.
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
-# rather than the directory itself.
+# rather than the directory itself, and the workflows folder is opened, closed and opened again
+# for the scripts alone.
 .claude/*
 !.claude/settings.json
+!.claude/workflows/
+.claude/workflows/*
+!.claude/workflows/*.js
 
 # Python bytecode. A companion that loads a sibling module by path, as tools/land_tests.py loads
 # tools/companion_runner.py, leaves it beside that module under any python3 but the one macOS ships.

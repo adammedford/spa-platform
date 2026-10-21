@@ -125,6 +125,20 @@ jobs:
           python3 -I .github/shell_parse_tests.py
           python3 -I .github/shell-parse.py
 
+      - name: Every workflow script parses
+        # The Workflow tool wraps a script's body in an async function, so the file begins with
+        # `export const meta` and returns at its top level. The check rewrites the metadata export,
+        # wraps the body in a function it never calls, and parses a .cjs copy to force CommonJS;
+        # an ambiguous .js copy can hide syntax errors behind module detection on Node 22.
+        # A syntax error fails at the push that broke it rather than at the launch that would
+        # have run it (ADR-0026, #135).
+        # The node is the one this image ships, printed here beside the result; the macOS job does
+        # not run this step (docs/dependencies.md).
+        run: |
+          node --version
+          python3 -I .github/workflow_parse_tests.py
+          python3 -I .github/workflow-parse.py
+
       - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
