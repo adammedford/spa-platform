@@ -40,16 +40,21 @@ internal static class AccessTokenStep
                     await next(context);
                     break;
 
-                // Answers, not rejections: each names its code alone and Problems.WriteAsync takes the
-                // status from contracts/http-contract.md -> Errors (#142, Q7). Neither writes a rule
-                // id. The 401 for a live session that yields no token is deliberately not a rejection
-                // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"),
-                // and auth.session turns on whether a cookie was presented (contracts/request-gate.md),
-                // which Unauthenticated does not say, so the step has nothing to write it from.
+                // Each body below names its code alone and Problems.WriteAsync takes the status from
+                // contracts/http-contract.md -> Errors (#142, Q7). None writes a rule id.
+                //
+                // An answer, not a rejection: the 401 for a live session that yields no token
+                // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line").
                 case AccessTokenResult.SessionEnded:
                     await Problems.WriteAsync(context, Problems.SessionEnded);
                     break;
 
+                // An answer for no cookie, a rejection for a dead one; one body for both, as
+                // Problems' summary says of the writers that send a rejection's body directly.
+                // auth.session turns on whether a cookie was presented (contracts/request-gate.md),
+                // which Unauthenticated does not say, so the rule is not this step's to write: the
+                // source noted it before it returned (Identity's AppSessions.KeyOf, through
+                // Rejection.Note), and only the body is left here.
                 case AccessTokenResult.Unauthenticated:
                     await Problems.WriteAsync(context, Problems.Unauthenticated);
                     break;

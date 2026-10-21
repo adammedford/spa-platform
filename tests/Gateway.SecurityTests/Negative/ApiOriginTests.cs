@@ -204,8 +204,8 @@ public sealed class ApiOriginTests(ApiOriginTests.Cell cell) : IClassFixture<Api
         BrowserResponse asset = await browser.GetAsync("/does-not-exist.js", ct: Suite.Ct);
 
         // The two that pass the gate are refused for want of a session, so the sweep covers the shapes it names.
-        Assert.Equal(HttpStatusCode.Unauthorized, admitted.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, asset.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, admitted.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, asset.StatusCode);
         Assert.NotEmpty(browser.Exchanges);
         foreach (BrowserResponse exchange in browser.Exchanges)
         {

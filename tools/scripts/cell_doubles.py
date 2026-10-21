@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""The doubles and the case harness of seed_tests.py, deploy_tests.py, rollback_tests.py and
-teardown_tests.py. Owner: workstream 1. Not a companion itself: each of the four loads it by path.
+"""The doubles and the case harness of the cell scripts' companions (seed_tests.py, deploy_tests.py
+and the others beside it that load it by path). Owner: workstream 1. Not a companion itself. Its own
+companion, cell_doubles_tests.py, finds every companion that loads it, runs each, and holds SECRETS to
+every credential the aws double hands out (#201).
 
 Task 1.7 (#58). The row's done-when, each script running unattended against a gateway build that
 answers /readyz, needs the applied cell and Docker, and is sitting C's (C1 and C2 in
@@ -25,7 +27,9 @@ task definition family and the repositories are the locals in infra/modules/cell
 files (CODING_STANDARDS.md, "A guard reads the thing it guards").
 
 **A universal held on every run:** nothing a script prints names the account id. The repositories'
-URIs, the bucket's name and every ARN carry it, and the doubles print them where the real tools do.
+URIs, the bucket's name and every ARN carry it, and the doubles print them where the real tools do:
+a plan, an apply, a destroy, a refused docker login. Nor does it name the registry password or the
+teardown role's credentials, which no file the script leaves holds either (SECRETS, CREDENTIALS).
 """
 
 from __future__ import annotations
@@ -47,7 +51,6 @@ ACCOUNT = "111122223333"
 REGION = "us-east-2"
 CELL = "poc"
 PASSWORD = "ecr-login-password-0123456789"
-SECRETS = (ACCOUNT, PASSWORD)
 
 # The real tools the scripts use. Everything else is absent.
 TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "basename", "python3", "sleep", "date")
@@ -82,6 +85,13 @@ TEARDOWN_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/{TEARDOWN_ROLE}"
 OPERATOR_ARN = f"arn:aws:sts::{ACCOUNT}:assumed-role/AWSReservedSSO_AdministratorAccess_0123/operator"
 TARGET_GROUP_ARN = f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/spa-{CELL}/0123456789abcdef"
 TEARDOWN_KEY = "ASIATEARDOWNKEY0000"
+TEARDOWN_SECRET = "teardownsecret/abc+def"
+TEARDOWN_TOKEN = "teardownsessiontoken/xyz=="
+# What no output may hold: the account id, the registry password, and the teardown role's three
+# credentials, as verify_release_immutability_tests.py lists them. teardown.sh and cell-common.sh say
+# the credentials go only to one call's environment, never into a file or the output (#191).
+CREDENTIALS = (PASSWORD, TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN)
+SECRETS = (ACCOUNT, *CREDENTIALS)
 
 
 def digest_of(text: str) -> str:
@@ -125,10 +135,21 @@ def platform_outputs(gateway_image: str = SAMPLE_IMAGE, bucket: str = BUCKET) ->
     }
 
 
+def task_ip(task: dict) -> str:
+    """The private IPv4 address of a task's elastic network interface, made from its id. The task
+    runs in awsvpc mode and the target group's target type is ip (infra/modules/cell/ecs.tf,
+    alb.tf), so this is also the id of the task's target."""
+    low = int(task["id"][-4:], 16)
+    return f"10.0.{low >> 8}.{low & 0xff}"
+
+
 def default_world() -> dict:
     """The cell after the first deployment's step 3: the three roots applied, the service on the
-    sample image with / as its health path, an empty bucket and empty repositories."""
+    sample image with / as its health path and its one task's target healthy, an empty bucket and
+    empty repositories."""
     first = f"{FAMILY}:1"
+    task = {"id": "0123456789abcdef0123456789abcdef", "lastStatus": "RUNNING", "taskDefinition": first,
+            "gatewayDigest": SAMPLE_IMAGE.split("@")[1]}
     return {
         "region": REGION,
         "caller": OPERATOR_ARN,
@@ -148,10 +169,13 @@ def default_world() -> dict:
         "task_definitions": {first: {"status": "ACTIVE", "containers": {
             GATEWAY: {"image": SAMPLE_IMAGE, "environment": environment()}}}},
         "service": {"taskDefinition": first, "rolloutState": "COMPLETED", "deployments": 1},
-        "tasks": [{"id": "0123456789abcdef0123456789abcdef", "lastStatus": "RUNNING", "taskDefinition": first,
-                   "gatewayDigest": SAMPLE_IMAGE.split("@")[1]}],
-        "target_group": {"path": "/", "states": ["healthy"]},
+        "tasks": [task],
+        "target_group": {"path": "/", "targets": [{"id": task_ip(task), "state": "healthy"}]},
         "tagged": [],
+        # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
+        # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
+        # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
+        "log_events": [],
         "faults": {},
         "next_task": 1,
     }
@@ -216,10 +240,16 @@ def objects_listing(world: dict, prefix: str) -> list:
     return [entry for entry in world["objects"] if entry["Key"].startswith(prefix)]
 
 
+def command_words(words: list[str]) -> list[str]:
+    """The service and operation, without the one positional argument two calls take after them:
+    get-object's file it writes, and logs tail's group name."""
+    return words[:2] if words[:2] in (["s3api", "get-object"], ["logs", "tail"]) else words
+
+
 def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path, stdout):
-    # get-object is the one call with a positional argument after the command: the file it writes.
     outfile = words[2:] if words[:2] == ["s3api", "get-object"] else []
-    words = words[:2] if outfile else words
+    positional = words[2:]
+    words = command_words(words)
     command = " ".join(words)
     query = options.get("query")
     fault = world["faults"].get(command)
@@ -229,6 +259,19 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         return [ACCOUNT, world["caller"]]
     if command == "ecr get-login-password":
         stdout.write(PASSWORD)
+        return None
+    if command == "logs tail":
+        # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html: one
+        # positional group name; the detailed format prints each event as its timestamp, its stream
+        # and its message.
+        if positional != [world["roots"]["platform"]["log_group"]]:
+            raise ServiceError("ResourceNotFoundException", "FilterLogEvents", "The specified log group does not exist.")
+        if query is not None or options.get("format") != "detailed" or options.get("color") != "off":
+            raise Unexpected(f"logs tail {options}")
+        prefix = options.get("log-stream-name-prefix", "")
+        for stream, message in world["log_events"]:
+            if stream.startswith(prefix):
+                stdout.write(f"2026-10-21T02:14:07.123000+00:00 {stream} {message}\n")
         return None
     if command == "ecr describe-images":
         repository = world["repositories"].get(options["repository-name"])
@@ -284,11 +327,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         return [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}" for task in world["tasks"]]
     if command == "ecs describe-tasks":
         expected = (f"tasks[].[taskArn, lastStatus, taskDefinitionArn, "
-                    f"containers[?name=='{GATEWAY}'] | [0].imageDigest]")
+                    f"containers[?name=='{GATEWAY}'] | [0].imageDigest, "
+                    f"containers[?name=='{GATEWAY}'] | [0].networkInterfaces[0].privateIpv4Address]")
         if query != expected:
             raise Unexpected(f"describe-tasks --query {query!r}")
         known = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task for task in world["tasks"]}
-        return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"]]
+        return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"],
+                 task_ip(known[arn])]
                 for arn in options["tasks"] if arn in known]
     if command == "ecs wait services-stable":
         if world["faults"].get("wait"):
@@ -301,16 +346,22 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             raise Unexpected(f"describe-target-groups --query {query!r}")
         return world["target_group"]["path"]
     if command == "elbv2 describe-target-health":
-        if query != "TargetHealthDescriptions[].TargetHealth.State":
+        if query != "TargetHealthDescriptions[].[Target.Id, TargetHealth.State]":
             raise Unexpected(f"describe-target-health --query {query!r}")
-        return world["target_group"]["states"]
+        return [[target["id"], target["state"]] for target in world["target_group"]["targets"]]
     if command == "s3api list-object-versions":
         prefix = options.get("prefix", "")
         listed = objects_listing(world, prefix)
         versions = [entry for entry in listed if not entry.get("marker")]
         markers = [entry for entry in listed if entry.get("marker")]
         if query == "[Versions, DeleteMarkers][].[Key, VersionId]":
-            return [[entry["Key"], entry["VersionId"]] for entry in versions + markers]
+            listing = [[entry["Key"], entry["VersionId"]] for entry in versions + markers]
+            # "written_after_listing": one version, the first, is written after this listing
+            # answered (a spactl still publishing, say), so the listing leaves it out and a delete of
+            # every listed version leaves the bucket holding it.
+            if world["faults"].get("written_after_listing") and listing:
+                listing = listing[1:]
+            return listing
         if query == "[length(Versions || `[]`), length(DeleteMarkers || `[]`)]":
             return [len(versions), len(markers)]
         raise Unexpected(f"list-object-versions --query {query!r}")
@@ -335,7 +386,7 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
     if command == "sts assume-role":
         if options.get("role-arn") != TEARDOWN_ROLE_ARN:
             raise ServiceError("AccessDenied", "AssumeRole")
-        return [TEARDOWN_KEY, "teardownsecret/abc+def", "teardownsessiontoken/xyz=="]
+        return [TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN]
     if command == "resourcegroupstaggingapi get-resources":
         filters = options.get("tag-filters", [])
         if query != "ResourceTagMappingList[].ResourceARN":
@@ -397,7 +448,7 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
     status = 0
     try:
         words, options = parse_aws(argv)
-        record.update(command=" ".join(words[:2] if words[:2] == ["s3api", "get-object"] else words),
+        record.update(command=" ".join(command_words(words)), positional=words[len(command_words(words)):],
                       options=options)
         if options.get("region") != world["region"]:
             raise Unexpected(f"--region {options.get('region')!r}, not the case's {world['region']}")
@@ -537,7 +588,11 @@ def world_root(case: pathlib.Path) -> pathlib.Path:
 def apply_platform(world: dict, variables: dict):
     """What an apply of the platform root does to the cell when the images change: a new task
     definition revision, the service moved to it and the old one deregistered, a new task, and the
-    health check on the path given. A circuit-breaker fault leaves the service on the old one."""
+    health check on the path given. A circuit-breaker fault leaves the service on the old one.
+
+    The target group then holds what the sitting saw on #58 (2026-10-21, #207) once the service is
+    stable: the new task's target healthy, and the previous task's target draining for the group's
+    deregistration delay. A target that was already draining has finished deregistering and is gone."""
     revisions = [int(name.split(":")[1]) for name in world["task_definitions"]]
     name = f"{FAMILY}:{max(revisions) + 1}"
     containers = {GATEWAY: {"image": variables["gateway_image"], "environment": environment(world["roots"]["platform"]["bucket"])}}
@@ -548,27 +603,72 @@ def apply_platform(world: dict, variables: dict):
     world["task_definitions"][previous]["status"] = "INACTIVE"
     world["tagged"].append({"arn": td_arn(name), "type": "ecs:task-definition", "root": "platform",
                             "tags": {"Platform": "spa-platform", "Cell": CELL}})
-    world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
-    world["target_group"]["path"] = variables.get("health_check_path", "/")
+    # Each fault below leaves one thing the apply should have moved where it was, so that a case can
+    # show the check in cell-common.sh's wait_and_assert (which deploy.sh and rollback.sh run) that
+    # reads it is the one that catches it.
+    if not world["faults"].get("output_image_stale"):
+        world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
+    if not world["faults"].get("health_path_stale"):
+        world["target_group"]["path"] = variables.get("health_check_path", "/")
     if world["faults"].get("circuit_breaker"):
         # The new tasks failed their health checks and ECS put the previous task definition back:
         # stable, on the old one.
         world["service"] = {"taskDefinition": previous, "rolloutState": "COMPLETED", "deployments": 1}
         return
+    # "deployments": the previous deployment not yet drained, so the service lists two.
     world["service"] = {"taskDefinition": name, "rolloutState": world["faults"].get("rollout", "COMPLETED"),
-                        "deployments": 1}
+                        "deployments": world["faults"].get("deployments", 1)}
     world["next_task"] += 1
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
-    world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING", "taskDefinition": name,
+    # "running_definition": a task running the applied digest under another revision, as one started
+    # from a task definition another apply registered with the same image would.
+    world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
+                       "taskDefinition": previous if world["faults"].get("running_definition") else name,
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
+    # "new_target": the new task's target in another state than healthy, or None for not registered.
+    # "extra_targets": more targets in the group, as [id, state] pairs.
+    group = world["target_group"]
+    group["targets"] = [{"id": target["id"], "state": "draining"}
+                        for target in group["targets"] if target["state"] != "draining"]
+    new_state = world["faults"].get("new_target", "healthy")
+    if new_state is not None:
+        group["targets"].append({"id": task_ip(world["tasks"][0]), "state": new_state})
+    group["targets"] += [{"id": ident, "state": state} for ident, state in world["faults"].get("extra_targets", [])]
+
+
+# One resource of each root, as `terraform destroy -auto-approve -no-color` names it: first in the
+# plan it prints, every attribute going to null, ARNs among them, and then on the line that destroys
+# it, by its id. The account id is in each, as it is in the real output, so a destroy whose output
+# skipped the redaction fails the account-id universal (#191). The addresses are sample text, written
+# out by hand: no case reads one, so nothing guards on them.
+# https://developer.hashicorp.com/terraform/cli/commands/destroy (destroy shows its plan, as plan -destroy)
+DESTROYED = {
+    "idp": ("module.idp.aws_cognito_user_pool.this",
+            f"arn:aws:cognito-idp:{REGION}:{ACCOUNT}:userpool/{REGION}_EXAMPLE", f"{REGION}_EXAMPLE"),
+    "apps": ('aws_ssm_parameter.client_secret["app1"]',
+             f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/spa-platform/{CELL}/apps/app1/client-secret",
+             f"/spa-platform/{CELL}/apps/app1/client-secret"),
+    "platform": ("module.cell.aws_s3_bucket.platform", f"arn:aws:s3:::{BUCKET}", BUCKET),
+}
 
 
 def destroy_root(world: dict, root: str, stdout):
+    if world["roots"][root] is None:
+        # A root with no state plans nothing, so names nothing.
+        stdout.write("No changes. No objects need to be destroyed.\n\n")
+        address = None
+    else:
+        address, arn, ident = DESTROYED[root]
+        stdout.write(f"Terraform will perform the following actions:\n\n"
+                     f"  # {address} will be destroyed\n"
+                     f"  - resource {{\n      - arn = \"{arn}\" -> null\n      - id  = \"{ident}\" -> null\n    }}\n\n"
+                     f"Plan: 0 to add, 0 to change, 30 to destroy.\n"
+                     f"{address}: Destroying... [id={ident}]\n")
     if root == "platform":
         if world["objects"]:
             # S3 refuses to delete a bucket that holds any version or delete marker.
             # https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
-            stdout.write("Error: deleting S3 Bucket: BucketNotEmpty\n")
+            stdout.write(f"Error: deleting S3 Bucket ({(world['roots']['platform'] or {}).get('bucket', BUCKET)}): BucketNotEmpty\n")
             world["faults"]["destroy platform"] = True
             return
         for definition in world["task_definitions"].values():
@@ -579,7 +679,10 @@ def destroy_root(world: dict, root: str, stdout):
     world["roots"][root] = None
     world["tagged"] = [entry for entry in world["tagged"]
                        if entry.get("root") != root or entry["type"] == "ecs:task-definition"]
-    stdout.write(f"Destroy complete! Resources: 30 destroyed.\n")
+    if address:
+        stdout.write(f"{address}: Destruction complete after 1s\n\nDestroy complete! Resources: 30 destroyed.\n")
+    else:
+        stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
 def docker_double(argv: list[str], case: pathlib.Path) -> int:
@@ -592,7 +695,15 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         given = sys.stdin.read()
         record["password_on_stdin"] = given == PASSWORD
         record["host"] = argv[-1]
-        sys.stdout.write("Login Succeeded\n")
+        if world["faults"].get("login"):
+            # What Docker prints when the registry refuses the login: the registry's URL, whose host
+            # carries the account id. The daemon's "login attempt to %s failed with status: %d %s",
+            # https://github.com/moby/moby/blob/master/daemon/pkg/registry/auth.go
+            sys.stderr.write(f"Error response from daemon: login attempt to https://{argv[-1]}/v2/ "
+                             "failed with status: 400 Bad Request\n")
+            status = 1
+        else:
+            sys.stdout.write("Login Succeeded\n")
     elif argv[:2] == ["buildx", "build"]:
         tag = argv[argv.index("--tag") + 1]
         record["tag"] = tag
@@ -774,7 +885,16 @@ class Case:
                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
         result = Result(completed)
         for secret in SECRETS:
-            self.test.assertNotIn(secret, result.output, "the script printed the account id or a password")
+            self.test.assertNotIn(secret, result.output, "the script printed the account id, a password or a credential")
+        # Nor into a file the script leaves in the repository or the home directory. The account id
+        # is not searched for here: outputs.json carries the bucket's name, which holds it.
+        for tree in (self.repo, self.home):
+            for path in tree.rglob("*"):
+                if path.is_file():
+                    content = path.read_bytes()
+                    for secret in CREDENTIALS:
+                        self.test.assertNotIn(secret.encode(), content,
+                                              f"the script wrote a password or a credential to {path.relative_to(self.dir)}")
         return result
 
     def calls(self, tool: str | None = None) -> list[dict]:

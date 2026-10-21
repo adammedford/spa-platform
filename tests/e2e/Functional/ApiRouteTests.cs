@@ -29,7 +29,7 @@ public sealed class ApiRouteTests
             candidate => candidate.EndsWith("/read", StringComparison.Ordinal) && candidate.Contains(api, StringComparison.Ordinal));
         string? audience = oauth["resource"]?.GetValue<string>();
 
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         await profile.SignInAsync(stack.App(appId));
 
@@ -47,7 +47,7 @@ public sealed class ApiRouteTests
         }
 
         // The listener admits this client, so the 403 is for want of the admin scope no app asks for.
-        Assert.Equal(403, admin.Status);
+        Assert.Equal(403, admin.Status); // Not an Errors row: the mock API's own answer, passed back.
         using (JsonDocument body = JsonDocument.Parse(admin.Body))
         {
             Assert.Equal("insufficient_scope", body.RootElement.GetProperty("error").GetString());

@@ -5,11 +5,11 @@ using Microsoft.Playwright;
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
-/// One browser profile on a <see cref="LocalStack"/>: a Playwright context (its own cookie jar and
+/// One browser profile on a stack (<see cref="IBrowserStack"/>): a Playwright context (its own cookie jar and
 /// storage) and a page in it. What a test does here is what a user, an SPA's script or a hostile page
 /// does in a real browser; nothing sets a header the browser would compute itself.
 /// </summary>
-public sealed class Profile(LocalStack stack, IBrowserContext context, IPage page) : IAsyncDisposable
+public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage page) : IAsyncDisposable
 {
     /// <summary>The fixture shell marks itself signed in once <c>/bff/session</c> has answered 200 (fixtures/spa).</summary>
     public const string SignedInState = "signed in";
@@ -26,6 +26,7 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     public async Task SignInAsync(HarnessApp app)
     {
         await Page.GotoAsync(app.Url("/bff/login").ToString());
+        await Stack.CompleteLoginAsync(this, app);
         await WaitSignedInAsync(app);
     }
 
@@ -47,28 +48,13 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     }
 
     /// <summary>
-    /// Starts a login to the app and stops it at the callback: the provider approves and redirects the
-    /// browser to <c>/signin-oidc</c> with a code and state, and the load balancer holds that one
-    /// request instead of passing it on. The browser keeps the login-state cookies the gateway set; the
-    /// code is unredeemed. Returns the callback URL.
+    /// Starts a login to the app (a navigation to <c>/bff/login</c>, unless <paramref name="start"/> says
+    /// otherwise) and stops it at the callback (<see cref="IBrowserStack.StopAtCallbackAsync"/>): the
+    /// browser keeps the login-state cookies the gateway set, and the code is unredeemed. Returns the
+    /// callback URL.
     /// </summary>
-    public async Task<Uri> StopAtCallbackAsync(HarnessApp app)
-    {
-        string callback = app.Url("/signin-oidc").ToString();
-        int before = Stack.LoadBalancer.Held.Count;
-        Stack.LoadBalancer.Hold(url => url.ToString().StartsWith(callback, StringComparison.Ordinal));
-        try
-        {
-            await Page.GotoAsync(app.Url("/bff/login").ToString());
-        }
-        finally
-        {
-            Stack.LoadBalancer.Release();
-        }
-
-        return Stack.LoadBalancer.Held.Skip(before).SingleOrDefault()
-            ?? throw new InvalidOperationException($"the login to {app} never reached its callback; the page is at {Page.Url}.");
-    }
+    public Task<Uri> StopAtCallbackAsync(HarnessApp app, Func<Task>? start = null) =>
+        Stack.StopAtCallbackAsync(this, app, start ?? (() => Page.GotoAsync(app.Url("/bff/login").ToString())));
 
     /// <summary>
     /// <c>fetch()</c> from the current page, as an SPA's script makes it, and what the script can read
@@ -125,19 +111,12 @@ public sealed class Profile(LocalStack stack, IBrowserContext context, IPage pag
     public async Task<bool> HoldsAsync(HarnessApp app, string name) =>
         (await CookiesOfAsync(app)).Any(cookie => cookie.Name == name);
 
-    /// <summary>
-    /// Opens a page some other party controls at <paramref name="url"/> (<see cref="TlsLoadBalancer.ServeForeign"/>):
-    /// a hostile sibling under the app domain, or <see cref="LocalStack.ForeignSite"/>. Every request the
-    /// page makes leaves the browser as usual.
-    /// </summary>
-    public async Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>")
-    {
-        Stack.LoadBalancer.ServeForeign(url, html);
-        await Page.GotoAsync(url.ToString());
-    }
+    /// <summary>Opens a page some other party controls at <paramref name="url"/> (<see cref="IBrowserStack.OpenForeignPageAsync"/>).</summary>
+    public Task OpenForeignPageAsync(Uri url, string html = "<!doctype html><title>foreign</title>") =>
+        Stack.OpenForeignPageAsync(this, url, html);
 
     /// <summary>The stack this profile is on.</summary>
-    public LocalStack Stack { get; } = stack;
+    public IBrowserStack Stack { get; } = stack;
 
     public ValueTask DisposeAsync() => Context.DisposeAsync();
 }

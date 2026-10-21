@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Browser suite (task 6.5): every row docs/plan/04-tests.md marks D, in headless Chromium. Owner: workstream 6.
-       Locally it drives the hermetic cell from Gateway.TestHarness, reached through a stand-in for the load balancer. -->
+       Locally it drives the hermetic cell from Gateway.TestHarness, reached through a stand-in for the load balancer.
+       With SPA_E2E_STACK=deployed the functional rows of G3 (#209), the negative subset of G4 (#211) and F-07 at G5 (#212) drive the deployed cell through the tunnel instead (Stack/DeployedStack.cs). -->
 
   <ItemGroup>
     <!-- The stand-in load balancer terminates TLS on Kestrel. -->

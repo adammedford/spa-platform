@@ -87,8 +87,8 @@ public sealed class AppSessionsTests
     [Fact]
     public async Task EndAsync_removes_the_session_when_its_action_throws()
     {
-        // ADR-0017 decision 4: revoke, then remove whatever the provider said. Mutation: move the remove
-        // out of the finally, after the action; the throwing action leaves the session, and this fails.
+        // "Revoke, then remove whatever the provider said" (#141, Q6). Mutation: move the remove out of
+        // the finally, after the action; the throwing action leaves the session, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1), Ct);
@@ -105,6 +105,25 @@ public sealed class AppSessionsTests
         Assert.Equal(Record(App1), given);
         Assert.Null(await store.GetAsync(key, Ct));
         Assert.Null(lease.Owned);
+    }
+
+    [Fact]
+    public async Task EndAsync_runs_its_action_while_the_store_still_holds_the_session()
+    {
+        // "Revoke, then remove" (#141, Q6): the action runs first and the removal after it, so logout's
+        // revocation reads a session that is still there. The throwing-action test above cannot see the
+        // order, since the removal runs either way. Mutation: swap the order in EndAsync (remove, then
+        // run the action); the action finds the store empty, and this fails.
+        InMemorySessionStore store = new();
+        AppSessions sessions = new(store);
+        string key = await store.CreateAsync(Record(App1), Ct);
+        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+        SessionRecord? storedWhenTheActionRan = null;
+
+        await lease.EndAsync(async _ => storedWhenTheActionRan = await store.GetAsync(key, Ct));
+
+        Assert.Equal(Record(App1), storedWhenTheActionRan);
+        Assert.Null(await store.GetAsync(key, Ct));
     }
 
     [Fact]

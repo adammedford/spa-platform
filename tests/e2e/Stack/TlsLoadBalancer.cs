@@ -51,6 +51,9 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// <summary>Where the listener is, e.g. <c>127.0.0.1:54321</c>, for Chromium's resolver rule.</summary>
     public string Endpoint { get; private set; } = "";
 
+    /// <summary>The listener's certificate key, as Chromium's <c>--ignore-certificate-errors-spki-list</c> names one (<see cref="ForeignSites.Spki"/>).</summary>
+    public string Spki { get; private set; } = "";
+
     /// <summary>Every exchange carried so far, oldest first.</summary>
     public IReadOnlyList<Exchange> Exchanges
     {
@@ -78,6 +81,7 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
 
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         balancer.Endpoint = new Uri(address).Authority;
+        balancer.Spki = ForeignSites.SpkiOf(certificate);
         return balancer;
     }
 
@@ -207,31 +211,25 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// </summary>
     public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
     {
-        raw ??= new HttpClient(new SocketsHttpHandler
-        {
-            UseProxy = false,
-            UseCookies = false,
-            AllowAutoRedirect = false,
-            ConnectCallback = async (_, ct) =>
-            {
-                string[] parts = Endpoint.Split(':');
-                System.Net.Sockets.Socket socket = new(System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
-                await socket.ConnectAsync(IPAddress.Parse(parts[0]), int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), ct);
-                return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
-            },
-            // The certificate is this run's own, trusted by no store: the same trust the browser context gives it.
-            SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true },
-        });
+        // The certificate is this run's own, trusted by no store: the same trust the browser context gives it.
+        raw ??= RawClient.To(Endpoint, TrustAnyCertificate);
         return raw.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
+    /// <summary>Accepts any certificate: for this run's own, which no store trusts.</summary>
+    public static bool TrustAnyCertificate(object sender, X509Certificate? certificate, X509Chain? chain, System.Net.Security.SslPolicyErrors errors) => true;
+
     /// <summary>A certificate for <c>*.{domain}</c>, made for this run and trusted by no one but the test context.</summary>
-    private static X509Certificate2 SelfSigned(string domain)
+    internal static X509Certificate2 SelfSigned(string domain, params string[] alsoFor)
     {
         using RSA key = RSA.Create(2048);
         CertificateRequest request = new($"CN=*.{domain}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         SubjectAlternativeNameBuilder names = new();
         names.AddDnsName("*." + domain);
+        foreach (string name in alsoFor)
+        {
+            names.AddDnsName(name);
+        }
         request.CertificateExtensions.Add(names.Build());
         using X509Certificate2 ephemeral = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
 
@@ -267,5 +265,6 @@ public sealed record Exchange(
 
     public string BodyText => System.Text.Encoding.UTF8.GetString(Body);
 
-    public override string ToString() => $"{Method} {Url} -> {Status}";
+    /// <summary>What an assertion over the exchanges prints for this one: the URL with no query (<see cref="Redacted"/>).</summary>
+    public override string ToString() => $"{Method} {Redacted.Url(Url)} -> {Status}";
 }

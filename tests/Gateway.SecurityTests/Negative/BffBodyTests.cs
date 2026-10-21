@@ -41,7 +41,7 @@ public sealed partial class BffBodyTests
         Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
         await SignedIn.OnPageOfAsync(browser, harness.App("app1"));
         BrowserResponse ended = await SignedIn.SessionAsync(browser);
-        Assert.Equal(HttpStatusCode.Unauthorized, ended.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, ended.StatusCode);
 
         BrowserResponse[] bff = [.. browser.Exchanges.Where(exchange => exchange.Url.AbsolutePath.StartsWith("/bff/", StringComparison.Ordinal))];
 
@@ -50,7 +50,7 @@ public sealed partial class BffBodyTests
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/login");
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/logout");
         Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/session" && exchange.StatusCode == HttpStatusCode.OK);
-        Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/session" && exchange.StatusCode == HttpStatusCode.Unauthorized);
+        Assert.Contains(bff, exchange => exchange.Url.AbsolutePath == "/bff/session" && (int)exchange.StatusCode == Contract.Error("unauthenticated").Status);
         Assert.Contains(SignedIn.Property(session, "csrfToken")!, session.Body, StringComparison.Ordinal);
 
         string[] tokens = [.. harness.Idp.IssuedAccessTokens, .. harness.Idp.IssuedRefreshTokens];

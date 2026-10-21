@@ -10,7 +10,8 @@ namespace Gateway.E2ETests.Negative;
 /// N-06 in a real browser (docs/plan/04-tests.md, tier D): an unsafe API call from the app's own page
 /// with no CSRF token, another user's token, another app's token and cookie pair, and a token from
 /// before the last logout. 403 <c>csrf_failed</c> each time, and the call with the page's own token
-/// succeeds, so the refusals are about the token.
+/// succeeds, so the refusals are about the token. On the stack <see cref="StackSwitch"/> chooses; the
+/// other user is the second test user both providers know (fixtures/cognito/pool.json).
 /// </summary>
 public sealed class CsrfTests
 {
@@ -20,27 +21,24 @@ public sealed class CsrfTests
     [Fact]
     public async Task N06_an_unsafe_call_without_the_sessions_own_token_is_403_csrf_failed_each_way()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile alice = await stack.OpenAsync();
-        await using Profile mallory = await stack.OpenAsync();
+        await using Profile bob = await stack.OpenAsync();
         HarnessApp app1 = stack.App("app1");
         HarnessApp app2 = stack.App("app2");
         string csrfCookie = Contract.PlatformCookie("-csrf");
 
-        // Another user's token: mallory's own session on app 1.
-        stack.Harness.Idp.DefaultSubject = "mallory";
-        await mallory.SignInAsync(app1);
-        string mallorysToken = await TokenAsync(mallory);
+        // Another user's token: bob's own session on app 1.
+        stack.SignInAs(DeployedStack.OtherUser);
+        await bob.SignInAsync(app1);
+        string bobsToken = await TokenAsync(bob);
 
         // A token from before the last logout: alice signs in, keeps her token, logs out through the
         // shell, and signs in again.
-        stack.Harness.Idp.DefaultSubject = "alice";
+        stack.SignInAs(DeployedStack.User);
         await alice.SignInAsync(app1);
         string beforeLogout = await TokenAsync(alice);
-        stack.LoadBalancer.Hold(url => url.AbsolutePath == "/signin-oidc");
-        await alice.Page.ClickAsync("form[action='/bff/logout'] button");
-        await Assertions.Expect(alice.Page).ToHaveTitleAsync(TlsLoadBalancer.HeldTitle);
-        stack.LoadBalancer.Release();
+        await stack.StopAtProviderLoginAsync(alice, () => alice.Page.ClickAsync("form[action='/bff/logout'] button"));
         await alice.SignInAsync(app1);
 
         // Another app's token and cookie pair: alice's own on app 2.
@@ -54,7 +52,7 @@ public sealed class CsrfTests
         string own = await TokenAsync(alice);
 
         await RefusedAsync(stack, alice, null);
-        await RefusedAsync(stack, alice, mallorysToken);
+        await RefusedAsync(stack, alice, bobsToken);
         await RefusedAsync(stack, alice, beforeLogout);
 
         // App 2's antiforgery cookie in app 1's place, with app 2's token.
@@ -67,9 +65,9 @@ public sealed class CsrfTests
         Assert.Equal(200, accepted.Status);
     }
 
-    private static async Task RefusedAsync(LocalStack stack, Profile profile, string? token)
+    private static async Task RefusedAsync(IBrowserStack stack, Profile profile, string? token)
     {
-        int mark = stack.RequestLines.Count;
+        LogMark mark = stack.MarkLog();
         FetchResult refused = await profile.FetchAsync("/api/orders/echo", "POST", token is null ? null : Headers(token), "{}");
         Assert.Equal(Contract.Error("csrf_failed").Status, refused.Status);
         Assert.Equal(Contract.Error("csrf_failed").Code, refused.Code);

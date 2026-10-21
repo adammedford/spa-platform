@@ -1,0 +1,698 @@
+{
+  "facts": {
+    "commit": "ffbee6750fc9cb5a22b0da865006239494779636",
+    "uncommitted_changes_not_measured": false,
+    "images": {
+      "floor": {
+        "tag": "spa-bench/floor:ffbee6750fc9",
+        "id": "sha256:dc71fa8edee5d3c116cb0229377897f0ff36c4885df8191f7d06a5847f8ec1fa"
+      },
+      "gateway": {
+        "tag": "spa-bench/gateway:ffbee6750fc9",
+        "id": "sha256:0490131862a3a4a02606c474daebd8fb22c273a0f80d5d7016096ef5191ca1b1"
+      },
+      "stand-in": {
+        "tag": "motoserver/moto:5.2.4",
+        "id": "sha256:120b1589c6df7e35d2092935f6ff724486bb2c4189d0e36ce795baba1400ffd2"
+      }
+    },
+    "docker": {
+      "server": "29.9.1",
+      "os": "Docker Desktop",
+      "arch": "aarch64",
+      "cpus": 12,
+      "memory": 8319238144
+    },
+    "host": {
+      "machine": "arm64",
+      "system": "macOS-27.0-arm64-arm-64bit",
+      "python": "3.9.6"
+    },
+    "runs": 10,
+    "cpus": "0.25",
+    "memory": "1g",
+    "interval_ms": 10
+  },
+  "runs": [
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 0,
+      "started_ns": 1792559418459278884,
+      "start_cli_ms": 52.05095800000015,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559418686967967,
+          "after_ns": 1792559418676563009,
+          "attempts": 23,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559418881491426,
+          "after_ns": 1792559418686973092,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559418773219426,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 0,
+      "started_ns": 1792559419455081134,
+      "start_cli_ms": 47.10216699999981,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559420572929843,
+          "after_ns": 1792559420562072135,
+          "attempts": 93,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559421274433093,
+          "after_ns": 1792559420572949010,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559422176692511,
+          "after_ns": 1792559422075638927,
+          "attempts": 6,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559422379056719,
+          "after_ns": 1792559422176699094,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559420576867176,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 1,
+      "started_ns": 1792559423310192553,
+      "start_cli_ms": 62.80337500000055,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559423610971845,
+          "after_ns": 1792559423600276386,
+          "attempts": 29,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559423813019178,
+          "after_ns": 1792559423610976636,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559423703846678,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 1,
+      "started_ns": 1792559424709975720,
+      "start_cli_ms": 130.82574999999963,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559425418155429,
+          "after_ns": 1792559425405719095,
+          "attempts": 64,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559426009056304,
+          "after_ns": 1792559425418161220,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559427014426180,
+          "after_ns": 1792559426923461971,
+          "attempts": 12,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559427406673471,
+          "after_ns": 1792559427014430055,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559425502021429,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 2,
+      "started_ns": 1792559428096359597,
+      "start_cli_ms": 51.19591600000106,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559428338760930,
+          "after_ns": 1792559428328093305,
+          "attempts": 23,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559428541276847,
+          "after_ns": 1792559428338767680,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559428341889513,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 2,
+      "started_ns": 1792559429237898083,
+      "start_cli_ms": 60.98191599999936,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559429984442000,
+          "after_ns": 1792559429973781958,
+          "attempts": 64,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559430393450042,
+          "after_ns": 1792559429984450500,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559431290699084,
+          "after_ns": 1792559431193092501,
+          "attempts": 8,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559431499301542,
+          "after_ns": 1792559431290702667,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559429984247833,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 3,
+      "started_ns": 1792559432218290293,
+      "start_cli_ms": 52.24554200000142,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559432528911126,
+          "after_ns": 1792559432517700793,
+          "attempts": 28,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559432651330585,
+          "after_ns": 1792559432528916668,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559432531803126,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 3,
+      "started_ns": 1792559433327178668,
+      "start_cli_ms": 54.837084000002534,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559434099113752,
+          "after_ns": 1792559434088343335,
+          "attempts": 66,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559434511919585,
+          "after_ns": 1792559434099124752,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559435417407461,
+          "after_ns": 1792559435335067544,
+          "attempts": 10,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559435813468253,
+          "after_ns": 1792559435417412711,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559434101056252,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 4,
+      "started_ns": 1792559436529707128,
+      "start_cli_ms": 57.62458299999906,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559436818433503,
+          "after_ns": 1792559436807498503,
+          "attempts": 27,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559436939568003,
+          "after_ns": 1792559436818440420,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559436814975378,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 4,
+      "started_ns": 1792559437611783629,
+      "start_cli_ms": 62.905332999999786,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559438272315921,
+          "after_ns": 1792559438261644171,
+          "attempts": 55,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559438673777754,
+          "after_ns": 1792559438272324754,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559439484935713,
+          "after_ns": 1792559439408601004,
+          "attempts": 7,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559439876423005,
+          "after_ns": 1792559439484940421,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559438272677046,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 5,
+      "started_ns": 1792559440599872505,
+      "start_cli_ms": 59.24633300000082,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559440929262172,
+          "after_ns": 1792559440918178880,
+          "attempts": 31,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559441122078880,
+          "after_ns": 1792559440929269672,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559440922252255,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 5,
+      "started_ns": 1792559441785308881,
+      "start_cli_ms": 53.96262499999693,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559442528347173,
+          "after_ns": 1792559442517716006,
+          "attempts": 66,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559443032457548,
+          "after_ns": 1792559442528355714,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559443831791715,
+          "after_ns": 1792559443766092882,
+          "attempts": 8,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559444039014882,
+          "after_ns": 1792559443831796507,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559442521833714,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 6,
+      "started_ns": 1792559444749297924,
+      "start_cli_ms": 55.66116600000015,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559444967331257,
+          "after_ns": 1792559444953904507,
+          "attempts": 22,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559445159218257,
+          "after_ns": 1792559444967338507,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559445045678340,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 6,
+      "started_ns": 1792559445846828591,
+      "start_cli_ms": 63.37970799999937,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559446602296008,
+          "after_ns": 1792559446591274800,
+          "attempts": 65,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559446994035883,
+          "after_ns": 1792559446602319383,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559447914431675,
+          "after_ns": 1792559447833040717,
+          "attempts": 11,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559448201847425,
+          "after_ns": 1792559447914434467,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559446602025175,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 7,
+      "started_ns": 1792559448944106384,
+      "start_cli_ms": 55.75841699999984,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559449197265842,
+          "after_ns": 1792559449186740884,
+          "attempts": 25,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559449389858759,
+          "after_ns": 1792559449197271676,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559449198302426,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 7,
+      "started_ns": 1792559450052958093,
+      "start_cli_ms": 51.12649999999519,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559450754951677,
+          "after_ns": 1792559450743906760,
+          "attempts": 59,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559451160911302,
+          "after_ns": 1792559450754956427,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559451986837344,
+          "after_ns": 1792559451971768635,
+          "attempts": 5,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559452271594761,
+          "after_ns": 1792559451986840427,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559450754089052,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 8,
+      "started_ns": 1792559452954253178,
+      "start_cli_ms": 52.49579099999835,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559453260505053,
+          "after_ns": 1792559453249797219,
+          "attempts": 29,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559453452649136,
+          "after_ns": 1792559453260519136,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559453257534428,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 8,
+      "started_ns": 1792559454128464303,
+      "start_cli_ms": 54.73679099999629,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559454814781928,
+          "after_ns": 1792559454800136262,
+          "attempts": 58,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559455405802804,
+          "after_ns": 1792559454814793262,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559456188645596,
+          "after_ns": 1792559456114203387,
+          "attempts": 5,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559456508179471,
+          "after_ns": 1792559456188649054,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559454804140303,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "floor",
+      "constrained": true,
+      "index": 9,
+      "started_ns": 1792559457183364680,
+      "start_cli_ms": 63.49133399999829,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559457357412513,
+          "after_ns": 1792559457346742596,
+          "attempts": 18,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559457551383471,
+          "after_ns": 1792559457357418513,
+          "attempts": 1,
+          "status": 200
+        },
+        "listening_log": {
+          "at_ns": 1792559457433020055,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    },
+    {
+      "kind": "gateway",
+      "constrained": true,
+      "index": 9,
+      "started_ns": 1792559458231592138,
+      "start_cli_ms": 53.37437500000419,
+      "marks": {
+        "listening": {
+          "at_ns": 1792559458912308930,
+          "after_ns": 1792559458901631805,
+          "attempts": 58,
+          "status": null
+        },
+        "healthz": {
+          "at_ns": 1792559459314755958,
+          "after_ns": 1792559458912315722,
+          "attempts": 1,
+          "status": 200
+        },
+        "readyz": {
+          "at_ns": 1792559460233872667,
+          "after_ns": 1792559460219168542,
+          "attempts": 5,
+          "status": 200
+        },
+        "app_host": {
+          "at_ns": 1792559460720911667,
+          "after_ns": 1792559460233875250,
+          "attempts": 1,
+          "status": 401
+        },
+        "listening_log": {
+          "at_ns": 1792559458911563264,
+          "after_ns": null,
+          "attempts": 0,
+          "status": null
+        }
+      }
+    }
+  ]
+}

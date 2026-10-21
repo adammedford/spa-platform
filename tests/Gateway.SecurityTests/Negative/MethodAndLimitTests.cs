@@ -140,7 +140,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
     /// <summary><c>gateway.requests</c> answered 405 for no app.</summary>
     private long Answered405s() =>
-        Counts.Sum("gateway.requests", ("status", 405), ("app_id", null));
+        Counts.Sum("gateway.requests", ("status", Contract.Error("method_not_allowed").Status), ("app_id", null));
 
     [Theory]
     [InlineData("POST")]

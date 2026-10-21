@@ -158,7 +158,7 @@ public sealed class HarnessBootTests(HarnessBootTests.Cell cell) : IClassFixture
         Assert.Equal("https://orders.spa-poc.test", body.RootElement.GetProperty("audience").GetString());
 
         // reports admits app 2's client only, as in the cell.
-        Assert.Equal(HttpStatusCode.Forbidden, reports.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, reports.StatusCode); // Not an Errors row: the mock API's own answer, asked directly.
         Assert.Contains("client_not_admitted", await reports.Content.ReadAsStringAsync(Ct));
     }
 

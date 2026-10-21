@@ -7,9 +7,10 @@ tools/land_tests.py's.
 **What runs is the script itself.** Each case runs the tracked files' current bytes, whole, in
 place: `/bin/bash <absolute path of the hook or the script>`, with a throwaway repository as the
 working directory. Both start by moving to that repository's top level, so the check files they
-reach from there -- .github/touches.sh, tools/smoke.sh, the Python checks -- are the case's. The
-case links .github/touches.sh and tools/check.sh to the real ones, so the halves are decided by the
-real classifier and the hook reaches the real script; it puts a double at tools/smoke.sh.
+reach from there -- .github/touches.sh, tools/smoke.sh, tools/image-check.sh, the Python checks --
+are the case's. The case links .github/touches.sh and tools/check.sh to the real ones, so the halves
+are decided by the real classifier and the hook reaches the real script; it puts doubles at
+tools/smoke.sh and tools/image-check.sh.
 
 **The interpreter is named**, as in land_tests.py: /bin/bash, so a Mac with Homebrew's bash first
 on PATH still tests the 3.2 macOS ships, and SCRIPT_TESTS_REQUIRE_BASH (CI's macOS job sets it to
@@ -20,11 +21,12 @@ on PATH still tests the 3.2 macOS ships, and SCRIPT_TESTS_REQUIRE_BASH (CI's mac
 the git configuration and the locale are the case's own. An inherited GIT_DIR would point every
 git call at another repository.
 
-**Real git; doubles for python3, dotnet, terraform and the smoke test.** The Python checks have
-their own companions and ask GitHub things; the build, the suite and Terraform take minutes and
-reach the network. Each double records its arguments, in one sequence shared by all of them, so a
-case asserts what ran and in what order. dotnet and terraform print a line on standard output, so
-a case can see whether the script showed or hid it. A double fails when a case names the call.
+**Real git; doubles for python3, dotnet, terraform, the smoke test and the image check.** The
+Python checks have their own companions and ask GitHub things; the build, the suite, Terraform and
+the image take minutes and reach the network. Each double records its arguments, in one sequence
+shared by all of them, so a case asserts what ran and in what order. dotnet and terraform print a
+line on standard output, so a case can see whether the script showed or hid it. A double fails
+when a case names the call.
 
 **The hook's output is asserted literally.** The expected lines in HookTests are the old hook's
 messages, typed from its text, not read from the script under test (#68: same checks, same skips,
@@ -88,13 +90,15 @@ BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
 # The real tools the script and the classifier use, reached from the case's bin directory, which
-# is the whole of the case's PATH. find runs dirname itself, through PATH.
-TOOLS = ("git", "find", "sort", "head", "dirname", "basename", "grep")
+# is the whole of the case's PATH. find runs dirname itself, through PATH; xargs runs find for the
+# file modes (#205).
+TOOLS = ("git", "find", "xargs", "sort", "head", "dirname", "basename", "grep")
 
 PORT = "5299"
 
 # A double: records its name and arguments as one call in the shared sequence, then fails when the
-# case named this call, and otherwise prints a line (dotnet, terraform, smoke) or nothing (python3).
+# case named this call, and otherwise prints a line (dotnet, terraform, smoke, image) or nothing
+# (python3). The image check takes no arguments, so a case names its call as `*`, which fails any.
 # A Terraform double answers `version` as Terraform does, first line `Terraform v<version>`, with the
 # version the case gave it (#69).
 DOUBLE = """#!/bin/bash
@@ -110,6 +114,7 @@ if [ -n "$reports" ] && [ "$*" = version ]; then
   printf 'Terraform v%s\\non darwin_arm64\\n' "$reports"
   exit 0
 fi
+if [ "$fails_on" = "*" ]; then printf '%s double failed\\n' "$name" >&2; exit 1; fi
 if [ -n "$fails_on" ]; then
   case " $* " in
     *" $fails_on "*) printf '%s double failed: %s\\n' "$name" "$*" >&2; exit 1 ;;
@@ -138,8 +143,10 @@ ROOTS = ["infra/modules/m", "infra/roots/a", "infra/roots/b"]
 TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
-# half now names the version it ran, in a line of its own and in the last line.
-HOOK_RAN = "A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts"
+# half now names the version it ran, in a line of its own and in the last line. #205 added a check,
+# the file modes, and so a name to the list of what ran.
+HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, "
+            "the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -155,6 +162,7 @@ PYTHON_CHECKS = [
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
 SMOKE = [["smoke", "Debug", PORT]]
+IMAGE = [["image"]]
 
 
 def terraform_checks() -> list[list[str]]:
@@ -267,6 +275,10 @@ class Case:
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
+            # The mode a checkout under umask 022 gives, whatever the umask of the process running
+            # this companion: under an agent session's 077, write_text leaves 600, which the file
+            # modes check refuses (#205), and every case would fail on that instead of its own point.
+            path.chmod(0o644)
         self.git("add", ".", cwd=self.work)
         self.git("commit", "-q", "-m", "Start", cwd=self.work)
         if origin:
@@ -274,7 +286,8 @@ class Case:
         self.git("checkout", "-q", "-b", "task", cwd=self.work)
 
         # The check files the script reaches from the top level: the real classifier and the real
-        # script, linked, and a double for the smoke test. Left untracked, so no diff includes them.
+        # script, linked, and doubles for the smoke test and the image check. Left untracked, so no
+        # diff includes them.
         (self.work / ".github").mkdir(exist_ok=True)
         (self.work / ".github" / "touches.sh").symlink_to(TOUCHES)
         (self.work / "tools").mkdir(exist_ok=True)
@@ -282,11 +295,14 @@ class Case:
         (self.work / "tools" / "terraform-floor.sh").symlink_to(FLOOR_HELPER)
         self.write_executable(self.work / "tools" / "smoke.sh",
                               self.double("smoke", fails_on.get("smoke", ""), "yes"))
+        self.write_executable(self.work / "tools" / "image-check.sh",
+                              self.double("image", fails_on.get("image", ""), "yes"))
 
         for name in (change,) if isinstance(change, str) else change or ():
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(path.read_text() + "changed\n" if path.exists() else "new\n")
+            path.chmod(0o644)
             self.git("add", name, cwd=self.work)
             self.git("commit", "-q", "-m", f"Change {name}", cwd=self.work)
 
@@ -433,6 +449,77 @@ class HookTests(CheckTestCase):
             HOOK_FIX,
         ], result.stderr)
 
+    def test_a_tracked_file_only_its_owner_can_read(self):
+        # #205: git records only the exec bit, so a file written under umask 077 is 600 with no
+        # diff to show it, and an image built from the tree keeps the mode. The check names the
+        # file, the fix and why, and judges the working tree, so the file needs no change of its own.
+        case = Case(self, change="docs/notes.md")
+        (case.work / "src" / "App" / "App.cs").chmod(0o600)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines([
+            "pre-push: tracked files that group and others cannot read:",
+            "src/App/App.cs",
+            "pre-push: git does not record these modes, but an image built from this tree keeps them. "
+            "Make them readable:",
+            "  git ls-files -z | xargs -0 chmod go+r",
+            "pre-push: a tracked file only its owner can read is a file the gateway's container cannot "
+            "read; run chmod go+r on it.",
+            HOOK_FIX,
+        ], result.stderr)
+        # Refused before the build, which would have carried the mode into what it wrote.
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_a_file_the_group_can_read_but_others_cannot(self):
+        # 640 is group-readable and still not readable by a container user outside the group.
+        case = Case(self, change="docs/notes.md")
+        (case.work / "README.md").chmod(0o640)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(["pre-push: tracked files that group and others cannot read:", "README.md"],
+                         result.stderr.splitlines()[:2])
+
+    def test_more_than_ten_such_files_are_counted_past_the_tenth(self):
+        names = [f"docs/owner-only-{n:02}.md" for n in range(12)]
+        case = Case(self, change="docs/notes.md", extra={name: "x\n" for name in names})
+        for name in names:
+            (case.work / name).chmod(0o600)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        lines = result.stderr.splitlines()
+        self.assertEqual(sorted(names)[:10], lines[1:11])
+        self.assertEqual("... and 2 more", lines[11])
+
+    def test_files_that_are_not_tracked_or_not_there_are_not_judged(self):
+        # An untracked owner-only file, a key under .certs/ say, is meant to be 600, and a tracked
+        # file deleted from the working tree has no mode to judge.
+        case = Case(self, change="docs/notes.md")
+        untracked = case.work / "notes.local"
+        untracked.write_text("private\n")
+        untracked.chmod(0o600)
+        (case.work / "README.md").unlink()
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"pre-push: {HOOK_RAN} pass.", result.last_line(result.stdout))
+
+    def test_a_tracked_executable_and_a_tracked_symlink_pass(self):
+        # The link gets the mode a umask 077 gives it on macOS, where a link has a mode of its own:
+        # chmod go+r follows a link, so a check that judged the link's mode could not be cleared.
+        # Linux has no lchmod and keeps every link 777.
+        case = Case(self, change="docs/notes.md")
+        script = case.work / "run.sh"
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755)
+        link = case.work / "link.md"
+        link.symlink_to("README.md")
+        if hasattr(os, "lchmod"):
+            os.lchmod(link, 0o700)
+        case.git("add", "run.sh", "link.md", cwd=case.work)
+        case.git("commit", "-q", "-m", "Add a script and a link", cwd=case.work)
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"pre-push: {HOOK_RAN} pass.", result.last_line(result.stdout))
+
     def test_the_hook_ignores_what_git_passes_it(self):
         # git runs a pre-push hook with the remote's name and URL as arguments and the refs on
         # standard input (https://git-scm.com/docs/githooks#_pre_push); none of it is an option.
@@ -464,23 +551,33 @@ class FullModeTests(CheckTestCase):
         stream = result.stdout if status == 0 else result.stderr
         self.assertEqual(verdict, result.last_line(stream))
 
-    def test_a_dotnet_change_runs_the_build_the_tests_and_the_smoke_test(self):
+    def test_a_dotnet_change_runs_the_build_the_tests_the_smoke_test_and_the_image(self):
         case = Case(self, change="src/App/App.cs")
         result = self.full(case)
-        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE, case.calls())
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
+                                      "the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         # Shown, not hidden: a lane reads its failure from the log.
         self.assertIn("dotnet double ran: build --nologo --verbosity quiet", result.stdout)
         self.assertIn("check: Terraform and its tests skipped: nothing under infra/ or the floor changed.",
                       result.stdout)
         self.assertNotIn("pre-push", result.stdout + result.stderr)
 
+    def test_a_change_to_the_dockerignore_builds_the_gateway_image(self):
+        # .dockerignore decides what the image is built from, so it is in the build half (#210).
+        case = Case(self, change=".dockerignore")
+        result = self.full(case)
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
+                                      "the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
+        self.assertIn("image double ran: ", result.stdout)
+
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.")
         self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
-        self.assertIn("check: build, tests and smoke test skipped: no .NET source changed.",
+        self.assertIn("check: build, tests, smoke test and gateway image skipped: no .NET source changed.",
                       result.stdout)
 
     def test_a_docs_only_change_runs_neither_half(self):
@@ -510,6 +607,9 @@ class FullModeTests(CheckTestCase):
                           PYTHON_CHECKS + BUILD + TESTS),
             "the smoke test": ({"smoke": "Debug"}, "src/App/App.cs", "check: fail: the smoke test failed.",
                                PYTHON_CHECKS + BUILD + TESTS + SMOKE),
+            "the gateway image": ({"image": "*"}, "src/App/App.cs",
+                                  "check: fail: the gateway image failed to build or to start as its "
+                                  "runtime user.", PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
             "terraform test": ({"terraform": "test"}, "infra/roots/a/main.tf",
                                "check: fail: terraform test failed in infra/modules/m.",
                                PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS[:1]),
@@ -523,6 +623,24 @@ class FullModeTests(CheckTestCase):
                 self.assertVerdict(result, 1, verdict)
                 self.assertEqual(calls, case.calls())
                 self.assertNotIn("--no-verify", result.stderr)
+
+    def test_an_owner_only_file_fails_the_verdict_with_the_fix(self):
+        case = Case(self, change="src/App/App.cs")
+        (case.work / "src" / "App" / "App.cs").chmod(0o600)
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: a tracked file only its owner can read is a file the "
+                                      "gateway's container cannot read; run chmod go+r on it.")
+        self.assertIn("src/App/App.cs", result.stderr.splitlines())
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_the_file_modes_fail_rather_than_pass_when_they_cannot_be_read(self):
+        # Without xargs nothing is judged, and an empty list is what a clean tree gives: the check
+        # must say it judged nothing rather than pass (#205's review).
+        case = Case(self, change="docs/notes.md")
+        (case.bin / "xargs").unlink()
+        result = self.full(case)
+        self.assertVerdict(result, 1, "check: fail: the file modes were not judged: git ls-files or "
+                                      "xargs failed.")
 
     def test_a_missing_tool_fails_rather_than_skipping(self):
         # The hook skips a check whose tool is missing and passes; a verdict must not hide that.
@@ -592,9 +710,10 @@ class BothHalvesTests(CheckTestCase):
         result = case.run("--full", "--port", PORT, "--both-halves")
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(
-            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, Terraform {FLOOR}, the Terraform tests.",
+            f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, the gateway image, Terraform {FLOOR}, "
+            "the Terraform tests.",
             result.last_line(result.stdout))
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + terraform_checks() + TERRAFORM_TESTS,
+        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS,
                          case.calls())
         self.assertNotIn("skipped", result.stdout)
 
@@ -912,7 +1031,11 @@ class CompanionTests(CheckTestCase):
         case = Case(self, extra={path: "" for path in beside}, change=scripts)
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"})
+        # tools/image_build_tests.py judges .dockerignore and the Dockerfiles, which no script's
+        # name names, so no change but its own earns it here; CI's documents job runs it on every
+        # pull request (#204). It was in this list from #204's merge, and the case failed on it.
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
+                                       "tools/image_build_tests.py"})
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 

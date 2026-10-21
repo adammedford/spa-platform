@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # teardown.sh -- empty the platform bucket, destroy the three roots in reverse order, delete what
-# Terraform leaves behind, and prove the account holds nothing with the platform tag (test P-05).
+# Terraform leaves behind, and prove the account holds nothing with the platform tag that the tag
+# query can list (test P-05). IAM roles are the exception: it cannot list them (#118).
 #
 # Task 1.7 (#58); docs/plan/05-infrastructure-and-cost.md, Teardown: "teardown.sh empties the bucket
 # and repositories, destroys the three roots in reverse order, deletes the imported certificate and
@@ -27,7 +28,9 @@
 #   4. The tagging API is asked for every resource whose Platform tag is exactly spa-platform
 #      (contracts/resource-tags.md), until it answers none or the wait runs out. The bootstrap root's
 #      three resources carry spa-platform-bootstrap and do not answer; they, and the state bucket,
-#      are removed by hand.
+#      are removed by hand. The cell's two IAM roles (infra/modules/cell/iam.tf) carry the platform
+#      tag and never answer either, because the tagging API cannot list IAM roles: they go with the
+#      platform root's destroy, and the tag query cannot show them gone (#118).
 #
 # --yes is required: nothing here can be undone.
 #
@@ -298,7 +301,7 @@ while :; do
     --query 'ResourceTagMappingList[].ResourceARN'
   remaining="$(tr '\t' '\n' < "$OUT" | awk 'NF')"
   if [ -z "$remaining" ]; then
-    note "pass: nothing in ${REGION} carries ${PLATFORM_TAG_KEY}=${PLATFORM_TAG_VALUE} (P-05). The bootstrap root and the state bucket go last, by hand."
+    note "pass: nothing in ${REGION} that the tag query can list carries ${PLATFORM_TAG_KEY}=${PLATFORM_TAG_VALUE} (P-05); it cannot list IAM roles, so the cell's two are not proved gone (#118). The bootstrap root and the state bucket go last, by hand."
     exit 0
   fi
   [ "$waited" -lt "$TAG_WAIT_SECONDS" ] || break

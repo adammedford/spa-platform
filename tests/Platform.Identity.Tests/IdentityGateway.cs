@@ -133,6 +133,22 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     public IServiceProvider Services => host.Services;
 
+    /// <summary>
+    /// Returns once the session module has a gate held, which a due token's refresh takes before it
+    /// reads the session and asks the provider, or fails if <paramref name="refresh"/> ends first: how a
+    /// test sends a request while a refresh is in flight on the session.
+    /// </summary>
+    public async Task GateHeldAsync(Task refresh)
+    {
+        AppSessions sessions = Services.GetRequiredService<AppSessions>();
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
+        while (sessions.ActiveGates == 0)
+        {
+            Assert.False(refresh.IsCompleted, "The refresh ended before it was seen holding the session's gate.");
+            await Task.Delay(TimeSpan.FromMilliseconds(5), deadline.Token);
+        }
+    }
+
     /// <summary>The secret the provider and the fake secret source agree on for an app.</summary>
     public static string SecretOf(AppDefinition app) => "secret-" + app.AppId;
 

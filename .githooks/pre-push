@@ -4,7 +4,8 @@
 # It catches, locally, the things that are expensive to find later: a change that touches a path
 # outside its owner's set, a steering document that misleads every session that reads it, a commit
 # that changes one without naming its authority, a ticket citation that opens nothing, two tickets
-# claiming one number, a build that does not compile and a Terraform root that does not validate.
+# claiming one number, a tracked file only its owner can read (#205), a build that does not compile
+# and a Terraform root that does not validate.
 # The tests stay in CI, where they cost nothing to wait for.
 #
 # The checks are tools/check.sh's, and its header says what each one catches and when it is

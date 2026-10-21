@@ -23,11 +23,13 @@ namespace Platform.Abstractions;
 /// lists one code under two statuses, the table test fails and this question reopens.
 ///
 /// <see cref="Rejection"/> ends a request under a rule id through this writer, and an answer, a
-/// response under no rule id, calls <see cref="WriteAsync"/> directly. Two writers in Identity call it
-/// directly for a rejection as well, because each writes one body for an answer and a rejection alike:
-/// the 401 on <c>GET /bff/session</c> (<c>Bff</c>) and the 401 to a fetch the shell gate challenges
-/// (<c>AuthenticationEvents</c>). When the cookie named no session, <c>AppSessions.KeyOf</c> has
-/// already noted <c>auth.session</c> through <see cref="Rejection.Note"/>, so only the body is left.
+/// response under no rule id, calls <see cref="WriteAsync"/> directly. Three writers call it directly
+/// for a rejection as well, because each writes one body for an answer and a rejection alike: in
+/// Identity, the 401 on <c>GET /bff/session</c> (<c>Bff</c>) and the 401 to a fetch the shell gate
+/// challenges (<c>AuthenticationEvents</c>); in Proxy, the 401 on <c>/api</c> when the access-token
+/// source finds no session (<c>AccessTokenStep</c>). When the cookie named no session,
+/// <c>AppSessions.KeyOf</c> has already noted <c>auth.session</c> through
+/// <see cref="Rejection.Note"/>, so only the body is left.
 /// </summary>
 public static class Problems
 {

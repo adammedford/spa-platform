@@ -122,7 +122,7 @@ public sealed class RefreshTests
     /// because the gateway's 503 is its own answer, not the provider's status passed on.
     /// </summary>
     [Theory]
-    [InlineData(503)]
+    [InlineData(503)] // Not an Errors row: the provider's status, which the fault plants.
     [InlineData(500)]
     public async Task A_provider_outage_on_refresh_is_503_idp_unavailable_and_the_session_survives_to_the_call_after_recovery(int outage)
     {

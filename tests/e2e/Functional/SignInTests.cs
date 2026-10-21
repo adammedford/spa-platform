@@ -14,7 +14,7 @@ public sealed class SignInTests
     [Fact]
     public async Task F01_signed_in_to_both_apps_each_host_serves_its_own_shell_from_the_one_gateway()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         HarnessApp app1 = stack.App("app1");
         HarnessApp app2 = stack.App("app2");
@@ -32,14 +32,15 @@ public sealed class SignInTests
         }
 
         // One load balancer and one gateway answered both hosts.
-        Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url == app1.Url("/") && exchange.Status == 200);
-        Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url == app2.Url("/") && exchange.Status == 200);
+        IReadOnlyList<Exchange> exchanges = await stack.ExchangesAsync();
+        Assert.Contains(exchanges, exchange => exchange.Url == app1.Url("/") && exchange.Status == 200);
+        Assert.Contains(exchanges, exchange => exchange.Url == app2.Url("/") && exchange.Status == 200);
     }
 
     [Fact]
     public async Task F02_each_login_goes_to_the_provider_with_its_own_client_and_returns_to_its_own_callback()
     {
-        await using LocalStack stack = await LocalStack.StartAsync();
+        await using IBrowserStack stack = await Stacks.StartAsync();
         await using Profile profile = await stack.OpenAsync();
         List<Uri> navigations = profile.RecordNavigations();
 
@@ -49,15 +50,19 @@ public sealed class SignInTests
             navigations.Clear();
             await profile.SignInAsync(app);
 
-            Uri authorize = Assert.Single(navigations, url => url.GetLeftPart(UriPartial.Path) == stack.Harness.Idp.AuthorizeEndpoint);
+            // The navigations carry the provider's state and the callback's code, so a failure prints
+            // them only as Redacted does, never as xUnit's dump of the list.
+            Uri[] authorizations = [.. navigations.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
+            Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests in {Redacted.Urls(navigations)}");
+            Uri authorize = authorizations[0];
             Dictionary<string, Microsoft.Extensions.Primitives.StringValues> query = QueryHelpers.ParseQuery(authorize.Query);
             Assert.Equal(app.ClientId, query["client_id"].ToString());
             Assert.Equal(app.Url("/signin-oidc").ToString(), query["redirect_uri"].ToString());
 
             // The browser came back to this app's own callback, after the provider and before the shell.
             int callback = navigations.FindIndex(url => url.GetLeftPart(UriPartial.Path) == app.Url("/signin-oidc").ToString());
-            Assert.True(callback > navigations.IndexOf(authorize), string.Join(" -> ", navigations));
-            Assert.Equal(app.Url("/"), navigations[^1]);
+            Assert.True(callback > navigations.IndexOf(authorize), Redacted.Urls(navigations));
+            Assert.True(navigations[^1] == app.Url("/"), $"the last navigation went to {Redacted.Url(navigations[^1])}, not {app.Url("/")}");
         }
     }
 }

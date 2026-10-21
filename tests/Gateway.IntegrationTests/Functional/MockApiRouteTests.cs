@@ -62,7 +62,7 @@ public sealed class MockApiRouteTests
 
         // The listener admits this client, so the 403 is about the admin scope no app asks for, not
         // about who is calling.
-        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         using JsonDocument body = JsonDocument.Parse(admin.Body);
         Assert.Equal("insufficient_scope", body.RootElement.GetProperty("error").GetString());
     }
@@ -78,7 +78,7 @@ public sealed class MockApiRouteTests
         // if the gateway sent one token for every app, this would succeed.
         BrowserResponse reports = await browser.GetAsync("/api/reports/whoami", ct: Ct);
 
-        Assert.Equal(HttpStatusCode.Forbidden, reports.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, reports.StatusCode); // Not an Errors row: the mock API's own answer, passed back.
         using JsonDocument body = JsonDocument.Parse(reports.Body);
         Assert.Equal("client_not_admitted", body.RootElement.GetProperty("error").GetString());
     }

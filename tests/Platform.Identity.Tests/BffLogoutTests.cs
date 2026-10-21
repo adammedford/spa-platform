@@ -108,6 +108,39 @@ public sealed class BffLogoutTests
         Assert.Equal(gateway.Idp.IssuedRefreshTokens[^1], Assert.Single(gateway.Idp.Revocations).Token);
     }
 
+    [Fact]
+    public async Task Logout_started_during_a_refresh_waits_for_it_and_revokes_the_token_it_stored()
+    {
+        // SessionEnd: the revocation reads the record under the session's gate, so a refresh in flight
+        // when logout starts finishes first and the token revoked is the one it stored. The test above
+        // lets its refresh end before the logout starts, so it cannot see where the read is made. The
+        // provider holds the refresh for 500 ms, and the logout is sent once the refresh holds the gate.
+        // Mutation: in SessionEnd.EndAsync, read the record with AppSessions.ReadAsync before EnterAsync
+        // and revoke the token that read found; the logout revokes the login's superseded token, the
+        // rotated one stays redeemable, and this fails.
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
+        gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromSeconds(30);
+        IdentityGateway.Login login = await gateway.LoginAsync(App1);
+        gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromMinutes(5);
+        string loginToken = Assert.Single(gateway.Idp.IssuedRefreshTokens);
+        gateway.Idp.Faults.TokenDelay = TimeSpan.FromMilliseconds(500);
+
+        Task<IdentityGateway.Answer> refresh = Task.Run(
+            () => gateway.SendAsync(App1, IdentityGateway.TokenPath, login.Jar), TestContext.Current.CancellationToken);
+        await gateway.GateHeldAsync(refresh);
+        IdentityGateway.Answer logout = await gateway.SendAsync(App1, "/bff/logout", login.Jar, "POST");
+        IdentityGateway.Answer refreshed = await refresh;
+
+        TokenGrant grant = Assert.Single(gateway.Idp.RefreshGrants);
+        Assert.True(grant.Ok);
+        Assert.Equal(loginToken, grant.RefreshTokenUsed);
+        Assert.Equal(200, refreshed.Status);
+        Assert.Equal(302, logout.Status);
+        Revocation revocation = Assert.Single(gateway.Idp.Revocations);
+        Assert.Equal(grant.RefreshTokenIssued, revocation.Token);
+        Assert.False(gateway.Idp.IsRedeemable(grant.RefreshTokenIssued!));
+    }
+
     [Theory]
     [InlineData(ClientCredentialStyle.PostBody, ClientAuth.Post)]
     [InlineData(ClientCredentialStyle.AuthorizationHeader, ClientAuth.Basic)]

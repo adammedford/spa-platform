@@ -77,6 +77,34 @@ public sealed class ContractTests
         Assert.Throws<InvalidOperationException>(() => ContractParser.Error(rows, "csrf"));
     }
 
+    [Fact]
+    public void A_second_table_in_the_errors_section_is_read_as_well_as_the_first()
+    {
+        // Mutation: a second table under the same heading, after the prose. A reader that stops at
+        // the first table's last row would miss every row of it.
+        string planted = Errors.Replace(
+            "One refusal is not a problem body.",
+            "One refusal is not a problem body.\n\n| Status | `code` | When |\n| --- | --- | --- |\n| 404 | `not_found` | Unknown host |",
+            StringComparison.Ordinal);
+
+        Assert.Equal(new Contract.ErrorRow(404, "not_found", "Unknown host"), ContractParser.Error(ContractParser.ErrorRows(planted), "not_found"));
+        Assert.Equal(403, ContractParser.Error(ContractParser.ErrorRows(planted), "csrf_failed").Status);
+    }
+
+    [Fact]
+    public void A_second_table_with_no_separator_row_throws_naming_the_file_and_the_section()
+    {
+        // A run of pipe lines without its separator is not a table, and its first line is not a row.
+        string planted = Errors.Replace(
+            "One refusal is not a problem body.",
+            "One refusal is not a problem body.\n\n| 404 | `not_found` | Unknown host |",
+            StringComparison.Ordinal);
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.ErrorRows(planted));
+
+        Assert.Contains("contracts/http-contract.md -> Errors", thrown.Message, StringComparison.Ordinal);
+    }
+
     private const string Cookies = """
         ## Cookies
 
@@ -161,6 +189,19 @@ public sealed class ContractTests
                 .Select(header => $"{header.Key}: {header.Value}")
                 .Order(StringComparer.Ordinal));
         Assert.Equal("Access-Control-", ContractParser.ForbiddenHeaderPrefix(ResponseHeaders));
+    }
+
+    [Fact]
+    public void A_fixed_header_bullet_with_an_empty_value_throws_naming_the_file_and_the_section()
+    {
+        // Mutation: the value of one fixed header deleted, its name and colon kept. A reader that
+        // accepted it would have the suites assert the gateway sends that header empty.
+        string planted = ResponseHeaders.Replace("`X-Content-Type-Options: nosniff`", "`X-Content-Type-Options: `", StringComparison.Ordinal);
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.FixedResponseHeaders(planted));
+
+        Assert.Contains("contracts/http-contract.md -> Response headers", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("X-Content-Type-Options", thrown.Message, StringComparison.Ordinal);
     }
 
     [Fact]

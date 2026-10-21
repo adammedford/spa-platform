@@ -41,7 +41,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 ## NuGet packages
 
-All pinned in `Directory.Packages.props`. Each pinned version was confirmed to exist on nuget.org, and the licence is the one its package file declares. For the two AWS SDK packages the pin may not be the newest patch.
+All pinned in `Directory.Packages.props`. Each pinned version was confirmed to exist on nuget.org, and the licence is the one its package file declares. For the three AWS SDK packages the pin may not be the newest patch.
 
 | Package | Version | Licence | Expected in | Note |
 | --- | --- | --- | --- | --- |
@@ -51,6 +51,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | Yarp.ReverseProxy | 2.3.0 | MIT | `Platform.Proxy` | The newest release. Its newest target is `net8.0`; G0 item 5 ran it on .NET 10.0.12 on 11 October 2026. |
 | AWSSDK.S3 | 4.0.101.6 | Apache-2.0 | `Platform.Registry`, `spactl` |  |
 | AWSSDK.SimpleSystemsManagement | 4.0.104.2 | Apache-2.0 | `Platform.Registry` | Parameter Store |
+| AWSSDK.Signin | 4.0.101.13 | Apache-2.0 | `spactl` | The project's profile signs in with `login_session`, which the AWS CLI and Terraform resolve on their own and the .NET SDK resolves only with this assembly; without it every provider in the credential chain fails with `Assembly AWSSDK.Signin could not be found or loaded` (#206). Its `AWSSDK.Core` floor is 4.0.102.9, the Core the solution already resolves, so it moves no other version. It brings `BouncyCastle.Cryptography` 2.6.2 (MIT) in transitively, a package new to the solution. |
 | OpenTelemetry.Extensions.Hosting | 1.19.1 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Instrumentation.AspNetCore | 1.19.0 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Instrumentation.Http | 1.19.0 | Apache-2.0 | `Platform.Telemetry` |  |

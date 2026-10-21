@@ -8,7 +8,7 @@ namespace Platform.Identity;
 /// The one module through which the gateway reads, changes and ends a session under the session gate,
 /// above the frozen <see cref="ISessionStore"/> seam (#141). It holds the app-and-client ownership check
 /// once (task 3.3, task 3.6), the versioned replace and the end that removes whatever its action did
-/// (ADR-0017 decision 4). <see cref="AccessTokenSource"/> and <see cref="SessionEnd"/> keep the decisions
+/// (#141 Q6). <see cref="AccessTokenSource"/> and <see cref="SessionEnd"/> keep the decisions
 /// and the outcome lines; this module never logs.
 ///
 /// It also opens a session, holds the request's session key and writes <c>session_ref</c>, all for
@@ -157,7 +157,7 @@ internal sealed class AppSessions(ISessionStore store)
     /// <param name="authenticated">This request's authentication of the pinned app's cookie scheme.</param>
     /// <param name="refusesDeadSession">
     /// False for a caller that answers a dead cookie with something other than a rejection, as
-    /// <c>/bff/logout</c> does: contracts/telemetry.md has the rule id written only by the stage that ends
+    /// <c>/bff/login</c> and <c>/bff/logout</c> do: contracts/telemetry.md has the rule id written only by the stage that ends
     /// the request with a rejection, and <c>security.rejections</c> counts what it writes.
     /// </param>
     public string? KeyOf(HttpContext httpContext, AuthenticateResult authenticated, bool refusesDeadSession = true)
@@ -300,8 +300,7 @@ internal sealed class AppSessions(ISessionStore store)
         /// Ends the owned session: runs <paramref name="beforeRemoval"/> on the owned record, then removes
         /// it in a <c>finally</c>, so the action failing never stops the removal, and what the action
         /// throws reaches the caller after the removal has run ("revoke, then remove whatever the provider
-        /// said", ADR-0017 decision 4). Removed under the gate, so a caller queued behind this one finds
-        /// no session.
+        /// said", #141 Q6). Removed under the gate, so a caller queued behind this one finds no session.
         /// </summary>
         public async Task EndAsync(Func<SessionRecord, Task>? beforeRemoval = null)
         {

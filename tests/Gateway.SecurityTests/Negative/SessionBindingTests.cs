@@ -94,8 +94,8 @@ public sealed class SessionBindingTests
         BrowserResponse session = await SignedIn.SessionAsync(attacker, cookie);
         BrowserResponse api = await attacker.GetAsync("/api/reports/whoami", RequestOptions.With(("Cookie", cookie)), Suite.Ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, api.StatusCode);
         Assert.DoesNotContain(harness.Idp.DefaultSubject, session.Body, StringComparison.Ordinal);
 
         // App 2 refused the record without removing it: it is still app 1's, and still good on app 1.
@@ -125,8 +125,8 @@ public sealed class SessionBindingTests
         // The store lookup does not.
         BrowserResponse session = await SignedIn.SessionAsync(browser);
         BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, api.StatusCode);
         Assert.Null(api.Header("Location"));
     }
 
@@ -149,8 +149,8 @@ public sealed class SessionBindingTests
 
         BrowserResponse session = await SignedIn.SessionAsync(browser);
         BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, api.StatusCode);
 
         // Control: the app is back and signs in afresh.
         await harness.SignInAsync(browser, "app1", Suite.Ct);
@@ -187,8 +187,8 @@ public sealed class SessionBindingTests
 
         BrowserResponse session = await SignedIn.SessionAsync(browser);
         BrowserResponse api = await browser.GetAsync("/api/orders/whoami", ct: Suite.Ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, api.StatusCode);
 
         // Control: a new login goes to the new client and is a session again.
         await harness.SignInAsync(browser, "app1", Suite.Ct);
