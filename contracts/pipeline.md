@@ -71,7 +71,9 @@ as a fault in its own stage has found this stub instead.
 | Path | Answer |
 | --- | --- |
 | `/healthz` | 200 while the process runs |
-| `/readyz` | 200 with `{"revision": N}` once a snapshot is live, 503 before that |
+| `/readyz` | `200` with `{"revision": N, "instance": "<id>"}` once a snapshot is live, `503` before that. `instance` names the gateway instance that answered: in a cell, its ECS task id; anywhere else, an id unique to that instance. A reader takes the members it names and ignores the rest. |
 
-The ALB health check and `spactl wait` both read `/readyz`. The health-check path is a Terraform
+The ALB health check and `spactl wait` both read `/readyz`. `spactl wait` can be given the instances a
+cell runs, and then returns only when each has answered at the revision asked for or later
+(change request P2-5, decided 2026-10-20). The health-check path is a Terraform
 variable: `/` for the sample image, `/readyz` for the gateway (task 1.3).

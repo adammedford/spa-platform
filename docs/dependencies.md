@@ -30,7 +30,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Chromium for Playwright | Comes with Microsoft.Playwright 1.63.0 | Installed by the test suite | 5.2, 6.5 | Playwright needs macOS 14 or later. See the note below. |
 | GitHub repository with Actions | n/a | n/a | I-5 | The plan's default CI. It needs a read-only AWS role to run Terraform plans, which task 1.0 creates. |
 | A Cognito domain prefix | n/a | n/a | 1.1 | Must be unique in the region |
-| Node.js, to parse the workflow scripts | The node GitHub's `ubuntu-latest` image ships; CI's step prints `node --version` beside its result | n/a for CI. Locally, any current node: `brew install node` | #135 | `.github/workflow-parse.py` and its companion. Not pinned with `actions/setup-node`, and not run in the macOS bash 3.2 job (ADR-0024) |
+| Node.js, to parse the workflow scripts | The node GitHub's `ubuntu-latest` image ships; CI's step prints `node --version` beside its result | n/a for CI. Locally, any current node: `brew install node` | #135 | `.github/workflow-parse.py` and its companion. Not pinned with `actions/setup-node`, and not run in the macOS bash 3.2 job (ADR-0026) |
 
 **Playwright's browser installer.** The documented step is `pwsh bin/Debug/net10.0/playwright.ps1 install`, which needs PowerShell. That script only calls `Microsoft.Playwright.Program.Main`. If the suite makes the same call, PowerShell stays off this list. Neither route has been tried here.
 
@@ -57,7 +57,7 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | OpenTelemetry.Exporter.OpenTelemetryProtocol | 1.19.1 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Exporter.InMemory | 1.19.1 | Apache-2.0 | Telemetry tests | F-11 |
 | Microsoft.AspNetCore.Authentication.JwtBearer | 10.0.12 | MIT | `fixtures/MockApi` |  |
-| Microsoft.IdentityModel.JsonWebTokens | 8.19.2 | MIT | `fixtures/TestIdp` | Signing for the test identity provider |
+| Microsoft.IdentityModel.JsonWebTokens | 8.19.2 | MIT | `fixtures/TestIdp`, `Platform.Identity` | Signing for the test identity provider, and the client assertion under `PrivateKeyJwt` (change request P2-6). Already in `Platform.Identity`'s closure through the handler package. |
 | xunit.v3 | 4.0.2 | Apache-2.0 | Every `*Tests` project | Added by `Directory.Build.props`. Runs on Microsoft Testing Platform v2. |
 | xunit.v3.extensibility.core | 4.0.2 | Apache-2.0 | `Platform.Testing` | The attributes without the runner. xUnit refuses `xunit.v3` on a library that is not an executable and names this instead. Already a transitive dependency of `xunit.v3`. |
 | xunit.v3.assert | 4.0.2 | Apache-2.0 | `Platform.Testing` | `Assert`, for the store contract suites that each implementation subclasses (task 3.4). Same 4.0.2 set. |

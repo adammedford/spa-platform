@@ -1,6 +1,8 @@
 # ADR-0017: What Gate G0 found against Cognito, and what it changes
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-20 by
+  [ADR-0024](0024-session-gate-in-process-and-refresh-lease-across-tasks.md): decision 1's
+  refresh design gains a cross-task refresh lease beside the in-process session gate.**
 - **Date:** 2026-10-16
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task I-6 ("fold the G0 findings into the
@@ -154,6 +156,8 @@ identity work.
   as Cognito's does, and which credential style its endpoints accept. Credential style is a profile
   member; locking is the gateway-owned refresh design, not a
   profile setting. Those questions remain evidence work for the PingFederate gate.
+  Credential style was answered on 2026-10-20 by change request P2-6 (`PrivateKeyJwt`); the
+  grace window remains the gate's.
 - **No change to rotation, token lifetimes or scopes.** The measured values match what tasks 1.8 and
   3.8 already specify: 5-minute access tokens, 780-minute refresh tokens, rotation with a 10-second
   grace, `ALLOW_REFRESH_TOKEN_AUTH` off.

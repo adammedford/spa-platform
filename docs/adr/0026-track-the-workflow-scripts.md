@@ -1,4 +1,4 @@
-# ADR-0024: Track the workflow scripts, so a workflow change is a branch, a review and a landing
+# ADR-0026: Track the workflow scripts, so a workflow change is a branch, a review and a landing
 
 - **Status:** Accepted
 - **Date:** 2026-10-21

@@ -5,7 +5,7 @@
 - **Tasks:** P2-6; 3.7 (the profiles), 5.4 (the test identity provider), 4.3 (the request gate),
   6.2 and 6.3 (the composed suites), 6.9 (the deployed runs)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** decided, 2026-10-20, items 1 to 6; item 7 on https://github.com/adammedford/spa-platform/issues/224; item 8 open until the harness branch that selects the profile exists. See the Decision section below.
 
 ## The gap
 
@@ -300,3 +300,98 @@ for it beside task 1.8's, in the shape of the deployed gate runs (#60, #61, #63)
 profile cannot be selected and row P2-6 cannot start; workstream 5's half does not wait. The
 deferred items, `clientSecretRef` and back-channel logout, hold nothing here open: each is its own
 later request.
+
+## Decision
+
+Integrator, 2026-10-20, on Adam's answers to the eleven questions of
+https://github.com/adammedford/spa-platform/issues/223 (all accepted as recommended), after the
+handler and library facts were verified on https://github.com/adammedford/spa-platform/issues/217
+(branch `research/handler-and-library-private-key-jwt`; claims cited by number). Items 1 to 6 are
+accepted as asked, with the corrections below. Item 7 is decided on #224; item 8 waits for the
+harness branch.
+
+**Two landings.** This decision record, with the prose that only records it (the ADR amendment, the
+glossary entries, the `docs/dependencies.md` cell), lands now and alone. The frozen-artifact edits
+(the enum value, the contracts test, the enum member, the schema property) are the Phase 2 spec
+issue's integrator ticket, under the constraint in item 1.
+
+1. **`Issuers:{name}:Profile` admits `pingfederate`**, a widening between gates, and **the enum edit
+   lands only in a merge that also registers the profile**: workstream 3's branch merges the
+   integrator's commit and one landing brings both, as `OWNERSHIP.md` allows. `main` never carries
+   the value alone. Not only because `IdpProfileTests` would go red: `CredentialStyles.Of` answers
+   `PostBody` for a name with no registration and `OidcOptionsSetup` applies no profile, so an
+   issuer naming `pingfederate` on such a `main` would run as `standard` with the form-body secret,
+   silently.
+2. **`ClientCredentialStyle.PrivateKeyJwt = 2`**, documented as: a signed JWT in `client_assertion`
+   with `client_assertion_type` `urn:ietf:params:oauth:client-assertion-type:jwt-bearer` (RFC 7523
+   section 2.2), in place of a secret, on the code exchange, the refresh, the revocation **and the
+   pushed authorization request** alike; maps to the library's `PostBody` with a `ClientAssertion`
+   on the request, **and to `null` for the scheme's `ClientSecret`, never an empty string**: the
+   library copies that option onto its requests, so a non-null value is posted beside the assertion
+   (#217 claims 1 to 3). The request's "maps to `PostBody` plus a `ClientAssertion`" was necessary,
+   not sufficient. The invariant lives in **the shared mapping in `Platform.Identity`, keyed on the
+   style, not in the profile**: `IssuerDefinition` carries no key and item 2 adds no member, so the
+   profile cannot build an assertion, and the request's item 4 ("its `OnPushAuthorization` adds the
+   client assertion") is corrected to the mapping. The mapping owns `OnAuthorizationCodeReceived`,
+   `OnPushAuthorization` with `HandleClientAuthentication()`, the refresh's
+   `UserTokenRequestParameters.Assertion` and `SessionEnd`'s `ClientAssertion`;
+   `ProfileTokenEndpoints.LibraryStyle(PrivateKeyJwt)` answers `PostBody` and reuses that endpoint
+   (an assertion on an `AuthorizationHeader` request throws); `OidcOptionsSetup` skips
+   `secrets.Get` for an issuer whose profile states `PrivateKeyJwt`. The profile's `Configure` sets
+   only what is the provider's. Two doc comments change with the member: the type "presents its
+   **credential**", not its secret, and the calls are **four**, not three.
+3. **The `ClientAssertion` object**, optional on the issuer object as proposed (`KeyRef` in the
+   `clientSecretRef` form, `Algorithm` default `RS256`, `KeyId` default the RFC 7638 thumbprint),
+   schema-optional with no `if`/`then` now (a candidate for MR-8's validator). The key is a property
+   of this deployment of the provider, so the issuer object is its home and the registry entry is
+   not. Workstream 3 reads it from `IConfiguration` as `SecurityHeaders` reads `BrowserOrigin`, and
+   enforces at start: a `pingfederate` issuer with no `ClientAssertion`, or whose `KeyRef` cannot be
+   read (`PreloadAsync` then `Get`), fails the start. Reusing `IClientSecretSource` for a private key
+   is accepted as the no-new-abstraction route and named as such.
+4. **`clientSecretRef` stays required**, deferred as written. Under `PrivateKeyJwt` the parameter
+   exists and resolves; its value is never placed on the scheme's options nor sent.
+5. **`form_post`.** `contracts/request-gate.md` → Rules by path splits the callback row:
+   `/signin-oidc` takes `GET` and `POST` for every profile, `/signout-callback-oidc` keeps `GET`,
+   `Sec-Fetch-Site` Any, the last cell unchanged. Workstream 4 implements it and flips the
+   `POST /signin-oidc` case in `RequestGateTests`. The gate needs no profile: a `POST` without
+   `state` fails as a `GET` does (400, the constant page, `auth.callback`), a non-form `POST` is "No
+   message", a `state` with no cookie is "Correlation failed", and `CallbackBlindCookieManager` is
+   path-only (#217 claim 4). The pingfederate profile's `Configure` sets `ResponseMode = form_post`
+   and `SameSite=None` on the two login-state cookies; `standard` and `cognito` keep `query` and
+   `Lax`. The one unexecuted part, that `SameSite=None; Secure` cookies ride the cross-site `POST`
+   in a browser, is the composed suites' under the pingfederate profile, in N-25's shape.
+6. **The prose that moves with it**, in the 4.2 form and with no new ADR: ADR-0007's status line,
+   overrides paragraph and T13 consequence gain a dated note; `contracts/http-contract.md`'s cookie
+   row reads `SameSite=Lax` (`SameSite=None` under a profile that uses `form_post`: `pingfederate`);
+   ADR-0011's PingFederate bullet and ADR-0017's matching consequence gain a dated line that the
+   credential-style question is answered by `PrivateKeyJwt`. ADR-0007's decision holds: `SameSite`
+   was never one of the four defences. A new ADR becomes warranted only if a second profile wants
+   `form_post`.
+7. **Pushed authorization**: no contract change. The pingfederate profile sets `Require`; the other
+   two keep the handler's default. The fail-closed path is an `InvalidOperationException` thrown
+   from the challenge inside `GET /bff/login`, answered as a bare 500 with a request line whose
+   `rule` is null, not a remote failure and not a rejection (#217 claim 5); no new problem code and
+   no start-up check, since discovery is lazy by design (R-D10). The profile ticket's hermetic test
+   asserts exactly that with the test provider's switch off. The authorize URL after a push carries
+   `client_id`, `request_uri` and the handler's two telemetry parameters. One note for the day
+   Cognito advertises `/par`: the handler's default pushed body carries `client_secret` in the form,
+   which the cognito profile's Basic-header style says it should not send.
+8. **Audience and logout**: no contract change; the recommendation that the deployment issues JWT
+   access tokens with `aud` following `resource` stands, as does the T-B13 caveat. Four facts are
+   the deployed run's to record on the profile ticket: whether `aud` survives a refresh naming no
+   `resource`; whether the token endpoint accepts `resource`; RP-initiated logout against a real
+   `end_session_endpoint`; and the provider's acceptance of the gateway's assertion (`aud`, `alg`,
+   `kid`, lifetime, `jti`), since the research's stub recorded the assertion and did not validate
+   it, and the test provider's `private_key_jwt` gain is the only validator before a deployed run.
+9. **Packages**: none new (#217 claim 6). The `docs/dependencies.md` row for
+   `Microsoft.IdentityModel.JsonWebTokens` now reads `fixtures/TestIdp`, `Platform.Identity`; the
+   direct reference in `Platform.Identity.csproj` needs no request. The 10.0.12 handler enters
+   `Platform.Identity`'s closure through `Platform.Abstractions`' direct reference, not through the
+   token library, whose own floor is 10.0.4.
+10. **Vocabulary**: `GLOSSARY.md` gains **Client credential style**, **Client assertion**, **Pushed
+    authorization** and **Login-state cookies**; `form_post` is a protocol term and gets no entry.
+
+What this decides for the spec issue: one integrator ticket (the enum value and the contracts test,
+`PrivateKeyJwt`, the `ClientAssertion` property, under item 1's coupled landing); workstream 3's
+profile and mapping ticket; workstream 5's test-provider ticket, which does not wait; workstream 4's
+gate ticket for `POST /signin-oidc`.

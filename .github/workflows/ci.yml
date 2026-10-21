@@ -130,7 +130,7 @@ jobs:
         # `export const meta` and returns at its top level, and neither a bare `node --check` nor a
         # bare wrapper parses it. The check rewrites the one line, wraps the body in a function it
         # never calls, and asks node to parse the result, so a script that does not parse fails at
-        # the push that broke it rather than at the launch that would have run it (ADR-0024, #135).
+        # the push that broke it rather than at the launch that would have run it (ADR-0026, #135).
         # The node is the one this image ships, printed here beside the result; the macOS job does
         # not run this step (docs/dependencies.md).
         run: |

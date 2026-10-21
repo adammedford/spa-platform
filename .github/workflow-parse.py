@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every tracked workflow script parses. Owner: integrator.
 
-A workflow script is a tracked `.claude/workflows/*.js`, which the Workflow tool runs (ADR-0024).
+A workflow script is a tracked `.claude/workflows/*.js`, which the Workflow tool runs (ADR-0026).
 The tool wraps the file's body in an async function of its own, so the file may use `return` and
 `await` at its top level and begins with `export const meta`. Neither parses as a plain script:
 `node --check` refuses the top-level `return`, and the same body wrapped in a function refuses

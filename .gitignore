@@ -68,7 +68,7 @@ spikes/g0/real-handler/vendor/ref/
 # Agent session scratch: worktrees and anything else a session leaves behind. Two exceptions:
 # settings.json, because the permission allowlist is shared, like CI config is; and the workflow
 # scripts under workflows/, because a workflow change is a branch, a review and a landing like any
-# other integrator change (ADR-0024). The mock harness and its fixtures beside them stay ignored
+# other integrator change (ADR-0026). The mock harness and its fixtures beside them stay ignored
 # until #133's follow-up tracks the harness as the script's test companion.
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
