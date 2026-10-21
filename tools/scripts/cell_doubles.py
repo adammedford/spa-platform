@@ -25,7 +25,9 @@ task definition family and the repositories are the locals in infra/modules/cell
 files (CODING_STANDARDS.md, "A guard reads the thing it guards").
 
 **A universal held on every run:** nothing a script prints names the account id. The repositories'
-URIs, the bucket's name and every ARN carry it, and the doubles print them where the real tools do.
+URIs, the bucket's name and every ARN carry it, and the doubles print them where the real tools do:
+a plan, an apply, a destroy, a refused docker login. Nor does it name the registry password or the
+teardown role's credentials, which no file the script leaves holds either (SECRETS, CREDENTIALS).
 """
 
 from __future__ import annotations
@@ -47,7 +49,6 @@ ACCOUNT = "111122223333"
 REGION = "us-east-2"
 CELL = "poc"
 PASSWORD = "ecr-login-password-0123456789"
-SECRETS = (ACCOUNT, PASSWORD)
 
 # The real tools the scripts use. Everything else is absent.
 TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "basename", "python3", "sleep", "date")
@@ -82,6 +83,13 @@ TEARDOWN_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/{TEARDOWN_ROLE}"
 OPERATOR_ARN = f"arn:aws:sts::{ACCOUNT}:assumed-role/AWSReservedSSO_AdministratorAccess_0123/operator"
 TARGET_GROUP_ARN = f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/spa-{CELL}/0123456789abcdef"
 TEARDOWN_KEY = "ASIATEARDOWNKEY0000"
+TEARDOWN_SECRET = "teardownsecret/abc+def"
+TEARDOWN_TOKEN = "teardownsessiontoken/xyz=="
+# What no output may hold: the account id, the registry password, and the teardown role's three
+# credentials, as verify_release_immutability_tests.py lists them. teardown.sh and cell-common.sh say
+# the credentials go only to one call's environment, never into a file or the output (#191).
+CREDENTIALS = (PASSWORD, TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN)
+SECRETS = (ACCOUNT, *CREDENTIALS)
 
 
 def digest_of(text: str) -> str:
@@ -335,7 +343,7 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
     if command == "sts assume-role":
         if options.get("role-arn") != TEARDOWN_ROLE_ARN:
             raise ServiceError("AccessDenied", "AssumeRole")
-        return [TEARDOWN_KEY, "teardownsecret/abc+def", "teardownsessiontoken/xyz=="]
+        return [TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN]
     if command == "resourcegroupstaggingapi get-resources":
         filters = options.get("tag-filters", [])
         if query != "ResourceTagMappingList[].ResourceARN":
@@ -563,12 +571,39 @@ def apply_platform(world: dict, variables: dict):
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
 
 
+# One resource of each root, as `terraform destroy -auto-approve -no-color` names it: first in the
+# plan it prints, every attribute going to null, ARNs among them, and then on the line that destroys
+# it, by its id. The account id is in each, as it is in the real output, so a destroy whose output
+# skipped the redaction fails the account-id universal (#191). The addresses are sample text, written
+# out by hand: no case reads one, so nothing guards on them.
+# https://developer.hashicorp.com/terraform/cli/commands/destroy (destroy shows its plan, as plan -destroy)
+DESTROYED = {
+    "idp": ("module.idp.aws_cognito_user_pool.this",
+            f"arn:aws:cognito-idp:{REGION}:{ACCOUNT}:userpool/{REGION}_EXAMPLE", f"{REGION}_EXAMPLE"),
+    "apps": ('aws_ssm_parameter.client_secret["app1"]',
+             f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/spa-platform/{CELL}/apps/app1/client-secret",
+             f"/spa-platform/{CELL}/apps/app1/client-secret"),
+    "platform": ("module.cell.aws_s3_bucket.platform", f"arn:aws:s3:::{BUCKET}", BUCKET),
+}
+
+
 def destroy_root(world: dict, root: str, stdout):
+    if world["roots"][root] is None:
+        # A root with no state plans nothing, so names nothing.
+        stdout.write("No changes. No objects need to be destroyed.\n\n")
+        address = None
+    else:
+        address, arn, ident = DESTROYED[root]
+        stdout.write(f"Terraform will perform the following actions:\n\n"
+                     f"  # {address} will be destroyed\n"
+                     f"  - resource {{\n      - arn = \"{arn}\" -> null\n      - id  = \"{ident}\" -> null\n    }}\n\n"
+                     f"Plan: 0 to add, 0 to change, 30 to destroy.\n"
+                     f"{address}: Destroying... [id={ident}]\n")
     if root == "platform":
         if world["objects"]:
             # S3 refuses to delete a bucket that holds any version or delete marker.
             # https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
-            stdout.write("Error: deleting S3 Bucket: BucketNotEmpty\n")
+            stdout.write(f"Error: deleting S3 Bucket ({(world['roots']['platform'] or {}).get('bucket', BUCKET)}): BucketNotEmpty\n")
             world["faults"]["destroy platform"] = True
             return
         for definition in world["task_definitions"].values():
@@ -579,7 +614,10 @@ def destroy_root(world: dict, root: str, stdout):
     world["roots"][root] = None
     world["tagged"] = [entry for entry in world["tagged"]
                        if entry.get("root") != root or entry["type"] == "ecs:task-definition"]
-    stdout.write(f"Destroy complete! Resources: 30 destroyed.\n")
+    if address:
+        stdout.write(f"{address}: Destruction complete after 1s\n\nDestroy complete! Resources: 30 destroyed.\n")
+    else:
+        stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
 def docker_double(argv: list[str], case: pathlib.Path) -> int:
@@ -592,7 +630,15 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         given = sys.stdin.read()
         record["password_on_stdin"] = given == PASSWORD
         record["host"] = argv[-1]
-        sys.stdout.write("Login Succeeded\n")
+        if world["faults"].get("login"):
+            # What Docker prints when the registry refuses the login: the registry's URL, whose host
+            # carries the account id. The daemon's "login attempt to %s failed with status: %d %s",
+            # https://github.com/moby/moby/blob/master/daemon/pkg/registry/auth.go
+            sys.stderr.write(f"Error response from daemon: login attempt to https://{argv[-1]}/v2/ "
+                             "failed with status: 400 Bad Request\n")
+            status = 1
+        else:
+            sys.stdout.write("Login Succeeded\n")
     elif argv[:2] == ["buildx", "build"]:
         tag = argv[argv.index("--tag") + 1]
         record["tag"] = tag
@@ -774,7 +820,16 @@ class Case:
                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
         result = Result(completed)
         for secret in SECRETS:
-            self.test.assertNotIn(secret, result.output, "the script printed the account id or a password")
+            self.test.assertNotIn(secret, result.output, "the script printed the account id, a password or a credential")
+        # Nor into a file the script leaves in the repository or the home directory. The account id
+        # is not searched for here: outputs.json carries the bucket's name, which holds it.
+        for tree in (self.repo, self.home):
+            for path in tree.rglob("*"):
+                if path.is_file():
+                    content = path.read_bytes()
+                    for secret in CREDENTIALS:
+                        self.test.assertNotIn(secret.encode(), content,
+                                              f"the script wrote a password or a credential to {path.relative_to(self.dir)}")
         return result
 
     def calls(self, tool: str | None = None) -> list[dict]:

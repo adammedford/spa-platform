@@ -233,6 +233,16 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         self.assertFalse((case.repo / "infra/envs/poc/platform/images.auto.tfvars").exists())
         self.assertEqual([], case.aws("ecs wait services-stable"))
 
+    def test_a_refused_docker_login_builds_nothing_and_names_no_account(self):
+        # Docker names the registry it could not log in to, and the registry's host is the account id
+        # (#191). Case.run holds the account-id universal, so this is the case where docker login's
+        # stream can fail it.
+        world = seeded_world()
+        world["faults"]["login"] = True
+        case = self.failed(world, "could not log Docker in to the cell's registry.")
+        self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")])
+
     def test_a_failed_build_applies_nothing(self):
         world = seeded_world()
         world["faults"]["build"] = True
