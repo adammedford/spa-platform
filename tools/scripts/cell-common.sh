@@ -104,8 +104,60 @@ cell_start() {
 
 # The account id never reaches the output: change request 1.5 keeps account identifiers out of the
 # tracked tree, and this output is pasted into tickets in a public repository (#122's rule).
-redact() { printf '%s' "$1" | sed "s/${ACCOUNT}/<account>/g"; }
-redact_stream() { sed "s/${ACCOUNT}/<account>/g"; }
+#
+# Nor does a client id, once a script has called redact_clients: each app's client id in the outputs
+# document becomes <client-id:appId>. The mock API's start line names both apps' clients, and the
+# sitting of #58 put them on the terminal and into its log by tailing the log group directly (#208).
+# A clientId may be any printable ASCII (contracts/registry.schema.json), so each value is replaced
+# as text, never made into a pattern. Each line is flushed as it is written, so a followed log
+# reaches a terminal or a tee as it arrives.
+REDACTIONS=""
+
+# After cell_start. Refuses, as outputs_field does, when the outputs document is missing or for
+# another Region.
+redact_clients() {
+  [ -f "$OUTPUTS_FILE" ] ||
+    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the three roots."
+  REDACTIONS="${WORK}/redactions"
+  documents clients "$OUTPUTS_FILE" "$REGION" > "$REDACTIONS" ||
+    refuse "$(root_name "$OUTPUTS_FILE") gives no clients for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the three roots."
+}
+
+redact() { printf '%s' "$1" | redact_stream; }
+
+# ENVIRON rather than -v, which would read a backslash in a value as an escape.
+# https://pubs.opengroup.org/onlinepubs/9799919799/utilities/awk.html (-v assignment, ENVIRON)
+redact_stream() {
+  REDACT_ACCOUNT="$ACCOUNT" REDACT_CLIENTS="$REDACTIONS" awk '
+    function swap(line, term, label,    out, at) {
+      out = ""
+      while ((at = index(line, term)) > 0) {
+        out = out substr(line, 1, at - 1) label
+        line = substr(line, at + length(term))
+      }
+      return out line
+    }
+    BEGIN {
+      count = 0
+      file = ENVIRON["REDACT_CLIENTS"]
+      if (file != "") {
+        while ((getline entry < file) > 0) {
+          tab = index(entry, "\t")
+          count++
+          labels[count] = "<client-id:" substr(entry, 1, tab - 1) ">"
+          terms[count] = substr(entry, tab + 1)
+        }
+      }
+      account = ENVIRON["REDACT_ACCOUNT"]
+    }
+    {
+      line = $0
+      for (i = 1; i <= count; i++) line = swap(line, terms[i], labels[i])
+      if (account != "") line = swap(line, account, "<account>")
+      print line
+      fflush()
+    }'
+}
 
 # --- one AWS call ----------------------------------------------------------------------------------
 #

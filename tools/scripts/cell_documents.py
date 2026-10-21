@@ -13,6 +13,9 @@ one file back.
         One field of that document, for a script that reads it: the contract's own description says
         the scripts read it and none of them reads Terraform state, teardown.sh excepted (change
         request 1.5a, decision 2; Q49 on #129). Refused when the document is for another Region.
+    cell_documents.py clients <outputs.json> <region>
+        Each app's client id from that document, one `<appId><tab><clientId>` line per app, for the
+        redaction in cell-common.sh, which elides them. Refused as field is.
     cell_documents.py config <environment.tsv> <platform-config.schema.json>
         The platform configuration the gateway container runs with, in the JSON form of
         contracts/platform-config.schema.json, from its task definition's environment.
@@ -115,7 +118,7 @@ def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
     return 0
 
 
-def field(path: str, name: str, region: str) -> int:
+def read_outputs(path: str, region: str) -> dict:
     try:
         document = json.loads(pathlib.Path(path).read_text())
     except (OSError, ValueError):
@@ -126,10 +129,33 @@ def field(path: str, name: str, region: str) -> int:
     # one for another Region would aim every call of the script where they cannot reach.
     if document.get("region") != region:
         raise Refused("the outputs document is not for AWS_REGION: source tools/aws-project.env, or run seed.sh again")
-    value = document.get(name)
+    return document
+
+
+def field(path: str, name: str, region: str) -> int:
+    value = read_outputs(path, region).get(name)
     if not isinstance(value, str) or not value:
         raise Refused(f"the outputs document has no {name}")
     print(value)
+    return 0
+
+
+def clients(path: str, region: str) -> int:
+    entries = read_outputs(path, region).get("clients")
+    if not isinstance(entries, dict):
+        raise Refused("the outputs document has no clients")
+    lines = []
+    for app, entry in entries.items():
+        client = entry.get("clientId") if isinstance(entry, dict) else None
+        # contracts/registry.schema.json: printable ASCII with no spaces, so no tab or newline can
+        # break the line the redaction reads.
+        if not isinstance(client, str) or not client or any(not "!" <= c <= "~" for c in client + app):
+            raise Refused("an entry of the outputs document's clients has no printable clientId")
+        lines.append((app, client))
+    # The longest first: the redaction replaces them in this order, and one id inside another
+    # would otherwise leave the longer one's remainder in the line.
+    for app, client in sorted(lines, key=lambda line: (-len(line[1]), line[0])):
+        print(f"{app}\t{client}")
     return 0
 
 
@@ -244,7 +270,7 @@ def release(directory: str) -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "config": (config, 2), "apps": (apps, 1), "release": (release, 1)}
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "release": (release, 1)}
 
 
 def main(argv: list[str]) -> int:
