@@ -233,14 +233,19 @@ const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.
 
 // ---------------------------------------------------------------- the questions, read here
 // The night's questions are comments on the Overnight issue, never its body (#104): each headed
-// "## Questions: #<issue>, <task id>, <title>", numbered **Q<n>.** continuously across them, each
-// with its "Recommended:" and "Answer:" lines. A comment over 60,000 characters is split into parts
-// whose headings end "(part k of m)"; the parts are joined in k order before reading, so a question
-// cut at a part boundary is read whole. A ticket whose parts are not all present, or a number that
-// appears twice, is a refusal, and those questions stay unread: nothing is applied from a partial read.
+// "## Questions: #<issue>, <task id>, <title>", numbered Q1..Qn continuously across them, each
+// with its "Recommended:" and "Answer:" lines. The overnight report does not pin the markup, and
+// the nights have written "**Q1.** text" (2026-10-21), "Q1. **text**" with the lines under it
+// indented, some as "- Answer:" list items (2026-10-20), and "**Q1** (#125 Q1). **text**"
+// (2026-10-19). So a question opens at a line that begins with any of the three, "Q1 to Q15, from
+// ..." opens none, and a Recommended: or Answer: line may be indented or a list item. A comment over 60,000
+// characters is split into parts whose headings end "(part k of m)"; the parts are joined in k order
+// before reading, so a question cut at a part boundary is read whole. A ticket whose parts are not
+// all present, a questions comment with no question in it, or a number that appears twice, is a
+// refusal, and those questions stay unread: nothing is applied from a partial read.
 const HEADING = /^## Questions: #(\d+), ([^,]+), (.*)$/
 const PART = /\s*\(part (\d+) of (\d+)\)\s*$/
-const Q_MARK = /^\*\*Q(\d+)\.\*\*[ \t]*/gm
+const Q_MARK = /^[ \t]*(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.(?=[ \t]))[ \t]*/gm
 const readQuestions = (comments) => {
   const groups = new Map()
   for (const c of comments) {
@@ -265,13 +270,17 @@ const readQuestions = (comments) => {
     }
     const text = [...g.parts].sort((a, b) => a.k - b.k).map((p) => p.text).join('\n')
     const marks = [...text.matchAll(Q_MARK)]
+    if (!marks.length) {
+      refusals.push(`the questions comment of #${g.issue} carries no question the morning can read (none opens "**Q<n>.**", "**Q<n>**" or "Q<n>."); none of it is read`)
+      continue
+    }
     marks.forEach((mk, i) => {
       const block = text.slice(mk.index + mk[0].length, i + 1 < marks.length ? marks[i + 1].index : text.length)
-      const rec = /^Recommended:[ \t]*(.*)$/m.exec(block)
-      const answers = [...block.matchAll(/^Answer:[ \t]*(.*)$/gm)]
+      const rec = /^[ \t]*(?:[-*][ \t]+)?Recommended:[ \t]*(.*)$/m.exec(block)
+      const answers = [...block.matchAll(/^[ \t]*(?:[-*][ \t]+)?Answer:[ \t]*(.*)$/gm)]
       found.push({
-        q: Number(mk[1]), issue: g.issue, task: g.task, title: g.title,
-        text: block.split(/^Recommended:/m)[0].trim(),
+        q: Number(mk[1] || mk[2]), issue: g.issue, task: g.task, title: g.title,
+        text: block.split(/^[ \t]*(?:[-*][ \t]+)?Recommended:/m)[0].trim(),
         recommendation: rec ? rec[1].trim() : '',
         answer: answers.length ? answers[answers.length - 1][1].trim() : '',
       })
@@ -283,7 +292,9 @@ const readQuestions = (comments) => {
 }
 
 // A confirmation is Adam's comment on the Overnight issue beginning "Confirm" (ADR-0021; #78 grill
-// Q1, Q7). Its first line names the questions it covers ("Q1 to Q57", "Q1-Q3", "Q58"); its
+// Q1, Q7). Its first sentence names the questions it covers ("Q1 to Q57", "Q1-Q3", "Q58"), and only
+// its first sentence, because a later one may name questions it leaves open ("Confirm D1, R1, R4.
+// Q1–Q48, R2 and R3 are not covered by this comment and stay open.", on 2026-10-18's issue); its
 // "Q<n>: <answer>" lines override, the last line per question winning across every Confirm comment
 // in order. A question no Confirm comment names or overrides stays as the night left it: provisional.
 const RANGE = /Q(\d+)\s*(?:to|through|–|—|-)\s*Q?(\d+)/g
@@ -294,7 +305,7 @@ const readConfirmations = (comments) => {
   const overrides = new Map() // q -> { answer, url }
   for (const c of confirms) {
     const body = String(c.body).trimStart()
-    const firstLine = body.split('\n')[0]
+    const firstLine = body.split('\n')[0].split(/\.(?:\s|$)/)[0]
     let rest = firstLine
     for (const r of firstLine.matchAll(RANGE)) {
       for (let q = Number(r[1]); q <= Number(r[2]); q++) covered.set(q, c.url)
@@ -554,6 +565,11 @@ const read = readQuestions(comments)
 refusals.push(...read.refusals)
 const conf = readConfirmations(comments)
 const dry = conf.confirms.length === 0
+// A question a Confirm comment names or overrides that no questions comment yielded is a read that
+// missed something: nothing is applied over it, and the hand-over says which.
+const readQs = new Set(read.questions.map((q) => q.q))
+const unread = [...new Set([...conf.covered.keys(), ...conf.overrides.keys()])].filter((q) => !readQs.has(q)).sort((a, b) => a - b)
+if (unread.length) refusals.push(`the Confirm comments name ${unread.map((q) => 'Q' + q).join(', ')}, which no "## Questions:" comment yielded; nothing is applied until every confirmed question is read`)
 const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answers: {}, morning: { commits: 0, pushed: false, reason: '' } }
 // Without a Confirm comment the pre-accepted answers are classified for the would-do list and acted
 // on by nobody (#78 grill Q1); with one, only what it confirms is classified and applied.
@@ -572,6 +588,8 @@ if (!verdict.ok) {
   // Any Verify stop goes to the hand-over: nothing is applied over a head no record clears (#78 ->
   // "Verify" step 8; the morning resumes once a record exists).
   log('Apply skipped: Verify did not clear the head')
+} else if (unread.length) {
+  log('Apply skipped: a confirmed question was not read')
 } else if (toClassify.length) {
   apply.ran = true
   const classifyKey = key({ questions: toClassify, dry })

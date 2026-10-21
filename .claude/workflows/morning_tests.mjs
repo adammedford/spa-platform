@@ -499,7 +499,31 @@ try {
     if (!ignored('stray_tests.mjs')) fail('.gitignore opens more than morning_tests.mjs: another companion is not ignored')
   }
 
-  // 14. Every agent call passes a schema and every stub's return satisfies it.
+  // 14. The question markup the nights have written: "**Q<n>.**", "Q<n>. **...**" with indented and
+  //     list-item lines under it, and "**Q<n>** (...)." all read, and a "Q1 to Q2, from ..." preamble
+  //     opens no question. A Confirm comment naming a question no comment yielded, or a questions
+  //     comment with no question in it, is a refusal and nothing is applied; a Confirm comment's
+  //     later sentence that names questions it leaves open covers none of them.
+  checks++
+  {
+    const forms = [
+      comment(30, `## Questions: ${cite(310)}, issue-310, Form two\n\nQ1 to Q2, from the grill's questions.\n\nQ1. **Add the term?**\n   Recommended: yes.\n   ${PRE}\n\nQ2. **Rewrite the sentence?**\n   - Recommended: yes.\n   - Answer: open\n`, '2026-10-21T06:00:00Z'),
+      comment(31, `## Questions: ${cite(311)}, issue-311, Form three\n\n**Q3** (${cite(311)} Q1). **File the ticket?**\nRecommended: Yes.\n${PRE}\n`, '2026-10-21T06:00:01Z'),
+    ]
+    const r = await execute(newRepo(), { date: DATE }, { issue: issueWith([...forms, comment(32, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:00:00Z')]) })
+    const a = r.result.apply.answers
+    if (Object.keys(a).join() !== '1,2,3' || a[1].verdict !== 'yes' || a[2].verdict !== 'open' || a[3].verdict !== 'yes' || r.result.refusals.length) fail(`the nights' markup: answers ${JSON.stringify(a)}, refusals ${JSON.stringify(r.result.refusals)}`)
+    const sent = (jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).map((q) => q.q)
+    if (sent.join() !== '1,3') fail(`the nights' markup: the classifier was sent ${sent}; expected 1,3`)
+    const unread = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, comment(33, 'Confirm Q1 to Q5 as pre-accepted.', '2026-10-21T08:00:00Z')]) })
+    if (unread.labels.some((l) => l === 'classify' || l.startsWith('apply:')) || !/Q5, which no "## Questions:" comment yielded/.test(unread.result.handover.text)) fail(`a Confirm comment naming an unread Q5: dispatched ${unread.labels.join(', ')}; refusals ${JSON.stringify(unread.result.refusals)}`)
+    const blank = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, comment(34, `## Questions: ${cite(312)}, issue-312, No markup\n\nQuestion one: add the term?\nAnswer: yes\n`, '2026-10-21T06:00:04Z'), CONFIRM]) })
+    if (!blank.result.refusals.some((x) => new RegExp(`${cite(312)} carries no question`).test(x))) fail(`a questions comment with no question in it was not refused: ${JSON.stringify(blank.result.refusals)}`)
+    const later = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, comment(35, 'Confirm Q1. Q3 is not covered by this comment and stays open.', '2026-10-21T08:00:00Z')]) })
+    if (later.result.apply.answers[3].confirmed || !later.result.apply.answers[1].confirmed) fail(`a Confirm comment's later sentence: answers ${JSON.stringify(later.result.apply.answers)}`)
+  }
+
+  // 15. Every agent call passes a schema and every stub's return satisfies it.
   checks++
   for (const c of allPrompts) if (!c.schema || c.schema.type !== 'object') fail(`${c.label}: called without a schema`)
   if (driftAll.length) fail(`returns not matching the script's schemas: ${driftAll.slice(0, 5).join(' | ')}`)
