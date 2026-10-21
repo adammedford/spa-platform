@@ -43,7 +43,10 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
     /// </summary>
     public Func<bool>? GateHeld { get; set; }
 
-    /// <summary>For each removal, in the order of <see cref="Removed"/>, what <see cref="GateHeld"/> answered as it arrived.</summary>
+    /// <summary>
+    /// For each removal, oldest first, what <see cref="GateHeld"/> answered as it arrived. Recorded before
+    /// the store is read, so two overlapping removals can sit in a different order in <see cref="Removed"/>.
+    /// </summary>
     public IReadOnlyList<(string Key, bool? GateHeld)> GatedRemovals => [.. gated];
 
     public async Task RemoveAsync(string key, CancellationToken ct)
