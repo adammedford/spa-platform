@@ -1,6 +1,8 @@
 # ADR-0017: What Gate G0 found against Cognito, and what it changes
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-20 by
+  [ADR-0024](0024-session-gate-in-process-and-refresh-lease-across-tasks.md): decision 1's
+  refresh design gains a cross-task refresh lease beside the in-process session gate.**
 - **Date:** 2026-10-16
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task I-6 ("fold the G0 findings into the
