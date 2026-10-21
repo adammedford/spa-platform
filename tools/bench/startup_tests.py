@@ -108,6 +108,9 @@ class Probe(unittest.TestCase):
         # The precision bound: the failed attempt before each success started no later than it.
         for name in names:
             self.assertLessEqual(marks[name]["after_ns"], marks[name]["at_ns"])
+        # ...and it is the attempt just before, not the first: polling every 5 ms, the window around
+        # listening is a few ms wide, not the 300 ms nothing listened for.
+        self.assertLess(marks["listening"]["at_ns"] - marks["listening"]["after_ns"], 100_000_000)
 
     def test_a_clock_whose_answer_never_comes_is_unreached_and_says_what_came(self):
         server = LateServer(0.0, app_status=500)
@@ -145,6 +148,10 @@ class Summary(unittest.TestCase):
         self.assertEqual({"median": 950.0, "max": 1000.0, "reached": 3, "runs": 3}, summary["listening"])
         self.assertEqual({"median": 1900.0, "max": 2000.0, "reached": 3, "runs": 3}, summary["app_host"])
 
+    def test_the_median_is_the_middle_run_not_the_mean(self):
+        runs = [run(i, listening=ms) for i, ms in enumerate([10, 90, 20])]
+        self.assertEqual(20.0, startup.summarise(runs)["listening"]["median"])
+
     def test_an_even_count_takes_the_mean_of_the_middle_two(self):
         runs = [run(i, listening=ms) for i, ms in enumerate([40, 10, 30, 20])]
         self.assertEqual(25.0, startup.summarise(runs)["listening"]["median"])
@@ -169,6 +176,19 @@ class Summary(unittest.TestCase):
         self.assertEqual(["1900", "2000", "1760", "1850"], app_row.split()[-4:])
         listening_row = next(line for line in text.splitlines() if line.startswith("listening"))
         self.assertEqual(["110", "120", "950", "1000", "840", "880"], listening_row.split()[-6:])
+
+
+class Windows(unittest.TestCase):
+    def test_each_clocks_widest_window_bounds_its_precision(self):
+        first = run(1, listening=100, healthz=130)
+        second = run(2, listening=100, healthz=130)
+        first["marks"]["healthz"]["after_ns"] = first["marks"]["healthz"]["at_ns"] - 12_000_000
+        second["marks"]["healthz"]["after_ns"] = second["marks"]["healthz"]["at_ns"] - 45_000_000
+        first["marks"]["listening"]["after_ns"] = first["marks"]["listening"]["at_ns"] - 7_000_000
+        second["marks"]["listening"]["after_ns"] = second["marks"]["listening"]["at_ns"] - 3_000_000
+        # The log-line clock is dockerd's stamp, not a poll, and has no window.
+        second["marks"]["listening_log"] = {"at_ns": 5, "after_ns": None, "attempts": 0, "status": None}
+        self.assertEqual({"listening": 7.0, "healthz": 45.0}, startup.windows_ms([first, second]))
 
 
 class GatewayEnvironment(unittest.TestCase):

@@ -266,11 +266,18 @@ def render_table(floor: Dict[str, dict], gateway: Dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def precision_ms(runs: List[dict]) -> Optional[float]:
-    """The widest window, over every polled mark reached, between the failed attempt's start and the mark."""
-    widths = [(mark["at_ns"] - mark["after_ns"]) / 1e6 for one in runs for mark in one["marks"].values()
-              if mark.get("at_ns") is not None and mark.get("after_ns") is not None]
-    return max(widths) if widths else None
+def windows_ms(runs: List[dict]) -> Dict[str, float]:
+    """Per polled clock, the widest window over the runs between the start of the failed attempt
+    before the mark and the mark. The event lies inside it, so it bounds the precision. A clock
+    reached on its first attempt has no failed attempt: its window is that attempt's own round trip,
+    and the mark is still when the answer arrived, which is what a health checker sees."""
+    widest: Dict[str, float] = {}
+    for one in runs:
+        for name, mark in one["marks"].items():
+            if mark.get("at_ns") is None or mark.get("after_ns") is None:
+                continue
+            widest[name] = max(widest.get(name, 0.0), (mark["at_ns"] - mark["after_ns"]) / 1e6)
+    return widest
 
 
 # --- the gateway's environment ---------------------------------------------------------------------
@@ -574,15 +581,15 @@ def report(facts: dict, runs: List[dict]) -> str:
             continue
         floor = [one for one in chosen if one["kind"] == "floor"]
         gateway = [one for one in chosen if one["kind"] == "gateway"]
-        width = precision_ms(chosen)
+        widths = windows_ms(chosen)
         cli = statistics.median(one["start_cli_ms"] for one in chosen)
         heading = (f"--cpus {facts['cpus']} --memory {facts['memory']}" if constrained
                    else "unconstrained (reported, not the floor)")
         lines += ["", f"{heading}: {len(floor)} floor and {len(gateway)} gateway cold starts, alternating",
                   render_table(summarise(floor), summarise(gateway)),
-                  f"precision: the widest window between a failed attempt and its mark was "
-                  f"{'-' if width is None else f'{width:.1f}'} ms; `docker start` took {cli:.0f} ms median "
-                  "on the host's clock"]
+                  "precision, the widest window between the attempt before a mark and the mark: "
+                  + ", ".join(f"{label} {widths[name]:.0f} ms" for name, label in CLOCKS if name in widths),
+                  f"`docker start` took {cli:.0f} ms median, timed on the host's clock and not part of the table"]
     return "\n".join(lines)
 
 
