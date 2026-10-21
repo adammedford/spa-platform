@@ -24,6 +24,7 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -385,50 +386,70 @@ class Rules(unittest.TestCase):
 
 class WillEndPartial(unittest.TestCase):
     """#228: the launch plan of 2026-10-21 forecast 22 integrated tickets and got 15 (#226), and
-    nothing at collect time said which would end partial. Each ticket now carries "willEndPartial":
-    one entry per other owner its Owner line names (#227 rule 1), and one per open box that names a
-    sitting, the deployed cell or #63 (rule 2) or a pushed branch or a landing (rule 3)."""
+    nothing at collect time said which would end partial. Each ticket now carries "willEndPartial".
+    Since #248 its entries are tools/ticket_shape.py's failures, one per rule broken, so the check at
+    creation and the forecast at launch judge a ticket by one grammar: each entry is the rule and the
+    line ticket_shape prints for it. A case per rule, each red while collect keeps a table of its own."""
 
-    def flags(self, number: int, text: str | None = None, *, label: str = "agent") -> list[dict]:
-        listed = {label: [issue(number, FILED[number] if text is None else text)]}
+    def flags(self, number: int, text: str | None = None, *, label: str = "agent",
+              blockers: tuple[tuple[int, str], ...] = ()) -> list[dict]:
+        listed = {label: [issue(number, FILED[number] if text is None else text,
+                                blockers=blockers)]}
         return by_issue(resolved(**listed))[number]["willEndPartial"]
 
-    def boxes(self, flags: list[dict]) -> list[tuple[str, list[str]]]:
-        return [(flag["box"], flag["names"]) for flag in flags if "box" in flag]
+    def rules(self, flags: list[dict]) -> list[str]:
+        return [flag["rule"] for flag in flags]
 
-    def owners(self, flags: list[dict]) -> list[str]:
-        return [flag["owner"] for flag in flags if "owner" in flag]
+    def test_one_owner_flags_touches_paths_of_two_owners(self):
+        text = ("**Owner:** integrator\n**Touches:** `src/Gateway/Dockerfile`, "
+                "`fixtures/MockApi/Dockerfile`\n\n## Acceptance\n- [ ] one\n")
+        flags = self.flags(7, text)
+        self.assertEqual(["one-owner"], self.rules(flags))
+        self.assertIn("ws5-fixtures: fixtures/MockApi/Dockerfile", flags[0]["reason"])
 
-    def test_172_is_flagged_for_its_pushed_branch_box(self):
+    def test_owner_line_flags_204_and_206_for_their_second_owner(self):
+        for number, other in ((204, "ws5-fixtures"), (206, "ws2-hosting")):
+            with self.subTest(issue=number):
+                flags = self.flags(number)
+                self.assertEqual(["owner-line"], self.rules(flags))
+                self.assertIn(f"integrator and {other}", flags[0]["reason"])
+
+    def test_owner_line_flags_172_for_naming_no_owner(self):
         flags = self.flags(172)
-        self.assertEqual([], self.owners(flags))
-        self.assertEqual(
-            [("The change request giving workstream 6 the `tools/bench` path is filed under "
-              "`contracts/changes/` on a pushed branch, in the existing change requests' shape, "
-              "naming this ticket and the map (#169); the answer links it.", ["a pushed branch"])],
-            self.boxes(flags))
-        self.assertIn("#227 rule 3", flags[0]["reason"])
+        self.assertEqual(["owner-line", "sitting-or-landing"], self.rules(flags))
+        self.assertIn("no role", flags[0]["reason"])
+        self.assertIn("pushed", flags[1]["reason"])
 
-    def test_204_is_flagged_for_workstream_5_and_for_no_box(self):
-        """Its Raised-by line names a sitting, and is no box."""
-        flags = self.flags(204)
-        self.assertEqual((["ws5-fixtures"], []), (self.owners(flags), self.boxes(flags)))
-        self.assertIn("#227 rule 1", flags[0]["reason"])
-
-    def test_206_is_flagged_for_workstream_2_and_for_no_box(self):
-        flags = self.flags(206)
-        self.assertEqual((["ws2-hosting"], []), (self.owners(flags), self.boxes(flags)))
-
-    def test_209_is_flagged_for_its_sitting_box_alone(self):
-        """Boxes 1 to 4 name the deployed stack, the tunnel, Parameter Store and CloudWatch, and a
-        lane built each of them; box 5 is the sitting's."""
+    def test_sitting_or_landing_flags_each_box_of_209_that_names_one(self):
+        """Box 1 says "A deployed stack" and box 5 is the sitting's. ticket_shape's word list reads
+        both alike, and its docstring names the escape: reword the box."""
         flags = self.flags(209)
-        self.assertEqual([], self.owners(flags))
-        self.assertEqual(
-            [("F-01 to F-06 and F-08 pass against the deployed cell in a sitting, and the run is "
-              "posted on #63", ["a sitting", "the deployed cell", "#63"])],
-            self.boxes(flags))
-        self.assertIn("#227 rule 2", flags[0]["reason"])
+        self.assertEqual(["sitting-or-landing", "sitting-or-landing"], self.rules(flags))
+        self.assertIn("A deployed stack beside the local one", flags[0]["reason"])
+        self.assertIn("F-01 to F-06 and F-08 pass against the deployed cell", flags[1]["reason"])
+
+    def test_sitting_or_landing_reads_ticket_shapes_own_word_list(self):
+        """Read from the module the creation check runs, so a word added there is forecast here."""
+        for word, _ in collect.ticket_shape().SITTING_OR_LANDING:
+            with self.subTest(word=word):
+                flags = self.flags(7, body(boxes=f"- [ ] It needs {word} first"))
+                self.assertEqual(["sitting-or-landing"], self.rules(flags))
+                self.assertIn(word, flags[0]["reason"])
+
+    def test_blocker_edge_flags_a_stated_wait_with_no_edge(self):
+        text = body() + "\nBlocked by #100.\n"
+        self.assertEqual(["blocker-edge"], self.rules(self.flags(7, text)))
+        self.assertEqual([], self.flags(7, text, blockers=((100, "OPEN"),)))
+
+    def test_foreground_flags_a_ready_for_agent_ticket(self):
+        text = "**Session:** foreground\n" + body()
+        self.assertEqual(["foreground"], self.rules(self.flags(7, text)))
+
+    def test_spec_is_never_a_ticket_so_never_forecast(self):
+        """ticket_shape's sixth rule fails a ready-for-agent issue with sub-issues. Collect lists
+        such an issue under "parents" and gives it no lane, so there is no ticket to flag."""
+        answer = resolved(agent=[issue(7, body(), subs=2)])
+        self.assertEqual(([], [7]), (answer["tickets"], [p["issue"] for p in answer["parents"]]))
 
     def test_one_owner_and_buildable_boxes_is_not_flagged(self):
         for number in (147, 198):
@@ -436,50 +457,15 @@ class WillEndPartial(unittest.TestCase):
                 self.assertEqual([], self.flags(number))
 
     def test_a_ticked_box_is_not_flagged(self):
-        ticked = FILED[209].replace("- [ ] F-01", "- [x] F-01")
+        ticked = FILED[209].replace("- [ ] F-01", "- [x] F-01").replace("- [ ] A deployed",
+                                                                          "- [x] A deployed")
         self.assertEqual([], self.flags(209, ticked))
 
-    def test_each_term_flags_a_box_alone(self):
-        for box, names in (
-            ("- [ ] It passes in a sitting", ["a sitting"]),
-            ("- [ ] Two sittings run it", ["a sitting"]),
-            ("- [ ] It runs on the Deployed Cell", ["the deployed cell"]),
-            ("- [ ] The run is posted on #63.", ["#63"]),
-            ("- [ ] The branch is pushed", ["a pushed branch"]),
-            ("- [ ] Ticked at the landing", ["a landing"]),
-            ("- [ ] Once #200 has landed", ["a landing"]),
-            ("- [ ] Met when the change lands", ["a landing"]),
-            ("- [ ] Ticked at the landing.", ["a landing"]),
-            ("- [ ] Once #200 has landed.", ["a landing"]),
-        ):
-            with self.subTest(box=box):
-                self.assertEqual([(box[6:], names)], self.boxes(self.flags(7, body(boxes=box))))
-
-    def test_a_term_inside_another_word_or_name_is_not_flagged(self):
-        """A box may cite the landing guide, the pre-push hook or the cell scripts, carry #63 inside
-        a longer token or by its URL, or say a landings table or unpushed, and still be buildable."""
-        for box in (
-            "- [ ] `docs/agents/landing-work.md` names the step",
-            "- [ ] `landing.md` names the step",
-            "- [ ] The pre-push hook refuses it",
-            "- [ ] The cell scripts' companions search for it",
-            "- [ ] It cites #63a and x#63",
-            "- [ ] It links https://github.com/adammedford/spa-platform/issues/63",
-            "- [ ] The landings table has a column",
-            "- [ ] The flag is unpushed",
-        ):
-            with self.subTest(box=box):
-                self.assertEqual([], self.flags(7, body(boxes=box)))
-
-    def test_an_integrator_row_whose_owner_line_names_a_workstream_is_flagged(self):
-        """An I-* row is the integrator's whatever its Owner line says, so a line naming ws2 is a
-        second owner: the same pair the "why" already says lands in its own pull request."""
-        self.assertEqual(["ws2-hosting"], self.owners(self.flags(7, body("I-7", "ws2-hosting"))))
-
-    def test_every_ticket_carries_the_field_whatever_its_status(self):
-        """The forecast reads the ready-for-agent ones; the field is the ticket's shape, so a human's
-        ticket carries it too."""
-        self.assertEqual(["ws5-fixtures"], self.owners(self.flags(204, label="human")))
+    def test_a_human_ticket_carries_the_rules_that_read_no_label(self):
+        """The rules under ready-for-agent alone read a lane's work; a human's ticket is judged by
+        its own label, as the creation check judges it, and still carries the owner rules."""
+        self.assertEqual(["owner-line"], self.rules(self.flags(204, label="human")))
+        self.assertEqual([], self.flags(209, label="human"))
 
 
 class ThroughGh(unittest.TestCase):
@@ -535,7 +521,7 @@ class ThroughGh(unittest.TestCase):
         self.assertEqual(0, code, err)
         found = {t["issue"]: t["willEndPartial"] for t in json.loads(out)["tickets"]}
         self.assertEqual([], found[198])
-        self.assertEqual(["ws5-fixtures"], [flag["owner"] for flag in found[204]])
+        self.assertEqual(["owner-line"], [flag["rule"] for flag in found[204]])
         self.assertIn("1 will end partial", err)
 
     def test_a_shared_id_exits_1_with_nothing_on_stdout(self):
@@ -579,6 +565,56 @@ class ThroughGh(unittest.TestCase):
                 code, out, err = self.run_main("--json", "--from", str(saved))
                 self.assertEqual((1, ""), (code, out))
                 self.assertIn("could not read the input", err)
+
+
+class ForecastFailsClosed(unittest.TestCase):
+    """A ticket-shape check that cannot load or judge stops the tool on exit 1 with nothing on
+    stdout, as a failed read does: an empty willEndPartial from a check that never ran would read
+    as "none flagged" (CODING_STANDARDS.md, "A check fails closed")."""
+
+    PARTS = ("tools/overnight_collect.py", "tools/ticket_shape.py", ".github/path-ownership.py",
+             "OWNERSHIP.md")
+
+    def test_a_missing_part_of_the_check_exits_1_with_nothing_on_stdout(self):
+        for missing in self.PARTS[1:]:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as scratch:
+                tree = pathlib.Path(scratch)
+                for part in self.PARTS:
+                    if part != missing:
+                        (tree / part).parent.mkdir(parents=True, exist_ok=True)
+                        (tree / part).write_bytes((ROOT / part).read_bytes())
+                saved = tree / "saved"
+                saved.mkdir()
+                (saved / "ready-for-agent.json").write_text(json.dumps([issue(198, FILED[198])]))
+                (saved / "branches.txt").write_text("")
+                (saved / "roadmap.json").write_text(json.dumps(ROAD))
+                done = subprocess.run(
+                    [sys.executable, "-I", str(tree / self.PARTS[0]), "--json", "--from",
+                     str(saved)], capture_output=True, text=True, cwd=scratch, check=False,
+                    env={"PATH": "/usr/bin:/bin", "HOME": scratch})
+                self.assertEqual((1, ""), (done.returncode, done.stdout), done.stderr)
+                self.assertIn("no tickets printed: the ticket-shape check could not", done.stderr)
+
+    def test_the_whole_tree_judges(self):
+        """The same layout with nothing missing prints the tickets, so the cases above fail on
+        the part they leave out and not on the copy."""
+        with tempfile.TemporaryDirectory() as scratch:
+            tree = pathlib.Path(scratch)
+            for part in self.PARTS:
+                (tree / part).parent.mkdir(parents=True, exist_ok=True)
+                (tree / part).write_bytes((ROOT / part).read_bytes())
+            saved = tree / "saved"
+            saved.mkdir()
+            (saved / "ready-for-agent.json").write_text(json.dumps([issue(204, FILED[204])]))
+            (saved / "branches.txt").write_text("")
+            (saved / "roadmap.json").write_text(json.dumps(ROAD))
+            done = subprocess.run(
+                [sys.executable, "-I", str(tree / self.PARTS[0]), "--json", "--from", str(saved)],
+                capture_output=True, text=True, cwd=scratch, check=False,
+                env={"PATH": "/usr/bin:/bin", "HOME": scratch})
+            self.assertEqual(0, done.returncode, done.stderr)
+            flags = json.loads(done.stdout)["tickets"][0]["willEndPartial"]
+            self.assertEqual(["owner-line"], [flag["rule"] for flag in flags])
 
 
 class BranchesThroughGit(unittest.TestCase):
