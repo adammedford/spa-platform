@@ -98,6 +98,8 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         self.assertEqual(queries[-1], case.calls("aws")[-1], "the tag query is not the last call")
         self.assertIn("pass:", result.stdout)
         self.assertIn("P-05", result.stdout)
+        # The tag query cannot list IAM roles, so the pass line does not claim them (#118).
+        self.assertIn("IAM roles", result.stdout)
 
     def test_the_bootstrap_s_resources_do_not_answer_and_are_left(self):
         case, _ = self.torn_down()
@@ -221,6 +223,20 @@ class TeardownFails(cell.CompanionTestCase):
         self.assertIn("still in use after 3 seconds", result.stderr)
         self.assertEqual(4, len(case.aws("acm delete-certificate")))
         self.assertNotIn("pass:", result.stdout)
+        self.assertNoUnexpectedCall(case)
+
+    def test_a_version_left_in_the_bucket_stops_before_any_destroy(self):
+        # A version written after the listing is not deleted, and the count after the deletes says
+        # so: the platform root is never destroyed with the bucket still holding it (#192). Without
+        # that check the destroy runs and S3 refuses the bucket's deletion, which this case tells
+        # apart by the message and by the destroy it ran.
+        world = deployed_world()
+        world["faults"]["written_after_listing"] = True
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("the bucket still holds 1 versions and 0 delete markers.", result.stderr)
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "destroy"])
         self.assertNoUnexpectedCall(case)
 
     def test_a_failed_destroy_stops_before_the_next_root(self):

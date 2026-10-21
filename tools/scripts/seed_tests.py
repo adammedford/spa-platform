@@ -164,6 +164,31 @@ class SeedRefuses(cell.CompanionTestCase):
         world["roots"]["idp"]["region"] = "us-east-1"
         self.refused(world, 1, "not AWS_REGION")
 
+    def test_an_idp_root_in_another_region_from_the_platform_root(self):
+        # The platform root is in AWS_REGION, so only the check across roots catches the idp root
+        # elsewhere (#192, from the review of #186, S5).
+        world = cell.default_world()
+        world["roots"]["idp"]["region"] = "us-east-1"
+        self.refused(world, 1, "the idp root's region differs from the platform root's")
+
+    def test_an_idp_root_of_another_cell_from_the_platform_root(self):
+        world = cell.default_world()
+        world["roots"]["idp"]["cell"] = "poc2"
+        self.refused(world, 1, "the idp root's cell differs from the platform root's")
+
+    def test_no_app_definition_publishes_nothing_and_fails(self):
+        # The loop over fixtures/apps/*.json runs no time, and the seed must not then say it passed
+        # (#192). Not refused(): the outputs document is written before the loop.
+        case = cell.Case(self)
+        for definition in (case.repo / "fixtures" / "apps").glob("*.json"):
+            definition.unlink()
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("fixtures/apps/ holds no app definition.", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
+        self.assertEqual([], case.calls("dotnet"))
+        self.assertNoUnexpectedCall(case)
+
     def test_a_release_name_that_is_not_one(self):
         self.refused(cell.default_world(), 2, "--release must be", "--release", "a/b")
 

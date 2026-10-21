@@ -88,13 +88,14 @@ def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
         document[field] = entry["value"]
     if missing:
         raise Refused("these outputs are missing, so a root is not applied or not initialised: " + ", ".join(missing))
-    # One Region and one cell across the three roots, and the Region every AWS call of the scripts
-    # names: a root applied elsewhere would put a bucket in the document the calls cannot reach.
-    for root in ("idp",):
-        for name in ("region", "cell"):
-            other = roots[root].get(name, {}).get("value")
-            if other is not None and other != document[name]:
-                raise Refused(f"the {root} root's {name} differs from the platform root's")
+    # The idp root's Region and cell against the platform root's, which the document carries; the
+    # apps root has no region or cell output, so there is nothing of it to compare. And then the
+    # platform root's Region against the one every AWS call of the scripts names: a root applied
+    # elsewhere would put a bucket in the document the calls cannot reach.
+    for name in ("region", "cell"):
+        other = roots["idp"].get(name, {}).get("value")
+        if other is not None and other != document[name]:
+            raise Refused(f"the idp root's {name} differs from the platform root's")
     if document["region"] != region:
         raise Refused("the platform root's region is not AWS_REGION: source tools/aws-project.env, or check the root's terraform.tfvars")
     target = pathlib.Path(out)

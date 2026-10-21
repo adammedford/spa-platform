@@ -15,6 +15,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
@@ -226,6 +227,37 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         world["target_group"]["states"] = ["healthy", "unhealthy.draining"]
         self.failed(world, "targets are: healthy unhealthy.draining")
 
+    # The four cases below each turn one check of cell-common.sh's wait_and_assert red when that
+    # check is removed, and no other check catches what they set up (#192, from the review of #186,
+    # P1): the merge body names each mutation.
+
+    def test_a_previous_deployment_not_drained(self):
+        world = seeded_world()
+        world["faults"]["deployments"] = 2
+        self.failed(world, "has 2 deployments; the previous one has not drained")
+
+    def test_a_running_task_of_another_revision_with_the_applied_digest(self):
+        # The digest matches, so only the comparison of each running task's definition catches it:
+        # the task is named with the revision it runs, the cell's first.
+        world = seeded_world()
+        world["faults"]["running_definition"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("is not the applied gateway", result.stderr)
+        self.assertIn(f": RUNNING, {cell.FAMILY}:1, gateway digest", result.stderr)
+        self.assertNoUnexpectedCall(case)
+
+    def test_a_target_group_that_does_not_check_readyz(self):
+        world = seeded_world()
+        world["faults"]["health_path_stale"] = True
+        self.failed(world, "the target group checks /, not /readyz.")
+
+    def test_an_outputs_document_that_names_another_gateway_image(self):
+        world = seeded_world()
+        world["faults"]["output_image_stale"] = True
+        self.failed(world, "the outputs document's gatewayImage is ")
+
     def test_a_failed_apply_records_no_images_and_waits_for_nothing(self):
         world = seeded_world()
         world["faults"]["apply"] = True
@@ -287,6 +319,28 @@ class DeployRefusesToStart(cell.CompanionTestCase):
         path.write_text(json.dumps(document))
         self.refused(case, f"gives no ecrGateway for {cell.REGION}")
         self.assertEqual([], case.calls("terraform"))
+
+
+class TheDoublesWorldIsReplacedWholeByRename(unittest.TestCase):
+    """deploy.sh pipes the aws double into the docker double for the ECR login, so two doubles hold
+    world.json at once, and cell_doubles.save_world writes it by rename so that a reader sees the old
+    world or the new one, never half of one (c1f4c2a). A rename is checked here directly rather than
+    by racing the pipe, which loses about 11 runs in 1000 written in place (the review of #186, P9):
+    a reader that opened the file before a save goes on reading the world it opened, whole, which a
+    write in place, truncating that same file, does not leave it."""
+
+    def test_a_reader_open_across_a_save_reads_the_world_it_opened(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            case = pathlib.Path(scratch)
+            old = cell.default_world()
+            cell.save_world(case, old)
+            new = seeded_world()
+            with open(case / "world.json") as reader:
+                cell.save_world(case, new)
+                self.assertEqual(old, json.loads(reader.read()))
+            self.assertEqual(new, json.loads((case / "world.json").read_text()))
+            self.assertEqual(["world.json"], sorted(path.name for path in case.iterdir()),
+                             "a staged world was left beside world.json")
 
 
 if __name__ == "__main__":
