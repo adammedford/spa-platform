@@ -1,0 +1,39 @@
+seed: spa-platform-poc-111122223333-us-east-1-an, 1 app(s), registry revision 42
+bench: floor constrained #1: {'listening': 228, 'healthz': 422, 'listening_log': 314}
+bench: gateway constrained #1: {'listening': 1118, 'healthz': 1819, 'readyz': 2722, 'app_host': 2924, 'listening_log': 1122}
+bench: floor constrained #2: {'listening': 301, 'healthz': 503, 'listening_log': 394}
+bench: gateway constrained #2: {'listening': 708, 'healthz': 1299, 'readyz': 2304, 'app_host': 2697, 'listening_log': 792}
+bench: floor constrained #3: {'listening': 242, 'healthz': 445, 'listening_log': 246}
+bench: gateway constrained #3: {'listening': 747, 'healthz': 1156, 'readyz': 2053, 'app_host': 2261, 'listening_log': 746}
+bench: floor constrained #4: {'listening': 311, 'healthz': 433, 'listening_log': 314}
+bench: gateway constrained #4: {'listening': 772, 'healthz': 1185, 'readyz': 2090, 'app_host': 2486, 'listening_log': 774}
+bench: floor constrained #5: {'listening': 289, 'healthz': 410, 'listening_log': 285}
+bench: gateway constrained #5: {'listening': 661, 'healthz': 1062, 'readyz': 1873, 'app_host': 2265, 'listening_log': 661}
+bench: floor constrained #6: {'listening': 329, 'healthz': 522, 'listening_log': 322}
+bench: gateway constrained #6: {'listening': 743, 'healthz': 1247, 'readyz': 2046, 'app_host': 2254, 'listening_log': 737}
+bench: floor constrained #7: {'listening': 218, 'healthz': 410, 'listening_log': 296}
+bench: gateway constrained #7: {'listening': 755, 'healthz': 1147, 'readyz': 2068, 'app_host': 2355, 'listening_log': 755}
+bench: floor constrained #8: {'listening': 253, 'healthz': 446, 'listening_log': 254}
+bench: gateway constrained #8: {'listening': 702, 'healthz': 1108, 'readyz': 1934, 'app_host': 2219, 'listening_log': 701}
+bench: floor constrained #9: {'listening': 306, 'healthz': 498, 'listening_log': 303}
+bench: gateway constrained #9: {'listening': 686, 'healthz': 1277, 'readyz': 2060, 'app_host': 2380, 'listening_log': 676}
+bench: floor constrained #10: {'listening': 174, 'healthz': 368, 'listening_log': 250}
+bench: gateway constrained #10: {'listening': 681, 'healthz': 1083, 'readyz': 2002, 'app_host': 2489, 'listening_log': 680}
+
+Startup benchmark (PROTOTYPE, #173)
+commit ffbee6750fc9cb5a22b0da865006239494779636
+images: floor dc71fa8edee5, gateway 0490131862a3, stand-in 120b1589c6df
+docker 29.9.1 on Docker Desktop, aarch64, 12 CPUs, 7.7 GiB; host arm64
+clock: zero is the container's State.StartedAt (dockerd); marks are time.time_ns() in a probe container on the same Docker VM, one CLOCK_REALTIME; the log-line clock is dockerd's own timestamp on that line
+polling: a new connection every 10 ms after a failed attempt, each clock only after the one before it
+
+--cpus 0.25 --memory 1g: 10 floor and 10 gateway cold starts, alternating
+clock (ms from StartedAt)  floor med  floor max  gw med  gw max  gap med  gap max
+listening                        271        329     726    1118      455      788
+listening (log line)             300        394     741    1122      442      728
+/healthz 200                     439        522    1170    1819      731     1297
+/readyz 200 *                      -          -    2056    2722     1618     2199
+first app-host 401 *               -          -    2367    2924     1928     2402
+* the gap is over the floor's /healthz: the floor has no registry, so that is when it is ready
+precision, the widest window between the attempt before a mark and the mark (a clock reached on its first attempt has only that request's round trip): listening 15 ms, /healthz 200 701 ms, /readyz 200 101 ms, first app-host 401 487 ms
+`docker start` took 55 ms median, timed on the host's clock and not part of the table
