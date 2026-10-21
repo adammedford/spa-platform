@@ -170,6 +170,11 @@ try {
     if (r.skippedBecauseRecorded !== false || r.outcome !== 'recorded') fail(`PR ${n}: outcome ${r.outcome}, skipped ${r.skippedBecauseRecorded}; a line that is not a record of this head skipped it`)
     if (env.posted.filter((p) => p.n === n).length !== 1) fail(`PR ${n}: expected one comment`)
   }
+  // The lines that are not records are not read as records of another head either, and the record
+  // of an earlier head is reported as one.
+  const earlier = (n) => JSON.stringify(((result.prs || []).find((x) => x.number === n) || {}).earlierRecords)
+  if (earlier(77) !== '[]') fail(`PR 77: earlierRecords ${earlier(77)}, expected none: a line that is not a record was read as one`)
+  if (earlier(78) !== JSON.stringify([CLEARED_76.html_url])) fail(`PR 78: earlierRecords ${earlier(78)}, expected PR #76's review`)
 
   // 5. With skipRecorded false, a recorded head is reviewed again and gets a new record.
   checks++
@@ -183,6 +188,56 @@ try {
   env = run({ prs: [] }, PRS)
   result = await execute(env)
   if (!result || !result.halted || env.calls.length) fail(`a launch with no pull request started ${env.calls.length} agent(s) and returned ${JSON.stringify(result)}`)
+
+  // 7. The producer's comment is a record to the recogniser: served back as the owner's comment, the
+  //    comment a first run posted makes a second run on the same head post nothing.
+  checks++
+  env = run({ prs: [101] }, PRS)
+  await execute(env)
+  const first = env.posted[0] ? env.posted[0].body : null
+  if (first === null) fail('PR 101: the first run posted no comment to serve back')
+  else {
+    const echo = { author_association: 'OWNER', created_at: '2026-10-21T09:00:00Z', html_url: 'https://github.com/o/r/pull/101#issuecomment-1', body: first }
+    env = run({ prs: [101] }, { 101: { ...PRS[101], comments: [echo] } })
+    result = await execute(env)
+    const r = (result.prs || []).find((x) => x.number === 101) || {}
+    if (!r.skippedBecauseRecorded || env.posted.length) fail(`PR 101's second run: outcome ${r.outcome}, ${env.posted.length} comment(s); its own record did not skip the head`)
+  }
+
+  // 8. The recogniser agrees with the reader land.sh runs. Each body below holds a merge record of
+  //    PR #76's head, separated or padded by a character on which JavaScript's and Python's notions
+  //    of a line or of whitespace differ; tools/review_record.py is run on each, and the head must be
+  //    skipped exactly when the reader clears it. Only merge records: the reader exits 1 on a hold.
+  checks++
+  const L = `Reviewed ${H76} against ${B76}: merge`
+  const BODIES = [L, `  ${L}\t`, `\ufeff${L}`, `\x1f${L}`, `\xa0${L}`, `\u3000${L}`, `x\u200b${L}`,
+    `prose\r${L}`, `prose\v${L}`, `prose\x1d${L}`, `${L}\x85`, `prose\u2028${L}`, `prose\u2029${L}`]
+  for (const [i, body] of BODIES.entries()) {
+    const entry = { author_association: 'OWNER', created_at: '2026-10-17T17:00:00Z', html_url: `u/r${i}`, body }
+    let cleared
+    try {
+      execFileSync('python3', ['-I', path.join(top, 'tools', 'review_record.py'), H76],
+        { input: JSON.stringify({ comments: [[entry]], reviews: [[]] }), stdio: ['pipe', 'ignore', 'ignore'] })
+      cleared = true
+    } catch (e) {
+      if (e.code === 'ENOENT') throw new Error('python3 is required to run tools/review_record.py, the reader this check holds the script to')
+      if (e.status !== 1) throw new Error(`tools/review_record.py exited ${e.status} on body ${i}`)
+      cleared = false
+    }
+    env = run({ prs: [76] }, { 76: { ...PRS[76], reviews: [], comments: [entry] } })
+    const res = await execute(env)
+    const skipped = !!(((res.prs || [])[0]) || {}).skippedBecauseRecorded
+    if (skipped !== cleared) fail(`body ${i} ${JSON.stringify(body)}: the reader ${cleared ? 'clears' : 'refuses'} it, the script ${skipped ? 'skips' : 'reviews'} the head`)
+  }
+
+  // 9. Two records of the head at the same instant, one comment carrying both verdicts: a hold among
+  //    them holds, as in the reader.
+  checks++
+  const both = { author_association: 'OWNER', created_at: '2026-10-17T17:00:00Z', html_url: 'u/both', body: `Reviewed ${H76} against ${B76}: hold\nReviewed ${H76} against ${B76}: merge` }
+  env = run({ prs: [76] }, { 76: { ...PRS[76], reviews: [], comments: [both] } })
+  result = await execute(env)
+  const tie = (result.prs || [])[0] || {}
+  if (tie.verdict !== 'hold') fail(`PR 76 with a hold and a merge at one instant: verdict ${tie.verdict}, expected hold`)
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)

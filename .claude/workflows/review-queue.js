@@ -13,8 +13,8 @@ export const meta = {
 // The walking skeleton of the review-queue spec (#79, ticket 1 of 5: #83). For each pull request it is
 // given it inventories, reviews on both axes, decides, and posts exactly one comment whose last line is
 // the review record docs/agents/review.md -> "The review record" defines. It never merges, pushes,
-// tags, labels, assigns or edits a branch; mutations, delta review and the open queue are later
-// tickets, and its comment says "No mutations run". Test companion: review-queue_tests.mjs beside it.
+// tags, labels, assigns or edits a branch. It runs no mutations, and its comment says "No mutations
+// run" so the record never implies one (#83). Test companion: review-queue_tests.mjs beside it.
 //
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/review-queue.js
@@ -25,8 +25,8 @@ export const meta = {
 //   repo          required  the main checkout, an absolute path. Read-only apart from the run's log.
 //   date          required  YYYY-MM-DD. Names the run's log directory.
 //   wt            required  the root for throwaway worktrees, an absolute path outside repo.
-//   prs           required  a non-empty array of pull request numbers into main. The open queue, read
-//                           when no list is given, is a later ticket.
+//   prs           required  a non-empty array of pull request numbers into main. The script reads no
+//                           queue of its own: it reviews exactly the pull requests it is named (#83).
 //   maxParallel   optional  positive integer, default 3: agents running at once.
 //   skipRecorded  optional  boolean, default true. A head that already carries a record of either
 //                           verdict is skipped and reported; false reviews it again and posts a new
@@ -68,6 +68,17 @@ const DIR = (n) => `${LOG}/pr-${n}`
 // exact form with both shas full and lowercase, in an issue comment or in a review whose state is
 // COMMENTED, posted by an account the repository let in (OWNER, MEMBER, COLLABORATOR). A change to
 // the grammar is an edit to these lines and to the reader, together.
+//
+// "Line" and "stripped" are Python's, because the reader splits a body with str.splitlines() and
+// strips each line with str.strip(): https://docs.python.org/3/library/stdtypes.html#str.splitlines
+// and #str.strip. JavaScript's /\r?\n/ and trim() differ from both. trim() strips U+FEFF, which
+// isspace() does not, so a BOM-prefixed line would skip a head the reader refuses to clear; and
+// neither treats \x1c-\x1f or \x85 as Python does, nor splits at \r, \v, \f, \x1c-\x1e, \x85, U+2028
+// or U+2029. The two classes below are those sets as python3 3.9 enumerates them over every code
+// point, and the companion's reader check runs tools/review_record.py itself to hold them to it.
+const PY_LINE_BREAK = /\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/
+const PY_SPACE = '[\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]'
+const PY_STRIP = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g')
 const RECORD = /^Reviewed ([0-9a-f]{40}) against ([0-9a-f]{40}): (merge|hold)$/
 const REPOSITORY_ACCOUNTS = ['OWNER', 'MEMBER', 'COLLABORATOR']
 const recordLine = (head, base, verdict) => {
@@ -81,8 +92,8 @@ const recordsIn = (inv) => {
   const read = (entry, at) => {
     if (!entry || typeof entry.body !== 'string') return
     if (!REPOSITORY_ACCOUNTS.includes(entry.author_association)) return
-    for (const raw of entry.body.split(/\r?\n/)) {
-      const m = RECORD.exec(raw.trim())
+    for (const raw of entry.body.split(PY_LINE_BREAK)) {
+      const m = RECORD.exec(raw.replace(PY_STRIP, ''))
       if (m) found.push({ head: m[1], base: m[2], verdict: m[3], url: entry.html_url || '', at: entry[at] || '' })
     }
   }
@@ -305,7 +316,10 @@ const review = async (n) => {
   const onHead = records.filter((r) => r.head === inv.head)
   res.earlierRecords = records.filter((r) => r.head !== inv.head).map((r) => r.url)
   if (SKIP_RECORDED && onHead.length) {
-    const latest = onHead[onHead.length - 1]
+    // The latest record decides, and a hold among records sharing the latest instant holds, as the
+    // reader's docstring says (tools/review_record.py, "The latest record naming the head decides").
+    const last = onHead[onHead.length - 1]
+    const latest = onHead.find((r) => r.at === last.at && r.verdict === 'hold') || last
     log(`#${n}: ${inv.head} already carries a record (${latest.verdict}): ${latest.url}; skipped`)
     return { ...res, outcome: 'skipped', stage: '', verdict: latest.verdict, recordUrl: latest.url, skippedBecauseRecorded: true }
   }
