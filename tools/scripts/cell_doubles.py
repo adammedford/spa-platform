@@ -563,7 +563,8 @@ def apply_platform(world: dict, variables: dict):
     world["tagged"].append({"arn": td_arn(name), "type": "ecs:task-definition", "root": "platform",
                             "tags": {"Platform": "spa-platform", "Cell": CELL}})
     # Each fault below leaves one thing the apply should have moved where it was, so that a case can
-    # show the check in deploy.sh's wait_and_assert that reads it is the one that catches it.
+    # show the check in cell-common.sh's wait_and_assert (which deploy.sh and rollback.sh run) that
+    # reads it is the one that catches it.
     if not world["faults"].get("output_image_stale"):
         world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
     if not world["faults"].get("health_path_stale"):

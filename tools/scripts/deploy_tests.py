@@ -15,6 +15,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
@@ -329,7 +330,6 @@ class TheDoublesWorldIsReplacedWholeByRename(unittest.TestCase):
     write in place, truncating that same file, does not leave it."""
 
     def test_a_reader_open_across_a_save_reads_the_world_it_opened(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as scratch:
             case = pathlib.Path(scratch)
             old = cell.default_world()
