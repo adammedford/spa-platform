@@ -35,7 +35,8 @@ detail):
 Exit 0 means the new gateway runs steady and healthy. Exit 1 names the step that failed; exit 2
 means it did not start (a missing tool, no Region, no credentials, no outputs document).
 
-Then check it from the workstation, with the tunnel up:
+Then check it from the workstation. The tunnel's hop is the gateway task, which the deployment
+replaced, so a tunnel opened before it has ended: start `tools/scripts/tunnel.sh` again, then
 
 ```bash
 tools/scripts/verify-tunnel.sh /healthz
@@ -45,7 +46,8 @@ Every user signs in again on their next request.
 
 ## If it fails
 
-- **Before the apply** (steps 1 and 2): nothing in the cell changed. Fix the cause and run it again.
+- **Before the apply** (steps 1 and 2): nothing the cell runs changed (step 2 may have pushed an
+  image to ECR, under a tag of its own, which nothing uses). Fix the cause and run it again.
   A step-1 refusal means the registry is empty: run `tools/scripts/seed.sh`.
 - **The apply or after it** (steps 3 to 5): the deployment circuit breaker rolls a deployment whose
   tasks fail their health checks back to the previous task definition on its own

@@ -55,7 +55,7 @@ it would see the same entry before and after, and purge nothing.
 Then confirm the purge ran, in the gateway's log through the redaction:
 
 ```bash
-tools/scripts/logs.sh --since 10m | grep 'purged the sessions of app app1 (removed)'
+tools/scripts/logs.sh --since 10m | grep "purged the sessions of app $APP (removed)"
 ```
 
 That line is event 3602 of the options invalidator (`src/Platform.Identity/OptionsInvalidator.cs`),
@@ -84,6 +84,11 @@ The app serves again, and every user signs in afresh.
   of the gateway would stay valid at Cognito until it expires, but a refresh with this confidential
   client also needs its secret. If the secret may have leaked too, rotate it as well
   ([secret-rotation.md](secret-rotation.md)).
+- **It does not end the user's session at the provider.** A logout redirects through the provider's
+  logout (`contracts/http-contract.md`); the purge does not, so a user whose Cognito sign-in session
+  is still live may sign in again without a password. What it ends is every session the gateway
+  holds for the app, so every one of its gateway cookies, a stolen one included, now names a
+  session that is gone (the cookie carries only a key into the session store, `AppBoundTicketStore`).
 - **It is not per user.** Ending one user's sessions needs a session index by subject, which is
   Phase 2's (ADR-0028; `docs/plan/06-phase-2-and-risks.md`).
 

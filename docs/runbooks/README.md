@@ -22,9 +22,9 @@ A gateway deployment signs everyone out because Phase 1 keeps sessions and data-
 the one task's memory (`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback). Phase 2
 removes that (P2-1, P2-2); until then, prefer a lever that needs no deployment.
 
-**Walked:** none yet. Deploy and teardown are exercised by task 6.9's gate runs, the other five are
-walked once on the deployed cell, and each walk is posted on #244. A note that has not been walked
-is the scripts' sequence written down, not yet a sequence that has been run.
+**Walked:** deploy and teardown are exercised by task 6.9's gate runs, and the other five are
+walked once on the deployed cell; each walk's record is on #244, not here. A note that has not been
+walked is the scripts' sequence written down, not yet a sequence that has been run.
 
 ## Before any note: the operator session
 
@@ -38,8 +38,8 @@ tools/preflight.sh                          # the tools, and that the session is
 The scripts need `terraform init -backend-config=backend.hcl` run once in each of
 `infra/envs/poc/idp`, `infra/envs/poc/apps` and `infra/envs/poc/platform`, and they read the cell's
 names from `infra/envs/poc/outputs.json`, which `seed.sh`, `deploy.sh` and `rollback.sh` write
-(`contracts/infra-outputs.schema.json`). Nothing here reads Terraform state directly except
-`teardown.sh`.
+(`contracts/infra-outputs.schema.json`). No script reads Terraform state directly except
+`teardown.sh`; of the notes, only [secret-rotation.md](secret-rotation.md) does, by hand.
 
 Never paste an AWS command's raw output into a ticket or a log: the bucket name, every ARN and every
 repository URI carry the account id, which the scripts redact and a hand-run command does not. Never
@@ -77,6 +77,7 @@ CONFIG="$RUN/platform-config.json"
 ```
 
 Build it again after a deployment or a rollback: a new task definition can carry a new policy.
+Start the tunnel again too: its hop is the gateway task, which a deployment or rollback replaces.
 Remove the directory when the note is done (`rm -rf "$RUN"`).
 
 ### Waiting for the gateway: the tunnel

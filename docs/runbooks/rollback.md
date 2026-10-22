@@ -42,14 +42,16 @@ It refuses, with exit 1:
   the first apply answers `/` and not `/readyz`, so going back to it is a platform-root apply with
   `health_check_path = "/"`, not a rollback;
 - an image the repository no longer holds, since the task could not pull it;
-- `--to-revision` naming the revision already running, or one ECS no longer describes.
+- `--to-revision` naming the revision already running, or one ECS no longer describes;
+- without `--to-revision`, when none of the twenty revisions below the running one has another
+  gateway image: there is nothing to roll back to.
 
 Then it does what `deploy.sh` does after its push: it applies the platform root with those digests
 and the `/readyz` health check, records them in `images.auto.tfvars`, rewrites
 `infra/envs/poc/outputs.json`, waits for a stable service and asserts the running digest and the
 target's health ([deploy.md](deploy.md), steps 3 to 5).
 
-Afterwards, with the tunnel up:
+Afterwards, start `tools/scripts/tunnel.sh` again (its hop was the replaced task), then:
 
 ```bash
 tools/scripts/verify-tunnel.sh /healthz
