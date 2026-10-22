@@ -26,8 +26,9 @@ internal static partial class Redacted
     /// the page passed through (a login's callback with its code and state among them), and a failed
     /// navigation names its target, which a row may have built with a code in it (#253). The failure
     /// keeps its type (a timeout stays a <see cref="System.TimeoutException"/>, which is what
-    /// Microsoft.Playwright throws for one) and its stack trace, and loses its inner exception, whose
-    /// message xUnit would print.
+    /// Microsoft.Playwright throws for one: https://playwright.dev/dotnet/docs/api/class-timeouterror
+    /// catches it as <c>TimeoutException</c>, and 1.63.0 declares no timeout type of its own) and its
+    /// stack trace, and loses its inner exception, whose message xUnit would print.
     /// </summary>
     public static async Task PlaywrightAsync(Func<Task> call)
     {

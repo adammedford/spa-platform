@@ -212,11 +212,14 @@ public sealed class DeployedStack : IBrowserStack
     /// Cognito's managed login, filled as a person fills it: the user name, then the password if the
     /// page asks for it on a second step. When Cognito still holds a session for this browser it sends
     /// the browser straight back to the callback and there is no form.
+    /// The whole login runs through <see cref="Redacted.PlaywrightAsync(Func{Task})"/>, not only its first
+    /// wait: F-07 calls it on the stack directly, and the form's submit is what sends the browser to the
+    /// callback with its code (#253).
     /// </summary>
     public Task CompleteLoginAsync(Profile profile, HarnessApp app)
     {
         string shell = app.Url("/").ToString();
-        return FillLoginFormIfShownAsync(profile, url => url == shell);
+        return Redacted.PlaywrightAsync(() => FillLoginFormIfShownAsync(profile, url => url == shell));
     }
 
     /// <summary>
