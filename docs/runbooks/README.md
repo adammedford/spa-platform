@@ -22,9 +22,9 @@ A gateway deployment signs everyone out because Phase 1 keeps sessions and data-
 the one task's memory (`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback). Phase 2
 removes that (P2-1, P2-2); until then, prefer a lever that needs no deployment.
 
-**Walked:** deploy and teardown are exercised by task 6.9's gate runs, and the other five are
-walked once on the deployed cell; each walk's record is on #244, not here. A note that has not been
-walked is the scripts' sequence written down, not yet a sequence that has been run.
+**Walked:** task 6.9's gate runs are where deploy and teardown are exercised, and #244 is where the
+other five are walked on the deployed cell and where each walk is recorded, not here. A note that has
+not been walked is the scripts' sequence written down, not a sequence that has been run.
 
 ## Before any note: the operator session
 
