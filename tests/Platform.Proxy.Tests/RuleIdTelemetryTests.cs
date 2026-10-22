@@ -65,12 +65,32 @@ public sealed class RuleIdTelemetryTests
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/reports/items"), Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        LogLine line = Assert.Single(gateway.Log, line => line.Message.Contains("rule=api.unknown", StringComparison.Ordinal));
+        CapturedLine line = Assert.Single(gateway.Log.LinesFor("api.unknown"));
         Assert.Equal("Platform.Proxy.UnknownApi", line.Category);
         Assert.Equal(LogLevel.Warning, line.Level);
-        Assert.False(string.IsNullOrEmpty(line.EventId.Name), "the line was not written through a LoggerMessage template");
+
+        // CapturedLine carries no event id yet (change request issue-148-captured-line-event-id), so the
+        // template's is read from the same line as the interim recorder kept it.
+        LogLine recorded = Assert.Single(gateway.EventLines, recorded =>
+            recorded.Category == line.Category && recorded.Message == line.Message);
+        Assert.False(string.IsNullOrEmpty(recorded.EventId.Name), "the line was not written through a LoggerMessage template");
 
         // The path is attacker-chosen and stays out of the line.
         Assert.DoesNotContain("reports", line.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_host_captures_the_lines_below_information()
+    {
+        // A never-logged search reads every line the gateway wrote, Debug and Trace included (#140):
+        // the framework's default floor is Information, so a host that leaves it there hides them.
+        await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, TestApps.Entry("app1"));
+        using HttpClient client = new();
+
+        using HttpResponseMessage response = await client.SendAsync(
+            gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/reports/items"), Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains(gateway.Log.Lines, line => line.Level < LogLevel.Information);
     }
 }
