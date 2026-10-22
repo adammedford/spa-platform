@@ -1861,6 +1861,7 @@ class SteeringTests(unittest.TestCase):
         self.git("commit", "--quiet", "--amend", "-m",
                  message("The change request, decided twice as Adam confirmed", COMMENT))
         code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
         self.assertNotIn("STEERING FAILED", out)
 
     def test_an_open_status_in_another_shape_is_held_and_told_the_shape_to_write(self):
