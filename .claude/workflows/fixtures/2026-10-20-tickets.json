@@ -1,5 +1,5 @@
 {
- "note": "The open tickets of 2026-10-20 as collect resolved them before the run (#180 on its own row, #56 with every box ticked). Built from the tracker snapshot of that evening.",
+ "note": "The open tickets of 2026-10-20 as collect resolved them before the run (#180 on its own row, #56 with every box ticked). Built from the tracker snapshot of that evening. That night overnight.js also left out the six workflow specs, #77 to #82, through its FOREGROUND_ONLY constant; #137 dropped the constant, so they are in args.skip, which reproduces the run's skip set.",
  "args": {
   "repo": "/Users/adammedford/Projects/spa-platform",
   "date": "2026-10-20",
@@ -8,6 +8,12 @@
   "maxParallel": 5,
   "maxFailures": 8,
   "skip": [
+   "issue-77",
+   "issue-78",
+   "issue-79",
+   "issue-80",
+   "issue-81",
+   "issue-82",
    "issue-139",
    "issue-140",
    "issue-141",
