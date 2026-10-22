@@ -143,7 +143,10 @@ jobs:
       - name: The overnight script schedules its lanes as its test companion says
         # .claude/workflows/overnight_tests.mjs runs overnight.js end to end with every agent mocked,
         # on the tracked fixture of 2026-10-20, and checks what integrates, what skips for a blocker,
-        # and that a lane runs its first ready ticket rather than idling behind a blocked one. It is
+        # that a lane runs its first ready ticket rather than idling behind a blocked one, and (#136)
+        # that each ticket has its own worktree, that a lane implements while its last ticket is in
+        # review or integrating, that no two merges run at once, and that a conflict back-merges,
+        # retries once and is reported, not merged, when it still conflicts. It is
         # the script's only behavioural proof, so a scheduler edit fails at its push, before the
         # launch it is for (ADR-0027, #213). It runs on every push with no path condition, like every
         # step in this job, and takes about a second on the node the step above printed. It is
