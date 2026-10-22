@@ -1183,7 +1183,8 @@ class LibraryTests(CheckTestCase):
     def test_a_name_inside_a_longer_name_is_not_a_use(self):
         # other.py names mylib.sh, not lib.sh; check.sh is not image-check.sh.
         case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
-        self.full(case)
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
         self.assertNotIn(companion("tools/other_tests.py"), case.calls())
         case = Case(self, extra=self.scripts(), change="tools/scripts/mylib.sh")
         result = self.full(case)
@@ -1199,7 +1200,8 @@ class LibraryTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual([companion(".github/gizmo_tests.py")], companions_run(case))
         case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
-        self.full(case)
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
         self.assertNotIn(companion(".github/gizmo_tests.py"), case.calls())
 
     def test_a_library_no_one_names_runs_nothing(self):
