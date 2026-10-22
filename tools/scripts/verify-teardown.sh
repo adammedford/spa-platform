@@ -34,7 +34,7 @@
 #
 # What it does not read: the bootstrap root's three resources and the state bucket, which carry
 # spa-platform-bootstrap and are removed by hand; and us-east-1, where the tagging API is refused
-# (#129 Q28's ACM and Logs readers there are not built: see #308's Answer).
+# and nothing of the platform's is created: certs.sh refuses rather than fall back there (#241).
 #
 #   tools/scripts/verify-teardown.sh [--cell NAME]
 #
