@@ -35,6 +35,15 @@ this work".
 Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
 default project".
 
+**Sitting** — a human's hands-on session in the platform project: the applies, imports and AWS
+reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
+the glossary keeps for agent sessions and the gateway's session records.
+
+**Unattended run** — one invocation of a script with its documented arguments only, from a shell
+that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
+with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
+read-back by hand showed the result right.
+
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
 a logical boundary inside one.
