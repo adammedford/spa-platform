@@ -87,6 +87,7 @@ const newRepo = () => {
 }
 
 // served: { index, rankedCount, openRetro, laneFindings: {key: [...]}, stateDate }
+const allPrompts = []   // {label, prompt}, every agent's, across every run
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -102,6 +103,7 @@ function stub(env, scriptArgs, served) {
       await new Promise((r) => setTimeout(r, 5))
       const label = opts.label
       calls.push({ label, prompt, schema: opts.schema })
+      allPrompts.push({ label, prompt })
       let out
       if (label === 'state') {
         const scratch = path.join(env.repo, SCRATCH_REL)
@@ -377,6 +379,16 @@ try {
   if (!/git -C <path> status --short/.test(gp)) fail('the Gather prompt does not read each lane worktree\'s status')
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
 } catch (e) {
   console.error(`retro tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)

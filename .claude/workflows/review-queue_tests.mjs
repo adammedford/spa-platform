@@ -84,6 +84,7 @@ const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({
 //           gh: a stubbed GitHub (ghStub below) }
 // Without behave.gh the post agent posts and reports the head unchanged; with it, the stubbed gh
 // decides, and its store of posted comments outlives the run, so a rerun reads what a run posted.
+const allPrompts = []   // {label, prompt}, every agent's, across every run
 function run(scriptArgs, served, behave = {}) {
   const calls = []
   const posted = []
@@ -123,6 +124,7 @@ function run(scriptArgs, served, behave = {}) {
     const [kind, n] = opts.label.split(':')
     calls.push(opts.label)
     prompts[opts.label] = prompt
+    allPrompts.push({ label: opts.label, prompt })
     // behave.delay: how many milliseconds an agent takes, by label, so agents overlap in time.
     const ms = behave.delay ? behave.delay(opts.label) : 0
     if (ms) await new Promise((resolve) => setTimeout(resolve, ms))
@@ -769,6 +771,16 @@ try {
       if ((result.prs || []).some((r) => r.outcome !== 'recorded')) fail(`the hand-off, k ${k}: outcomes ${(result.prs || []).map((r) => r.outcome).join(', ')}`)
     }
     if (over.length) fail(`the hand-off: more agents in flight than the 2 slots, at ${over.length} of 25 offsets: ${over.join('; ')}`)
+  }
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)

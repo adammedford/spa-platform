@@ -104,6 +104,7 @@ const HOUSE = `House rules (a truth audit; it modifies nothing in the checkout a
 - The tracker is GitHub Issues. Run every \`gh\` command with \`cd ${REPO} &&\` in front. A multi-line body goes through a file you write under the run log and \`--body-file <that file>\`.
 - Never write a comment that begins "Confirm" or "Approved": a confirmation is Adam's act. Never change a label, a body or a state on an existing issue, except the edit of this day's report issue when your prompt names it.
 - Never log a secret, token, cookie, authorization code or state value (AGENTS.md).
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Write each PHASE FILE and OUTPUT FILE line's path exactly as given.`
 
 // The rules the verifier carries by name (#81 -> "Phase Verify: verdicts"), and the glossary's words.

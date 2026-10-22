@@ -164,7 +164,8 @@ const HOUSE = `House rules (a review run; you write nothing under review):
 - CI has already run. Rebuild nothing and never run the solution. Where a runtime claim genuinely must be run, make a throwaway worktree under ${WTROOT}, detached at the head, run the one project there, and remove it with \`git -C ${REPO} worktree remove --force <path>\` and \`git -C ${REPO} worktree prune\` before you return.
 - Never push, merge, tag, label, assign, or edit a pull request's body or branch. Never start a process on a port.
 - Never log or quote a credential, token, cookie, authorization code or state value.
-- Write each OUTPUT FILE line's path exactly as given, and no other file outside a throwaway worktree under ${WTROOT}.`
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
+- Write each OUTPUT FILE line's path exactly as given, and no other file outside a throwaway worktree under ${WTROOT} but a script the edit rule above has you write under your scratchpad.`
 
 const AXIS_GUIDE = `Read docs/agents/review.md (at origin/main) before anything else: it is the review guide, with the sources each axis holds the diff to and the bar for a finding. CODING_STANDARDS.md is the standard. Read both yourself; this prompt does not transcribe them.`
 
