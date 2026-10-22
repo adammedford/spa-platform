@@ -24,7 +24,7 @@ namespace Platform.Security.Tests;
 /// <para>The method allowlist (<c>MethodAllowlist</c>, inside <c>UsePlatformForwardedHeaders</c>) is
 /// here too. <c>UsePlatformTelemetry</c> runs before it (ADR-0018), so its 405 sets <c>gate.method</c>
 /// like every other rejection, and <see cref="StageHost"/> installs the stand-in in the same place,
-/// outermost, in both hosts that compose that stage.</para>
+/// outermost, in both hosts that offer it (<see cref="GateHost"/> and <see cref="AntiforgeryHost"/>).</para>
 /// </summary>
 public sealed class RuleIdTelemetryTests
 {
