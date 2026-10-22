@@ -10,7 +10,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Dependency | Offered today | Install on macOS | First needed by | Note |
 | --- | --- | --- | --- | --- |
 | Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
-| Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
+| Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py`, and the deployment scripts' JSON, in `tools/scripts/cell_documents.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | GitHub CLI, signed in | 2.102.0 | `brew install gh`, then `gh auth login` | Every landing, and the tracker, which is GitHub Issues | `tools/land.sh` refuses to start without gh on PATH, and `tools/preflight.sh` counts gh as missing until it is signed in (#96) |
 | .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
@@ -181,6 +181,16 @@ their cases at the same time through `tools/companion_runner.py` (#107): unittes
 and command line, but for `-b`, which it refuses, with the cases on threads, one per CPU up to eight
 unless `SCRIPT_TESTS_JOBS` names another number. It uses nothing outside the standard library
 either, and has a companion of its own, `tools/companion_runner_tests.py`, in both jobs.
+
+`tools/scripts/tunnel.sh` and `tools/scripts/verify-tunnel.sh` have
+`tools/scripts/tunnel_tests.py` (#57), in both jobs: doubles for aws, session-manager-plugin and
+curl, and the real curl against two loopback listeners, so no case reaches AWS.
+`tools/scripts/seed.sh`, `deploy.sh`, `rollback.sh` and `teardown.sh` have
+`tools/scripts/seed_tests.py`, `deploy_tests.py`, `rollback_tests.py` and `teardown_tests.py` (#58),
+in both jobs, sharing the doubles in `tools/scripts/cell_doubles.py`: aws, terraform, docker and
+dotnet, so no case reaches AWS, Docker or NuGet. `tools/scripts/verify-release-immutability.sh` has
+`tools/scripts/verify_release_immutability_tests.py` (#122), in both jobs: doubles for aws,
+terraform and date, so no case reaches AWS.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,
