@@ -83,11 +83,21 @@ public sealed class GatewayInstance
             return generated;
         }
 
+        // A value that is not an absolute http URI is refused here, before HttpClient sees it: HttpClient
+        // throws InvalidOperationException for a relative URI (verified by this file's tests) and
+        // SocketsHttpHandler refuses a scheme other than http or https, neither of which the catches below take, and a faulted id would fail every ready
+        // /readyz for the host's lifetime (P2-5, decision 2: never failing the start).
+        if (!Uri.TryCreate(metadataUri.TrimEnd('/') + "/task", UriKind.Absolute, out Uri? taskUri)
+            || (taskUri.Scheme != Uri.UriSchemeHttp && taskUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return Fallback("the variable is not an absolute http URI", log);
+        }
+
         string? reason;
         try
         {
             using HttpClient http = new(handler, disposeHandler: false) { Timeout = timeout };
-            using HttpResponseMessage response = await http.GetAsync(metadataUri.TrimEnd('/') + "/task", ct);
+            using HttpResponseMessage response = await http.GetAsync(taskUri, ct);
             reason = response.IsSuccessStatusCode
                 ? null
                 : $"it answered HTTP {(int)response.StatusCode}";
@@ -108,11 +118,21 @@ public sealed class GatewayInstance
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
+            // HttpClient.Timeout ends a request with TaskCanceledException
+            // (https://learn.microsoft.com/dotnet/api/system.net.http.httpclient.timeout).
             reason = $"it did not answer within {timeout.TotalSeconds} seconds";
         }
 
-        // The reason names a status or an error kind, never the answer: the ARN in it carries the
-        // account id and the Region (P2-5, decision 1).
+        return Fallback(reason, log);
+    }
+
+    /// <summary>
+    /// A generated id, logged with the reason the endpoint was not used. The reason names a status, an
+    /// error kind or the variable's shape, never the answer or the variable's value: the ARN carries the
+    /// account id and the Region (P2-5, decision 1).
+    /// </summary>
+    private static string Fallback(string reason, ILogger log)
+    {
         string fallback = Generated();
         log.LogInformation(
             "The ECS task metadata endpoint was not usable: {Reason}; this instance is {Instance}.", reason, fallback);

@@ -174,6 +174,28 @@ public sealed class HealthTests
         Assert.Matches("^[0-9a-f]{32}$", id);
     }
 
+    /// <summary>
+    /// A variable that is set but is not an absolute http URI falls back too, rather than faulting the
+    /// id, which every ready <c>/readyz</c> awaits and would then fail on for the host's lifetime
+    /// (change request P2-5, decision 2: never failing the start).
+    /// </summary>
+    [Theory]
+    [InlineData("not a uri")]
+    [InlineData("/v4/relative")]
+    [InlineData("file:///etc/passwd")]
+    public async Task A_metadata_variable_that_is_not_an_http_uri_falls_back_to_a_generated_id(string variable)
+    {
+        MetadataStub metadata = new(HttpStatusCode.OK, "{}");
+        CapturedLog log = new();
+
+        string id = await GatewayInstance.ResolveAsync(
+            variable, metadata, TimeSpan.FromSeconds(2), log.CreateLogger<HealthTests>(), Ct);
+
+        Assert.Empty(metadata.Requests);
+        Assert.Matches("^[0-9a-f]{32}$", id);
+        Assert.Contains(log.Lines, line => line.Level == LogLevel.Information && line.Message.Contains(id, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task With_no_metadata_variable_nothing_is_read_and_the_id_is_generated()
     {
