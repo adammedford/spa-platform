@@ -179,9 +179,9 @@ public sealed class BffLogoutTests
     public async Task The_providers_answer_to_the_revocation_is_logged_and_the_token_is_not(int? failure, string outcome)
     {
         // ADR-0017 decision 4: the response is checked, and the token reaches no log line (N-16).
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs), stubProfile: false);
+            [App1], services => services.AddSingleton(logs.Provider), stubProfile: false);
         gateway.Idp.Faults.RevokeFailureStatus = failure;
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
@@ -191,7 +191,7 @@ public sealed class BffLogoutTests
         string line = Assert.Single(logs.Lines, l => l.Category == typeof(SessionEnd).FullName).Message;
         Assert.EndsWith(": " + outcome + ".", line, StringComparison.Ordinal);
         Assert.Contains(SessionRef.Of(key), line, StringComparison.Ordinal);
-        string all = string.Join("\n", logs.Lines.Select(l => l.Message));
+        string all = string.Join("\n", logs.Lines.Select(l => l.Text));
         Assert.DoesNotContain(key, all, StringComparison.Ordinal);
         TokenSearch.AssertNoTokens(gateway.Idp, all);
     }
