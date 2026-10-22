@@ -60,9 +60,8 @@ public sealed class ProxyHost : IAsyncDisposable
 
     /// <summary>
     /// Every line the gateway logged with its event id, which <see cref="CapturedLine"/> does not carry.
-    /// Read by the one test that holds the unknown-api line to its <c>LoggerMessage</c> template (#162),
-    /// and deleted once <see cref="CapturedLine"/> carries the event id (change request
-    /// issue-148-captured-line-event-id).
+    /// Read by the one test that holds the unknown-api line to its <c>LoggerMessage</c> template (#162);
+    /// change request issue-148-captured-line-event-id asks for the event id on <see cref="CapturedLine"/>.
     /// </summary>
     internal IReadOnlyList<LogLine> EventLines => recorded.Lines;
 
@@ -112,7 +111,7 @@ public sealed class ProxyHost : IAsyncDisposable
                     // IAppFeature, which is what the token source reads to know whose session it is. An
                     // unknown host is left without one, as the real stage would never let it this far.
                     // The pin matches the request's host without its port, while the real stage compares
-                    // the full authority, port included (#140); every request here names a host with no
+                    // the full authority, port included (#148); every request here names a host with no
                     // port, so the two agree on what these tests send.
                     web.Use((context, next) =>
                     {

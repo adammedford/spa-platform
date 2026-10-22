@@ -8,9 +8,10 @@ namespace Platform.Proxy.Tests;
 /// the unknown-api endpoint's Warning line to its template: a <c>LoggerMessage</c> method carries an
 /// event id named after it, and an ad hoc <c>LogWarning</c> call carries none (#162).
 ///
-/// Interim: <see cref="Platform.Testing.CapturedLog"/> is the host's capture, and its
-/// <see cref="Platform.Testing.CapturedLine"/> has no event id. This file goes once it does (change
-/// request issue-148-captured-line-event-id).
+/// <see cref="Platform.Testing.CapturedLog"/> is the host's capture, but its
+/// <see cref="Platform.Testing.CapturedLine"/> has no event id (change request issue-145, section 4),
+/// so this recorder keeps it for that one test; change request issue-148-captured-line-event-id asks
+/// for it.
 /// </summary>
 internal sealed class RecordingLoggerProvider : ILoggerProvider
 {
