@@ -414,8 +414,9 @@ section 2.6, its step.
   classifies named paths into a `Row`, so its change is a new row and a new arm. The gate table is
   `contracts/request-gate.md` → Rules by path, not `contracts/pipeline.md`.
 - **The validation list is the spec's, which is longer** (Q3 below). The request's list lacks
-  `exp`, the `alg` rule and the absence of `nonce`, and makes `jti` mandatory where the spec makes it
-  optional.
+  `exp`, the `alg` rule and the absence of `nonce`. Its "an unseen `jti`" runs two rules together:
+  the `jti` claim is required (section 2.4), and only the check that it has not been seen before is
+  optional (section 2.6 step 8).
 - **`KeysAsync` cannot be built on P2-1's table.** The table never holds a session key, only its
   SHA-256 (`p2-1-dynamodb-session-store.md:201`; plan row P2-1, "The key is a hash of the session
   key"), so an index on the pair can return hashes and nothing else. `SessionEnd.EndAsync(app, key)`
@@ -441,15 +442,23 @@ section 2.6, its step.
 - **Validation (Q3).** The spec's mandatory steps: the signature (section 2.6 step 2); `alg` as for
   an ID token and never `none` (step 3); `iss`, `aud` equal to the app's client id, `iat` and `exp`
   (step 4); `sub` present (step 5, narrowed by Q9); an `events` claim holding the member
-  `http://schemas.openid.net/event/backchannel-logout` (step 6); no `nonce` (step 7). `typ` is
-  absent or `logout+jwt` (explicit typing, section 2.4). `JsonWebTokenHandler.ValidateTokenAsync`
-  from the already-pinned `Microsoft.IdentityModel.JsonWebTokens` validates the token against the
-  scheme's own configuration: keys and issuer from discovery through the issuer's shared metadata
-  manager, the app's client id as audience, `exp` required, and the ID-token algorithms discovery
-  lists. The endpoint checks four claims itself (`events`, `nonce`, `sub`, `typ`), with nothing
-  cryptographic in them. The shipped handler has no back-channel support, so this is the bounded
-  route the no-hand-written-protocol-code rule allows.
-- **`jti` (Q4).** The check is optional (step 8). Each task remembers every `jti` it accepted until
+  `http://schemas.openid.net/event/backchannel-logout` (step 6); no `nonce` (step 7). Section 2.4
+  makes `iat` and `jti` required claims. `typ` is absent or `logout+jwt` (explicit typing, section
+  2.4). `JsonWebTokenHandler.ValidateTokenAsync` from the already-pinned
+  `Microsoft.IdentityModel.JsonWebTokens` validates the token against the scheme's own
+  configuration: keys and issuer from discovery through the issuer's shared metadata manager, the
+  app's client id as audience, `exp` required, and the ID-token algorithms discovery lists. It
+  covers neither `iat` nor `jti`: at 8.19.2 its lifetime check reads `nbf` and `exp` alone
+  (`JsonWebTokenHandler.ValidateToken.cs:660-663`,
+  https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8.19.2/src/Microsoft.IdentityModel.JsonWebTokens/JsonWebTokenHandler.ValidateToken.cs#L660-L663),
+  and nothing in it requires either claim. So the endpoint checks six claims itself, with nothing
+  cryptographic in them: `events`, no `nonce`, `sub`, `typ`, `iat` present and no later than now
+  plus the clock skew the handler allows on `exp`, and `jti` present as a non-empty string. A token
+  missing `iat` or `jti`, or whose `iat` is later than that, is refused under `auth.backchannel`.
+  The shipped handler has no back-channel support, so this is the bounded route the
+  no-hand-written-protocol-code rule allows.
+- **`jti` (Q4).** The claim is required (Q3). The check that it has not been seen before is
+  optional (step 8), and this is how far it goes. Each task remembers every `jti` it accepted until
   that token's `exp`, in memory and capped in count; at the cap the oldest entry goes and the token
   is still accepted. A repeat on the same task is refused under `auth.backchannel`. Replay across
   tasks is accepted: within the token's lifetime, which providers are asked to keep within two
@@ -457,8 +466,8 @@ section 2.6, its step.
   direction for a logout.
 - **The answers (Q5).** 200 with an empty body for any valid token, whether or not it matched a
   session (sections 2.7 and 2.8). 400 `application/problem+json` with `code: invalid_request`
-  (`contracts/http-contract.md:92`) for a refused token: a failed step, a missing `logout_token`, a
-  non-form body, a `jti` already seen on this task, or a `sid`-only token. That is a rejection under
+  (`contracts/http-contract.md:92`) for a refused token: a failed step, a missing `iat` or `jti`,
+  a missing `logout_token`, a non-form body, a `jti` already seen on this task, or a `sid`-only token. That is a rejection under
   `auth.backchannel`, and the Errors table gains one sentence, not a code. 400 with no rule id when
   the token was valid and the store failed, logged at Error by outcome, since no rule fired.
   `Cache-Control: no-store` on both. The logout token never reaches a log line: "tokens" is already
@@ -529,11 +538,12 @@ section 2.6, its step.
   endpoint takes no refresh lease. Workstream 5's ticket does not wait. It adds `sid` to every ID
   token, a back-channel URI on `TestIdpClient` (`fixtures/TestIdp/TestIdpRecords.cs:30`, which
   holds redirect and post-logout URIs only), the signed-token sender with switches for an
-  unpublished key and a missing `events`, and a canary `jti` for N-16. Two facts are for the
-  deployed run: whether the provider reaches the app host on the internal ALB over TLS it trusts,
-  and whether PingFederate sends `sub`. Two test ids are the integrator's to name at G7: a
-  functional "a logout token ends the subject's sessions on its app" and a negative "each refused
-  logout token is a 400 under `auth.backchannel`".
+  unpublished key, a missing `events`, a missing `iat` and a missing `jti`, and a canary `jti` for
+  N-16. Two facts are for the deployed run: whether the provider reaches the app host on the
+  internal ALB over TLS it trusts, and whether PingFederate sends `sub`. Two test ids are the
+  integrator's to name at G7: a functional "a logout token ends the subject's sessions on its app"
+  and a negative "each refused logout token is a 400 under `auth.backchannel`", whose cases include
+  a token missing `iat`, one missing `jti` and one whose `iat` is in the future.
 - **Vocabulary (Q12).** `GLOSSARY.md` gains **Back-channel logout** and **Session index** under
   Sessions. "Logout token" is a protocol term and gets no entry. The **Request gate** entry stays
   true, which is one more reason the path is outside `/bff`.

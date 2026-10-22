@@ -30,9 +30,11 @@ And `SessionRecord`, frozen at G1b, carries `AppId` and `Subject` and no provide
    `Sec-Fetch-Site` Any, nothing more at the gate. Each provider client registers the URI on its
    app's host, so the token's `aud` is checked against that app's client id.
 2. **The endpoint validates the spec's mandatory steps** (section 2.6) through
-   `JsonWebTokenHandler` against the scheme's discovery configuration, and checks four claims
-   itself: `events`, no `nonce`, `sub`, and `typ` absent or `logout+jwt`. A refused token is a 400
-   rejection under a new rule id, `auth.backchannel`.
+   `JsonWebTokenHandler` against the scheme's discovery configuration, and checks six claims
+   itself: `events`, no `nonce`, `sub`, `typ` absent or `logout+jwt`, `iat` present and no later
+   than now plus the handler's clock skew, and `jti` present. Section 2.4 requires `iat` and `jti`,
+   and the handler covers neither: its lifetime check reads only `nbf` and `exp`. A refused token
+   is a 400 rejection under a new rule id, `auth.backchannel`.
 3. **Sessions end by subject**, option (b) of the three weighed. The session index is `ISessionIndex.RemoveSubjectAsync(appId,
    subject, ct)`: it removes every live session of one subject on one app, never another app's, and
    returns the records it removed, from which the endpoint revokes refresh tokens. It hands out no
@@ -41,8 +43,9 @@ And `SessionRecord`, frozen at G1b, carries `AppId` and `Subject` and no provide
    reserved path and the stage prose. It is a new type beside `ISessionStore`, frozen on landing,
    implemented by the session store's own instance, with `InMemorySessionStore` as its double and a
    contract suite that takes both interfaces. It does not land between gates before P2-1's store.
-5. **A `jti` is remembered per task until its `exp`.** A repeat on the same task is refused. A
-   replay that reaches another task is accepted.
+5. **A `jti` is remembered per task until its `exp`.** The claim is required, and only the check
+   that it has not been seen before is optional (section 2.6 step 8). A repeat on the same task is
+   refused. A replay that reaches another task is accepted.
 6. **A token with `sid` and no `sub` is refused.** With both, every session of that `sub` on the app
    ends.
 
@@ -79,6 +82,8 @@ And `SessionRecord`, frozen at G1b, carries `AppId` and `Subject` and no provide
 Change request `contracts/changes/p2-6-pingfederate-profile.md`, item 7 and its Decision; the
 grilling round and answer on https://github.com/adammedford/spa-platform/issues/224; OpenID Connect
 Back-Channel Logout 1.0, Final incorporating errata set 1 (2023-12-15), sections 2.2 and 2.4 to 2.8
-and 4; "Adding a Global Secondary Index to an existing table",
+and 4; the pinned `JsonWebTokenHandler`'s lifetime check at 8.19.2,
+https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8.19.2/src/Microsoft.IdentityModel.JsonWebTokens/JsonWebTokenHandler.ValidateToken.cs#L660-L663;
+"Adding a Global Secondary Index to an existing table",
 https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.OnlineOps.html; the P2-1 item
 layout, `contracts/changes/p2-1-dynamodb-session-store.md` section 6.
