@@ -958,6 +958,8 @@ LIBRARIES = {
     "tools/scripts/doubles.py": "# a library only the companion names\n",
     "tools/scripts/mylib.sh": "# a library with a longer name\n",
     "tools/other.py": "# reads tools/scripts/mylib.sh\n",
+    "tools/scripts/ending.sh": "# a library one comment names at a sentence's end\n",
+    ".github/gizmo.py": "# Sources tools/scripts/ending.sh. Reads tools/scripts/lib.sh.bak too.\n",
 }
 
 
@@ -1187,6 +1189,18 @@ class LibraryTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual([companion("tools/other_tests.py")], companions_run(case))
+
+    def test_a_name_that_ends_a_sentence_is_a_use(self):
+        # The full stop after ending.sh ends the name; the one inside lib.sh.bak does not, so
+        # gizmo.py names ending.sh and not lib.sh. On 2026-10-22 the stop was read as part of the
+        # name, and a change to tools/scripts/logs.sh missed cell_doubles.py's "for logs.sh."
+        case = Case(self, extra=self.scripts(), change="tools/scripts/ending.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion(".github/gizmo_tests.py")], companions_run(case))
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
+        self.full(case)
+        self.assertNotIn(companion(".github/gizmo_tests.py"), case.calls())
 
     def test_a_library_no_one_names_runs_nothing(self):
         case = Case(self, extra=self.scripts(), change="tools/lonely.sh")

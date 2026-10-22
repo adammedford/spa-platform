@@ -522,7 +522,8 @@ companion_names() {
 #   - A companion ends it too, whether it changed or names the change: the workflow names every
 #     companion it runs, and a companion's change is its own companion's run alone.
 #   - A name counts whole: tools/check.sh is not in tools/image-check.sh, nor tunnel.sh in
-#     verify-tunnel.sh.
+#     verify-tunnel.sh, nor lib.sh in lib.sh.bak. A full stop that ends a sentence ends a name too,
+#     so "for logs.sh." in tools/scripts/cell_doubles.py names logs.sh (#237's review).
 # A name in a comment counts as a use. That over-runs, which costs time and is safe; skipping
 # comments would need a reader for each language, and a rule that fails open when it misreads one.
 is_companion() {
@@ -549,7 +550,7 @@ users_of() {
   local name status
   name="${1##*/}"
   status=0
-  git grep -I -l -E -e "(^|[^A-Za-z0-9_.-])${name//./\\.}([^A-Za-z0-9_.-]|\$)" -- tools .github || status=$?
+  git grep -I -l -E -e "(^|[^A-Za-z0-9_.-])${name//./\\.}([^A-Za-z0-9_.-]|\.([^A-Za-z0-9_-]|\$)|\$)" -- tools .github || status=$?
   [ "$status" -le 1 ] || return 2
 }
 
