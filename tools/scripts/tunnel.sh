@@ -14,22 +14,26 @@
 # It stays in the foreground until the session ends; Ctrl-C ends it. In a second terminal,
 # tools/scripts/verify-tunnel.sh <path> checks it: / on the sample image, /healthz on the gateway.
 #
-# It finds what it forwards through by the names the cell module gives them, read from AWS, not
-# from Terraform state: the cluster and the load balancer are spa-<cell>, the service is gateway
-# and the hop is its gateway container (infra/modules/cell/ecs.tf and alb.tf, and
-# contracts/infra-outputs.example.json). Each name can be given instead.
+# Its names come from the outputs document, infra/envs/poc/outputs.json, and from nowhere else: the
+# ECS cluster is its ecsCluster, the service its ecsService and the load balancer its albDnsName
+# (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it"). seed.sh,
+# deploy.sh and rollback.sh write it after every apply, so it names the last apply's cell. Nothing
+# is looked up in AWS by name and nothing is read from Terraform state (#198); without the
+# document, or with one for another Region, it refuses. AWS is asked only for the service's running
+# tasks, and the hop is a task's gateway container (infra/modules/cell/ecs.tf). The load balancer is
+# the cell module's, which is internal (alb.tf).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced. It needs the AWS CLI v2 and the Session Manager plugin.
+# sourced, after seed.sh. It needs the AWS CLI v2, the Session Manager plugin and python3.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
 # stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code
 # alone, and any other line with every twelve-digit run masked.
 #
 # Exit status: the AWS CLI's once the session is handed to it, 254 when StartSession itself is
-# refused (`aws help return-codes`); 1 when the cell has no load balancer or no task a session can
-# reach; 2 when it did not start (a usage error, a missing tool, no Region, or the local port
-# already held).
+# refused (`aws help return-codes`); 1 when the cell has no task a session can reach; 2 when it did
+# not start (a usage error, a missing tool, no Region, the local port already held, or no outputs
+# document with the three names for this Region).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -38,31 +42,16 @@ set -euo pipefail
 umask 077
 
 PROGRAM="tunnel"
-CELL="${SPA_CELL:-poc}"
+# The outputs document, the AWS plumbing and note, refuse and fail are the cell scripts' own:
+# OUTPUTS_FILE and outputs_field, aws_read, and the scratch directory's clean-up.
+# shellcheck source=tools/scripts/cell-common.sh
+. "$(dirname -- "$0")/cell-common.sh"
+
 LOCAL_PORT="${SPA_TUNNEL_PORT:-8443}"
-CLUSTER=""
-SERVICE=""
-ALB=""
 
 # The hop. The task has two containers and ECS Exec reaches both, but the plan names the gateway
 # task as the hop and the gateway container is the one the ALB's target group sends to.
-CONTAINER="gateway"
-
-# The AWS CLI pages a terminal's output through less unless told not to.
-# https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-pagination.html#cli-usage-pagination-clientside
-export AWS_PAGER=""
-
-note() { printf '%s: %s\n' "$PROGRAM" "$*"; }
-
-refuse() {
-  printf '%s: %s\n' "$PROGRAM" "$*" >&2
-  exit 2
-}
-
-fail() {
-  printf '%s: %s\n' "$PROGRAM" "$*" >&2
-  exit 1
-}
+CONTAINER="$GATEWAY_CONTAINER"
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -73,23 +62,11 @@ Options
   --local-port N   The workstation port the Session Manager plugin listens on. Default:
                    \$SPA_TUNNEL_PORT, else 8443, the port in every app's registry host and
                    callback URL (docs/plan/05-infrastructure-and-cost.md, step 5).
-  --cell NAME      The cell. Default: \$SPA_CELL, else poc.
-  --cluster NAME   The ECS cluster. Default: spa-<cell>.
-  --service NAME   The ECS service. Default: gateway.
-  --alb DNSNAME    The load balancer's DNS name. Default: looked up as spa-<cell>.
   -h, --help       This text.
 EOF
 }
 
-WORK=""
-cleanup() {
-  status=$?
-  if [ -n "$WORK" ] && [ -d "$WORK" ]; then
-    rm -rf "$WORK"
-  fi
-  return "$status"
-}
-trap cleanup EXIT
+trap cell_cleanup EXIT
 trap 'exit 130' INT TERM
 
 value_of() {
@@ -99,10 +76,6 @@ value_of() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local-port) value_of "$1" "$#"; LOCAL_PORT="$2"; shift ;;
-    --cell) value_of "$1" "$#"; CELL="$2"; shift ;;
-    --cluster) value_of "$1" "$#"; CLUSTER="$2"; shift ;;
-    --service) value_of "$1" "$#"; SERVICE="$2"; shift ;;
-    --alb) value_of "$1" "$#"; ALB="$2"; shift ;;
     -h | --help)
       usage
       exit 0
@@ -112,19 +85,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# The cell's lexical form, as tools/scripts/certs.sh checks it.
-case "$CELL" in
-  *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
-esac
 case "$LOCAL_PORT" in
   '' | *[!0-9]* | 0*) refuse "--local-port must be a port number: got '${LOCAL_PORT}'" ;;
 esac
 [ "$LOCAL_PORT" -le 65535 ] || refuse "--local-port must be a port number: got '${LOCAL_PORT}'"
-
-# infra/modules/cell: ecs.tf's cluster_name and service_name, alb.tf's lb_name.
-[ -n "$CLUSTER" ] || CLUSTER="spa-${CELL}"
-[ -n "$SERVICE" ] || SERVICE="gateway"
-LB_NAME="spa-${CELL}"
 
 command -v aws > /dev/null 2>&1 || refuse "the AWS CLI is not on PATH. brew install awscli"
 # The CLI hands a session to the plugin and cannot start one without it.
@@ -132,8 +96,17 @@ command -v aws > /dev/null 2>&1 || refuse "the AWS CLI is not on PATH. brew inst
 command -v session-manager-plugin > /dev/null 2>&1 ||
   refuse "the Session Manager plugin is not on PATH. brew install --cask session-manager-plugin"
 
+# cell_documents.py reads the outputs document: bash 3.2 has no JSON reader.
+need_tool python3 "xcode-select --install"
+
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 [ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a"
+
+# The three names, before any AWS call. Each refuses, exit 2, when the document is absent, is for
+# another Region or lacks the name, and says to run seed.sh (cell-common.sh, outputs_field).
+CLUSTER="$(outputs_field ecsCluster)"
+SERVICE="$(outputs_field ecsService)"
+ALB="$(outputs_field albDnsName)"
 
 # Something already answering on the port would take the browser's connections, or the plugin
 # would fail to bind it after the session had started. bash's /dev/tcp connects, so a refusal means
@@ -142,38 +115,12 @@ if (exec 3<> "/dev/tcp/127.0.0.1/${LOCAL_PORT}") 2> /dev/null; then
   refuse "something already listens on 127.0.0.1:${LOCAL_PORT}: an earlier tunnel.sh, or the G0 harness (spikes/g0/README.md). Stop it, or pass --local-port."
 fi
 
+# Not cell_start, which asks AWS who the caller is: this script reads only the service's tasks.
+# Every read goes through cell-common.sh's aws_read: the Region and --output text on each call, and
+# a failure named by its error code, never by its message, which can carry an ARN.
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROGRAM}.XXXXXX")"
 OUT="${WORK}/out"
 ERR="${WORK}/err"
-
-# One read. Every call names the Region and --output text, so a profile's own output setting cannot
-# change what is read back. On failure it says which call and the error code the CLI printed, in
-# "An error occurred (<Code>) when calling the <Operation> operation" (`aws help return-codes`),
-# and not the message, which can carry an ARN.
-aws_read() {
-  local what="$1"
-  shift
-  if aws --region "$REGION" --output text "$@" > "$OUT" 2> "$ERR"; then
-    return 0
-  fi
-  local code
-  code="$(awk 'match($0, /An error occurred \([^)]*\)/) { print substr($0, RSTART + 19, RLENGTH - 20); exit }' "$ERR")"
-  [ -n "$code" ] || code="no answer from AWS"
-  fail "${what}: ${code}"
-}
-
-# --- the load balancer ---------------------------------------------------------------------------
-
-if [ -z "$ALB" ]; then
-  aws_read "the load balancer ${LB_NAME} in ${REGION}" \
-    elbv2 describe-load-balancers --names "$LB_NAME" --query "LoadBalancers[0].[DNSName, Scheme]"
-  ALB="$(awk -F '\t' 'NR == 1 { print $1 }' "$OUT")"
-  SCHEME="$(awk -F '\t' 'NR == 1 { print $2 }' "$OUT")"
-  [ -n "$ALB" ] && [ "$ALB" != "None" ] || fail "the load balancer ${LB_NAME} has no DNS name"
-  # Task 1.3's load balancer is internal; one that is not would be reached without the tunnel,
-  # and this would be forwarding to the wrong thing.
-  [ "$SCHEME" = "internal" ] || fail "the load balancer ${LB_NAME} is ${SCHEME}, not internal"
-fi
 
 # --- the task ------------------------------------------------------------------------------------
 
