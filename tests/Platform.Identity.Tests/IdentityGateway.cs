@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 using Platform.Abstractions;
 using Platform.Testing;
@@ -28,6 +29,12 @@ namespace Platform.Identity.Tests;
 /// whose authority is the provider's loopback origin. Sessions go to <see cref="Sessions"/>, the
 /// Platform.Testing store behind a recorder, and every request carries a
 /// <see cref="SettableRequestTelemetryFeature"/> in place of <c>UsePlatformTelemetry</c>.
+///
+/// It logs at Trace, the stage host's floor (#140), and writes to no provider of its own. A test that
+/// reads the log attaches a <see cref="CapturedLog"/> in its services delegate,
+/// <c>services.AddSingleton(log.Provider)</c>, so a never-logged search (N-16) sees every line a
+/// logger could write, the OpenID Connect handler's Trace line with the callback's authorization code
+/// among them (<see cref="IdentityGatewayLogTests"/> pins it).
 /// </summary>
 internal sealed class IdentityGateway : IAsyncDisposable
 {
@@ -163,11 +170,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         new HashSet<string>(StringComparer.Ordinal) { $"https://{app.Host}/signout-callback-oidc", $"https://{app.Host}/" };
 
     private static void Register(TestIdentityProvider idp, AppDefinition app) =>
-        idp.AddClient(new TestIdpClient(
-            app.OAuth.ClientId,
-            SecretOf(app),
-            new HashSet<string>(StringComparer.Ordinal) { RedirectUriOf(app) },
-            PostLogoutUrisOf(app)));
+        idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), PostLogoutUrisOf(app));
 
     /// <param name="apps">The registry's entries.</param>
     /// <param name="services">Registrations made after <c>AddPlatformIdentity</c>.</param>
@@ -211,7 +214,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
             [$"Issuers:{IssuerName}:Profile"] = issuerProfile,
             [$"Issuers:{IssuerName}:BrowserOrigin"] = idp.BaseUrl,
         });
-        builder.Services.AddLogging();
+        builder.Services.AddLogging(logging => logging.SetMinimumLevel(LogLevel.Trace));
         builder.Services.AddSingleton<IRegistry>(registry);
         builder.Services.AddSingleton<IClientSecretSource>(secrets);
         builder.Services.AddSingleton<IIdpProfile>(profile);
