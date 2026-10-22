@@ -6,7 +6,8 @@
   P2-3, whose lease the store's conditional writes can carry; MR-9, whose format version the item
   carries
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** decided, 2026-10-21, on https://github.com/adammedford/spa-platform/issues/221. See the
+  Decision section below.
 
 ## The gap
 
@@ -240,3 +241,110 @@ item 2 the store can be built and proved against the fake but cannot be configur
 deployed half of the acceptance, "killing a task loses no session", also waits on the table and
 the task role in `infra/` (workstream 1), on P2-2, and on the deployed gate runs of #63 reaching G5,
 since G6 opens after it.
+
+## Decision
+
+Integrator, 2026-10-21, on Adam's answers to the nine questions of
+https://github.com/adammedford/spa-platform/issues/221 (all accepted as recommended). This decides
+items 1 to 5, places the refresh lease that P2-3's Decision item 2 left to this request, and records
+item 6.
+
+**Two landings.** This decision record lands now and alone. The four frozen-artifact edits (the pin
+and its comment, the `docs/dependencies.md` row and its preface, the `TableName` property and its
+contracts cases, the `SessionStoreContract` change) are one integrator ticket on the Phase 2 spec
+issue. Workstream 3's store ticket is blocked by it, because nothing compiles without the pin.
+
+1. **Pin `AWSSDK.DynamoDBv2` 4.0.108** under `Label="AWS"`: the version the trial restore of
+   https://github.com/adammedford/spa-platform/issues/216 built, not the newest. The pin carries a
+   comment in the `AWSSDK.Signin` style (`Directory.Packages.props:28-31`) naming why this version,
+   its `AWSSDK.Core` floor `[4.0.102.12, 5.0.0)`, and the date it was confirmed on nuget.org.
+   `Platform.Identity.csproj` gains the versionless reference. `tests/Platform.Identity.Tests` needs
+   none of its own: the package flows transitively, as `AWSSDK.S3` reaches `Platform.Registry.Tests`.
+2. **The `docs/dependencies.md` row** (item 3) is as written, placed after the `AWSSDK.Signin` row.
+   The table's preface, "the three AWS SDK packages" (`docs/dependencies.md:44`), says four.
+3. **`Session:TableName`** (item 2) is as asked: optional, flat, with the request's pattern and
+   description. `Session` is already a closed object, so adding a property is a widening and lands
+   between gates. The `if`/`then` requirement waits for the next gate with the other deferred
+   narrowings, and the store's `FromConfiguration` enforces it until then. There is no `ServiceUrl`
+   key: the store takes `IAmazonDynamoDB` from the container with `TryAddSingleton`, as
+   `AddPlatformRegistry` does. The integrator's ticket adds an accepted name and a refused one (two
+   characters, or one carrying a `/`) beside `Session_store_is_memory_in_phase_1_and_dynamodb_in_phase_2`
+   (`tests/Contracts.Tests/PlatformConfigurationTests.cs:135-140`). `MaxSessions` stays required,
+   with its description unchanged.
+4. **The assertion change lands between gates** (item 4). `contracts/README.md` -> "What may land
+   between gates" admits prose and a new type, and a corrected assertion in a suite under the G1b
+   freeze is neither. It meets the rule's reason instead: nothing built against the frozen contract
+   has to change. Every store that passes today's `Assert.Equal(record, ...)`
+   (`src/Platform.Testing/SessionStoreContract.cs:28`) also passes a value comparison, because
+   today's passes only when the ticket is the same backing array. The README is not amended, since
+   one case is not yet a pattern.
+5. **The assertion's shape.** `Assert.NotNull(stored)`, then `record with { Ticket = default }`
+   equal to `stored with { Ticket = default }`, and the ticket bytes compared as arrays. The six
+   scalars compare in one statement, so a seventh added at a later gate is covered. Timestamps
+   compare by instant: `DateTimeOffset.Equals` ignores the offset, so item 4's "must round-trip
+   exactly" overstates what the suite checks, and a store may hand back UTC. The first test's record
+   carries sub-second ticks, so a store that truncates to seconds fails it. The shared `Record()`
+   keeps its whole-second times (`SessionStoreContract.cs:164-165`), which alone could not fail such
+   a store (`CODING_STANDARDS.md` -> "An assertion must be able to fail").
+6. **The fake is option (a)** (item 5): a JSON 1.0 DynamoDB HTTP server in
+   `tests/Platform.Identity.Tests`, whose home P2-3's Decision item 7 settled. Its surface is item 5's
+   operations table and item 7's lease conditions, and nothing else. Only (a) shows what the SDK does
+   when cancellation fires after a request is sent. Only (a) proves the attribute serialization,
+   `ConsistentRead` as sent, and the mapping of a 400 `ConditionalCheckFailedException`. The SDK
+   checks a response CRC only when the `x-amz-crc32` header is present, so the fake omits it, and the
+   fake's first test confirms that at the pin. Its honest limit stands as item 5 words it, and the
+   real table at G6 proves the rest.
+7. **The refresh lease lives on a lease item of its own.** Its `pk` is `lease#` followed by the
+   session key's SHA-256 hex, which no 64-character session `pk` can equal. Acquire is a `PutItem`
+   under `attribute_not_exists(pk) OR leaseUntil < :now`. Release is a `DeleteItem` under
+   `leaseToken = :token`, where a failed condition is the stale release P2-3's Decision item 5
+   swallows. `leaseUntil` is in epoch milliseconds, because a 15 s lease compared in seconds loses up
+   to a second. `expiresAt` is set to the lease's expiry in seconds, so the table's time to live
+   sweeps a lease whose holder died. The item carries no `appId`, so the `appId` index never projects
+   it and `RemoveAppAsync` never sees it. `ReplaceAsync` therefore stays `PutItem`, `RemoveAsync`
+   stays unconditional, and no read rule is added. On the session item, a `PutItem` would erase a
+   held lease, a `DeleteItem` would free it, and a lease on a key with no record would create a
+   ticketless item. Each lease write is one write unit. The fake's evaluator gains `OR`, `<` on `N`,
+   and the `DeleteItem` condition.
+8. **Item 6 is recorded, not decided.** It is the layout workstream 3 builds against, except its
+   `leaseUntil`/`leaseToken` row, which item 7 moves to the lease item: `pk`, `leaseUntil` (N,
+   milliseconds), `leaseToken` (S) and `expiresAt` (N). The `expiresAt <= now` read rule and the
+   behaviour of a cancellation after the write was sent are left to the store ticket, as facts the
+   fake shows. The session item keeps `appId` and `subject` as attributes. Back-channel logout
+   (`p2-6-pingfederate-profile.md` item 7, decided on
+   https://github.com/adammedford/spa-platform/issues/224) adds an index on that pair at G7, and
+   DynamoDB can add a global secondary index to a live table and backfill it
+   (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.OnlineOps.html), so no item
+   is rewritten then. The store does not implement the session index at G6.
+9. **No ADR and no glossary entry.** The pin, the optional key and the assertion fix are routine.
+   The lease placement is internal to the store and cheap to change, because a lease lives 15 s and
+   moving it migrates no data; the contract it implements already has ADR-0024. Session record,
+   Session key, session_ref and Refresh lease already read true against the layout.
+
+Corrections this record makes to the request, against `main` at `b313c14`:
+
+- Item 1 says 4.0.108 is "the newest of the 1,475 versions listed" (line 42). 4.0.109
+  (2026-10-20) and 4.0.109.1 (2026-10-21) have since been published, the second with an
+  `AWSSDK.Core` floor of 4.0.102.13. The pin is the version the trial restore proved.
+- Item 1 counts "the two AWS packages already pinned" (line 44). There are three, since
+  `AWSSDK.Signin` 4.0.101.13 (`Directory.Packages.props:32`, #206). Its Core floor is 4.0.102.9, so
+  the graph conclusions stand.
+- Item 2 cites the `Session` object as `contracts/platform-config.schema.json:127-140` (line 61). It
+  is `:127-143`.
+- Item 5's table cites `AppBoundTicketStore.Owned` at `:107-112` (line 155). No such member exists,
+  and the file is 101 lines. The ownership check that makes the purge hygiene is
+  `AppSessions.OwnedBy` (`src/Platform.Identity/AppSessions.cs:194-199`).
+- Item 6 cites `TicketSerializer` at `AppBoundTicketStore.cs:105` (line 207). It serializes at `:97`
+  and deserializes at `:76`.
+- Item 6 says `AppBoundTicketStore.RenewAsync` passes the request's token to the store (line 217).
+  It throws `NotSupportedException` (`AppBoundTicketStore.cs:70-71`, refused under #141). T-B17 still
+  holds for the Phase 2 store, through the paths that do pass the request's token: create
+  (`AppBoundTicketStore.cs:54`, then `AppSessions.cs:96`), read (`AppSessions.cs:86`) and remove
+  (`AppSessions.cs:140`). Every store call under the session gate passes `CancellationToken.None`
+  (`AppSessions.cs:64, 69, 290, 322`). So "a cancellation after the write was sent" concerns a
+  create and a remove, never a replace.
+
+What this decides for the spec issue: one integrator ticket with the four frozen-artifact edits,
+blocking workstream 3's store ticket; workstream 3's store ticket, which carries the fake, the
+lease item of item 7 and the two facts of item 8; and, for workstream 1's row on the map, that the
+table's `expiresAt` time to live sweeps lease items as well as sessions.

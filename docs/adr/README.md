@@ -46,6 +46,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0025](0025-one-key-ring-per-cell-registered-by-hosting.md) | One data-protection key ring per cell, named `spa-platform-{cell}` and kept in Parameter Store under a per-cell prefix, registered by hosting; nothing registered when the section is absent | — |
 | [0026](0026-track-the-workflow-scripts.md) | The workflow scripts under `.claude/workflows/` are tracked, as integrator code and not a steering document; every edit lands before the launch it is for, and CI parses each script the way the Workflow tool reads it | — |
 | [0027](0027-track-the-project-skills-and-the-test-companion.md) | The overnight script's test companion, its fixtures and the project skills under `.claude/skills/` are tracked under the workflow scripts' rule; CI runs the companion on every push, a project skill is integrator code whose edits land before the sitting that runs them, and the user-level skills stay outside the repository | — |
+| [0028](0028-back-channel-logout-outside-bff-by-subject.md) | Back-channel logout at `/signout-backchannel-oidc`, outside `/bff`, ends a subject's sessions on one app through a session index that removes by subject and lands with its endpoint at G7; a `sid`-only token is refused and cross-task `jti` replay is accepted | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

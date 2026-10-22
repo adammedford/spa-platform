@@ -190,6 +190,16 @@ time and given back when its refresh is written. The **holder** is the task that
 **loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
 
+**Back-channel logout** — the provider telling the gateway, server to server and with no browser
+present, that a user's sign-in at an app has ended, so the gateway ends that user's sessions for the
+app. Distinct from **logout**, the browser's `POST /bff/logout`, and from the provider's own
+RP-initiated logout. See ADR-0028.
+_Avoid_: "remote sign-out", which is the framework's front-channel `/signout-oidc`, switched off.
+
+**Session index** — the lookup of one app's sessions by the provider's subject, kept by whatever
+keeps the session records. See ADR-0028.
+_Avoid_: "user index", "sessions by user".
+
 ## Work, gates and evidence
 
 **Workstream** — one of the six parallel streams of work (1 AWS and IaC, 2 Hosting and registry,
