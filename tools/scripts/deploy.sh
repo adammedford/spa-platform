@@ -15,7 +15,12 @@
 #      deployment would fail its health checks and roll back (contracts/README.md). Run seed.sh
 #      first. Nothing is built before this.
 #   2. It builds both images for ARM64 and pushes each under a tag of this run's own, since the
-#      repositories' tags are immutable, then takes each digest from ECR.
+#      repositories' tags are immutable, then takes each digest from ECR. Each build pulls its base
+#      image (--pull), so every deployment resolves the floating tag, mcr.microsoft.com/dotnet/
+#      aspnet:10.0-noble among them, afresh: without it a workstation whose cache holds an older
+#      image builds on that one, and could ship a .NET runtime that predates the security fixes
+#      the tag's current image carries (#273, #288). --pull is Docker's "Always attempt to pull all
+#      referenced images": https://docs.docker.com/reference/cli/docker/buildx/build/
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
@@ -155,7 +160,7 @@ build_and_push() {
 # Docker's own output, through the redaction: it names the repository, which carries the account.
 docker_build() {
   local status=0
-  docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+  docker buildx build --pull --platform linux/arm64 --provenance=false --sbom=false \
     --file "${REPO_ROOT}/$1" --tag "$2" --push "$REPO_ROOT" 2>&1 | redact_stream || status=$?
   return "$status"
 }

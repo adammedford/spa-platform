@@ -66,6 +66,16 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
             self.assertIn("--provenance=false", argv)
             self.assertIn("--sbom=false", argv)
 
+    def test_each_build_pulls_its_base_image_afresh(self):
+        # #288: without --pull, a workstation whose cache holds an older
+        # mcr.microsoft.com/dotnet/aspnet:10.0-noble builds on it, and could ship a runtime that
+        # predates the advisories the floating tag's current image fixes (#273).
+        case, _ = self.deployed()
+        builds = [call for call in case.calls("docker") if call["argv"][:2] == ["buildx", "build"]]
+        self.assertEqual(2, len(builds))
+        for call in builds:
+            self.assertIn("--pull", call["argv"], call["argv"])
+
     def test_the_apply_names_each_image_by_the_digest_ecr_holds_and_the_health_path_is_readyz(self):
         case, _ = self.deployed()
         world = case.load()
