@@ -123,6 +123,7 @@ const HOUSE = `House rules (gate evidence; it proves and reports, and changes no
 - Nothing is pushed, merged or tagged; no branch is created or moved; no AWS command is run, and no deployed stack, tunnel or provider is reached.
 - Never log a secret, token, cookie, authorization code or state value (AGENTS.md); a runner's output you copy to a log is copied as printed and never gains one.
 - A process you start binds only a port your prompt gives you (the suites bind ephemeral ports), and is stopped before you return.
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Write each PHASE FILE, RESULT FILE and OUTPUT FILE line's path exactly as given.
 The vocabulary is the glossary's: this run performs checks, and the only gates are the ladder's.`
 

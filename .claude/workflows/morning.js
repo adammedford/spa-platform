@@ -135,11 +135,11 @@ const HOUSE = (mdir) => `House rules (a morning session; Adam reads the hand-ove
 - Never run the landing script, tools/land.sh: Adam runs it (#78 grill Q2). Never merge, rebase or cherry-pick into any branch, never tag, never pass --admin or --no-verify, never force-push, never delete a branch (#71 owns deletion), and never remove a worktree by force.
 - Only two branches may be pushed, each with the pre-push hook running: the integration branch and the morning branch. Before a push, compare the remote tip with the local one: equal, skip the push; not an ancestor of the local tip, stop, because someone else pushed and the morning never force-pushes.
 - Begin every Bash command that touches a worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. A bare \`git commit\` lands on Adam's branch.
-- Change a file with Edit only after opening it with Read in this session, and open it again after anything else wrote it; otherwise make the change with a short script.
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Worktrees live under ${WTROOT}. Never create one under the repo.
 - AGENTS.md's rules hold: owner paths only (OWNERSHIP.md); never log a secret, token, cookie, code or state value.
 - Commit messages end with the attribution line "${TRAILER}" (or the one this session's own attribution reminder names, if it differs).
-- Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file outside a worktree under ${WTROOT}.`
+- Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file outside a worktree under ${WTROOT} but a script the edit rule above has you write under your scratchpad.`
 
 // The lookup every first agent does before anything else (#78 user story 38): the run is one open
 // issue titled exactly "Overnight <date>", or nothing happens. The script judges the listing the
