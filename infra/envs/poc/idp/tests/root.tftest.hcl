@@ -81,7 +81,8 @@ run "domain_prefix_defaults_to_the_cell_and_account" {
 # .scratch/overnight/questions-2026-10-15-answered.md, answered yes, put this root in row 1.9 with
 # aws_cognito_user_pool_client named as absent: the clients are the apps root's, which is what keeps
 # onboarding an app out of this root's plan (docs/plan/05-infrastructure-and-cost.md -> Terraform
-# boundaries).
+# boundaries). The two runs below are P-07, the identity plan allowlist, which ADR-0016 decision 7
+# registers because docs/plan/04-tests.md is a frozen export that takes no new row.
 #
 # Patterns take quoted labels, the only form `terraform fmt -check` passes, and paths are built on
 # path.module because Terraform refuses an assertion that refers to nothing in the configuration.
