@@ -41,7 +41,8 @@ DOMAIN="${SPA_CERT_DOMAIN:-spa-poc.test}"
 # AWS_DEFAULT_REGION, then the profile's configured Region, with --region over all three. There is
 # no fallback. A us-east-1 default once sent the import to a Region the platform root never reads,
 # from a shell preflight had passed on the profile's Region alone (#118, #241); resolve_region
-# refuses instead.
+# refuses instead. The order is the AWS CLI's own:
+#   https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 CERTS_DIR="${SPA_CERTS_DIR:-}"
 VERIFY_HOST=""

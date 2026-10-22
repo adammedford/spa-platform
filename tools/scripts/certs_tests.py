@@ -21,6 +21,8 @@ certificate are issued once, by the script, and copied into each case. No case c
 in order with the Region it named, and exits 97 on a call shape it does not answer, so a new call in
 the script turns a case red instead of being answered. `aws configure get region` prints the case's
 profile Region, or exits 1 with nothing on stdout, as the real CLI does when the profile names none.
+(https://docs.aws.amazon.com/cli/latest/reference/configure/get.html: a value that does not exist
+returns exit code 1.)
 
 **A universal held on every run:** nothing the script prints holds private key material.
 
