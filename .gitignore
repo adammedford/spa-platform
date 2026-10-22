@@ -73,13 +73,16 @@ spikes/g0/real-handler/vendor/ref/
 
 # Agent session scratch: worktrees and anything else a session leaves behind. Three exceptions:
 # settings.json, because the permission allowlist is shared, like CI config is; the workflow
-# scripts under workflows/, with the overnight script's test companion overnight_tests.mjs and its
-# fixtures under workflows/fixtures/; and the project skills under skills/, such as wiz. A workflow
-# change or a skill change is a branch, a review and a landing like any other integrator change
-# (ADR-0026, ADR-0027). The user-level skills under ~/.agents/skills are not in this repository.
+# scripts under workflows/, with their test companions, each named <script>_tests.mjs, and the
+# overnight companion's fixtures under workflows/fixtures/; and the project skills under skills/,
+# such as wiz. A workflow change or a skill change is a branch, a review and a landing like any
+# other integrator change (ADR-0026, ADR-0027). The companions are the overnight script's (#213),
+# the review-queue script's (#83), the retro script's (#260), the morning script's (#263), the
+# truth-audit script's (#267), the pins-sweep script's (#269) and the gate-evidence script's (#265).
+# The user-level skills under ~/.agents/skills are not in this repository.
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
-# for the scripts, the companion and its fixtures alone; anything else there, a .bak or the old
+# for the scripts, their companions and the fixtures alone; anything else there, a .bak or the old
 # overnight_harness.mjs, stays ignored.
 .claude/*
 !.claude/settings.json
@@ -87,6 +90,12 @@ spikes/g0/real-handler/vendor/ref/
 .claude/workflows/*
 !.claude/workflows/*.js
 !.claude/workflows/overnight_tests.mjs
+!.claude/workflows/review-queue_tests.mjs
+!.claude/workflows/retro_tests.mjs
+!.claude/workflows/morning_tests.mjs
+!.claude/workflows/truth-audit_tests.mjs
+!.claude/workflows/pins-sweep_tests.mjs
+!.claude/workflows/gate-evidence_tests.mjs
 !.claude/workflows/fixtures/
 !.claude/skills/
 

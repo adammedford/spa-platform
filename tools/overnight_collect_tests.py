@@ -24,6 +24,7 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -61,6 +62,127 @@ ROAD = {
              "6.9": "open"},
     "splits": {"6.3a": "landed"},
     "tickets": {"issue-65": "landed"},
+}
+
+
+# Issue bodies as they were filed, every acceptance box open: #172, #204, #206 and #209 are the shapes
+# that ended partial on 2026-10-21 (#226), and #147 and #198 the single-owner, buildable shape #247
+# names as passing. Copied whole, so a pattern is tried on the text around a box as well as the box.
+FILED = {
+    172: '''## Question
+
+Charting decided the harness and the floor artifact live under `tools/bench`, owned by workstream 6 (verification). `OWNERSHIP.md` is an integrator file, and `tools/` is integrator by the `*` rule, so the path needs a line under "6 Verification and operations" and `AGENTS.md`'s owner table needs the same.
+
+Resolution: `contracts/changes/<id>-tools-bench-ownership.md` filed on a branch and pushed, following the existing change request's shape, naming this ticket and the map. The integrator decides and edits; this ticket closes when the request is filed, and the answer links it.
+
+## Acceptance
+
+- [ ] The change request giving workstream 6 the `tools/bench` path is filed under `contracts/changes/` on a pushed branch, in the existing change requests' shape, naming this ticket and the map (#169); the answer links it.
+''',
+    204: '''**Raised by:** #58 (sitting C, stage C1, 2026-10-21)
+**Owner:** integrator (root files, `src/Gateway/Dockerfile`), with workstream 5 for `fixtures/MockApi/Dockerfile`
+
+## What to build
+
+A workstation builds and runs the gateway and mock API images the way CI does, and the files the scripts write never reach a commit or a builder.
+
+Tonight's first deployment hit two defects that a clean CI checkout can't show. The image build copied the workstation's own build output over the image's `linux-arm64` restore, so `dotnet publish --no-restore` failed with `NETSDK1047`; and because no `.dockerignore` exists, every build also sent the local certificate authority's private key, the scratch directory and the git-ignored Terraform variables to the builder. Then, once the images built, the gateway died on its first line: `UnauthorizedAccessException` on `appsettings.json`, because the files were owner-only on the workstation, `COPY` and `publish` keep that mode, and the final stage runs as `$APP_UID`.
+
+The scripts also write the infrastructure outputs document into the tree, and git doesn't ignore it. It carries the account id and both apps' client ids, so one `git add .` would commit it.
+
+## Acceptance criteria
+
+- [ ] A root `.dockerignore` keeps build output, the local certificate authority, the scratch directory, `.git/`, Terraform's working directories, state and variable files out of the build context
+- [ ] The infrastructure outputs document the scripts write is git-ignored
+- [ ] Both Dockerfiles make the published output readable by the runtime user whatever the build context's file modes were
+- [ ] From a tree that has host build output and an owner-only `appsettings.json`, the gateway image builds, and a container started as its own user gets past `WebApplication.CreateBuilder`
+
+## Blocked by
+
+None (can start immediately).
+''',
+    206: '''**Raised by:** #58 (sitting C, stage C1, 2026-10-21)
+**Owner:** integrator (`Directory.Packages.props`, `docs/dependencies.md`), workstream 2 (`tools/spactl`, its tests)
+
+## What to build
+
+`spactl` signs in as the project's profile, so `seed.sh`, onboarding and every operator command run with no exported credentials.
+
+The `spa-platform` profile signs in with `login_session`, which the new AWS experience sets up. The AWS CLI and Terraform resolve it. The .NET SDK resolves it only when the `AWSSDK.Signin` assembly is present, and `spactl` references the S3 package alone, so every provider in its credential chain failed tonight (`Assembly AWSSDK.Signin could not be found or loaded`). The sitting got past it by exporting short-lived credentials into the shell before `seed.sh`.
+
+## Acceptance criteria
+
+- [ ] `AWSSDK.Signin` is pinned centrally at the release that pairs with the pinned S3 package's core, and `spactl` references it
+- [ ] `docs/dependencies.md` carries its row and the reason: the project's profile signs in with `login_session`, which the CLI and Terraform resolve on their own and the .NET SDK resolves only with this assembly
+- [ ] A test in `spactl`'s test project loads the credential chain against a profile file that uses `login_session` and asserts it gets past the missing-assembly failure, with no AWS call
+- [ ] `seed.sh` runs to its pass line on a workstation with the profile alone
+
+## Blocked by
+
+None (can start immediately).
+''',
+    209: '''**Raised by:** #63 (sitting C, stages C2 and C3, 2026-10-21)
+**Owner:** workstream 6 (`tests/e2e`)
+
+## What to build
+
+The browser suite runs against the deployed cell, through the tunnel, against Cognito, and the G3 functional rows (F-01 to F-06 and F-08) pass there. Tonight the stack was up and verified, and none of them could run: every test builds the in-process stack, and nothing points the browser at the tunnel, signs in through the managed login, or reads the gateway's log from CloudWatch.
+
+Running it needs a sitting: the cell deployed, `tunnel.sh` up, and the local authority trusted. The suite reads the cell's names from the infrastructure outputs document, never from Terraform state.
+
+## Acceptance criteria
+
+- [ ] A deployed stack beside the local one, chosen by an environment switch, with the local stack still the default
+- [ ] Chromium reaches every app host through the tunnel's local port and trusts the local authority
+- [ ] Sign-in goes through Cognito's managed login with the identity root's test users, whose passwords are read from Parameter Store at run time and never logged
+- [ ] The gateway's request lines are read from its CloudWatch log group, so the rows that assert a rule id or a redaction still can
+- [ ] F-01 to F-06 and F-08 pass against the deployed cell in a sitting, and the run is posted on #63
+
+## Blocked by
+
+None (can start immediately).
+''',
+    147: '''**Owner:** 4 API and security
+**Plan row:** none
+
+## Parent
+
+Part of #140, the `stage-host` spec. Ticket 4 of 10: the security tests' four hosts.
+
+## What to build
+
+`GateHost`, `AntiforgeryHost`, `HeadersHost` and `SecurityHost` in the security tests are each reduced to what is their own: a services delegate with the stage's settings, a pipeline delegate holding the stages they prove in the contract's order, their host-resolution pin and their terminal, and a `SendAsync` carrying their stage's headers. Everything else comes from `StageHost`: the listener, the telemetry stand-in through `TelemetryStandIn`, the captured log, the raw sender and the client. The antiforgery host's stand-in, installed today after the forwarded-headers stage in the reverse of the pipeline's order, is installed by the module outermost, so the method allowlist's 405 finds a feature to write on. The project's own `ListLoggerProvider` and its raw sender and parser are deleted.
+
+Call-shape edits the suite needs: a `string` becomes a `RawResponse` at the raw-send sites, the `lock` blocks over the live log list go because `Lines` is a snapshot, and rule-id queries use `LinesFor(rule, level?)`, which reads the `Rule` state property. With the floor at Trace a single-line assertion may meet a second, lower-level line; pass the level where it does. The pin stays in the pipeline delegate with no option and no helper. Note while migrating: the antiforgery host's pin matches the request's host without its port, while the real stage compares the full authority, port included; the ticket records this and changes nothing in the stage.
+
+## Acceptance criteria
+
+- [ ] The four hosts start on `StageHost` and each is its services delegate, pipeline delegate, pin, terminal and `SendAsync`, with no copied listener, stand-in, capture or sender left.
+- [ ] `ListLoggerProvider` and the project's raw sender and parser are deleted.
+- [ ] Every behaviour test in the project passes unchanged in behaviour, including the six proofs that a stage writes the feature null-conditionally with the stand-in off.
+- [ ] A test sends the antiforgery host a method the allowlist refuses with the stand-in on and reads the method rule id from `TelemetryRules`, which the reversed order could never show.
+- [ ] The change touches only workstream 4's paths and leaves no change request open.
+''',
+    198: '''**Owner:** 1 AWS and IaC
+**Plan row:** none
+**Raised by:** P8 in #186's independent review, https://github.com/adammedford/spa-platform/pull/186#issuecomment-6302058080
+
+## Parent
+
+#190
+
+## What to build
+
+The tunnel finds the cluster, the service and the load balancer by asking AWS for them by name, because the outputs document did not exist when 1.6b landed. 1.7 now writes it, and the frozen infra-outputs schema says the scripts read their names from it. The 1.6b review asked for this, and its merge body's Outstanding line left it out.
+
+## Acceptance criteria
+
+- [ ] The tunnel reads the ECS cluster, the service and the ALB's DNS name from the outputs document, and refuses with a named error when the document is absent.
+- [ ] Its companion fails when the tunnel goes back to looking the names up in AWS.
+- [ ] The tunnel's header says where its names come from.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+''',
 }
 
 
@@ -234,14 +356,16 @@ class Rules(unittest.TestCase):
         self.assertEqual([153], [t["issue"] for t in answer["tickets"]])
         self.assertEqual([139], [p["issue"] for p in answer["parents"]])
 
-    def test_a_foreground_session_line_is_listed_apart_and_prose_naming_one_is_not(self):
-        """#137 quotes the line in a sentence and is a ticket; #83 carries it and is not."""
+    def test_a_session_foreground_line_no_longer_keeps_an_issue_out_of_the_tickets(self):
+        """#137 (ADR-0026, Q12 of #135): the workflow files are tracked, so a lane can write them
+        and the `**Session:** foreground` rule is gone. An issue that carries the line, as #109 did
+        on 2026-10-21, is read as any other ticket, and the answer has no "foreground" list."""
         answer = resolved(agent=[
-            issue(83, "**Owner:** integrator\n**Session:** foreground — not an overnight lane\n"),
+            issue(109, "**Owner:** integrator\n**Session:** foreground — not an overnight lane\n"),
             issue(137, "Today #83 carries `**Session:** foreground — ...`, which this ends.\n"),
         ])
-        self.assertEqual([137], [t["issue"] for t in answer["tickets"]])
-        self.assertEqual([83], [f["issue"] for f in answer["foreground"]])
+        self.assertEqual([109, 137], sorted(t["issue"] for t in answer["tickets"]))
+        self.assertNotIn("foreground", answer)
 
     def test_two_tickets_with_one_id_refuse_and_name_both(self):
         """#56 and #180 on 2026-10-20, both `**Plan row:** 1.4`."""
@@ -258,6 +382,90 @@ class Rules(unittest.TestCase):
     def test_an_open_issue_on_a_landed_row_is_reported(self):
         answer = resolved(agent=[issue(65, body())], branches=[])
         self.assertEqual([{"id": "issue-65", "issue": 65}], answer["landedButOpen"])
+
+
+class WillEndPartial(unittest.TestCase):
+    """#228: the launch plan of 2026-10-21 forecast 22 integrated tickets and got 15 (#226), and
+    nothing at collect time said which would end partial. Each ticket now carries "willEndPartial".
+    Since #248 its entries are tools/ticket_shape.py's failures, one per rule broken, so the check at
+    creation and the forecast at launch judge a ticket by one grammar: each entry is the rule and the
+    line ticket_shape prints for it. A case per rule, each red while collect keeps a table of its own."""
+
+    def flags(self, number: int, text: str | None = None, *, label: str = "agent",
+              blockers: tuple[tuple[int, str], ...] = ()) -> list[dict]:
+        listed = {label: [issue(number, FILED[number] if text is None else text,
+                                blockers=blockers)]}
+        return by_issue(resolved(**listed))[number]["willEndPartial"]
+
+    def rules(self, flags: list[dict]) -> list[str]:
+        return [flag["rule"] for flag in flags]
+
+    def test_one_owner_flags_touches_paths_of_two_owners(self):
+        text = ("**Owner:** integrator\n**Touches:** `src/Gateway/Dockerfile`, "
+                "`fixtures/MockApi/Dockerfile`\n\n## Acceptance\n- [ ] one\n")
+        flags = self.flags(7, text)
+        self.assertEqual(["one-owner"], self.rules(flags))
+        self.assertIn("ws5-fixtures: fixtures/MockApi/Dockerfile", flags[0]["reason"])
+
+    def test_owner_line_flags_204_and_206_for_their_second_owner(self):
+        for number, other in ((204, "ws5-fixtures"), (206, "ws2-hosting")):
+            with self.subTest(issue=number):
+                flags = self.flags(number)
+                self.assertEqual(["owner-line"], self.rules(flags))
+                self.assertIn(f"integrator and {other}", flags[0]["reason"])
+
+    def test_owner_line_flags_172_for_naming_no_owner(self):
+        flags = self.flags(172)
+        self.assertEqual(["owner-line", "sitting-or-landing"], self.rules(flags))
+        self.assertIn("no role", flags[0]["reason"])
+        self.assertIn("pushed", flags[1]["reason"])
+
+    def test_sitting_or_landing_flags_each_box_of_209_that_names_one(self):
+        """Box 1 says "A deployed stack" and box 5 is the sitting's. ticket_shape's word list reads
+        both alike, and its docstring names the escape: reword the box."""
+        flags = self.flags(209)
+        self.assertEqual(["sitting-or-landing", "sitting-or-landing"], self.rules(flags))
+        self.assertIn("A deployed stack beside the local one", flags[0]["reason"])
+        self.assertIn("F-01 to F-06 and F-08 pass against the deployed cell", flags[1]["reason"])
+
+    def test_sitting_or_landing_reads_ticket_shapes_own_word_list(self):
+        """Read from the module the creation check runs, so a word added there is forecast here."""
+        for word, _ in collect.ticket_shape().SITTING_OR_LANDING:
+            with self.subTest(word=word):
+                flags = self.flags(7, body(boxes=f"- [ ] It needs {word} first"))
+                self.assertEqual(["sitting-or-landing"], self.rules(flags))
+                self.assertIn(word, flags[0]["reason"])
+
+    def test_blocker_edge_flags_a_stated_wait_with_no_edge(self):
+        text = body() + "\nBlocked by #100.\n"
+        self.assertEqual(["blocker-edge"], self.rules(self.flags(7, text)))
+        self.assertEqual([], self.flags(7, text, blockers=((100, "OPEN"),)))
+
+    def test_foreground_flags_a_ready_for_agent_ticket(self):
+        text = "**Session:** foreground\n" + body()
+        self.assertEqual(["foreground"], self.rules(self.flags(7, text)))
+
+    def test_spec_is_never_a_ticket_so_never_forecast(self):
+        """ticket_shape's sixth rule fails a ready-for-agent issue with sub-issues. Collect lists
+        such an issue under "parents" and gives it no lane, so there is no ticket to flag."""
+        answer = resolved(agent=[issue(7, body(), subs=2)])
+        self.assertEqual(([], [7]), (answer["tickets"], [p["issue"] for p in answer["parents"]]))
+
+    def test_one_owner_and_buildable_boxes_is_not_flagged(self):
+        for number in (147, 198):
+            with self.subTest(issue=number):
+                self.assertEqual([], self.flags(number))
+
+    def test_a_ticked_box_is_not_flagged(self):
+        ticked = FILED[209].replace("- [ ] F-01", "- [x] F-01").replace("- [ ] A deployed",
+                                                                          "- [x] A deployed")
+        self.assertEqual([], self.flags(209, ticked))
+
+    def test_a_human_ticket_carries_the_rules_that_read_no_label(self):
+        """The rules under ready-for-agent alone read a lane's work; a human's ticket is judged by
+        its own label, as the creation check judges it, and still carries the owner rules."""
+        self.assertEqual(["owner-line"], self.rules(self.flags(204, label="human")))
+        self.assertEqual([], self.flags(209, label="human"))
 
 
 class ThroughGh(unittest.TestCase):
@@ -303,8 +511,18 @@ class ThroughGh(unittest.TestCase):
             self.assertIn(f"--label {label} --limit 500 --json {collect.FIELDS}", call)
         self.assertIn("subIssuesSummary", collect.FIELDS)
         answer = json.loads(out)
+        self.assertEqual([[], []], [t["willEndPartial"] for t in answer["tickets"]])
         self.assertEqual([("1.7", "ready-for-agent"), ("issue-2", "ready-for-human")],
                          [(t["id"], t["status"]) for t in answer["tickets"]])
+
+    def test_the_json_marks_a_ticket_that_will_end_partial_and_stderr_counts_it(self):
+        self.listings(agent=[issue(204, FILED[204]), issue(198, FILED[198])])
+        code, out, err = self.run_main("--json")
+        self.assertEqual(0, code, err)
+        found = {t["issue"]: t["willEndPartial"] for t in json.loads(out)["tickets"]}
+        self.assertEqual([], found[198])
+        self.assertEqual(["owner-line"], [flag["rule"] for flag in found[204]])
+        self.assertIn("1 will end partial", err)
 
     def test_a_shared_id_exits_1_with_nothing_on_stdout(self):
         self.listings(agent=[issue(56, body("1.4")), issue(180, body("1.4"))])
@@ -347,6 +565,56 @@ class ThroughGh(unittest.TestCase):
                 code, out, err = self.run_main("--json", "--from", str(saved))
                 self.assertEqual((1, ""), (code, out))
                 self.assertIn("could not read the input", err)
+
+
+class ForecastFailsClosed(unittest.TestCase):
+    """A ticket-shape check that cannot load or judge stops the tool on exit 1 with nothing on
+    stdout, as a failed read does: an empty willEndPartial from a check that never ran would read
+    as "none flagged" (CODING_STANDARDS.md, "A check fails closed")."""
+
+    PARTS = ("tools/overnight_collect.py", "tools/ticket_shape.py", ".github/path-ownership.py",
+             "OWNERSHIP.md")
+
+    def test_a_missing_part_of_the_check_exits_1_with_nothing_on_stdout(self):
+        for missing in self.PARTS[1:]:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as scratch:
+                tree = pathlib.Path(scratch)
+                for part in self.PARTS:
+                    if part != missing:
+                        (tree / part).parent.mkdir(parents=True, exist_ok=True)
+                        (tree / part).write_bytes((ROOT / part).read_bytes())
+                saved = tree / "saved"
+                saved.mkdir()
+                (saved / "ready-for-agent.json").write_text(json.dumps([issue(198, FILED[198])]))
+                (saved / "branches.txt").write_text("")
+                (saved / "roadmap.json").write_text(json.dumps(ROAD))
+                done = subprocess.run(
+                    [sys.executable, "-I", str(tree / self.PARTS[0]), "--json", "--from",
+                     str(saved)], capture_output=True, text=True, cwd=scratch, check=False,
+                    env={"PATH": "/usr/bin:/bin", "HOME": scratch})
+                self.assertEqual((1, ""), (done.returncode, done.stdout), done.stderr)
+                self.assertIn("no tickets printed: the ticket-shape check could not", done.stderr)
+
+    def test_the_whole_tree_judges(self):
+        """The same layout with nothing missing prints the tickets, so the cases above fail on
+        the part they leave out and not on the copy."""
+        with tempfile.TemporaryDirectory() as scratch:
+            tree = pathlib.Path(scratch)
+            for part in self.PARTS:
+                (tree / part).parent.mkdir(parents=True, exist_ok=True)
+                (tree / part).write_bytes((ROOT / part).read_bytes())
+            saved = tree / "saved"
+            saved.mkdir()
+            (saved / "ready-for-agent.json").write_text(json.dumps([issue(204, FILED[204])]))
+            (saved / "branches.txt").write_text("")
+            (saved / "roadmap.json").write_text(json.dumps(ROAD))
+            done = subprocess.run(
+                [sys.executable, "-I", str(tree / self.PARTS[0]), "--json", "--from", str(saved)],
+                capture_output=True, text=True, cwd=scratch, check=False,
+                env={"PATH": "/usr/bin:/bin", "HOME": scratch})
+            self.assertEqual(0, done.returncode, done.stderr)
+            flags = json.loads(done.stdout)["tickets"][0]["willEndPartial"]
+            self.assertEqual(["owner-line"], [flag["rule"] for flag in flags])
 
 
 class BranchesThroughGit(unittest.TestCase):

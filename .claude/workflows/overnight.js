@@ -33,7 +33,7 @@ export const meta = {
 //                             HEAD and checks it against origin.
 //   maxParallel     optional  positive integer, default 3.      maxFailures  optional  positive integer, default 4.
 //   only            optional  array of task ids to run.         skip         optional  array of task ids to
-//                             leave out, added to FOREGROUND_ONLY below.
+//                             leave out of this run.
 // Shell (#129): every agent's Bash must run /bin/bash. settings.json sets CLAUDE_CODE_SHELL=/bin/bash, but only a
 // Claude Code process started after that setting merged honours it; collect reports the shell, and the run halts
 // before Route, with no lane started, when it is not bash. Restart Claude Code before a launch if in doubt.
@@ -67,12 +67,9 @@ const WTROOT = A.wt
 const MAX_PAR = A.maxParallel || 3
 const MAX_FAIL = A.maxFailures || 4
 const ONLY = A.only || null          // task ids to implement/grill; null = all (applied after collect)
-// Foreground-only work: the six workflow specs (#77 to #82) build git-ignored files in the main checkout, which
-// no lane may write, so they stay out of every run until /to-tickets splits them into tickets a lane can land.
-// Remove an id here when its tickets exist; A.skip extends the list for one run. Tickets filed from these specs carry a
-// `**Session:** foreground` line instead, which the collect prompt reads, so they need no entry here.
-const FOREGROUND_ONLY = ['issue-77', 'issue-78', 'issue-79', 'issue-80', 'issue-81', 'issue-82']
-const SKIP = new Set([...FOREGROUND_ONLY, ...(A.skip || [])])
+// Task ids left out of this run. No id is left out of every run: the workflow files are tracked (ADR-0026), so a
+// lane can write them, and #137 dropped the foreground-only list and the `**Session:** foreground` rule with it.
+const SKIP = new Set(A.skip || [])
 // The standing answer is granted per launch (#78 grill, Q5/Q12), default off. Granted, grills and lanes take each
 // recommendation as decided and write pre-accepted answers; not granted, answers stay open and human-owned
 // decisions stop the lane. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue.
@@ -128,8 +125,13 @@ const TICKET = {
     status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed'] },
     owner: { type: 'string' }, blockedBy: { type: 'array', items: { type: 'string' } }, why: { type: 'string' },
     openBoxes: { type: 'integer' },
+    // tools/overnight_collect.py's forecast (#228): why a lane cannot finish this ticket, [] when nothing says so.
+    // Since #248 each entry is a tools/ticket_shape.py failure: the rule's name and the line the check prints for it.
+    willEndPartial: { type: 'array', items: { type: 'object', properties: {
+      rule: { type: 'string' }, reason: { type: 'string' },
+    }, required: ['rule', 'reason'] } },
   },
-  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes'],
+  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'willEndPartial'],
 }
 const COLLECT = {
   type: 'object',
@@ -140,8 +142,11 @@ const COLLECT = {
     landed: { type: 'array', items: { type: 'string' } },
     base: { type: 'string' },
     shell: { type: 'string' }, shellCommand: { type: 'string' },
+    // '' when tools/overnight_collect.py's forecast ran (#228), else its stderr's last line, so a forecast that did not
+    // run never reads as one that flagged nothing.
+    forecastFailed: { type: 'string' },
   },
-  required: ['outcome', 'reason', 'tickets', 'landed', 'base', 'shell', 'shellCommand'],
+  required: ['outcome', 'reason', 'tickets', 'landed', 'base', 'shell', 'shellCommand', 'forecastFailed'],
 }
 const ROUTE = {
   type: 'object',
@@ -216,7 +221,7 @@ TICKETS come from GitHub Issues, one list per triage label (\`--label a,b\` is a
   cd ${REPO} && gh issue list --state open --label ready-for-agent --limit 500 --json number,title,body,labels,assignees,url,blockedBy
   cd ${REPO} && gh issue list --state open --label ready-for-human --limit 500 --json number,title,body,labels,assignees,url,blockedBy
   cd ${REPO} && gh issue list --state open --label needs-triage --limit 500 --json number,title,body,labels,assignees,url,blockedBy
-An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an Overnight report) is not a ticket. Nor is an issue whose body carries a \`**Session:** foreground\` line: its work happens in a foreground session in the main checkout (a git-ignored workflow file no lane may write); leave it out of tickets and name it in "reason" as foreground-only. Each listed issue is ONE ticket:
+An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an Overnight report) is not a ticket. Each listed issue is ONE ticket:
 - issue: its number; url: its url; title: its title.
 - id: the X of a \`**Plan row:** X\` line in the body, else \`issue-<number>\`; a value of \`none\` (or an empty value) counts as absent, so a spec issue filed with \`**Plan row:** none\` gets \`issue-<number>\`, never the id \`none\`. slug: a short kebab-case slug of the title.
 - owner: the \`**Owner:**\` line mapped to the OWNERSHIP.md role: ws1-infra (workstream 1, AWS and IaC, infra/), ws2-hosting (workstream 2, Registry/Hosting/spactl), ws3-identity (workstream 3, Identity), ws4-proxy (workstream 4, Proxy/Security), ws5-fixtures (workstream 5, fixtures/), ws6-verification (workstream 6, Telemetry, tests/Gateway.*, e2e, runbooks), integrator (everything else, and every I-* row). A body that says "workstream 2 (...)" maps the same way. When it names more than one owner, the ticket's owner is the first named and "why" says the others land in their own PRs.
@@ -233,16 +238,19 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
 - n: the ticket's ordinal, 1.. in plan order (rows in the plan's order first, then \`issue-<number>\` tickets by number). It picks the lane's port, so every ticket needs a distinct one.
 Then, for every id in "landed", say in "reason" if an open issue still carries that plan row (Adam closes it; do not close it yourself).
 
-NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and not present as an issue (\`cd ${REPO} && gh issue list --state all --limit 500 --json number,body --jq '.[] | select(.body | test("\\\\*\\\\*Plan row:\\\\*\\\\* ")) | .number'\` and read their Plan row lines; any state counts) gets one, as a sub-issue of #${PARENT_ISSUE}:
-  cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file - <<'EOF'
+NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and not present as an issue (\`cd ${REPO} && gh issue list --state all --limit 500 --json number,body --jq '.[] | select(.body | test("\\\\*\\\\*Plan row:\\\\*\\\\* ")) | .number'\` and read their Plan row lines; any state counts) gets one, as a sub-issue of #${PARENT_ISSUE}, in three steps:
+  1. Write its body to ${LOG}/new-ticket-<id>.md (the Write tool, or a quoted heredoc \`cat > ${LOG}/new-ticket-<id>.md <<'EOF'\`):
   **Owner:** <role>
   **Plan row:** <id>
 
   **What to build:** the row's What, the contracts/ rows and test ids that name it (cite paths), and its Done when.
   ## Acceptance
   - [ ] one box per Done-when clause and per test id
-  EOF
+  2. Check its shape under the label and blockers you will file it with, by the rules the ticket-shape workflow holds at creation and tools/overnight_collect.py forecasts from (#248): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' ${LOG}/new-ticket-<id>.md <label> <each --blocked-by number> | python3 -I tools/ticket_shape.py -\` (bare numbers, such as 213; with no blockers, nothing after the label: a word there, such as "none", stops the check on exit 2 and files nothing)
+  3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
 Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>"). An open change request (contracts/changes/*.md with Status open) is not a ticket of its own tonight: name it in "reason" and in the "why" of every ticket it holds up.
+
+FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, the task branches, the roadmap and OWNERSHIP.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run.
 
 Return outcome "ok", tickets (sorted by n), landed, reason, base: the base's full sha (on "dirty-start", whatever HEAD is), and shell and shellCommand from SETUP 0.`
 
@@ -284,7 +292,7 @@ ${GATE({ dir: WT(t.owner), log: `${LOG}/${t.id}-implement.txt`, kind: 'task', fo
 STEP 2 — outcomes. Every record below is a comment on issue #${t.issue} (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`), with the heading named as the comment's first line; nothing is written to a ticket file.
 - Needs an integrator path (a contract, a package, a new project, anything in src/Platform.Abstractions or Platform.Testing): write contracts/changes/${t.id}-<slug>.md in the worktree in the shape of the existing ones (Status: open), build what you can without it, and land partial: complete=false, outstanding says what waits on the request.
 - Human-owned decision (the plan, contracts and ADRs are silent or contradict, and the choice is hard to reverse): ${STANDING ? "Adam's standing answer, granted for this run (" + DATE + "), is that he accepts the implementer's recommendation, so take it and keep going, on one condition: the recommendation is weighed, not asserted. It covers the code on your own branch and nothing else (ADR-0023 decision 1): on it no steering document changes, no ticket body is rewritten beyond its boxes, no ticket is filed and nothing merges." : "No standing answer was granted for this run, so every human-owned decision goes the \"## Status note\" way described at the end of this bullet, and the \"## Decisions taken\" route below is closed tonight."} In a comment headed "## Decisions taken" write, for each: the question; at least two real alternatives, each with what it costs and what it breaks, citing the plan row, contract or ADR that bears on it; the one you took and why it beats the others on those terms; what evidence would show it was wrong, and how it is reversed. A decision whose alternatives are strawmen, or whose choice contradicts a frozen contract or an accepted ADR, is not yours to take: that one goes in a comment headed "## Status note" with the question, the options and your recommendation, then \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\`, a commit with subject "Task ${t.id}: partial, question for Adam", and outcome "needs-human". List every decision taken in delegatedDecisions prefixed "Human-owned:", to tell it from a gap decision.
-- Steering documents (GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/, contracts/; adding a change request under contracts/changes/ is not a change to one): a new term or guide sentence you need is a proposal, not an edit. Put its exact text under a heading "## Proposed steering changes" in your "## Answer" comment and change no steering file for it; the report puts each proposal to Adam, and once he confirms it a session commits it on its own branch (ADR-0023 decision 4). The one steering change you commit is one this ticket's acceptance criteria ask for, in a commit whose message ends with the trailer "Authority: #${t.issue}" (ADR-0023 decision 3); the reviewer holds any other.
+- Steering documents (GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/, contracts/; adding a change request under contracts/changes/ is not a change to one): a new term or guide sentence you need is a proposal, not an edit. Put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under a heading "## Proposed steering changes" in your "## Answer" comment and change no steering file for it; the report puts each proposal to Adam, and once he confirms it a session commits it on its own branch (ADR-0023 decision 4). The one steering change you commit is one this ticket's acceptance criteria ask for, in a commit whose message ends with the trailer "Authority: #${t.issue}" (ADR-0023 decision 3); the reviewer holds any other.
 - Cannot get green (or it needs AWS, network the machine refuses, or another owner's path): a comment headed "## Status note" saying what blocks it and what you tried; \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\` (the label stays ready-for-agent); commit what exists with subject "Task ${t.id}: attempt, not green"; return "failed".
 - Green: tick the boxes you can point at (${TICK(t, 'tick')}), then a comment headed "## Answer" (what landed, where, seams, the check's last line, and an "Outstanding:" line if partial), and commit everything in the worktree with subject "Task ${t.id}: <what landed>" and a short body. The Answer says where each part went, the branch and the sha, and that the issue closes when that lands on main. Never close the issue: complete or partial, it stays open and assigned until the landing pull request's \`Closes #${t.issue}\` line closes it on the merge into main (#100; docs/agents/issue-tracker.md). A partial row's Answer carries its Outstanding line.
 - No commit: if the lane makes no commit (\`git -C ${WT(t.owner)} rev-parse HEAD\` equals forkSha), you claimed an issue you did no work on, so remove the assignee before returning: \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`.
@@ -304,7 +312,7 @@ ${GATE({ dir: WT(t.owner), log: `${LOG}/${t.id}-review.txt`, kind: 'task', fork:
 
 STEP 2 — ${skill('code-review')}, fixed point ${impl.forkSha}, in ${WT(t.owner)}. The spec is issue #${t.issue}'s body plus its plan row and the contracts/ rows naming the task (landing-work.md "Review": there is no per-task spec file). Standards sources include CODING_STANDARDS.md. Tell both axes: the tests have been run and their output is ${LOG}/${t.id}-review.txt; read it rather than running dotnet. CODING_STANDARDS.md asks a runtime claim to be verified by a run — that file is the run; a claim it does not cover may run one test project, never the solution.
 Launch every sub-agent with \`run_in_background: false\` and wait until each axis has reported before you write anything: a background sub-agent lets you hand back before it reports. If sub-agents are unavailable, do both axes yourself in turn and keep the two reports separate.
-Steering documents (#103): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/ (contracts/changes/ excepted), read the trailer of the commit that changed it, \`git -C ${WT(t.owner)} log --format='%h %(trailers:key=Authority,valueonly)' ${impl.forkSha}..HEAD -- <path>\`, and the item it cites. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, or a confirmed answer; a pre-accepted answer, a proposal, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change with no Authority trailer, or one whose cited item does not decide it, is held: take it out of the branch (restore the file to ${impl.forkSha} when the whole change lacks authority, else edit the sentence out, and commit), put its exact text under "## Proposed steering changes" in your "## Review" comment, and list it there under "Held". Make no steering change of your own; propose it the same way.
+Steering documents (#103): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/ (contracts/changes/ excepted), read the trailer of the commit that changed it, \`git -C ${WT(t.owner)} log --format='%h %(trailers:key=Authority,valueonly)' ${impl.forkSha}..HEAD -- <path>\`, and the item it cites. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, or a confirmed answer; a pre-accepted answer, a proposal, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change with no Authority trailer, or one whose cited item does not decide it, is held: take it out of the branch (restore the file to ${impl.forkSha} when the whole change lacks authority, else edit the sentence out, and commit), put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under "## Proposed steering changes" in your "## Review" comment, and list it there under "Held". Make no steering change of your own; propose it the same way.
 Then read the "## Decisions taken" comment, if any. Each human-owned decision the implementer took is a finding on the Spec axis unless its alternatives were real (not strawmen), its costs were stated against the plan row, contract or ADR that bears on it, and the choice holds against every frozen contract and accepted ADR. Re-weigh each one yourself; where the implementer's choice loses on those terms, reverse it in code and say so in your "## Review" comment under "Decisions reversed".
 
 STEP 3 — fix every finding you verify as real; for each one you reject, say why. If you changed files, re-run the gate above into ${LOG}/${t.id}-review.txt (at most twice) and keep it green. Untick any acceptance box that is not actually met (${TICK(t, 'untick')}). Post one comment headed "## Review" on issue #${t.issue} (both axes' findings, what you fixed, what you skipped and why, decisions upheld or reversed). Commit with subject "Review: <what changed>" (a review with no code change commits nothing; say so). The issue stays open whatever you tick or untick: the landing closes it (#100).
@@ -361,6 +369,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
 1. The report issue, created once at the end of this step with \`cd ${REPO} && gh issue create --title "Overnight ${DATE}" --body-file - <<'EOF' ... EOF\` (no label, no parent; if an open issue titled "Overnight ${DATE}" already exists from a resumed run, edit its body with \`gh issue edit <n> --body-file -\` instead of creating a second). Its body holds no question text: the questions are comments, step 1b below (#104). The body, for Adam first thing in the morning:
    - first line: "Standing answer: ${STANDING_LINE}." Adam confirms pre-accepted answers with one comment on this issue beginning "Confirm" (overrides as "Q<n>: <answer>" lines); until then they are provisional;
    - one line: N integrated, N partial, N skipped, N failed, N need you, N blocked;
+   - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty and "forecastFailed" is "". When "forecastFailed" is not empty, the section says the forecast did not run and quotes it, never "none". This section comes before Integrated, so the forecast reads as made before the lanes ran;
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Close in the morning: every ticket whose result's "why" is "every acceptance box is ticked; close it in the morning": no lane ran, because collect found no open acceptance box on its issue (#129); cite each as #<issue> so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
@@ -453,6 +462,17 @@ agentT.filter((t) => t.openBoxes === 0).forEach((t) => {
   resolveDone[t.id](true)
 })
 
+// The forecast (#228), before any lane starts: a lane ticket whose shape collect says will end partial (another owner
+// on its Owner line, or an open box only a sitting, a push or a landing can tick). A ticket with no list (a collect
+// result from before the field) counts as unflagged.
+// A forecast that did not run says so (CODING_STANDARDS.md, "A check fails closed"): its count would read as zero flagged.
+const forecastFailed = col.forecastFailed || ''
+const willEndPartial = Object.values(lanes).flat().filter((t) => (t.willEndPartial || []).length)
+  .map((t) => ({ id: t.id, issue: t.issue, reasons: t.willEndPartial.map((w) => w.reason) }))
+log(forecastFailed ? `forecast: did not run: ${forecastFailed}`
+  : `forecast: ${willEndPartial.length} of ${Object.values(lanes).flat().length} lane tickets will end partial`
+  + willEndPartial.map((w) => `\n  ${w.id} (#${w.issue}): ${w.reasons.join('; ')}`).join(''))
+
 const work = async (t) => {
     const deps = await Promise.all(t.blockedBy.map((b) => (byId[b] && done[b]) ? done[b] : Promise.resolve(!byId[b])))
     // a blocker not in tonight's agent set counts as met only if collect did not list it as a ticket
@@ -513,6 +533,7 @@ const summary = {
   blocked: tickets.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, issue: t.issue, waitsOn: t.blockedBy, why: t.why })),
   claimed: tickets.filter((t) => t.status === 'claimed').map((t) => t.id),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
+  willEndPartial, forecastFailed,
   results,
 }
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
@@ -526,6 +547,7 @@ return {
   failed: ids((r) => r.outcome === 'failed'),
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
+  willEndPartial: willEndPartial.map((w) => w.id), forecastFailed,
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   reportIssue: rep ? rep.issue : null,

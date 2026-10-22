@@ -205,6 +205,12 @@ independence is counted. A sub-agent belongs to the session that dispatched it. 
 the integrator, may be many agent sessions. _Avoid_: bare "session" wherever the gateway's sessions
 (session record, session key) could be meant.
 
+**Claude Code process** — one launch of Claude Code, from a terminal or an editor, with every agent
+session it hosts: the foreground conversation, its subagents and the agents a workflow starts. It
+reads the checkout's settings when it starts, so a change to them reaches only a process launched
+afterwards. _Avoid_: "fresh session" or "new session" for this; a new agent session can run in an
+old process.
+
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
 
@@ -259,7 +265,9 @@ to one.
 
 **Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
 common directory. Concurrent sessions share it, so a session's branch work happens in a linked
-worktree of its own (`docs/agents/landing-work.md`, "Take a task").
+worktree of its own (`docs/agents/landing-work.md`, "Take a task"); the one change a session makes
+there is a fast-forward of a clean `main` to what has landed, `git merge --ff-only origin/main`
+(#200).
 
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
