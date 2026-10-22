@@ -42,10 +42,13 @@ public static class RawHttp
         }
         catch (IOException) when (received.Length > 0)
         {
-            // The server answered and then reset the connection, which Kestrel may do after refusing a
-            // request it did not read to the end. The answer is what the test wants. Kept and
-            // deliberately untested: no deterministic way to make Kestrel reset after answering was
-            // found (#140, Testing Decisions).
+            // The server answered and then reset the connection. Kestrel closes a connection whose
+            // request body it could not drain after answering
+            // (https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/request-draining),
+            // and a close with received data still unread sends RST, not FIN (RFC 1122, section
+            // 4.2.2.13), which this side reads as an IOException. The answer is what the test wants.
+            // Kept and deliberately untested: no deterministic way to make Kestrel reset after
+            // answering was found (#140, Testing Decisions).
         }
 
         return RawResponse.Parse(received.ToArray());
@@ -95,6 +98,7 @@ public sealed record RawResponse(
     /// written with no <c>Content-Length</c>, which is how the gateway writes a problem document or
     /// <c>/readyz</c>'s revision, so a test that parses a body reads this.
     /// </summary>
+    /// <exception cref="InvalidDataException">The response says it is chunked, and its framing is malformed or cut off.</exception>
     public string BodyText =>
         Header("Transfer-Encoding")?.Contains("chunked", StringComparison.OrdinalIgnoreCase) == true
             ? Encoding.UTF8.GetString(Dechunk(Body))
@@ -138,32 +142,43 @@ public sealed record RawResponse(
     /// RFC 9112 section 7.1: each chunk is a hex size, CRLF, that many bytes, CRLF, and a zero-sized
     /// chunk ends the body. Trailers after it are not part of the body and are ignored. Framing only:
     /// the bytes between the markers are returned as they arrived.
+    ///
+    /// Framing that does not parse, or that ends before the last chunk, throws rather than returning
+    /// what was decoded so far: a test that parsed part of a problem document as the whole would pass
+    /// or fail on bytes the server never finished sending. An empty body is empty, framing or not: a
+    /// <c>HEAD</c> answer carries the header and no body.
     /// </summary>
+    /// <exception cref="InvalidDataException">The chunked framing is malformed or cut off.</exception>
     private static byte[] Dechunk(byte[] body)
     {
         List<byte> decoded = [];
         int at = 0;
-        while (at < body.Length)
+        while (body.Length > 0)
         {
             int found = body.AsSpan(at).IndexOf("\r\n"u8);
             if (found < 0)
             {
-                break;
+                throw new InvalidDataException("the chunked body ends before its last chunk.");
             }
 
             int eol = at + found;
 
             // The size line may carry chunk extensions after a ';', which are not part of the size.
             string line = Encoding.ASCII.GetString(body, at, eol - at).Split(';')[0].Trim();
-            if (!int.TryParse(line, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int size) || size <= 0)
+            if (!int.TryParse(line, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int size) || size < 0)
+            {
+                throw new InvalidDataException($"not a chunk size: '{line}'.");
+            }
+
+            if (size == 0)
             {
                 break;
             }
 
             int start = eol + 2;
-            if (start + size > body.Length)
+            if ((long)start + size + 2 > body.Length || !body.AsSpan(start + size, 2).SequenceEqual("\r\n"u8))
             {
-                break;
+                throw new InvalidDataException("a chunk is shorter than its size says.");
             }
 
             decoded.AddRange(body[start..(start + size)]);

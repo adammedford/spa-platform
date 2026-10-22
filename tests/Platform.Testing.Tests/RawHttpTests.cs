@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -76,6 +78,39 @@ public sealed class RawHttpTests
         Assert.Equal("chunked", response.Header("Transfer-Encoding"));
         Assert.Equal("{\"code\":\"chunked\"}", response.BodyText);
         Assert.EndsWith("\r\n0\r\n\r\n", Encoding.ASCII.GetString(response.Body), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BodyText_refuses_chunked_framing_cut_off_before_its_last_chunk()
+    {
+        // Mutation: return what was decoded when the framing ends early. A test that parsed part of a
+        // problem document as the whole would pass or fail on bytes the server never finished
+        // sending. Kestrel frames every body it sends, so the terminal here is a bare listener that
+        // writes one chunk and closes without the last.
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        Task serve = Task.Run(async () =>
+        {
+            using TcpClient client = await listener.AcceptTcpClientAsync(Ct);
+            NetworkStream stream = client.GetStream();
+            byte[] request = new byte[4096];
+            int read = 0;
+            while (request.AsSpan(0, read).IndexOf("\r\n\r\n"u8) < 0)
+            {
+                read += await stream.ReadAsync(request.AsMemory(read), Ct);
+            }
+
+            await stream.WriteAsync("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\npartial\r\n"u8.ToArray(), Ct);
+            client.Client.Shutdown(SocketShutdown.Send);
+        }, Ct);
+
+        Uri endpoint = new($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/");
+        RawResponse response = await RawHttp.SendAsync(endpoint, "GET", "/", "localhost", ct: Ct);
+        await serve;
+
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal("7\r\npartial\r\n", Encoding.ASCII.GetString(response.Body));
+        Assert.Throws<InvalidDataException>(() => response.BodyText);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

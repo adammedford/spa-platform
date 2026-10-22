@@ -10,8 +10,9 @@ namespace Platform.Testing.Internal;
 
 /// <summary>
 /// The loopback start shared by <see cref="StageHost"/> and <see cref="EchoUpstreamListener"/>: its
-/// two callers, and no public name (change request issue-145, section 7). The first half is steps 1
-/// to 3 of the stage host's construction order, the second is step 10.
+/// two callers, and no public name (change request issue-145, section 7). <see cref="CreateBuilder"/>
+/// is the start of the stage host's construction order (the slim builder, the loopback URL, the
+/// providers cleared), and <see cref="StartAsync"/> its end (start, and the address read).
 /// </summary>
 internal static class LoopbackStart
 {

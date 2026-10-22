@@ -171,8 +171,9 @@ public sealed class StageHostTests
     [Fact]
     public async Task A_connect_after_dispose_fails()
     {
-        // Mutation: skip stopping the listener in DisposeAsync. A host that kept its port after a test
-        // would answer the next test's stray request.
+        // Mutation: make DisposeAsync release nothing, neither stopping nor disposing the application.
+        // Either alone releases the port, so skipping one leaves this green. A host that kept its port
+        // after a test would answer the next test's stray request.
         StageHost host = await StageHost.StartAsync(new StageHostOptions
         {
             Pipeline = app => app.Run(context => Task.CompletedTask),

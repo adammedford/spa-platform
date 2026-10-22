@@ -15,20 +15,27 @@ namespace Platform.Testing.Tests;
 public sealed class CapturedLogTests
 {
     [Fact]
-    public void LinesFor_reads_the_Rule_property_whatever_the_template_says()
+    public async Task LinesFor_reads_the_Rule_property_whatever_the_template_says()
     {
         // Mutation: match the rendered "rule=" text instead of the Rule state property. Hosting's
         // template says "refused under {Rule}", the rest "rule={Rule}", so a text search misses
         // hosting's line (shared decision S1 leaves the wording each stage's own).
-        CapturedLog log = new();
-        ILogger logger = log.CreateLogger<CapturedLogTests>();
+        await using StageHost host = await StageHost.StartAsync(new StageHostOptions
+        {
+            Pipeline = app => app.Run(context =>
+            {
+                ILogger logger = context.RequestServices.GetRequiredService<ILogger<CapturedLogTests>>();
+                logger.LogWarning("refused under {Rule}", "host.unknown");
+                logger.LogDebug("still refused under {Rule}", "host.unknown");
+                logger.LogWarning("refused under {Rule}", "gate.origin");
+                return Task.CompletedTask;
+            }),
+        }, Ct);
 
-        logger.LogWarning("refused under {Rule}", "host.unknown");
-        logger.LogDebug("still refused under {Rule}", "host.unknown");
-        logger.LogWarning("refused under {Rule}", "gate.origin");
+        (await host.Client.GetAsync("/", Ct)).Dispose();
 
-        Assert.Equal(2, log.LinesFor("host.unknown").Count);
-        CapturedLine warning = Assert.Single(log.LinesFor("host.unknown", LogLevel.Warning));
+        Assert.Equal(2, host.Log.LinesFor("host.unknown").Count);
+        CapturedLine warning = Assert.Single(host.Log.LinesFor("host.unknown", LogLevel.Warning));
         Assert.Equal("refused under host.unknown", warning.Message);
     }
 
