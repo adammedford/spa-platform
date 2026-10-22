@@ -464,6 +464,12 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: The SDK and the runtimes the test hosts load
+        # The test hosts run on the SDK's shared framework, not the gateway image's, so a patch in one
+        # is not a patch in the other. This reads them the way a workstation reads its own, and the way
+        # tools/image-check.sh reads the image's (#273). Informational: no version fails it.
+        run: dotnet --version && dotnet --list-runtimes
+
       # Package versions are central, so one key covers the whole solution.
       - uses: actions/cache@v4
         with:
