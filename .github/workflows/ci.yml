@@ -322,8 +322,8 @@ jobs:
         # The cell scripts under tools/scripts/ are workstream 1's, and six of their companions run
         # here because neither half in .github/touches.sh covers that directory, so this job is the
         # one that sees a change to them (change requests 1.6b, 1.7 and issue-122, decided on #226).
-        # certs_tests.py waits on change request issue-241, and logs_tests.py and
-        # cell_doubles_tests.py run under tools/check.sh --full and in no job here. This companion runs
+        # certs_tests.py, logs_tests.py and cell_doubles_tests.py run under tools/check.sh --full and
+        # in no job here. This companion runs
         # the real scripts with doubles for aws, session-manager-plugin and curl, and the real curl
         # against two loopback listeners, one with nothing on it and one whose certificate no trust
         # store holds, so no case reaches AWS. Under bash 5 here; the job below runs it under 3.2.
