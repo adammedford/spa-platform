@@ -148,7 +148,7 @@ public sealed class RequestLineTests
         logs.CreateLogger(authentication).LogWarning("Remote error: {ErrorDescription}", canary);
         logs.CreateLogger("Platform.Identity.AuthenticationEvents").LogWarning("Safe callback outcome {Rule}", "auth.callback");
 
-        Assert.DoesNotContain(host.Log.Lines, line => line.Contains(canary, StringComparison.Ordinal));
+        Assert.DoesNotContain(host.Log.Rendered, line => line.Contains(canary, StringComparison.Ordinal));
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "Safe callback outcome auth.callback");
     }
 
@@ -169,6 +169,6 @@ public sealed class RequestLineTests
 
         Assert.DoesNotContain(host.Log.Json, line =>
             line.GetProperty("category").GetString() == "Microsoft.AspNetCore.Hosting.Diagnostics");
-        Assert.DoesNotContain(host.Log.Lines, line => line.Contains("q=1", StringComparison.Ordinal));
+        Assert.DoesNotContain(host.Log.Rendered, line => line.Contains("q=1", StringComparison.Ordinal));
     }
 }
