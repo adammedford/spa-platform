@@ -19,7 +19,8 @@
 #      image (--pull), so every deployment resolves the floating tag, mcr.microsoft.com/dotnet/
 #      aspnet:10.0-noble among them, afresh: without it a workstation whose cache holds an older
 #      image builds on that one, and could ship a .NET runtime that predates the security fixes
-#      the tag's current image carries (#273, #288).
+#      the tag's current image carries (#273, #288). --pull is Docker's "Always attempt to pull all
+#      referenced images": https://docs.docker.com/reference/cli/docker/buildx/build/
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
