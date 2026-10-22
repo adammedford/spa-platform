@@ -39,9 +39,8 @@ a platform root with no `bucket` output has no bucket to empty, which the script
 
 ## 2. Prove the IAM roles gone by name
 
-The tag query cannot list IAM roles, and the cell's two roles carry the platform tag (#118), so exit
-0 does not show them gone. Until #118 decides how P-05 and `teardown.sh` prove them, check them by
-name (`infra/modules/cell/iam.tf`):
+The tag query cannot list IAM roles, though the cell's two roles carry the platform tag, so exit 0
+does not show them gone. Check them by name (`infra/modules/cell/iam.tf`):
 
 ```bash
 for role in spa-platform-poc-task spa-platform-poc-task-execution; do

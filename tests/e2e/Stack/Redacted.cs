@@ -24,11 +24,13 @@ internal static partial class Redacted
     /// Runs a Playwright call and, when it fails, rethrows its failure with every URL in the message as
     /// <see cref="Url(string)"/> prints it. A Playwright timeout's message carries a call log of the URLs
     /// the page passed through (a login's callback with its code and state among them), and a failed
-    /// navigation names its target, which a row may have built with a code in it (#253). The failure
-    /// keeps its type (a timeout stays a <see cref="System.TimeoutException"/>, which is what
-    /// Microsoft.Playwright throws for one: https://playwright.dev/dotnet/docs/api/class-timeouterror
-    /// catches it as <c>TimeoutException</c>, and 1.63.0 declares no timeout type of its own) and its
-    /// stack trace, and loses its inner exception, whose message xUnit would print.
+    /// navigation names its target, which a row may have built with a code in it (#253). A timeout
+    /// stays a <see cref="System.TimeoutException"/>, which is what Microsoft.Playwright throws for one
+    /// (https://playwright.dev/dotnet/docs/api/class-timeouterror catches it as <c>TimeoutException</c>,
+    /// and 1.63.0 declares no timeout type of its own); any other failure comes back as a
+    /// <see cref="PlaywrightException"/>, so a subclass Playwright keeps internal, such as its
+    /// target-closed failure, loses its own type. The failure keeps its stack trace and loses its inner
+    /// exception, whose message xUnit would print.
     /// </summary>
     public static async Task PlaywrightAsync(Func<Task> call)
     {
