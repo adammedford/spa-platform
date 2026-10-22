@@ -251,6 +251,12 @@ is one), which launches scripted sessions and tells each what to do. It is track
 branch, a review and a landing like any other integrator change (ADR-0026). It is not a CI workflow
 under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
 
+**Reuse key** — the value a workflow script compares between launches to decide whether a phase's
+saved result still stands: equal keys reuse the result, a changed key runs the phase again. A phase
+here is the Workflow tool's unit of work, not a plan Phase such as Phase 1. A reuse key is only as
+fresh as the inputs it covers (`CODING_STANDARDS.md`). _Avoid_: "cache key" and "resume key" for
+this.
+
 **Project skill** — a skill under `.claude/skills/` that a foreground session runs in this
 repository (`wiz`, which walks a sitting, is one). It is tracked and changes by a branch, a review
 and a landing like any other integrator change, and no sitting runs an edit to it that has not
