@@ -27,7 +27,7 @@
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
 #
-# The fourth job runs the shell scripts' test companions, the cell scripts' among them, and the
+# The fourth job runs the shell scripts' test companions, six of the cell scripts' among them, and the
 # parse check again on macOS, under the bash 3.2 the scripts target, and the main-checkout guard's
 # companion on macOS, where the sessions here run the hook, on every push and pull request; the
 # steps that run them say why.
@@ -319,9 +319,11 @@ jobs:
         run: python3 -I tools/image_build_tests.py
 
       - name: tunnel.sh and verify-tunnel.sh reach the ALB through the gateway task, and refuse TLS the workstation does not trust
-        # The cell scripts under tools/scripts/ are workstream 1's, and their companions run here
-        # because neither half in .github/touches.sh covers that directory, so this job is the one
-        # that sees every change to them (change request 1.6b, decided on #226). This companion runs
+        # The cell scripts under tools/scripts/ are workstream 1's, and six of their companions run
+        # here because neither half in .github/touches.sh covers that directory, so this job is the
+        # one that sees a change to them (change requests 1.6b, 1.7 and issue-122, decided on #226).
+        # certs_tests.py waits on change request issue-241, and logs_tests.py and
+        # cell_doubles_tests.py run under tools/check.sh --full and in no job here. This companion runs
         # the real scripts with doubles for aws, session-manager-plugin and curl, and the real curl
         # against two loopback listeners, one with nothing on it and one whose certificate no trust
         # store holds, so no case reaches AWS. Under bash 5 here; the job below runs it under 3.2.
