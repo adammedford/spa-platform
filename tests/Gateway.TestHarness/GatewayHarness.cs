@@ -6,7 +6,6 @@ using MockApi;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Console;
 using Platform.Abstractions;
 using Platform.Registry;
 using Platform.Testing;
@@ -199,12 +198,12 @@ public sealed class GatewayHarness : IAsyncDisposable
                 services.AddSingleton(clock);
             }
 
-            // Beside the console logger, rendering with the formatter the gateway configured for it.
-            services.AddSingleton<ILoggerProvider>(provider => new CapturedLog.Provider(log, () =>
-                provider.GetServices<ConsoleFormatter>().FirstOrDefault(formatter =>
-                    formatter.Name == provider.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ConsoleLoggerOptions>>()?.CurrentValue.FormatterName)));
-
             options.ConfigureServices?.Invoke(services);
+
+            // Beside the console logger, rendering with the formatter the gateway configured for it by
+            // name. Last, as a stage host registers its capture, so a test's hook that clears the
+            // providers cannot take the capture with them.
+            services.AddSingleton<ILoggerProvider>(provider => log.ProviderFor(provider));
         });
 
         GatewayHarness harness = new(
@@ -241,7 +240,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             {
                 throw new InvalidOperationException(
                     "the first registry revision did not go live. The gateway log says why:" + Environment.NewLine
-                    + string.Join(Environment.NewLine, log.Lines.TakeLast(20)));
+                    + string.Join(Environment.NewLine, log.Rendered.TakeLast(20)));
             }
         }
         catch
@@ -462,12 +461,12 @@ public sealed class GatewayHarness : IAsyncDisposable
             "secret-" + appId + "-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
             $"ssm:/spa-platform/harness/apps/{appId}/client-secret:1");
 
-        Idp.AddClient(new TestIdpClient(
+        Idp.AddClient(
             app.ClientId,
             app.ClientSecret,
-            new HashSet<string>(StringComparer.Ordinal) { app.Url("/signin-oidc").ToString() },
+            app.Url("/signin-oidc").ToString(),
             // The standard profile returns to the signout callback; the Cognito profile lands on / (ADR-0011).
-            new HashSet<string>(StringComparer.Ordinal) { app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString() }));
+            [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
         Secrets[app.SecretRef] = app.ClientSecret;
 
         apps[appId] = app;

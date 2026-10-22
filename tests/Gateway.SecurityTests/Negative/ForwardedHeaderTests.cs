@@ -97,7 +97,7 @@ public sealed class ForwardedHeaderTests
 
         Contract.ErrorRow expected = Contract.Error("origin_rejected");
         Assert.Equal(expected.Status, refused.StatusCode);
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(refused), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", refused.BodyText, StringComparison.Ordinal);
         Assert.Equal(RuleIds.GateOrigin, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
 
         // And the http origin is admitted, which is what "ignored" means rather than "refused":
@@ -185,7 +185,7 @@ public sealed class ForwardedHeaderTests
     {
         Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         Assert.Equal(noSession.Status, response.StatusCode);
-        Assert.Contains($"\"code\":\"{noSession.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{noSession.Code}\"", response.BodyText, StringComparison.Ordinal);
         Assert.Null(await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
     }
 

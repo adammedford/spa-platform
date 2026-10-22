@@ -1,4 +1,5 @@
 using Gateway.TestHarness;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -143,7 +144,10 @@ public sealed class CanaryTests(CanaryTests.Cell cell) : IClassFixture<CanaryTes
         Assert.NotEmpty(harness.Idp.IssuedAccessTokens);
         Assert.NotEmpty(harness.Idp.IssuedRefreshTokens);
         Assert.All(issued, token => Assert.True(CanarySweep.Values.Contains(token), "an issued token is not swept for"));
-        Assert.Empty(CanarySweep.Leaks(harness.Log.Lines, issued));
+
+        // Rendered is empty when no console formatter is configured, and an empty search finds no leak.
+        Assert.NotEmpty(harness.Log.Rendered);
+        Assert.Empty(CanarySweep.Leaks(harness.Log.Rendered, issued));
     }
 
     /// <summary>
