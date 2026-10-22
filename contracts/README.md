@@ -31,7 +31,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Resource tags | [`resource-tags.md`](resource-tags.md) | G1a | Workstream 1, `teardown.sh`, workstream 6 |
 | Telemetry | [`telemetry.md`](telemetry.md) | G1a | Everyone |
 | Records and interfaces | `src/Platform.Abstractions` (task I-3) | G1a, except the identity interfaces at G1b | Workstreams 2, 3, 4, 6 |
-| Test doubles | `src/Platform.Testing` (task I-3) | With the interface each one stands in for | Everyone |
+| Test doubles, and the stage host | `src/Platform.Testing` (task I-3; #145) | A double with the interface it stands in for; the stage host, the captured log and the raw sender when #145 lands | Everyone |
 
 The integrator writes every file in this table. Workstreams 1 and 6 propose the infrastructure
 outputs and telemetry contracts, and workstream 1 proposed the resource tags; they do not edit them.

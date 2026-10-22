@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Gateway.TestHarness;
 using Platform.Registry;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -151,7 +152,7 @@ public sealed class RegistryRejectionTests
             harness.GatewayAddress, "GET", "/readyz", harness.App("app1").Host, ct: Suite.Ct);
 
         Assert.Equal(200, response.StatusCode);
-        return JsonNode.Parse(RawBody.Text(response))!["revision"]!.GetValue<long>();
+        return JsonNode.Parse(response.BodyText)!["revision"]!.GetValue<long>();
     }
 
     /// <summary>

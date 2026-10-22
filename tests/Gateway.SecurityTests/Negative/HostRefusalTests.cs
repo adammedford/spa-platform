@@ -1,5 +1,6 @@
 using Gateway.TestHarness;
 using Platform.Abstractions;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -101,7 +102,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
         // the app host resolution pinned on that answer as on any other.
         Contract.ErrorRow noSession = Contract.Error("unauthenticated");
         Assert.Equal(noSession.Status, answered.StatusCode);
-        Assert.Contains($"\"code\":\"{noSession.Code}\"", RawBody.Text(answered), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{noSession.Code}\"", answered.BodyText, StringComparison.Ordinal);
 
         string policy = Assert.Single(answered.Values("Content-Security-Policy"));
         Assert.DoesNotContain(app2Addition, policy, StringComparison.Ordinal);
@@ -133,7 +134,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
             Harness.GatewayAddress, "GET", "/api/echo/anything", "nobody.spa-poc.test:8443", ct: Suite.Ct);
 
         await AssertHostRefusedAsync(response, before);
-        Assert.DoesNotContain("unknown_api", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.DoesNotContain("unknown_api", response.BodyText, StringComparison.Ordinal);
         Assert.Equal(upstreamsBefore, Harness.Echo.Requests.Count);
     }
 
@@ -142,7 +143,7 @@ public sealed class HostRefusalTests(HostRefusalTests.Cell cell) : IClassFixture
         Contract.ErrorRow expected = Contract.Error("not_found");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
 
         Assert.Equal(RuleIds.HostUnknown, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }

@@ -361,6 +361,30 @@ copy of its parts. _Avoid_: harness, suite, for these.
 harness under `spikes/g0/`, which probes one mechanism and records its evidence ids. Say which when
 the sentence does not. _Avoid_: harness, for a test companion.
 
+**Test host** — a workstream's own cut-down gateway in its test project: the real stages it owns, in
+the contract's order, between stand-ins for the rest and a terminal, started on a stage host.
+_Avoid_: harness, component host, fixture.
+
+**Stage host** — the `Platform.Testing` module a test host is built on: Kestrel on a loopback port,
+the telemetry stand-in when asked, the captured log and both senders, composing the pipeline the
+test host hands it. _Avoid_: test server, base host, loopback host, harness.
+
+**Telemetry stand-in** — the middleware a test host installs in place of `UsePlatformTelemetry`, giving
+each request a `SettableRequestTelemetryFeature` to write its rule id on. Off unless a test asks, so
+the stages' null-conditional writes stay proven. _Avoid_: "telemetry" alone, which also names the
+real stage.
+
+**Captured log** — every line a test host or the gateway test harness logged, held as records and, when
+a console formatter is configured, as the rendered lines stdout would carry. _Avoid_: log double,
+recording logger, logger provider.
+
+**Terminal** — the last middleware of a test host, standing for every stage after the ones under
+test and answering in a way a rejection cannot imitate. _Avoid_: endpoint, handler, sink.
+
+**Pin** — the act `UsePlatformHostResolution` performs for a request, setting `IAppFeature` with the app
+and the snapshot; in a test host its stand-in does the same by the host's own rule, and stays in
+the host. _Avoid_: host stub, resolver.
+
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
 provider, an in-memory object store, the real mock API and an echo upstream.
 

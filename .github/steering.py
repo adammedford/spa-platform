@@ -185,10 +185,17 @@ RELATIONAL = re.compile(r"^\s*(?:with\s+(?:the\s+)?)?(?P<row>.*?)\s*\.?\s*$", re
 # is code with no freeze header, so resolving the cell would compare nothing anyway. What holds a
 # double to its interface is the compiler, since each one implements the interface it stands in
 # for, and the shared contract suites (ObjectStoreContract, SessionStoreContract) that run the
-# double and the real implementation through the same cases.
+# double and the real implementation through the same cases. Since #145 the row also carries the
+# stage host, the captured log and the raw sender, which stand in for no interface and freeze when
+# they land (change request issue-145, "The charter, and the two edits it takes"); they are code
+# with no header too, and their own tests in Platform.Testing.Tests hold them.
 UNCOMPARED = {
-    ("Test doubles", "With the interface each one stands in for"):
-        "each double freezes with its own interface, and the code carries no header",
+    (
+        "Test doubles, and the stage host",
+        "A double with the interface it stands in for; the stage host, the captured log and the "
+        "raw sender when #145 lands",
+    ): "each double freezes with its own interface, the stage host's modules when they land, and "
+    "the code carries no header",
 }
 
 # The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON

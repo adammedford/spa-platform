@@ -1,5 +1,6 @@
 using Gateway.TestHarness;
 using Platform.Abstractions;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -104,7 +105,7 @@ public sealed class AssetPathTests : IAsyncLifetime
         // code for it, both read from the Errors table rather than written down.
         Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
         Assert.Equal(RuleIds.PathInvalid, await Observed.RuleOfOneRequestAsync(harness, lines, Suite.Ct));
 
         // The claim this class exists for: not one key was asked for, inside the prefix or out.

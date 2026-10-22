@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Gateway.TestHarness;
 using Platform.Abstractions;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -106,7 +107,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
         Contract.ErrorRow expected = Contract.Error("method_not_allowed");
         Assert.Equal(expected.Status, response.StatusCode);
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
 
         // RFC 9110 section 15.5.6: a 405 carries Allow. The methods it names are the ones some path
         // of the gateway does accept, so neither of these is among them.
@@ -155,7 +156,7 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
 
         Contract.ErrorRow expected = Contract.Error("method_not_allowed");
         Assert.Equal(expected.Status, response.StatusCode);
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
 
         // An asset path takes GET and HEAD and nothing else (contracts/request-gate.md), and the
         // Allow header says so rather than naming every method some other path takes.
@@ -207,9 +208,9 @@ public sealed class MethodAndLimitTests(MethodAndLimitTests.Cell cell) : IClassF
         // And no stage logged any of it, because Kestrel answered before any stage ran. Swept over
         // the log rather than over the status line, which could not have carried a request header's
         // value in the first place (CODING_STANDARDS.md -> "An assertion must be able to fail").
-        Assert.NotEmpty(Harness.Log.Lines);
+        Assert.NotEmpty(Harness.Log.Rendered);
         Assert.DoesNotContain(
-            Harness.Log.Lines, line => line.Contains(oversized, StringComparison.Ordinal));
+            Harness.Log.Rendered, line => line.Contains(oversized, StringComparison.Ordinal));
     }
 
     [Fact]

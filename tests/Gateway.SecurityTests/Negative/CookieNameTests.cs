@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Gateway.TestHarness;
 using Platform.Abstractions;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -143,7 +144,7 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
     {
         Contract.ErrorRow expected = Contract.Error("unauthenticated");
         Assert.Equal(expected.Status, response.StatusCode);
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
         Assert.Equal(rule, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }
 
@@ -152,11 +153,11 @@ public sealed class CookieNameTests(CookieNameTests.Cell cell) : IClassFixture<C
         Contract.ErrorRow expected = Contract.Error("invalid_request");
         Assert.Equal(expected.Status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Header("Content-Type"));
-        Assert.Contains($"\"code\":\"{expected.Code}\"", RawBody.Text(response), StringComparison.Ordinal);
+        Assert.Contains($"\"code\":\"{expected.Code}\"", response.BodyText, StringComparison.Ordinal);
 
         // Nothing the client sent reaches the body or the line: the cookie name is the client's to
         // choose (contracts/telemetry.md -> Never logged).
-        Assert.DoesNotContain("__Host", RawBody.Text(response), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("__Host", response.BodyText, StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal(RuleIds.GateCookieName, await Observed.RuleOfOneRequestAsync(Harness, before, Suite.Ct));
     }
