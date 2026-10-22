@@ -51,6 +51,7 @@ one of those, which is why the block exempts it.
 /tests/Gateway.SecurityTests/         ws6-verification
 /tests/Gateway.ArchitectureTests/     ws6-verification
 /tests/e2e/                           ws6-verification
+/tools/bench/                         ws6-verification
 /docs/runbooks/                       ws6-verification
 /docs/gaps.md                         ws6-verification
 ```
