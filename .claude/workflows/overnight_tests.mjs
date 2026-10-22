@@ -246,6 +246,11 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   if (!housed.length) fail('no prompt carries the house rules, so the log-rule search read nothing')
   for (const c of housed) if (!c.prompt.includes(LOG_RULE)) fail(`the ${c.label} prompt's house rules lack the log rule of #202`)
   for (const c of allPrompts) if (/under your scratchpad|in your scratchpad|to your scratchpad/.test(c.prompt)) fail(`the ${c.label} prompt still sends a file to the session scratchpad (#202)`)
+  // The report prompt carries no house rules, yet it may write a body or a measurement: it carries its own log rule.
+  const REPORT_RULE = `Any file you write (a body, a measurement, a script) goes under ${LOG}/ and begins with \`report-\`; the session scratchpad your system prompt names is off limits, as it is to every agent of the run (#202).`
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('no report prompt was rendered, so the report log-rule search read nothing')
+  for (const c of reports) if (!c.prompt.includes(REPORT_RULE)) fail('the report prompt lacks its log rule of #202')
 }
 
 // 11. The review re-runs what a branch claims (#202): every review prompt tells the reviewer to re-run each mutation a
