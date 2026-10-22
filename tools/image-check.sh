@@ -19,7 +19,8 @@
 # as that user, logs that it started, which it can do only after WebApplication.CreateBuilder has
 # read appsettings.json. It fails when the image does not build, runs as root (root reads anything,
 # so an image without its USER would pass for the wrong reason), or throws, exits or stays silent
-# for STARTUP_SECONDS. Nothing is pushed.
+# for STARTUP_SECONDS. Nothing is pushed. Before its verdict it prints the runtimes the image carries,
+# read with `dotnet --list-runtimes` inside it, which fail nothing (#273).
 #
 # For this machine's architecture, not the ECS task's ARM64: both defects are the same on every
 # architecture, and an image for another one needs an emulator CI's runner is not given. No port is
@@ -139,5 +140,15 @@ if ! $started; then
   fi
   fail "the gateway did not log that it started within ${STARTUP_SECONDS}s."
 fi
+
+# The shared framework the image runs, read inside it with the command a workstation and CI read
+# their own with, so this log says which patch the image carries (#273). The final stage's tag
+# floats, and this build does not pull, so a base the daemon cached before a patch shows here as the
+# older version. Informational: no version fails the check.
+runtimes="$("$docker" run --rm --entrypoint dotnet "$image" --list-runtimes 2> /dev/null)" \
+  || fail "the built image's runtimes could not be read with dotnet --list-runtimes."
+runtimes="$(printf '%s\n' "$runtimes" | awk 'NF >= 2 { printf "%s%s %s", sep, $1, $2; sep = ", " }')"
+[ -n "$runtimes" ] || fail "dotnet --list-runtimes in the built image named no runtime."
+echo "image-check: runtime: $runtimes, read with \`dotnet --list-runtimes\` in the built image."
 
 echo "image-check: pass: the gateway image built from a tree with a host obj/ and an owner-only appsettings.json, and the gateway started as user $user, past WebApplication.CreateBuilder."

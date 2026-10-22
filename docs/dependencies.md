@@ -12,7 +12,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 | Git | 2.38+ (`merge-tree --write-tree` for `tools/prune_branches.py`; `--remerge-diff`, 2.36, for A-05 merge audits) | `xcode-select --install` | Everything |  |
 | Python 3.9 or later | 3.9.6, with macOS's developer tools | `xcode-select --install` | The checks in `.githooks/pre-push` and CI, their test companions, `tools/land.sh` and `tools/roadmap.py`, and the deployment scripts' JSON, in `tools/scripts/cell_documents.py` | Kept 3.9-compatible with `from __future__ import annotations`; no CI job runs 3.9 (D-3) |
 | GitHub CLI, signed in | 2.102.0 | `brew install gh`, then `gh auth login` | Every landing, and the tracker, which is GitHub Issues | `tools/land.sh` refuses to start without gh on PATH, and `tools/preflight.sh` counts gh as missing until it is signed in (#96) |
-| .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK |
+| .NET SDK 10.0 | SDK 10.0.401, runtime 10.0.12 (8 September 2026) | `brew install --cask dotnet-sdk` | I-1, I-2, 5.4, G0 | `global.json` accepts any 10.0 SDK. Runtime 10.0.12 carries five advisories fixed in 10.0.13; see "The .NET runtimes" |
 | Access to nuget.org | n/a | n/a | Every build | See "Where agents can run" |
 | Terraform 1.11 or later | 1.15.8 | `brew install hashicorp/tap/terraform` | 1.0 | The state backend uses the S3 lock file, which the plan requires 1.11 for. This is the `terraform` an apply runs |
 | The Terraform floor, 1.11.0 | n/a | `tools/preflight.sh` prints the line, through `hc-install` (`brew install hashicorp/tap/hc-install`) | The local check, on a Terraform change | Below, under "The Terraform floor" |
@@ -68,6 +68,36 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | JsonSchema.Net | 8.0.5 | MIT | Schema tests, `Fixtures.Tests`, `Platform.Registry` (the gateway and `spactl`) | Decision D-1, decided |
 
 The skeleton adds only `xunit.v3` to projects. Each owner adds the other references to their own project files as the work needs them.
+
+## The .NET runtimes
+
+Three places run the shared framework, and each carries its own patch: the gateway image, CI's
+test hosts and a workstation's test hosts. The test hosts load the SDK's runtime, not the image's.
+Five GitHub advisories cover `System.Security.Cryptography.Xml` and `System.Security.Cryptography.Pkcs`
+`>= 10.0.0, <= 10.0.12` and are fixed in 10.0.13 (GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj,
+GHSA-r955-8q5j-3h83, GHSA-846f-f764-76mx, GHSA-2fmv-rv2c-59x7). The gateway prunes both packages
+from its restore graph and runs the framework's own copy, so only a runtime patch clears them (#216,
+#222, #273).
+
+Each is read with `dotnet --list-runtimes`, the image's from inside it:
+
+| Where | Read on 22 October 2026 | Command |
+| --- | --- | --- |
+| The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.13; the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble` resolved to manifest list `sha256:8af87eba5e7cdafb1514d7388be287365da97c132509e84dfe252ffd552398ca` | `docker build --pull -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
+| CI's build job | SDK 10.0.402, runtime 10.0.13, as `actions/setup-dotnet` installs them from `global.json` | `dotnet --version && dotnet --list-runtimes`, the step after `setup-dotnet` in `.github/workflows/ci.yml` |
+| This workstation | SDK 10.0.401, runtime 10.0.12 | `dotnet --version && dotnet --list-runtimes` |
+
+**The base image floats on purpose.** Both stages name a floating `10.0-noble` tag, so a build that
+pulls takes the newest patch, and what runs is fixed afterwards by digest: `deploy.sh` pushes, applies
+and asserts the image's own digest. A digest pin in the Dockerfile would need a commit for every
+runtime patch. The cost of floating is the cache: neither `deploy.sh` nor `tools/image-check.sh` pulls,
+and Docker Desktop's builder reuses the base it last pulled, so a workstation that pulled
+`10.0-noble` before 10.0.13 builds 10.0.12 until `docker pull mcr.microsoft.com/dotnet/aspnet:10.0-noble`
+(and `.../sdk:10.0-noble`) refreshes it. `tools/image-check.sh`'s runtime line shows which one it got.
+
+**The workstation's test hosts still run 10.0.12.** Updating the SDK to 10.0.402 or later
+(`brew upgrade --cask dotnet-sdk`) brings runtime 10.0.13. `global.json` is not raised to force it:
+a floor above the installed SDK stops every build on a machine that has not updated.
 
 ## Terraform
 

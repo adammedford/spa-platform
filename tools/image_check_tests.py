@@ -110,6 +110,13 @@ class ImageCheckTests(unittest.TestCase):
                          r"^image-check: pass: the gateway image built from a tree with a host obj/ and an "
                          r"owner-only appsettings\.json, and the gateway started as user \d+, past "
                          r"WebApplication\.CreateBuilder\.$")
+        # The runtime the image runs, read inside it the way a workstation and CI read theirs, so a
+        # log says which patch of the shared framework the image carries (#273). A base image the
+        # daemon cached before a patch shows here as the older version.
+        self.assertRegex(result.stdout,
+                         r"(?m)^image-check: runtime: (Microsoft\.\S+ 10\.0\.\d+, )*Microsoft\.NETCore\.App "
+                         r"10\.0\.\d+(, Microsoft\.\S+ 10\.0\.\d+)*, read with `dotnet --list-runtimes` in the "
+                         r"built image\.$")
         # The planted conditions are the copy's, never the tree's: the tree's file keeps its mode,
         # and no obj/ is left in it.
         self.assertEqual(before, stat.S_IMODE((tree.dir / SETTINGS).stat().st_mode))
