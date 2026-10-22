@@ -147,9 +147,18 @@ public readonly record struct LogMark(int Lines, DateTimeOffset At);
 /// <summary>Starts the stack <see cref="StackSwitch"/> chooses.</summary>
 public static class Stacks
 {
-    public static async Task<IBrowserStack> StartAsync() => StackSwitch.FromEnvironment() switch
-    {
-        StackKind.Deployed => await DeployedStack.StartAsync(),
-        _ => await LocalStack.StartAsync(),
-    };
+    /// <summary>
+    /// A stack a test starts in place of the switch's, for the rows it calls in its own flow: the deployed
+    /// subset on a <see cref="DeployedStack"/> over a stand-in tunnel and a recorded runner (#211,
+    /// <c>DeployedRunTests</c>). Unset everywhere else, so a row run by itself starts what the switch chooses.
+    /// </summary>
+    internal static readonly AsyncLocal<Func<Task<IBrowserStack>>?> Instead = new();
+
+    public static async Task<IBrowserStack> StartAsync() => Instead.Value is { } start
+        ? await start()
+        : StackSwitch.FromEnvironment() switch
+        {
+            StackKind.Deployed => await DeployedStack.StartAsync(),
+            _ => await LocalStack.StartAsync(),
+        };
 }
