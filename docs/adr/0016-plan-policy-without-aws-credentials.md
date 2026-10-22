@@ -1,6 +1,7 @@
 # ADR-0016: Assert plan policy with mock providers, and keep AWS credentials out of CI
 
-- **Status:** Accepted; rationale corrected after the AWS profile mismatch reported in PR35
+- **Status:** Accepted; rationale corrected after the AWS profile mismatch reported in PR35.
+  **Amended 2026-10-22 by change request 1.9:** decision 7 registers P-07.
 - **Date:** 2026-10-15
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task 1.0 ("the read-only role CI assumes to
@@ -52,6 +53,17 @@ aggregate assertion count is not a claim that all of P-01 to P-03 is complete.
 6. **Account-level checks stay deployed.** P-04 (release immutability), P-05 (teardown) and P-06
    (network reachability) still run at their gates with credentials. Mock-provider assertions do
    not replace those checks or establish successful provisioning.
+7. **P-07 is registered here, beside the P-01 to P-03 this ADR governs.** `docs/plan/04-tests.md`
+   is a frozen export and cannot take a new row, so the identity root's allowlist, given its own id
+   by Q45 (2026-10-15) and written by task 1.9 (Q42), is recorded as:
+
+   | ID | Check | Expect |
+   | --- | --- | --- |
+   | P-07 | Identity plan allowlist | One user pool, one domain, the resource servers and test users `fixtures/cognito/pool.json` lists with a generated password and a parameter per user, and no app client |
+
+   Like P-01 to P-03, it is a mock-provider assertion in `terraform test`
+   (`infra/envs/poc/idp/tests/root.tftest.hcl`), run by CI's Terraform test step with no AWS
+   credential. Until a register of post-export test ids is decided, P-07 is listed only here.
 
 ## Alternatives rejected
 

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Keep plan generation disabled until task 1.9 supplies a reviewed private pipeline.
+"""Keep plan generation disabled: no decision admits a plan pipeline (ADR-0016 decision 4).
 
 CR 1.1: Terraform plans contain plaintext credentials even when marked sensitive:
 https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename
 https://developer.hashicorp.com/terraform/cli/commands/show#json-output
 
 This conservative source check is a regression guard for accidental CI edits, not a
-shell interpreter or a sandbox against deliberately obfuscated code. There is no
-plan-policy implementation today. Do not enable plan/show by relaxing a path regex:
-review the full producer, consumer, logging and artifact flow when task 1.9 lands.
+shell interpreter or a sandbox against deliberately obfuscated code. Plan policy needs
+no plan file: P-01 to P-03 are mock-provider assertions in terraform test (ADR-0016).
+Do not enable plan/show by relaxing a path regex: review the full producer, consumer,
+logging and artifact flow when a new decision admits a plan pipeline.
 """
 
 from __future__ import annotations
@@ -59,8 +60,9 @@ def check(root: pathlib.Path) -> list[str]:
                     problems.append(f"{rel}:{n}: only the reviewed NuGet dependency cache is allowed")
             if TERRAFORM.search(normalized):
                 problems.append(
-                    f"{rel}:{n}: plan/show is disabled until task 1.9 supplies a reviewed private "
-                    "producer, policy consumer and logging/artifact controls (CR 1.1)"
+                    f"{rel}:{n}: plan/show is disabled: a credentialed plan pipeline needs a new "
+                    "decision (ADR-0016 decision 4) and a review of its producer, policy consumer "
+                    "and logging/artifact controls (CR 1.1)"
                 )
     return problems
 
