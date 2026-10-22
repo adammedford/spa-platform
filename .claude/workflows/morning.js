@@ -33,7 +33,8 @@ export const meta = {
 //                read off its title. Given both, they must agree.
 //   repo         required  the main checkout, an absolute path. Written only under its run log.
 //   wt           required  the worktree root the run used, as the overnight workflow names it:
-//                          <wt>/overnight is the integration worktree, <wt>/<owner> each lane's.
+//                          <wt>/overnight is the integration worktree, <wt>/<owner>-<task id> each
+//                          ticket's (#136; <wt>/<owner> on runs before it).
 //   after        optional  boolean, default false: the post-landing mode (#78 grill Q10).
 //   maxParallel  optional  positive integer, default 3: agents in flight at once, and the most
 //                          appliers Apply dispatches (#78 -> "Agent budget").

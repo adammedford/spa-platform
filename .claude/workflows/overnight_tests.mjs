@@ -9,8 +9,10 @@
 // sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed) or when
 // the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent
 // returns the fixture's tickets; implement, review and integrate succeed after a delay that depends on the
-// owner, so the integrator lane is the slow one, as it is on a real night. No agent, gh or git call is
-// made.
+// owner, so the integrator lane is the slow one, as it is on a real night, except that two tickets nobody
+// waits on meet a merge conflict at integrate (#136): one resolves on the retry, one does not. It also
+// checks that each ticket has its own worktree, that a lane implements while its last ticket is in review
+// or integrating, and that no two merges run at once. No agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +23,15 @@ const fixturePath = process.argv[3] || path.join(here, 'fixtures', '2026-10-20-t
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
 const tickets = fixture.tickets
 const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
+// Two tickets meet a content conflict at integrate (#136), chosen from those the fixture expects to integrate and
+// no ticket waits on: CONFLICT_ONCE conflicts on its first merge only, so it integrates after the back-merge;
+// CONFLICT_ALWAYS conflicts on its retry too, so it is reported, not merged, and fails.
+const blocking = new Set(tickets.flatMap((t) => t.blockedBy))
+const free = fixture.expect.integrated.filter((id) => !blocking.has(id))
+const CONFLICT_ONCE = free[0]
+const CONFLICT_ALWAYS = free[free.length - 1]
+const CONFLICT_FILES = ['.github/workflows/ci.yml', 'docs/dependencies.md']
+const merges = {}          // id -> integrate calls so far
 const cost = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
 
 let tick = 0
@@ -34,6 +45,7 @@ globalThis.phase = () => {}
 globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
 const allPrompts = []      // {label, prompt}, every agent's
+let calls = 0              // each mocked agent call's ordinal, so an agent's start and end pair up
 globalThis.agent = async (prompt, opts) => {
   allPrompts.push({ label: opts.label, prompt })
   const [kind, id] = opts.label.split(':')
@@ -41,12 +53,18 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'companion' }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
-  events.push({ at: tick, kind, id, edge: 'start' })
+  const n = ++calls
+  events.push({ at: tick, kind, id, edge: 'start', n })
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
-  events.push({ at: tick, kind, id, edge: 'end' })
+  events.push({ at: tick, kind, id, edge: 'end', n })
   if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], proposedSteering: [] }
   if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [] }
-  if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '' }
+  if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', notes: 'companion' }
+  if (kind === 'integrate') {
+    const k = merges[id] = (merges[id] || 0) + 1
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: CONFLICT_FILES }
+    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [] }
+  }
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
@@ -89,10 +107,10 @@ if (result === STALLED) {
 const failures = []
 const fail = (msg) => failures.push(msg)
 const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id && e.edge === 'start')
-const integratedAt = (id) => (events.find((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end') || {}).at
+const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set(fixture.expect.integrated)
+const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS))
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -134,6 +152,84 @@ for (const l of logs) {
   if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
   for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
   for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+}
+
+// 6. One worktree per ticket (#136): every implement prompt names its own worktree, so no two tickets share one.
+{
+  const wtOf = {}
+  for (const c of allPrompts.filter((x) => x.label.startsWith('implement:'))) {
+    const m = /^Worktree: (\S+?)\.? Branch:/m.exec(c.prompt)
+    if (!m) { fail(`the ${c.label} prompt names no worktree`); continue }
+    wtOf[c.label.split(':')[1]] = m[1]
+  }
+  const owners = {}
+  for (const [id, wt] of Object.entries(wtOf)) (owners[wt] = owners[wt] || []).push(id)
+  for (const [wt, ids] of Object.entries(owners)) if (ids.length > 1) fail(`tickets ${ids.join(', ')} share the worktree ${wt}`)
+  for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
+    const id = c.label.split(':')[1]
+    if (wtOf[id] && !c.prompt.includes(`Worktree ${wtOf[id]},`)) fail(`the review of ${id} does not run in its ticket's worktree ${wtOf[id]}`)
+  }
+}
+
+// 7. A lane implements while its last ticket is in review or integrating (#136): in every lane with two or more
+//    implements, the second starts before the first's integrate ends, unless the second waits on the first.
+{
+  const lanes = {}
+  for (const e of events.filter((x) => x.kind === 'implement' && x.edge === 'start')) (lanes[byId[e.id].owner] = lanes[byId[e.id].owner] || []).push(e)
+  let pairs = 0
+  for (const [owner, starts] of Object.entries(lanes)) {
+    if (starts.length < 2) continue
+    const [a, b] = starts
+    if (byId[b.id].blockedBy.includes(a.id)) continue
+    const end = integratedAt(a.id)
+    if (end === undefined) continue
+    pairs++
+    if (b.at >= end) fail(`${owner}: ${b.id} started its implement at ${b.at}, only after ${a.id} integrated at ${end}; the lane waited on review and integrate`)
+  }
+  if (!pairs) fail('no lane had two implements to compare, so the overlap check read nothing')
+}
+
+// 8. Integrate merges one ticket at a time (#136): no two integrate or resolve agents run at once.
+{
+  const spans = []
+  for (const s of events.filter((x) => (x.kind === 'integrate' || x.kind === 'resolve') && x.edge === 'start')) {
+    const e = events.find((x) => x.kind === s.kind && x.id === s.id && x.edge === 'end' && x.at >= s.at && x.n === s.n)
+    spans.push({ label: `${s.kind}:${s.id}#${s.n}`, from: s.at, to: e ? e.at : Infinity })
+  }
+  spans.sort((p, q) => p.from - q.from)
+  for (let i = 1; i < spans.length; i++) if (spans[i].from < spans[i - 1].to) fail(`${spans[i].label} started at ${spans[i].from} while ${spans[i - 1].label} ran until ${spans[i - 1].to}`)
+}
+
+// 9. A conflict at integrate (#136): the ticket's branch back-merges the run branch in its own worktree, resolves
+//    and re-runs the check (the resolve agent), and integrate retries once; a ticket still in conflict is reported
+//    with its files, not merged.
+{
+  if (!CONFLICT_ONCE || CONFLICT_ONCE === CONFLICT_ALWAYS) fail('the fixture has fewer than two tickets nobody waits on, so the conflict checks read nothing')
+  const resolves = (id) => allPrompts.filter((c) => c.label === `resolve:${id}`)
+  for (const id of [CONFLICT_ONCE, CONFLICT_ALWAYS]) {
+    if (resolves(id).length !== 1) fail(`${id} met a conflict and ran ${resolves(id).length} resolve agents, not 1`)
+    else {
+      const r = resolves(id)[0].prompt
+      if (!r.includes(`merge --no-ff overnight/${fixture.args.date}`)) fail(`the resolve of ${id} does not back-merge overnight/${fixture.args.date}`)
+      for (const f of CONFLICT_FILES) if (!r.includes(f)) fail(`the resolve of ${id} does not name the conflicting file ${f}`)
+      if (!/THE CHECK/.test(r)) fail(`the resolve of ${id} does not re-run the check`)
+    }
+    if (merges[id] !== 2) fail(`${id} was merged ${merges[id] || 0} times; a conflict retries once, so 2`)
+  }
+  for (const id of Object.keys(merges)) if (![CONFLICT_ONCE, CONFLICT_ALWAYS].includes(id) && resolves(id).length) fail(`${id} ran a resolve agent without a conflict`)
+  if (!(result.integrated || []).includes(CONFLICT_ONCE)) fail(`${CONFLICT_ONCE} did not integrate after its conflict was resolved`)
+  if ((result.integrated || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} integrated although its retry still conflicted`)
+  if (!(result.failed || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} is not reported failed after its retry still conflicted`)
+  const c = Object.fromEntries((result.conflicts || []).map((x) => [x.id, x]))
+  for (const [id, resolved] of [[CONFLICT_ONCE, true], [CONFLICT_ALWAYS, false]]) {
+    if (!c[id]) { fail(`the run's result names no conflict for ${id}`); continue }
+    if (c[id].resolved !== resolved) fail(`the run's result says ${id}'s conflict resolved=${c[id].resolved}, not ${resolved}`)
+    if (CONFLICT_FILES.some((f) => !(c[id].files || []).includes(f))) fail(`the run's result does not name ${id}'s conflicting files`)
+  }
+  if ((result.conflicts || []).length !== 2) fail(`the run's result names ${(result.conflicts || []).length} conflicts, not 2`)
+  const logged = logs.filter((l) => /^conflict: /.test(l.text)).map((l) => l.text)
+  if (!logged.some((l) => l.includes(CONFLICT_ONCE) && l.endsWith('-> resolved'))) fail(`no "conflict: ... -> resolved" log line for ${CONFLICT_ONCE}`)
+  if (!logged.some((l) => l.includes(CONFLICT_ALWAYS) && l.endsWith('-> unresolved'))) fail(`no "conflict: ... -> unresolved" log line for ${CONFLICT_ALWAYS}`)
 }
 
 if (failures.length) {
