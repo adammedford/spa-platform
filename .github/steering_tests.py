@@ -186,8 +186,9 @@ APP_DEFINITION_ROW = (
     "| With the registry document | Workstreams 1, 2 and 5 |"
 )
 
-# The one relational cell that names no row at all, on the row the live index carries it in, and
-# the UNCOMPARED key that exempts that row and no other.
+# The one relational cell that names no row at all, on the row the live index carried it in until
+# #145 widened the row, and the UNCOMPARED key that exempts that row and no other. The fixtures
+# exercise the exemption's mechanism, which the widening did not change.
 TEST_DOUBLES_CELL = "With the interface each one stands in for"
 TEST_DOUBLES_ROW = (
     f"| Test doubles | `src/Platform.Testing` (task I-3) | {TEST_DOUBLES_CELL} | Everyone |"

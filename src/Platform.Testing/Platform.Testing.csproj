@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- A test double for every interface in Platform.Abstractions. Owner: integrator. -->
+  <!-- The doubles for every interface in Platform.Abstractions, and the test host and captures a
+       workstream composes them in (#140; change request issue-145). Owner: integrator. -->
 
   <ItemGroup>
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
