@@ -5,7 +5,8 @@
 - **Tasks:** none in the plan. #169's harness and floor-artifact tickets, which write under
   `tools/bench/`; #172, which files this request
 - **Date:** 2026-10-21
-- **Status:** open
+- **Status:** decided, 2026-10-22, on https://github.com/adammedford/spa-platform/issues/246. See the
+  Decision section below.
 
 ## What is missing
 
@@ -74,3 +75,28 @@ request, not the edit: the integrator decides and edits.
 
 **Yes, for #169's harness tickets only.** A workstream 6 branch cannot add `tools/bench/` past A-05
 until item 1 lands. Nothing else in the repository waits on it, and no test does.
+
+## Decision
+
+Integrator, 2026-10-22, on Adam's answer on https://github.com/adammedford/spa-platform/issues/246:
+**workstream 6 owns `tools/bench/`, as asked.** He chose this over keeping the floor project with
+the integrator and over declining the request.
+
+1. **Both edits land in one commit**, this one: `OWNERSHIP.md` gains `/tools/bench/` under
+   workstream 6, and `AGENTS.md` -> Who owns what gains `tools/bench/` in the workstream 6 row.
+2. **The floor project goes with the path.** `tools/bench/floor/Bench.Floor.csproj` is workstream
+   6's. `SpaPlatform.slnx`, which lists it, stays the integrator's, so adding or removing a project
+   under `tools/bench/` is still a change request.
+
+Two lines of "What this does not change" were made false by #173 before this decision, as the
+comment of 2026-10-21 on #246 records:
+
+- "The harness is outside `SpaPlatform.slnx`" no longer holds. `SpaPlatform.slnx` lists
+  `tools/bench/floor/Bench.Floor.csproj`, because `Gateway.ArchitectureTests` requires every
+  `.csproj` outside `spikes/` to be listed.
+- "`.github/touches.sh` puts `tools/bench/` in neither half" holds only in part. The floor's
+  `Program.cs` and `Bench.Floor.csproj` match the build half's extension pattern. `startup.py`, the
+  floor's `Dockerfile` and `results/` match neither half.
+
+This unblocks #177, whose ADR records the harness's location and owner, and lets the verdict mode
+#176 Q7 assigns to workstream 6 land as a workstream 6 branch.

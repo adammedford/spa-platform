@@ -42,7 +42,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | 3 OAuth and sessions | `src/Platform.Identity`, its test project, `spikes/g0/` |
 | 4 API and security | `src/Platform.Proxy`, `src/Platform.Security`, and their test projects |
 | 5 Fixtures | `fixtures/` |
-| 6 Verification and operations | `src/Platform.Telemetry`, its test project, `tests/Gateway.*`, `tests/e2e`, `docs/runbooks/`, `docs/gaps.md` |
+| 6 Verification and operations | `src/Platform.Telemetry`, its test project, `tests/Gateway.*`, `tests/e2e`, `tools/bench/`, `docs/runbooks/`, `docs/gaps.md` |
 
 A component test project is `tests/<Project>.Tests` and belongs to the owner of `<Project>`.
 
