@@ -19,18 +19,29 @@ in most verify-tunnel.sh cases, curl. HOME is the case's own. No case can reach 
 real aws on PATH.
 
 **The doubles are this file's own functions**, started as `--double <name> <case dir> <args>`. The
-AWS double keeps the case's cell in world.json -- its load balancers, its cluster, its service's
-tasks and their containers -- and answers each call the shape the AWS CLI's `--output text` prints
+AWS double keeps the case's cell in world.json -- its cluster, its service's tasks and their
+containers -- and answers each call the shape the AWS CLI's `--output text` prints
 it, with the error codes the services document. It answers only the call shapes tunnel.sh makes and
 records every call; anything else is recorded and exits 97, so a new call in the script turns a case
 red instead of being answered. Each query the double answers was evaluated against the same data
 with the jmespath library the AWS CLI 2.37.12 bundles, so its answers are JMESPath's, not this
 file's guess.
 
-**Names are read from the Terraform that makes them, never typed here.** The cluster, the service,
-the gateway container and the load balancer are the locals in infra/modules/cell/ecs.tf and alb.tf,
-read out of those files, so renaming one in the module turns this companion red until tunnel.sh
-follows (CODING_STANDARDS.md, "A guard reads the thing it guards").
+**tunnel.sh reads its names from the outputs document, and only from it (#198).** The cluster,
+the service and the load balancer's DNS name are contracts/infra-outputs.schema.json's ecsCluster,
+ecsService and albDnsName in infra/envs/poc/outputs.json, which seed.sh, deploy.sh and rollback.sh
+write after every apply. The script finds that file from its own path, so each case runs a copy of
+the scripts in a repository tree of its own and writes the document there, in the shape of
+contracts/infra-outputs.example.json; nothing is read from or written to this checkout's
+infra/envs/poc. The AWS double answers no call that looks a name up (describe-load-balancers among
+them), so a tunnel that went back to asking AWS for its names turns a case red, and one case gives
+the document names the module's convention would never guess.
+
+**The world's names are read from the Terraform that makes them, never typed here.** The cluster,
+the service, the gateway container and the load balancer are the locals in
+infra/modules/cell/ecs.tf and alb.tf, read out of those files (CODING_STANDARDS.md, "A guard reads
+the thing it guards"). The load balancer's scheme is alb.tf's too: tunnel.sh no longer asks AWS
+whether it is internal, so this companion holds the module to `internal = true`.
 
 **Two verify-tunnel.sh cases use the real curl**: one against a local TLS listener whose certificate
 no trust store holds, which must fail as untrusted, and one against a port nothing listens on. They
@@ -55,6 +66,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 TUNNEL = ROOT / "tools" / "scripts" / "tunnel.sh"
 VERIFY = ROOT / "tools" / "scripts" / "verify-tunnel.sh"
 ECS_TF = ROOT / "infra" / "modules" / "cell" / "ecs.tf"
+EXAMPLE_OUTPUTS = ROOT / "contracts" / "infra-outputs.example.json"
+OUTPUTS = pathlib.Path("infra") / "envs" / "poc" / "outputs.json"
+# What a case copies into its own repository tree: tunnel.sh, what it sources and reads with, and
+# verify-tunnel.sh beside it.
+SCRIPT_FILES = ("tunnel.sh", "verify-tunnel.sh", "cell-common.sh", "cell_documents.py")
 ALB_TF = ROOT / "infra" / "modules" / "cell" / "alb.tf"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
@@ -65,7 +81,7 @@ CELL = "poc"
 SECRETS = (ACCOUNT,)
 
 # The real tools the scripts read their answers with. Everything else is absent.
-TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm")
+TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname")
 
 
 def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
@@ -100,13 +116,27 @@ def task(task_id: str, *, last_status: str = "RUNNING", exec_on: bool = True, ag
 
 
 def default_world() -> dict:
-    """The cell as tasks 1.3 and 1.4 make it, on one running task."""
+    """The cell as tasks 1.3 and 1.4 make it, on one running task, and the outputs document's names
+    for it as seed.sh writes them."""
     return {
         "region": REGION,
-        "load_balancers": {LB_NAME: {"DNSName": ALB_DNS, "Scheme": "internal"}},
+        "outputs": {"region": REGION, "cell": CELL, "ecsCluster": CLUSTER, "ecsService": SERVICE,
+                    "albDnsName": ALB_DNS},
         "clusters": {CLUSTER: {SERVICE: [task("0123456789abcdef0123456789abcdef")]}},
         "start_session_status": 0,
     }
+
+
+def outputs_document(fields: dict) -> dict:
+    """infra/envs/poc/outputs.json: contracts/infra-outputs.example.json with the case's fields put
+    in, so the document keeps the contract's shape. A field given as None is left out."""
+    document = json.loads(EXAMPLE_OUTPUTS.read_text())
+    for name, value in fields.items():
+        if value is None:
+            document.pop(name, None)
+        else:
+            document[name] = value
+    return document
 
 
 # --- the AWS double ------------------------------------------------------------------------------
@@ -126,19 +156,17 @@ GLOBAL_OPTIONS = {"region", "output", "query"}
 # (required, optional) options per command, from the AWS CLI reference:
 # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/index.html
 COMMANDS = {
-    ("elbv2", "describe-load-balancers"): ({"names"}, set()),
     ("ecs", "list-tasks"): ({"cluster", "service-name", "desired-status"}, set()),
     ("ecs", "describe-tasks"): ({"cluster", "tasks"}, set()),
     ("ssm", "start-session"): ({"target", "document-name", "parameters"}, set()),
 }
-OPERATIONS = {"describe-load-balancers": "DescribeLoadBalancers", "list-tasks": "ListTasks",
+OPERATIONS = {"list-tasks": "ListTasks",
               "describe-tasks": "DescribeTasks", "start-session": "StartSession"}
 # describe-tasks takes several task ids after one --tasks.
 MULTI_VALUED = {"tasks"}
 
 # The queries tunnel.sh sends, each evaluated against this file's world with the AWS CLI's own
 # jmespath before it was written down here.
-LB_QUERY = "LoadBalancers[0].[DNSName, Scheme]"
 TASKS_QUERY = "taskArns"
 DESCRIBE_QUERY = (f"tasks[].[taskArn, lastStatus, enableExecuteCommand, "
                   f"containers[?name=='{CONTAINER}'] | [0].runtimeId, "
@@ -200,14 +228,6 @@ def gateway_of(entry: dict) -> dict | None:
 def answer(world: dict, service: str, command: str, options: dict):
     if command in world.get("errors", {}):
         raise ServiceError(*world["errors"][command])
-    if command == "describe-load-balancers":
-        if options.get("query") != LB_QUERY:
-            raise Unexpected(f"--query {options.get('query')!r}")
-        found = world["load_balancers"].get(options["names"])
-        if found is None:
-            # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_DescribeLoadBalancers.html
-            raise ServiceError("LoadBalancerNotFound", "One or more load balancers not found")
-        return [found["DNSName"], found["Scheme"]]
     if command in ("list-tasks", "describe-tasks"):
         cluster = world["clusters"].get(options["cluster"])
         if cluster is None:
@@ -345,8 +365,9 @@ def free_port() -> int:
 
 
 class Case:
-    """One throwaway directory: a bin holding the doubles and a way to each real tool, which is the
-    case's whole PATH, and the case's world beside it."""
+    """One throwaway directory: a copy of the scripts in a repository tree of its own, a bin holding
+    the doubles and a way to each real tool, which is the case's whole PATH, and the case's world
+    beside them."""
 
     def __init__(self, test: unittest.TestCase, *, world: dict | None = None,
                  doubles: tuple[str, ...] = tuple(DOUBLES), real: tuple[str, ...] = ()):
@@ -356,8 +377,14 @@ class Case:
         self.dir = pathlib.Path(scratch.name).resolve()
         self.bin = self.dir / "bin"
         self.home = self.dir / "home"
-        for directory in (self.bin, self.home):
-            directory.mkdir()
+        self.repo = self.dir / "repo"
+        for directory in (self.bin, self.home, self.repo / "tools" / "scripts", self.repo / OUTPUTS.parent):
+            directory.mkdir(parents=True)
+        # The scripts find the repository from their own path, so the outputs document a case writes
+        # is the copy's, never this checkout's.
+        for name in SCRIPT_FILES:
+            shutil.copy2(ROOT / "tools" / "scripts" / name, self.repo / "tools" / "scripts" / name)
+        self.write_executable("python3", f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(sys.executable))} "$@"\n')
         for tool in TOOLS + real:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
@@ -383,6 +410,11 @@ class Case:
 
     def save(self):
         (self.dir / "world.json").write_text(json.dumps(self.world, indent=1))
+        document = self.repo / OUTPUTS
+        if self.world.get("outputs") is None:
+            document.unlink(missing_ok=True)
+        else:
+            document.write_text(json.dumps(outputs_document(self.world["outputs"]), indent=2))
 
     def curl(self, answer: dict):
         (self.dir / "curl.json").write_text(json.dumps(answer))
@@ -394,7 +426,8 @@ class Case:
         return {name: value for name, value in env.items() if value is not None}
 
     def run(self, script: pathlib.Path, *args: str, env: dict[str, str] | None = None) -> Result:
-        completed = subprocess.run([BASH, str(script), *args], cwd=self.dir, env=env or self.env(),
+        copy = self.repo / script.relative_to(ROOT)
+        completed = subprocess.run([BASH, str(copy), *args], cwd=self.dir, env=env or self.env(),
                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
         result = Result(completed)
         for secret in SECRETS:
@@ -483,25 +516,6 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertEqual([], case.start_sessions())
         self.assertIn(f"no running {CONTAINER} container", result.stderr)
 
-    def test_an_alb_given_is_used_and_not_looked_up(self):
-        case = Case(self)
-        result = case.run(TUNNEL, "--local-port", str(free_port()), "--alb", "internal-other-1.example.com")
-        self.assertEqual(0, result.status, result.output)
-        self.assertNoUnexpectedCall(case)
-        self.assertEqual([], [c for c in case.aws_calls() if c.get("command") == "describe-load-balancers"])
-        self.assertEqual(["internal-other-1.example.com"],
-                         json.loads(case.start_sessions()[0]["options"]["parameters"])["host"])
-
-    def test_another_cell_names_its_own_cluster_and_load_balancer(self):
-        other = "blue"
-        cluster, lb = terraform_local(ECS_TF, "cluster_name", other), terraform_local(ALB_TF, "lb_name", other)
-        world = default_world()
-        world["load_balancers"] = {lb: {"DNSName": f"internal-{lb}-1.{REGION}.elb.amazonaws.com", "Scheme": "internal"}}
-        world["clusters"] = {cluster: {SERVICE: [task("ffff0000ffff0000ffff0000ffff0000")]}}
-        case = Case(self, world=world)
-        result = case.run(TUNNEL, "--local-port", str(free_port()), "--cell", other)
-        self.assertEqual(0, result.status, result.output)
-        self.assertTrue(case.start_sessions()[0]["options"]["target"].startswith(f"ecs:{cluster}_"))
 
     def test_the_session_s_own_exit_status_is_the_script_s(self):
         world = default_world()
@@ -551,6 +565,90 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertIn("Waiting for connections...", result.stdout)
 
 
+class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
+    """#198: the cluster, the service and the load balancer's DNS name come from
+    infra/envs/poc/outputs.json (contracts/infra-outputs.schema.json: "The scripts and the deployed
+    tests read it"), never from AWS by name and never from Terraform state."""
+
+    def test_the_names_are_the_document_s_even_where_the_module_s_convention_would_guess_others(self):
+        # Names no convention gives: spa-<cell> and gateway would find nothing here, so a tunnel that
+        # went back to building or looking up its names fails this case.
+        cluster, service = "documented-cluster", "documented-service"
+        alb = f"internal-documented-lb-42.{REGION}.elb.amazonaws.com"
+        world = default_world()
+        world["outputs"].update(ecsCluster=cluster, ecsService=service, albDnsName=alb)
+        world["clusters"] = {cluster: {service: [task("abab0000abab0000abab0000abab0000")]}}
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        options = case.start_sessions()[0]["options"]
+        self.assertEqual(f"ecs:{cluster}_abab0000abab0000abab0000abab0000_abab0000abab0000abab0000abab0000-2222222222",
+                         options["target"])
+        self.assertEqual([alb], json.loads(options["parameters"])["host"])
+        for call in case.aws_calls():
+            if call.get("command") in ("list-tasks", "describe-tasks"):
+                self.assertEqual(cluster, call["options"]["cluster"])
+        self.assertEqual([service], [c["options"]["service-name"] for c in case.aws_calls()
+                                     if c.get("command") == "list-tasks"])
+
+    def test_it_asks_aws_for_tasks_and_the_session_and_for_no_name(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([("ecs", "list-tasks"), ("ecs", "describe-tasks"), ("ssm", "start-session")],
+                         [(c.get("service"), c.get("command")) for c in case.aws_calls()])
+
+    def test_the_header_says_where_the_names_come_from(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--help")
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn(str(OUTPUTS), result.stdout)
+        for name in ("ecsCluster", "ecsService", "albDnsName"):
+            self.assertIn(name, result.stdout)
+        self.assertEqual([], case.aws_calls())
+
+    def test_the_module_s_load_balancer_is_internal(self):
+        # tunnel.sh no longer reads the scheme from AWS; the document's albDnsName is the module's
+        # load balancer, and the module makes it internal (task 1.3).
+        self.assertRegex(ALB_TF.read_text(), r"(?m)^\s*internal\s*=\s*true\s*$")
+
+
+class TunnelRefusesWithoutTheOutputsDocument(CompanionTestCase):
+    """The document absent, for another Region, or short of a name: a refusal that names it, exit 2,
+    and no AWS call."""
+
+    def refused(self, case: Case, fragment: str, *args: str) -> Result:
+        result = case.run(TUNNEL, "--local-port", str(free_port()), *args)
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn(fragment, result.stderr)
+        self.assertEqual([], case.aws_calls())
+        return result
+
+    def test_no_document(self):
+        world = default_world()
+        world["outputs"] = None
+        result = self.refused(Case(self, world=world), f"there is no {OUTPUTS}")
+        self.assertIn("tools/scripts/seed.sh", result.stderr)
+
+    def test_a_document_for_another_region(self):
+        world = default_world()
+        world["outputs"]["region"] = "eu-west-1"
+        self.refused(Case(self, world=world), "not for AWS_REGION")
+
+    def test_a_document_without_each_name(self):
+        for name in ("ecsCluster", "ecsService", "albDnsName"):
+            with self.subTest(field=name):
+                world = default_world()
+                world["outputs"][name] = None
+                self.refused(Case(self, world=world), f"gives no {name}")
+
+    def test_no_option_steps_round_the_document(self):
+        for option in ("--cell", "--cluster", "--service", "--alb"):
+            with self.subTest(option=option):
+                self.refused(Case(self), "unknown argument", option, "anything")
+
+
 class TunnelRefusesBeforeASession(CompanionTestCase):
     """Each condition the plan names for the route, and each prerequisite, stops the script before
     it starts a session, with a reason and the status its header gives."""
@@ -577,16 +675,6 @@ class TunnelRefusesBeforeASession(CompanionTestCase):
         world = default_world()
         world["clusters"][CLUSTER][SERVICE] = [task("1111000011110000111100001111000b", agent="STOPPED")]
         self.refused(Case(self, world=world), 1, "ExecuteCommandAgent is STOPPED")
-
-    def test_no_load_balancer(self):
-        world = default_world()
-        world["load_balancers"] = {}
-        self.refused(Case(self, world=world), 1, "LoadBalancerNotFound")
-
-    def test_a_load_balancer_that_is_not_internal(self):
-        world = default_world()
-        world["load_balancers"][LB_NAME]["Scheme"] = "internet-facing"
-        self.refused(Case(self, world=world), 1, "not internal")
 
     def test_an_access_denial_names_its_code_and_never_the_principal(self):
         # An access denial's message names the caller's ARN, which carries the account id: "User:
