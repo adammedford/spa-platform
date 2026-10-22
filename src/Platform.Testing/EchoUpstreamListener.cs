@@ -2,20 +2,16 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Platform.Testing.Internal;
 
 namespace Platform.Testing;
 
 /// <summary>
 /// An <see cref="EchoUpstream"/> behind a real loopback listener on a port the operating system
 /// picks. Task 6.1's harness forwards to this, so the composed suites see headers as they were
-/// actually serialized rather than as objects.
+/// actually serialized rather than as objects. It starts on the stage host's loopback seam
+/// (<see cref="LoopbackHost"/>), so the two listeners in this project start one way.
 /// </summary>
 public sealed class EchoUpstreamListener : IAsyncDisposable
 {
@@ -32,20 +28,14 @@ public sealed class EchoUpstreamListener : IAsyncDisposable
 
     internal static async Task<EchoUpstreamListener> StartAsync(EchoUpstream upstream, CancellationToken ct)
     {
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
+        WebApplicationBuilder builder = LoopbackHost.CreateBuilder();
 
         WebApplication app = builder.Build();
         app.Run(context => HandleAsync(upstream, context));
 
-        await app.StartAsync(ct);
+        Uri address = await LoopbackHost.StartAsync(app, "the echo upstream", ct);
 
-        string address = app.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the echo upstream started without an address.");
-
-        return new EchoUpstreamListener(app, new Uri(address));
+        return new EchoUpstreamListener(app, address);
     }
 
     public async ValueTask DisposeAsync()
