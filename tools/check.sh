@@ -21,11 +21,15 @@
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
 # port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
-# tests, and the test companion of each script in tools/ or .github/ the change touches (#134), but
-# not tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it
-# ends on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a
-# log's last line is the verdict. Its first two lines name the bash running it and the file-mode
-# mask, so a log can be compared with another machine's (#230).
+# tests, and the test companions the change earns: that of each script in tools/ or .github/ it
+# touches (#134), and that of each script or companion naming a library it touches, followed through
+# the libraries that name that one (#237). CI runs the companions .github/workflows/ci.yml lists,
+# one step each, whatever the diff, so that file says which run there; this check runs only those
+# the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
+# when the other changes. Neither mode runs tools/check_tests.py, which runs this file and so stays
+# CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
+# exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
+# bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
 #
 # tools/image-check.sh builds the gateway's image the way a workstation does, from a copy of the
 # tree it has first given a host obj/ and an owner-only appsettings.json, and starts it as the
@@ -471,18 +475,19 @@ fi
 #
 # A change to tools/ or .github/ touches neither half, so without this a green full check on it
 # would have run none of its code: on 2026-10-19, 7 of the 12 merged tickets were such changes, and
-# their reviewers ran the companions by hand (#134). CI runs a fixed list of companions whatever the
-# diff, and none of them is under tools/scripts/ (.github/workflows/ci.yml); this runs those the
-# diff earns, as the halves are gated.
+# their reviewers ran the companions by hand (#134). CI runs the companions
+# .github/workflows/ci.yml lists, one step each, whatever the diff, and that file is where to read
+# which; this runs those the diff earns, as the halves are gated, including any CI does not list.
 #
 # A script's companion is the file beside it named `<name>_tests.py`, its name with the extension
 # dropped and hyphens as underscores (tools/land.sh's is tools/land_tests.py, and
 # .github/path-ownership.py's .github/path_ownership_tests.py), or else its named test file
 # `<name>-tests.py` (.github/plan-secrecy.py's is .github/plan-secrecy-tests.py). A companion runs
-# when the diff touches its script or the companion itself, and every tracked one runs under
-# --both-halves, which promises no skips. Each is a tracked `*_tests.py` or `*-tests.py` under
-# tools/ or .github/, at any depth, so tools/scripts/ is covered too. The hook leaves them to the
-# full check and to CI, as it does the test suite.
+# when the diff touches its script, the companion itself, or a library either names (below), and
+# every tracked one runs under --both-halves, which promises no skips. Each is a tracked
+# `*_tests.py` or `*-tests.py` under tools/ or .github/, at any depth, tools/scripts/ included,
+# whether CI lists it or not. The hook leaves them to the full check and to CI, as it does the test
+# suite.
 companion_names() {
   # The companions a changed path could name: itself if it is one, else the two names above.
   while IFS= read -r path; do
@@ -500,6 +505,82 @@ companion_names() {
   done
 }
 
+# A library is a file a script or a companion names that has no companion of its own: on 2026-10-20
+# #186's review broke redact() in tools/scripts/cell-common.sh, which seed.sh, deploy.sh, rollback.sh
+# and teardown.sh source, and the full check passed green, since the change touched no script with a
+# companion, while deploy_tests.py alone failed 18 cases (#186 P6). So the paths a change reaches are
+# what the companion names are taken from: each changed path, each tracked file under tools/ or
+# .github/ that names one under tools/ or .github/, and, followed through libraries, each that names
+# one of those in turn. tools/scripts/cell_documents.py is two names from deploy.sh, through
+# cell-common.sh, and the companions load tools/scripts/cell_doubles.py, which names it too (#237).
+#
+# Three things bound it, measured over the 30 tracked companions on 2026-10-22. Without them a
+# change to almost any script reached 24 of them, through the names in tools/check.sh's and the
+# workflow's comments, which is a slower directory rule:
+#   - A file with a companion of its own ends the chain: it earns its companion, which is what tests
+#     it, and its own users earn nothing from it.
+#   - A companion ends it too, whether it changed or names the change: the workflow names every
+#     companion it runs, and a companion's change is its own companion's run alone.
+#   - A name counts whole: tools/check.sh is not in tools/image-check.sh, nor tunnel.sh in
+#     verify-tunnel.sh.
+# A name in a comment counts as a use. That over-runs, which costs time and is safe; skipping
+# comments would need a reader for each language, and a rule that fails open when it misreads one.
+is_companion() {
+  case "$1" in
+    *_tests.py | *-tests.py) return 0 ;;
+  esac
+  return 1
+}
+
+# Whether $1 is a library: neither a companion nor a file with a tracked companion of its own.
+is_library() {
+  local candidate
+  is_companion "$1" && return 1
+  for candidate in $(printf '%s\n' "$1" | companion_names); do
+    printf '%s\n' "$tracked" | grep -Fx -- "$candidate" > /dev/null && return 1
+  done
+  return 0
+}
+
+# The tracked files under tools/ or .github/ that name the path $1, by its file name, whole. git
+# grep searches tracked files only, as the companions are found, and exits 1 on no match; any other
+# status is a search that did not happen, and returns 2 so the caller fails rather than run less.
+users_of() {
+  local name status
+  name="${1##*/}"
+  status=0
+  git grep -I -l -E -e "(^|[^A-Za-z0-9_.-])${name//./\\.}([^A-Za-z0-9_.-]|\$)" -- tools .github || status=$?
+  [ "$status" -le 1 ] || return 2
+}
+
+# Sets reach to the paths the changed paths reach, the changed paths included. It sets a variable
+# rather than printing, so that fail() ends the check and not a command substitution around it.
+reach_from_changes() {
+  local frontier next path user users
+  reach="${changed:-}"
+  frontier=""
+  for path in $reach; do
+    case "$path" in
+      tools/* | .github/*) is_companion "$path" || frontier="$frontier $path" ;;
+    esac
+  done
+  while [ -n "$frontier" ]; do
+    next=""
+    for path in $frontier; do
+      users="$(users_of "$path")" || fail "could not search tools/ and .github/ for the files that name $path."
+      for user in $users; do
+        printf '%s\n' "$reach" | grep -Fx -- "$user" > /dev/null && continue
+        reach="$reach
+$user"
+        if is_library "$user"; then
+          next="$next $user"
+        fi
+      done
+    done
+    frontier="$next"
+  done
+}
+
 # Whether the companion $1 runs: the diff names it, or --both-halves asks for every one. grep -Fx
 # rather than -q: -q would close the pipe at a match and fail printf under pipefail.
 earned() {
@@ -509,7 +590,9 @@ earned() {
 # What the verdict adds when it ran no check of the check itself.
 unrun=""
 if $full; then
-  named="$(printf '%s\n' "${changed:-}" | companion_names)"
+  tracked="$(git ls-files -- tools .github)"
+  reach_from_changes
+  named="$(printf '%s\n' "$reach" | companion_names)"
   companions=""
   others=""
   for found in $(git ls-files -- tools .github); do
@@ -538,7 +621,7 @@ if $full; then
   if [ -z "$companions" ] && $both; then
     echo "check: no test companion is tracked in tools/ or .github/."
   elif [ -z "$companions" ]; then
-    echo "check: test companions skipped: no${others} script with one in tools/ or .github/ changed."
+    echo "check: test companions skipped: no${others} script with one in tools/ or .github/, nor a file one names, changed."
   else
     listed=""
     count=0
