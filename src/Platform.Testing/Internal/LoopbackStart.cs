@@ -13,7 +13,7 @@ namespace Platform.Testing.Internal;
 /// two callers, and no public name (change request issue-145, section 7). The first half is steps 1
 /// to 3 of the stage host's construction order, the second is step 10.
 /// </summary>
-internal static class LoopbackHost
+internal static class LoopbackStart
 {
     /// <summary>
     /// The slim builder in the <c>Production</c> environment, as the test identity provider and the

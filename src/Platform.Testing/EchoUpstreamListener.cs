@@ -11,7 +11,7 @@ namespace Platform.Testing;
 /// An <see cref="EchoUpstream"/> behind a real loopback listener on a port the operating system
 /// picks. Task 6.1's harness forwards to this, so the composed suites see headers as they were
 /// actually serialized rather than as objects. It starts on the stage host's loopback seam
-/// (<see cref="LoopbackHost"/>), so the two listeners in this project start one way.
+/// (<see cref="LoopbackStart"/>), so the two listeners in this project start one way.
 /// </summary>
 public sealed class EchoUpstreamListener : IAsyncDisposable
 {
@@ -28,12 +28,12 @@ public sealed class EchoUpstreamListener : IAsyncDisposable
 
     internal static async Task<EchoUpstreamListener> StartAsync(EchoUpstream upstream, CancellationToken ct)
     {
-        WebApplicationBuilder builder = LoopbackHost.CreateBuilder();
+        WebApplicationBuilder builder = LoopbackStart.CreateBuilder();
 
         WebApplication app = builder.Build();
         app.Run(context => HandleAsync(upstream, context));
 
-        Uri address = await LoopbackHost.StartAsync(app, "the echo upstream", ct);
+        Uri address = await LoopbackStart.StartAsync(app, "the echo upstream", ct);
 
         return new EchoUpstreamListener(app, address);
     }

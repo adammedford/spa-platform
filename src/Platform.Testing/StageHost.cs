@@ -121,7 +121,7 @@ public sealed class StageHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(options.Pipeline);
 
-        WebApplicationBuilder builder = LoopbackHost.CreateBuilder();
+        WebApplicationBuilder builder = LoopbackStart.CreateBuilder();
 
         // The framework's default floor is Information, so a never-logged search could not see the
         // Debug and Trace lines the OpenID Connect handler writes its callback URL in (#140).
@@ -159,7 +159,7 @@ public sealed class StageHost : IAsyncDisposable
         Uri address;
         try
         {
-            address = await LoopbackHost.StartAsync(app, "the stage host", ct);
+            address = await LoopbackStart.StartAsync(app, "the stage host", ct);
         }
         catch
         {
