@@ -206,6 +206,24 @@ jobs:
         # case of each.
         run: python3 -I tools/review_record_tests.py
 
+      - name: The retro's record reader reads each record line the way its rules say
+        # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line
+        # is: a check log's verdict, a side log, an earlier round, a report's date, the noun merge, cost
+        # times recurrence, coverage and a ticket body's shape (#260). Its companion builds each shape to
+        # trip one rule, a RED log beside a GREEN one and a body without its owner line beside one with
+        # it, because a reader that read RED as GREEN would file nothing and look clean.
+        run: python3 -I tools/retro_record_tests.py
+
+      - name: The pins inventory classifies each pin the way its rules say, and renders the same table twice
+        # The pins sweep (#82) files its issues and the standing report's table from what
+        # tools/pins_inventory.py decides a pin is: its family, the projects that reference it, the
+        # documents and evidence that name its version, its advisories, a decision's hold, and its
+        # status by precedence (#269). Its companion builds each shape against throwaway copies of this
+        # checkout's pins file and project files, with every network input supplied from a file, because
+        # a classifier that read an advisory as current would leave the one warning nobody reads as the
+        # only place it appears.
+        run: python3 -I tools/pins_inventory_tests.py
+
       - name: The companions' runner reports every case it runs, each in its suite's order
         # tools/land_tests.py, tools/check_tests.py and tools/prune_branches_tests.py run their cases
         # at the same time through tools/companion_runner.py (#107), so a failure the runner lost

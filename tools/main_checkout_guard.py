@@ -1,22 +1,36 @@
 #!/usr/bin/env python3
-"""Keeps branch work out of the repository's main checkout. Owner: integrator.
+"""Keeps branch work, and changes to its files and index, out of the repository's main checkout.
+Owner: integrator.
 
-A Claude Code PreToolUse hook (#114). The entry in the tracked `.claude/settings.json` runs it before
-each Bash call of a session started in a checkout that holds both files. The main checkout is the
-clone's own working tree, the worktree whose git directory is the common directory, and the sessions
+A Claude Code PreToolUse hook (#114, #200). The entry in the tracked `.claude/settings.json` runs it
+before each Bash call of a session started in a checkout that holds both files. The main checkout is
+the clone's own working tree, the worktree whose git directory is the common directory, and the sessions
 running at once share it: its branch is whichever one a session last left it on. On 2026-10-18 a
 session ran `git rebase origin/main` there, taking it for its own branch, after another had switched
 it to `ws1/certs-domain-tag` and committed on it; the rebase did nothing only because that branch
-already held origin/main. So in that checkout this refuses a Bash call that runs `git rebase`,
-`switch`, `checkout <branch-or-commit>`, `reset`, `commit`, `merge`, `pull`, `cherry-pick`, `revert`
-or `stash`, and names the route instead: a worktree of the session's own, as
+already held origin/main. On 2026-10-20 a smoke test ran `git rm` there and deleted a tracked test
+file (#187, #200). So in that checkout this refuses a Bash call that runs `git rebase`, `switch`,
+`checkout` in every form, `reset`, `commit`, `merge`, `pull`, `cherry-pick`, `revert`, `am` or
+`stash`, which move its branch or rewrite its history, and `git rm`, `mv`, `add`, `restore`, `clean`
+or `apply`, which change its files or index, dry runs and `apply --check` and `--stat` included
+(#226 Q16 to Q18). It names the route instead: a worktree of the session's own, as
 docs/agents/landing-work.md -> "Take a task" says.
 
+**The one merge it admits** is the fast-forward of a clean `main` to what has landed (#226 Q15,
+Q19, Q20): `git merge` with exactly the arguments `--ff-only` and `origin/main`, in either order and
+with no git option before the subcommand but `-C`, while `git symbolic-ref -q HEAD` is
+`refs/heads/main` and `git status --porcelain --untracked-files=no` prints nothing. Untracked files
+are allowed: they are Adam's, and `--ff-only` will not overwrite one. Every other merge, ref or
+extra option is refused as before, and so is `git pull`, which reads the configured upstream and
+merge settings rather than one named ref; a session runs `git fetch origin` and then the merge.
+
 **What passes.** The same commands in a linked worktree; git that reads, `git stash list` and
-`git stash show` among it; `git worktree add`; `git checkout` with a path after `--`, which restores
-that path from whatever commit it names and moves no branch; and every other command, file edits
-included. The checkout guarded is the main worktree of the repository this file is tracked in, so
-another repository's, a scratch one or a clone made for a mutation run, is left alone.
+`git stash show` among it; `git fetch`; `git worktree add`; and every other command, file edits
+included. Left out on purpose, as plumbing and ref commands a confused session does not type
+(#226 Q18): `update-index`, `read-tree`, `checkout-index`, `update-ref`, `branch -f` and `-D`,
+`worktree remove`, `sparse-checkout` and `submodule update`. The checkout guarded is the main
+worktree of the repository this file is tracked in, so another repository's, a scratch one or a
+clone made for a mutation run, is left alone.
 
 **How it reads a command.** Claude Code hands the hook the command as text, and as `cwd` the
 directory the session is in, which follows its `cd`s (https://code.claude.com/docs/en/hooks). The
@@ -33,8 +47,12 @@ is the main worktree is git's answer: its git directory and its common directory
 **What it does not read**, which makes it a tripwire for a session that mistook the checkout for its
 own and not a sandbox: a command run through another layer -- `sh -c`, `eval`, a script, a shell or
 git alias -- a directory only the running shell knows, such as `"$(pwd)"`, and a repository named by
-`--git-dir`, `--work-tree` or `GIT_DIR`. What it cannot read it lets through. It binds Claude Code
-sessions, a sub-agent's Bash calls included, and never a person's terminal.
+`--git-dir`, `--work-tree` or `GIT_DIR`. What it cannot read it lets through. It reads the main
+checkout's HEAD and tracked files when the hook runs, with no lock, so they can change before the
+fast-forward does: another session can switch the checkout, or the same call can edit a file before
+its merge (#226 Q21). `--ff-only` still refuses a branch that has diverged and a change it would
+overwrite, so the merge cannot take a commit. It binds Claude Code sessions, a sub-agent's Bash calls
+included, and never a person's terminal.
 
 **Its answer** is Claude Code's PreToolUse contract: exit 2 blocks the call and hands standard error
 to the session as the reason, and exit 0 lets it run. Any other exit, a crash or a missing git, also
@@ -61,20 +79,35 @@ ROUTE = "git worktree add -b <branch> <path> origin/main"
 
 REFUSAL = """\
 main-checkout guard: refused `git {subcommand}` in {directory}.
-That is this repository's main checkout. The sessions running at once share it, and its branch is
-whichever one a session last left it on, so a commit, rebase or switch there acts on another
-session's work (#114). Do branch work in a worktree of your own, and run the command there:
+{reason}That is this repository's main checkout. The sessions running at once share it, and its
+branch is whichever one a session last left it on, so a commit, rebase or switch there acts on
+another session's work, and an rm, add or restore changes files another session has in hand (#114, #200).
+Do branch work in a worktree of your own, and run the command there:
 
     {route}
 
-Here, read-only git, `git worktree add`, `git checkout -- <path>` and file edits still run.
-docs/agents/landing-work.md -> "Take a task" says why.
+Here, read-only git, `git worktree add`, file edits, and `git fetch origin` followed by
+`git merge --ff-only origin/main` on a clean `main` still run. docs/agents/landing-work.md ->
+"Take a task" says why.
 """
 
-# The subcommands #114 refuses whatever follows them. Most of their forms move the branch or rewrite
-# history; the ticket refuses the few that do not, such as `git reset -- <path>`, with the rest.
-# `checkout` and `stash` are decided by what follows them, in moves_the_checkout().
-MOVES = {"rebase", "switch", "reset", "commit", "merge", "pull", "cherry-pick", "revert"}
+# The line a refused fast-forward adds, naming the condition of a clean `main` that failed (#226 Q22).
+NOT_MAIN = "The fast-forward was refused because HEAD is not `main`.\n"
+CHANGED = "The fast-forward was refused because tracked files have changes, or git could not list them.\n"
+
+# The subcommands refused whatever follows them. Most forms of #114's move the branch or rewrite
+# history, and that ticket refused the few that do not, such as `git reset -- <path>`, with the rest;
+# `am` commits on the branch as `commit` does (#226 Q18). `checkout` joins them because its path form
+# overwrites files and the index as `restore` does (Q17). `merge` is refused but for the one
+# fast-forward, in refusal(), and `stash` is decided by what follows it.
+MOVES = {"rebase", "switch", "checkout", "reset", "commit", "merge", "pull", "cherry-pick", "revert", "am"}
+
+# The subcommands #200 refuses whatever follows them, because they change the checkout's files or
+# index; their dry runs too, which belong in the session's worktree like the real run (#226 Q16).
+CHANGES = {"rm", "mv", "add", "restore", "clean", "apply"}
+
+# The one merge admitted, as its arguments in either order (#226 Q20).
+FAST_FORWARD = ["--ff-only", "origin/main"]
 
 # git's options before the subcommand that take the next word as their value, so that word is not
 # the subcommand (https://git-scm.com/docs/git#_options; git 2.54 takes each in this separate form).
@@ -376,26 +409,44 @@ def simple_command(words, shell):
 
 
 def git_call(directory, args):
+    """(directory, subcommand, its arguments, whether an option other than -C came before it)."""
     i = 0
+    other = False
     while i < len(args) and args[i] is not None and args[i].startswith("-"):
         if args[i] == "-C":
             directory = within(directory, args[i + 1] if i + 1 < len(args) else None)
+        else:
+            other = True
         i += 2 if args[i] in VALUED else 1
     subcommand = args[i] if i < len(args) else None
-    return directory, subcommand, args[i + 1:]
+    return directory, subcommand, args[i + 1:], other
 
 
-def moves_the_checkout(subcommand, args):
-    if subcommand in MOVES:
+def refusal(subcommand, args, options):
+    """Whether the main checkout refuses the call: False, True, or "fast-forward" when it is the one
+    merge admitted, which is refused only on a `main` that is not clean."""
+    if subcommand == "merge" and not options and sorted(arg or "" for arg in args) == FAST_FORWARD:
+        return "fast-forward"
+    if subcommand in MOVES or subcommand in CHANGES:
         return True
-    if subcommand == "checkout":
-        # `--` ends the commit and options; only a path after it makes checkout restore that path
-        # rather than switch, and `git checkout <branch> --` still switches
-        # (https://git-scm.com/docs/git-checkout).
-        return "--" not in args or args.index("--") == len(args) - 1
     if subcommand == "stash":
         return not args or args[0] not in ("list", "show")
     return False
+
+
+def unclean(directory):
+    """The line saying which condition of a clean `main` fails in directory, or "" when none does.
+    git status runs with --no-optional-locks, so reading does not take the index lock a session's own
+    git may be holding (https://git-scm.com/docs/git#Documentation/git.txt---no-optional-locks)."""
+    head = subprocess.run(["git", "-C", directory, "symbolic-ref", "-q", "HEAD"], capture_output=True,
+                          text=True)
+    if head.returncode != 0 or head.stdout.strip() != "refs/heads/main":
+        return NOT_MAIN
+    status = subprocess.run(["git", "--no-optional-locks", "-C", directory, "status", "--porcelain",
+                             "--untracked-files=no"], capture_output=True, text=True)
+    if status.returncode != 0 or status.stdout.strip():
+        return CHANGED
+    return ""
 
 
 def git_dirs(directory):
@@ -422,8 +473,9 @@ def main():
     if not isinstance(command, str):
         return 0
     guarded = None
-    for directory, subcommand, args in git_calls(Lexer(command).tokens(), Shell(event.get("cwd"))):
-        if directory is None or not moves_the_checkout(subcommand, args):
+    for directory, subcommand, args, options in git_calls(Lexer(command).tokens(), Shell(event.get("cwd"))):
+        refused = None if directory is None else refusal(subcommand, args, options)
+        if not refused:
             continue
         if guarded is None:
             own = git_dirs(os.path.dirname(os.path.abspath(__file__)))
@@ -432,8 +484,11 @@ def main():
             guarded = own[1]
         found = git_dirs(directory)
         if found and found[0] == found[1] == guarded:
-            print(REFUSAL.format(subcommand=subcommand, directory=directory, route=ROUTE), end="",
-                  file=sys.stderr)
+            reason = unclean(directory) if refused == "fast-forward" else ""
+            if refused == "fast-forward" and not reason:
+                continue
+            print(REFUSAL.format(subcommand=subcommand, directory=directory, reason=reason, route=ROUTE),
+                  end="", file=sys.stderr)
             return 2
     return 0
 

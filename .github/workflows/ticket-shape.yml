@@ -1,0 +1,72 @@
+# The ticket-shape check, where tickets are written. Owner: integrator, written for #247.
+#
+# tools/ticket_shape.py holds the five rules of docs/agents/issue-tracker.md's "The shape of a
+# ticket a lane can finish" (#227). Run at the push, as A-05 is, a two-owner ticket is found after a
+# lane has built half of it; run here, it is found when the ticket is opened, edited or labelled,
+# before any lane takes it. /to-tickets is a user-level skill outside this repository (#213), so this
+# is what catches what it files.
+#
+# It judges an issue carrying `ready-for-agent` only: that label is the promise that a lane can
+# finish the ticket, and a ticket still being shaped under `needs-triage` or waiting on a human
+# under `ready-for-human` would otherwise draw a comment on every edit. On a failed rule (exit 1) it
+# swaps `ready-for-agent` for `needs-triage` and comments the rule; with the label gone, the next
+# edit is not judged until someone relabels. An issue it could not read (exit 2) is left as it was,
+# and the job fails on the check's own verdict line, because a relabel on a read that failed would
+# be a judgement nobody made. Events made with this job's token "will not create a new workflow
+# run" (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow),
+# so the relabel cannot run it again.
+
+name: Ticket shape
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+# One run per issue at a time, queued rather than cancelled: a cancel between the relabel and the
+# comment would leave a ticket sent back to triage with no reason given.
+concurrency:
+  group: ticket-shape-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  shape:
+    name: Ticket shape
+    if: contains(github.event.issue.labels.*.name, 'ready-for-agent')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Judge the issue, and send a failing ticket back to triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -uo pipefail
+          verdict="$RUNNER_TEMP/ticket-shape.txt"
+          comment="$RUNNER_TEMP/ticket-shape-comment.md"
+          status=0
+          python3 -I tools/ticket_shape.py "$NUMBER" > "$verdict" 2>&1 || status=$?
+          cat "$verdict"
+          [ "$status" -eq 0 ] && exit 0
+          [ "$status" -eq 1 ] || exit "$status"
+          # Exit 1 is also Python's code for an uncaught error, so only a judged verdict relabels.
+          case "$(tail -n 1 "$verdict")" in
+            "ticket-shape: fail: "[#]*" breaks "*) ;;
+            *) echo "ticket-shape: fail: exit 1 without a judged verdict; the issue is left as it was"; exit 2 ;;
+          esac
+          gh issue edit "$NUMBER" --remove-label ready-for-agent --add-label needs-triage || exit 1
+          {
+            printf '%s\n' "## Ticket shape" ""
+            printf '%s\n' "\`tools/ticket_shape.py\` failed this ticket, so \`ready-for-agent\` is now \`needs-triage\`:" ""
+            printf '%s\n' "~~~text"
+            cat "$verdict"
+            printf '%s\n' "~~~" ""
+            printf '%s\n' "The rules are the tracker guide's \"The shape of a ticket a lane can finish\" (docs/agents/issue-tracker.md). A box flagged for a sitting or a landing is reworded, or moved to a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel \`ready-for-agent\`."
+          } > "$comment"
+          gh issue comment "$NUMBER" --body-file "$comment"
+          exit 1
