@@ -18,4 +18,11 @@
     <PackageReference Include="AWSSDK.S3" />
   </ItemGroup>
 
+  <!-- The project's profile signs in with login_session, which the SDK's default chain resolves only
+       when this assembly is present at runtime; it is loaded by name, so nothing fails at compile time
+       without it (#206, docs/dependencies.md). tests/Spactl.Tests/LoginSessionProfileTests guards it. -->
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.Signin" />
+  </ItemGroup>
+
 </Project>
