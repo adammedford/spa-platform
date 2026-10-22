@@ -24,11 +24,11 @@ public sealed class HostResolutionTests
         await using HostingHost gateway = await StartAsync();
 
         RawResponse one = await gateway.GetAsync("app1.spa-poc.test", "/", Ct);
-        Assert.Equal(200, one.Status);
+        Assert.Equal(200, one.StatusCode);
         Assert.Equal(("app1", "app1.spa-poc.test", 3L), gateway.LastSeen);
 
         RawResponse two = await gateway.GetAsync("app2.spa-poc.test", "/orders/42", Ct);
-        Assert.Equal(200, two.Status);
+        Assert.Equal(200, two.StatusCode);
         Assert.Equal(("app2", "app2.spa-poc.test", 3L), gateway.LastSeen);
     }
 
@@ -79,7 +79,7 @@ public sealed class HostResolutionTests
 
         // The control: the same gateway resolves the authority the entry does name.
         RawResponse named = await gateway.GetAsync("app3.spa-poc.test:8443", "/", Ct);
-        Assert.Equal(200, named.Status);
+        Assert.Equal(200, named.StatusCode);
         Assert.Equal(("app3", "app3.spa-poc.test:8443", 3L), gateway.LastSeen);
     }
 
@@ -103,12 +103,12 @@ public sealed class HostResolutionTests
 
         RawResponse moved = await gateway.GetAsync(
             "app1.spa-poc.test", "/", Ct, "X-Forwarded-Host: app2.spa-poc.test\r\n");
-        Assert.Equal(200, moved.Status);
+        Assert.Equal(200, moved.StatusCode);
         Assert.Equal(("app1", "app1.spa-poc.test", 3L), gateway.LastSeen);
 
         RawResponse refused = await gateway.GetAsync(
             "app2.spa-poc.test", "/", Ct, "X-Forwarded-Host: evil.example\r\n");
-        Assert.Equal(200, refused.Status);
+        Assert.Equal(200, refused.StatusCode);
         Assert.Equal(("app2", "app2.spa-poc.test", 3L), gateway.LastSeen);
     }
 
@@ -162,7 +162,7 @@ public sealed class HostResolutionTests
         AssertNotFound(await gateway.GetAsync("app1.spa-poc.test", "/", Ct));
 
         gateway.Registry.Swap(Snapshots.With(1, App1));
-        Assert.Equal(200, (await gateway.GetAsync("app1.spa-poc.test", "/", Ct)).Status);
+        Assert.Equal(200, (await gateway.GetAsync("app1.spa-poc.test", "/", Ct)).StatusCode);
         Assert.Equal(1, gateway.Reached);
     }
 
@@ -186,7 +186,7 @@ public sealed class HostResolutionTests
         AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
         Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
 
-        Assert.Equal(200, (await gateway.GetAsync("app1.spa-poc.test", "/", Ct)).Status);
+        Assert.Equal(200, (await gateway.GetAsync("app1.spa-poc.test", "/", Ct)).StatusCode);
         Assert.NotNull(gateway.LastTelemetry);
         Assert.Null(gateway.LastTelemetry.Rule);
     }
@@ -201,23 +201,22 @@ public sealed class HostResolutionTests
     [Fact]
     public async Task An_unknown_host_is_not_logged_by_this_project()
     {
-        RecordingLoggerProvider logs = new();
         await using HostingHost gateway = await HostingHost.StartAsync(
-            Snapshots.With(3, App1, App2), Ct, logs: logs, telemetry: true);
+            Snapshots.With(3, App1, App2), Ct, telemetry: true);
 
         AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
 
         Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
-        Assert.DoesNotContain(logs.Lines, line => line.Category == "Platform.Hosting"
+        Assert.DoesNotContain(gateway.Log.Lines, line => line.Category == "Platform.Hosting"
             || line.Category.StartsWith("Platform.Hosting.", StringComparison.Ordinal));
     }
 
     /// <summary>The 404 for an unknown host is the contract's error body, code <c>not_found</c>.</summary>
     private static void AssertNotFound(RawResponse response)
     {
-        Assert.Equal(404, response.Status);
-        Assert.Equal("application/problem+json", response.Headers["content-type"].Split(';')[0]);
-        using JsonDocument body = JsonDocument.Parse(response.Body);
+        Assert.Equal(404, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Header("content-type")!.Split(';')[0]);
+        using JsonDocument body = JsonDocument.Parse(response.BodyText);
         Assert.Equal("not_found", body.RootElement.GetProperty("code").GetString());
         Assert.Equal(404, body.RootElement.GetProperty("status").GetInt32());
     }
