@@ -99,7 +99,7 @@ Options
   --domain NAME      Certificate domain, without the wildcard. Default: ${DOMAIN}.
   --region NAME      AWS Region for ACM. Default: AWS_REGION, then
                      AWS_DEFAULT_REGION, then the profile's region, as
-                     tools/preflight.sh resolves it. None of them is refused.
+                     tools/preflight.sh resolves it. With none set, it refuses.
   --dir PATH         Where keys and certificates live. Default: <repo>/.certs.
   --host NAME        Host for 'verify'. Default: app1.<domain>.
   --port N           Port for 'verify'. Default: ${VERIFY_PORT}.
