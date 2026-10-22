@@ -1,11 +1,11 @@
 ---
-name: wizard
+name: wiz
 description: Walk a sitting in the platform project. Reads preflight, the tracker and the cell, says which sitting applies (A the read pass, B the tunnel and the destroy, C the first deployment and the gate runs), runs each stage's commands with the human's approval of each one, posts each stage's evidence to its ticket from captured and redacted output, and stops where only the human can act. Never writes a Confirm comment, never applies or destroys without a confirm on the plan it showed.
 ---
 
-# /wizard: a sitting in the platform project
+# /wiz: a sitting in the platform project
 
-Draft of 2026-10-19, from `.scratch/sitting/spec.md`. Install at `.claude/skills/wizard/SKILL.md`
+Draft of 2026-10-19, from `.scratch/sitting/spec.md`. Install at `.claude/skills/wiz/SKILL.md`
 (git-ignored until #135 decides otherwise). It replaces `aws-sitting-2.sh`.
 
 Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level
@@ -32,7 +32,7 @@ tickets this sitting serves.
    Claude Code attribution footer.
 5. **No `Confirm` comment, ever** (ADR-0021 decision 2). **No relabel, unblock or close** until a
    `Confirm` comment on the run's `Overnight <date>` issue covers the question that decided it
-   (ADR-0023 decision 4). A comment that is only the word `Confirm` covers every pre-accepted
+   (ADR-0023 decision 1, ADR-0021 decision 1). A comment that is only the word `Confirm` covers every pre-accepted
    answer of that run and none that read `Answer: open`, which is the rule the report body states;
    the `Confirm` of 2026-10-19 on #129 is one such. Where none covers a write, print the write you
    would make under "Held" and go on.
@@ -62,21 +62,26 @@ answer governs Stage 0 too. Then run every time, before choosing a sitting.
 
 ```bash
 set -a; . tools/aws-project.env; set +a
-tools/preflight.sh                              # must end ready; it compares the account with the pin
+tools/preflight.sh                              # must end ready; it compares the account with the pin; C reads its Container engine row
 git fetch origin --tags && git status --short   # main checkout clean, on main, at origin/main
 gh issue view 129 --json comments --jq '[.comments[] | select(.body | test("^Confirm")) | .body]'
 aws ecs describe-services --cluster spa-poc --services gateway \
   --query 'services[0].{status:status,desired:desiredCount,running:runningCount}'
 ls tools/scripts/                               # which of tunnel.sh, verify-tunnel.sh, seed.sh, deploy.sh, teardown.sh have landed
-docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'no engine'
+ls tests/e2e/Stack/DeployedStack.cs             # the browser suite's deployed mode (#209); C2 and C3 need it
 ```
 
 Then say which sitting applies and list its stages with the minutes from the spec's inventory:
 
 - **A** when the service exists and #56 has no read-back comment yet.
 - **B** when #56's read-back is posted and `tunnel.sh` and `verify-tunnel.sh` are on `main`.
-- **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, the engine runs, and the
-  platform root is destroyed or absent.
+- **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, preflight's `Container engine`
+  row reads `ok` in the shell this sitting runs in, and the platform root is destroyed or absent. A
+  running engine is not enough: a per-user Docker Desktop puts `docker` in `~/.docker/bin`, which
+  that shell may not have on `PATH`, and then preflight and the scripts see no engine. Offer C2
+  and C3 only when `tests/e2e/Stack/DeployedStack.cs`, the browser suite's deployed mode (#209), is
+  on `main`, read from the tree as the scripts are; without it the sitting stops after C1 and says
+  so.
 - If the service is absent in A: the sitting becomes the platform root's re-apply on the sample
   image (A-alt below) before the read pass.
 
@@ -109,7 +114,7 @@ user", the `describe-user-pool-client` output with the client id elided, and "th
 ```bash
 terraform -chdir=infra/envs/poc/platform init -backend-config=backend.hcl -input=false
 terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode; echo "exit=$?"   # 0 means no changes; no -out, so no plan file
-LB=$(aws elbv2 describe-load-balancers --names spa-platform-poc --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+LB=$(aws elbv2 describe-load-balancers --names spa-poc --query 'LoadBalancers[0].LoadBalancerArn' --output text)
 aws elbv2 describe-load-balancers --load-balancer-arns "$LB" --query 'LoadBalancers[0].{scheme:Scheme,type:Type,state:State.Code}'
 aws elbv2 describe-load-balancer-attributes --load-balancer-arn "$LB" \
   --query "Attributes[?Key=='routing.http.preserve_host_header.enabled' || Key=='routing.http.drop_invalid_header_fields.enabled']"
@@ -123,7 +128,7 @@ IMPORTED_CERT=$(aws acm list-certificates --query "CertificateSummaryList[?Domai
 if [ -n "$LISTENER_CERT" ] && [ "$LISTENER_CERT" != "None" ] && [ "$LISTENER_CERT" = "$IMPORTED_CERT" ]; then echo "certificate: match"; else echo "certificate: MISMATCH"; fi
 ```
 
-If the load balancer's name differs, find it by the `Platform` tag: the A5 `get-resources` call
+The load balancer is named `spa-poc` (`local.lb_name` in `infra/modules/cell/alb.tf`, read back on 2026-10-20). If the name differs, find it by the `Platform` tag: the A5 `get-resources` call
 with `--resource-type-filters elasticloadbalancing:loadbalancer`. Expect: `internal`, both
 attributes `true`, one listener on 443 HTTPS with one certificate and one `forward`, one rule (the
 default), the target group `ip`, `HTTP`, 8080, path `/`, and `certificate: match`: the listener's
@@ -143,7 +148,7 @@ task definition `spa-platform-poc`, task role `spa-platform-poc-task`, log group
 aws ecs wait services-stable --cluster spa-poc --services gateway; echo "exit=$?"
 aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[].{status:status,rollout:rolloutState},events:events[:3].message,exec:enableExecuteCommand,breaker:deploymentConfiguration.deploymentCircuitBreaker,publicIp:networkConfiguration.awsvpcConfiguration.assignPublicIp}'
 TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --query 'taskArns[0]' --output text)
-aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{status:lastStatus,image:containers[?name==`gateway`].image|[0],digest:containers[?name==`gateway`].imageDigest|[0],agent:containers[?name==`gateway`].managedAgents[?name==`ExecuteCommandAgent`].lastStatus|[0]}'
+aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{status:lastStatus,image:containers[0].image,digest:containers[0].imageDigest,containers:containers[].name,agents:containers[0].managedAgents}'   # the nested managedAgents filter returns null; read the list and expect one ExecuteCommandAgent RUNNING
 aws ecs describe-task-definition --task-definition spa-platform-poc --query 'taskDefinition.{cpu:cpu,memory:memory,arch:runtimePlatform.cpuArchitecture}'
 TG=$(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].loadBalancers[0].targetGroupArn' --output text)
 aws elbv2 describe-target-health --target-group-arn "$TG" --query 'TargetHealthDescriptions[].{port:Target.Port,health:TargetHealth.State}'
@@ -157,10 +162,10 @@ for r in $(aws ecs describe-clusters --clusters spa-poc --query 'clusters[0].clu
   aws ecs list-tags-for-resource --resource-arn "$r" --query "tags[?key=='Platform'].value"; done
 aws logs list-tags-for-resource --resource-arn "$(aws logs describe-log-groups --log-group-name-prefix /spa-platform/poc/gateway --query 'logGroups[0].logGroupArn' --output text | sed 's/:\*$//')" --query 'tags.Platform'
 aws iam list-role-tags --role-name spa-platform-poc-task --query "Tags[?Key=='Platform'].Value"
-aws iam list-role-tags --role-name spa-platform-poc-execution --query "Tags[?Key=='Platform'].Value"
+aws iam list-role-tags --role-name spa-platform-poc-task-execution --query "Tags[?Key=='Platform'].Value"
 ```
 
-If the execution role's name differs, take it from the task definition's `executionRoleArn`.
+The execution role is `spa-platform-poc-task-execution` (read from the task definition's `executionRoleArn` on 2026-10-20; `spa-platform-poc-execution` does not exist).
 Expect, per #56's Q6 to Q8: the waiter exits 0; desired 1, running 1, pending 0; one `PRIMARY`
 deployment `COMPLETED`; a steady-state event and no rollback; the task `RUNNING` with the image
 equal to the pin and the Exec agent `RUNNING`; `256`, `1024`, `ARM64`; Exec on, the breaker with
@@ -249,7 +254,9 @@ that the cell is down until `deploy.sh`.
 
 ## Sitting C: the first deployment and the gate runs
 
-Needs #58's scripts on `main`, Docker Desktop running (D-2), and the platform root absent.
+Needs #58's scripts on `main`, preflight's `Container engine` row reading `ok` in this sitting's
+shell (Docker Desktop, D-2), and the platform root absent; C2 and
+C3 also need `tests/e2e`'s deployed stack on `main` (#209).
 
 **C1.** In the plan's First deployment order: the platform root on the sample image (A-alt),
 `tools/scripts/seed.sh`, `tools/scripts/deploy.sh` (builds both images for ARM64, pushes by
@@ -257,15 +264,18 @@ digest, applies with `health_check_path=/readyz`, waits for steady state, assert
 digest), then `tunnel.sh` and `verify-tunnel.sh /healthz`. Each apply on confirm; post each
 script's exit code and key lines on #58.
 
-**C2, #63 for G3.** The browser suite through the tunnel (`dotnet test --project tests/e2e` with
-the stack settings #61's suite documents), `verify-release-immutability.sh` as P-04, P-06 (a
-connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -w 5
--z <address> 8080; echo "exit=$?"`, expecting non-zero), then `teardown.sh` and P-05 (the tag query
+**C2, #63 for G3.** The browser suite through the tunnel (`SPA_E2E_STACK=deployed dotnet test
+--project tests/e2e`, with what `tests/e2e/Stack/DeployedStack.cs`'s summary says a sitting has
+before the run), `verify-release-immutability.sh` as P-04, P-06 (a
+connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -G 5
+-z <address> 8080; echo "exit=$?"`, expecting non-zero; on macOS `-G` is the connect timeout,
+while `-w` is an idle timeout that leaves the probe waiting about 75 seconds), then `teardown.sh` and P-05 (the tag query
 empty, the roles gone by name, #118), then seed and deploy again from nothing. Post per test id on
 #63.
 
-**C3, #63 for G4 and G5.** The deployed negative subset (`tests/Gateway.SecurityTests` against the
-stack, N-26 in the browser), then F-07: the apps root's plan with `fixtures/onboarding/app3.json`
+**C3, #63 for G4 and G5.** The deployed negative subset (the rows
+`tests/e2e/Deployed/DeployedSubsetTests.cs` names, run by the same `SPA_E2E_STACK=deployed`
+`dotnet test --project tests/e2e`, N-26 in the browser), then F-07: the apps root's plan with `fixtures/onboarding/app3.json`
 shows three resources, `spactl release publish`, `spactl app add`, `spactl wait`, the task id and
 task definition revision unchanged before and after, app 3 served. Post on #63.
 
@@ -282,7 +292,7 @@ deployed tier; destroy on confirm.
 - **H1, the open questions on an `Overnight <date>` issue.** A `Confirm` that is the one word
   covers the pre-accepted answers and none that read `Answer: open`. On request, print a digest
   table of the open ones from the issue's comments (question, recommendation, what it changes), as
-  `.scratch/sitting/open-questions-129.md` did for #129, whose 25 were answered on 2026-10-19. The
+  `.scratch/sitting/open-questions-129.md` did for #129, whose 26 were answered on 2026-10-19. The
   human writes and posts any comment that names them, or has a session post it at his word.
 - **H2, #90.** Print the three pre-checks and the close path (AWS Settings → View all projects →
   the sample project → Close project); after the human reports it closed, `rm` the two local files

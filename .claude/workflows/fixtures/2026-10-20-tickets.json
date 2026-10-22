@@ -1,0 +1,849 @@
+{
+ "note": "The open tickets of 2026-10-20 as collect resolved them before the run (#180 on its own row, #56 with every box ticked). Built from the tracker snapshot of that evening. That night overnight.js also left out the six workflow specs, #77 to #82, through its FOREGROUND_ONLY constant; #137 dropped the constant, so they are in args.skip, which reproduces the run's skip set.",
+ "args": {
+  "repo": "/Users/adammedford/Projects/spa-platform",
+  "date": "2026-10-20",
+  "wt": "/Users/adammedford/.worktrees/overnight-2026-10-20",
+  "standingAnswer": true,
+  "maxParallel": 5,
+  "maxFailures": 8,
+  "skip": [
+   "issue-77",
+   "issue-78",
+   "issue-79",
+   "issue-80",
+   "issue-81",
+   "issue-82",
+   "issue-139",
+   "issue-140",
+   "issue-141",
+   "issue-142",
+   "issue-145",
+   "issue-146",
+   "6.7",
+   "6.9"
+  ]
+ },
+ "tickets": [
+  {
+   "n": 1,
+   "id": "1.4",
+   "slug": "s",
+   "issue": 56,
+   "url": "https://github.com/adammedford/spa-platform/issues/56",
+   "title": "1.4 \u2014 ECS cluster, task and service",
+   "status": "ready-for-agent",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 0
+  },
+  {
+   "n": 2,
+   "id": "1.5",
+   "slug": "s",
+   "issue": 92,
+   "url": "https://github.com/adammedford/spa-platform/issues/92",
+   "title": "1.5 \u2014 Private versioned bucket and image",
+   "status": "ready-for-human",
+   "owner": "ws1-infra",
+   "blockedBy": [
+    "issue-122"
+   ],
+   "why": "sim",
+   "openBoxes": 2
+  },
+  {
+   "n": 3,
+   "id": "1.6b",
+   "slug": "s",
+   "issue": 57,
+   "url": "https://github.com/adammedford/spa-platform/issues/57",
+   "title": "1.6b \u2014 tunnel.sh and verify-tunnel.sh",
+   "status": "ready-for-agent",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 4,
+   "id": "1.7",
+   "slug": "s",
+   "issue": 58,
+   "url": "https://github.com/adammedford/spa-platform/issues/58",
+   "title": "1.7 \u2014 seed, deploy, rollback and teardow",
+   "status": "ready-for-agent",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 5,
+   "id": "1.9",
+   "slug": "s",
+   "issue": 59,
+   "url": "https://github.com/adammedford/spa-platform/issues/59",
+   "title": "1.9 \u2014 Plan policy for the platform and a",
+   "status": "claimed",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 0
+  },
+  {
+   "n": 6,
+   "id": "6.3",
+   "slug": "s",
+   "issue": 60,
+   "url": "https://github.com/adammedford/spa-platform/issues/60",
+   "title": "6.3 \u2014 Negative suite N-01 to N-25 and N-",
+   "status": "claimed",
+   "owner": "ws6-verification",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 0
+  },
+  {
+   "n": 7,
+   "id": "6.7",
+   "slug": "s",
+   "issue": 62,
+   "url": "https://github.com/adammedford/spa-platform/issues/62",
+   "title": "6.7 \u2014 Operating notes",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [
+    "6.9"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 8,
+   "id": "6.9",
+   "slug": "s",
+   "issue": 63,
+   "url": "https://github.com/adammedford/spa-platform/issues/63",
+   "title": "6.9 \u2014 Deployed gate runs G3 to G5",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [
+    "1.7",
+    "1.6b"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 9,
+   "id": "issue-75",
+   "slug": "s",
+   "issue": 75,
+   "url": "https://github.com/adammedford/spa-platform/issues/75",
+   "title": "Read test JSON without the file provider",
+   "status": "claimed",
+   "owner": "ws2-hosting",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 10,
+   "id": "issue-77",
+   "slug": "s",
+   "issue": 77,
+   "url": "https://github.com/adammedford/spa-platform/issues/77",
+   "title": "retro: file evidence-bearing follow-ups ",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 11,
+   "id": "issue-78",
+   "slug": "s",
+   "issue": 78,
+   "url": "https://github.com/adammedford/spa-platform/issues/78",
+   "title": "morning: land an overnight run \u2014 replay,",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 12,
+   "id": "issue-79",
+   "slug": "s",
+   "issue": 79,
+   "url": "https://github.com/adammedford/spa-platform/issues/79",
+   "title": "review-queue: independent two-axis revie",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 13,
+   "id": "issue-80",
+   "slug": "s",
+   "issue": 80,
+   "url": "https://github.com/adammedford/spa-platform/issues/80",
+   "title": "gate-evidence: prove the exit test, audi",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 14,
+   "id": "issue-81",
+   "slug": "s",
+   "issue": 81,
+   "url": "https://github.com/adammedford/spa-platform/issues/81",
+   "title": "truth-audit: verify every claim the pros",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 15,
+   "id": "issue-82",
+   "slug": "s",
+   "issue": 82,
+   "url": "https://github.com/adammedford/spa-platform/issues/82",
+   "title": "pins-sweep: check every pin, trial-build",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 16,
+   "id": "issue-90",
+   "slug": "s",
+   "issue": 90,
+   "url": "https://github.com/adammedford/spa-platform/issues/90",
+   "title": "Retire the sample project: close it in A",
+   "status": "ready-for-human",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 17,
+   "id": "issue-118",
+   "slug": "s",
+   "issue": 118,
+   "url": "https://github.com/adammedford/spa-platform/issues/118",
+   "title": "P-05 and teardown prove the account empt",
+   "status": "ready-for-human",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 18,
+   "id": "issue-122",
+   "slug": "s",
+   "issue": 122,
+   "url": "https://github.com/adammedford/spa-platform/issues/122",
+   "title": "1.5 \u2014 verify-release-immutability.sh pro",
+   "status": "claimed",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 1
+  },
+  {
+   "n": 19,
+   "id": "issue-134",
+   "slug": "s",
+   "issue": 134,
+   "url": "https://github.com/adammedford/spa-platform/issues/134",
+   "title": "The full check runs the test companion o",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 20,
+   "id": "issue-135",
+   "slug": "s",
+   "issue": 135,
+   "url": "https://github.com/adammedford/spa-platform/issues/135",
+   "title": "Track .claude/workflows/ so workflow cha",
+   "status": "ready-for-human",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 21,
+   "id": "issue-136",
+   "slug": "s",
+   "issue": 136,
+   "url": "https://github.com/adammedford/spa-platform/issues/136",
+   "title": "One worktree per ticket, so a lane imple",
+   "status": "blocked",
+   "owner": "integrator",
+   "blockedBy": [
+    "issue-135"
+   ],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 22,
+   "id": "issue-138",
+   "slug": "s",
+   "issue": 138,
+   "url": "https://github.com/adammedford/spa-platform/issues/138",
+   "title": "HarnessBootTests passes with the gateway",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 2
+  },
+  {
+   "n": 23,
+   "id": "issue-139",
+   "slug": "s",
+   "issue": 139,
+   "url": "https://github.com/adammedford/spa-platform/issues/139",
+   "title": "contract-reader: the composed suites rea",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 24,
+   "id": "issue-140",
+   "slug": "s",
+   "issue": 140,
+   "url": "https://github.com/adammedford/spa-platform/issues/140",
+   "title": "stage-host: StageHost, CapturedLog and R",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 25,
+   "id": "issue-141",
+   "slug": "s",
+   "issue": 141,
+   "url": "https://github.com/adammedford/spa-platform/issues/141",
+   "title": "app-sessions: the gated session rules li",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 26,
+   "id": "issue-142",
+   "slug": "s",
+   "issue": 142,
+   "url": "https://github.com/adammedford/spa-platform/issues/142",
+   "title": "rejection-table: a stage ends a rejectio",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": -1
+  },
+  {
+   "n": 27,
+   "id": "issue-143",
+   "slug": "s",
+   "issue": 143,
+   "url": "https://github.com/adammedford/spa-platform/issues/143",
+   "title": "stage-host 1/10: the change request for ",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 28,
+   "id": "issue-144",
+   "slug": "s",
+   "issue": 144,
+   "url": "https://github.com/adammedford/spa-platform/issues/144",
+   "title": "stage-host 10/10: the test identity prov",
+   "status": "ready-for-agent",
+   "owner": "ws5-fixtures",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 29,
+   "id": "issue-145",
+   "slug": "s",
+   "issue": 145,
+   "url": "https://github.com/adammedford/spa-platform/issues/145",
+   "title": "stage-host 2/10: StageHost, CapturedLog ",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [
+    "issue-143"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 30,
+   "id": "issue-146",
+   "slug": "s",
+   "issue": 146,
+   "url": "https://github.com/adammedford/spa-platform/issues/146",
+   "title": "stage-host 3/10: the gateway test harnes",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [
+    "issue-143"
+   ],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 31,
+   "id": "issue-147",
+   "slug": "s",
+   "issue": 147,
+   "url": "https://github.com/adammedford/spa-platform/issues/147",
+   "title": "stage-host 4/10: the security tests' fou",
+   "status": "ready-for-agent",
+   "owner": "ws4-proxy",
+   "blockedBy": [
+    "issue-145"
+   ],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 32,
+   "id": "issue-148",
+   "slug": "s",
+   "issue": 148,
+   "url": "https://github.com/adammedford/spa-platform/issues/148",
+   "title": "stage-host 5/10: ProxyHost moves onto St",
+   "status": "ready-for-agent",
+   "owner": "ws4-proxy",
+   "blockedBy": [
+    "issue-145"
+   ],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 33,
+   "id": "issue-149",
+   "slug": "s",
+   "issue": 149,
+   "url": "https://github.com/adammedford/spa-platform/issues/149",
+   "title": "stage-host 6/10: HostingHost moves onto ",
+   "status": "ready-for-agent",
+   "owner": "ws2-hosting",
+   "blockedBy": [
+    "issue-145"
+   ],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 34,
+   "id": "issue-150",
+   "slug": "s",
+   "issue": 150,
+   "url": "https://github.com/adammedford/spa-platform/issues/150",
+   "title": "stage-host 7/10: the registry tests atta",
+   "status": "ready-for-agent",
+   "owner": "ws2-hosting",
+   "blockedBy": [
+    "issue-145"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 35,
+   "id": "issue-151",
+   "slug": "s",
+   "issue": 151,
+   "url": "https://github.com/adammedford/spa-platform/issues/151",
+   "title": "stage-host 8/10: the identity tests atta",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-145",
+    "issue-144"
+   ],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 36,
+   "id": "issue-152",
+   "slug": "s",
+   "issue": 152,
+   "url": "https://github.com/adammedford/spa-platform/issues/152",
+   "title": "stage-host 9/10: TelemetryHost moves ont",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [
+    "issue-145"
+   ],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 37,
+   "id": "issue-153",
+   "slug": "s",
+   "issue": 153,
+   "url": "https://github.com/adammedford/spa-platform/issues/153",
+   "title": "contract-reader 1/6: one Contract reader",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 9
+  },
+  {
+   "n": 38,
+   "id": "issue-154",
+   "slug": "s",
+   "issue": 154,
+   "url": "https://github.com/adammedford/spa-platform/issues/154",
+   "title": "contract-reader 2/6: one architecture ru",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 7
+  },
+  {
+   "n": 39,
+   "id": "issue-155",
+   "slug": "s",
+   "issue": 155,
+   "url": "https://github.com/adammedford/spa-platform/issues/155",
+   "title": "contract-reader 3/6: Identity deletes it",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-154"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 40,
+   "id": "issue-156",
+   "slug": "s",
+   "issue": 156,
+   "url": "https://github.com/adammedford/spa-platform/issues/156",
+   "title": "contract-reader 4/6: Proxy deletes its c",
+   "status": "ready-for-agent",
+   "owner": "ws4-proxy",
+   "blockedBy": [
+    "issue-154"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 41,
+   "id": "issue-157",
+   "slug": "s",
+   "issue": 157,
+   "url": "https://github.com/adammedford/spa-platform/issues/157",
+   "title": "contract-reader 5/6: Security deletes it",
+   "status": "ready-for-agent",
+   "owner": "ws4-proxy",
+   "blockedBy": [
+    "issue-154"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 42,
+   "id": "issue-158",
+   "slug": "s",
+   "issue": 158,
+   "url": "https://github.com/adammedford/spa-platform/issues/158",
+   "title": "contract-reader 6/6: the rule-id-literal",
+   "status": "ready-for-agent",
+   "owner": "ws6-verification",
+   "blockedBy": [
+    "issue-160",
+    "issue-154"
+   ],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 43,
+   "id": "issue-159",
+   "slug": "s",
+   "issue": 159,
+   "url": "https://github.com/adammedford/spa-platform/issues/159",
+   "title": "rejection-table 1/5: the change request ",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 44,
+   "id": "issue-160",
+   "slug": "s",
+   "issue": 160,
+   "url": "https://github.com/adammedford/spa-platform/issues/160",
+   "title": "rejection-table 2/5: Rejection and Probl",
+   "status": "ready-for-agent",
+   "owner": "integrator",
+   "blockedBy": [
+    "issue-159"
+   ],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 45,
+   "id": "issue-161",
+   "slug": "s",
+   "issue": 161,
+   "url": "https://github.com/adammedford/spa-platform/issues/161",
+   "title": "rejection-table 3/5: Hosting ends host.u",
+   "status": "ready-for-agent",
+   "owner": "ws2-hosting",
+   "blockedBy": [
+    "issue-160"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 46,
+   "id": "issue-162",
+   "slug": "s",
+   "issue": 162,
+   "url": "https://github.com/adammedford/spa-platform/issues/162",
+   "title": "rejection-table 4/5: Security and Proxy ",
+   "status": "ready-for-agent",
+   "owner": "ws4-proxy",
+   "blockedBy": [
+    "issue-160"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 47,
+   "id": "issue-163",
+   "slug": "s",
+   "issue": 163,
+   "url": "https://github.com/adammedford/spa-platform/issues/163",
+   "title": "rejection-table 5/5: Identity notes auth",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-165",
+    "issue-160"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 48,
+   "id": "issue-164",
+   "slug": "s",
+   "issue": 164,
+   "url": "https://github.com/adammedford/spa-platform/issues/164",
+   "title": "app-sessions 1/5: SessionGates grows int",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 49,
+   "id": "issue-165",
+   "slug": "s",
+   "issue": 165,
+   "url": "https://github.com/adammedford/spa-platform/issues/165",
+   "title": "app-sessions 2/5: the ticket store opens",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-164"
+   ],
+   "why": "sim",
+   "openBoxes": 7
+  },
+  {
+   "n": 50,
+   "id": "issue-166",
+   "slug": "s",
+   "issue": 166,
+   "url": "https://github.com/adammedford/spa-platform/issues/166",
+   "title": "app-sessions 3/5: /bff/session reads and",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-164"
+   ],
+   "why": "sim",
+   "openBoxes": 5
+  },
+  {
+   "n": 51,
+   "id": "issue-167",
+   "slug": "s",
+   "issue": 167,
+   "url": "https://github.com/adammedford/spa-platform/issues/167",
+   "title": "app-sessions 4/5: the three read-count t",
+   "status": "ready-for-agent",
+   "owner": "ws3-identity",
+   "blockedBy": [
+    "issue-165",
+    "issue-166"
+   ],
+   "why": "sim",
+   "openBoxes": 6
+  },
+  {
+   "n": 52,
+   "id": "issue-168",
+   "slug": "s",
+   "issue": 168,
+   "url": "https://github.com/adammedford/spa-platform/issues/168",
+   "title": "app-sessions 5/5: the ADR and the glossa",
+   "status": "ready-for-human",
+   "owner": "integrator",
+   "blockedBy": [
+    "issue-165",
+    "issue-167",
+    "issue-166",
+    "issue-164"
+   ],
+   "why": "sim",
+   "openBoxes": 3
+  },
+  {
+   "n": 53,
+   "id": "issue-180",
+   "slug": "s",
+   "issue": 180,
+   "url": "https://github.com/adammedford/spa-platform/issues/180",
+   "title": "The ecs.tf grace-period comment says rea",
+   "status": "ready-for-agent",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 2
+  },
+  {
+   "n": 54,
+   "id": "issue-183",
+   "slug": "s",
+   "issue": 183,
+   "url": "https://github.com/adammedford/spa-platform/issues/183",
+   "title": "Project-level CLAUDE_CODE_SHELL does not",
+   "status": "ready-for-human",
+   "owner": "integrator",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 4
+  },
+  {
+   "n": 55,
+   "id": "issue-184",
+   "slug": "s",
+   "issue": 184,
+   "url": "https://github.com/adammedford/spa-platform/issues/184",
+   "title": "1.5 \u2014 verify-release-immutability.sh's c",
+   "status": "ready-for-agent",
+   "owner": "ws1-infra",
+   "blockedBy": [],
+   "why": "sim",
+   "openBoxes": 4
+  }
+ ],
+ "expect": {
+  "integrated": [
+   "issue-144",
+   "1.6b",
+   "issue-138",
+   "issue-164",
+   "issue-134",
+   "1.7",
+   "issue-153",
+   "issue-165",
+   "issue-180",
+   "issue-143",
+   "issue-154",
+   "issue-166",
+   "issue-156",
+   "issue-155",
+   "issue-184",
+   "issue-157",
+   "issue-159",
+   "issue-167",
+   "issue-160",
+   "issue-161",
+   "issue-162",
+   "issue-158",
+   "issue-163"
+  ],
+  "skippedForBlocker": [
+   "issue-147",
+   "issue-148",
+   "issue-149",
+   "issue-150",
+   "issue-151",
+   "issue-152"
+  ],
+  "startsBefore": [
+   [
+    "issue-164",
+    "issue-155"
+   ],
+   [
+    "issue-164",
+    "issue-163"
+   ],
+   [
+    "issue-138",
+    "issue-158"
+   ]
+  ]
+ }
+}

@@ -140,6 +140,18 @@ jobs:
           python3 -I .github/workflow_parse_tests.py
           python3 -I .github/workflow-parse.py
 
+      - name: The overnight script schedules its lanes as its test companion says
+        # .claude/workflows/overnight_tests.mjs runs overnight.js end to end with every agent mocked,
+        # on the tracked fixture of 2026-10-20, and checks what integrates, what skips for a blocker,
+        # and that a lane runs its first ready ticket rather than idling behind a blocked one. It is
+        # the script's only behavioural proof, so a scheduler edit fails at its push, before the
+        # launch it is for (ADR-0027, #213). It runs on every push with no path condition, like every
+        # step in this job, and takes about a second on the node the step above printed. It is
+        # wall-clock timed (a 1 ms tick against sleeps of 30 to 180 ms); a virtual clock comes only
+        # if it ever flakes here. tools/check.sh does not run it: CI on the landing pull request is
+        # what proves a scheduler edit before its launch (ADR-0026 decision 3).
+        run: node .claude/workflows/overnight_tests.mjs
+
       - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose

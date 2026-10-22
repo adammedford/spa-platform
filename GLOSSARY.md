@@ -231,6 +231,13 @@ is one), which launches scripted sessions and tells each what to do. It is track
 branch, a review and a landing like any other integrator change (ADR-0026). It is not a CI workflow
 under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
 
+**Project skill** — a skill under `.claude/skills/` that a foreground session runs in this
+repository (`wiz`, which walks a sitting, is one). It is tracked and changes by a branch, a review
+and a landing like any other integrator change, and no sitting runs an edit to it that has not
+landed. Not a user-level skill under `~/.agents/skills` (such as `grilling` or
+`implement`), which is the human's own, shared across projects and outside this repository.
+_Avoid_: bare "skill" where the user-level kind could be meant; "wizard" for `wiz`.
+
 **Lane** — one owner's tickets in one overnight run, worked in that owner's worktree, each on a
 branch of its own. The integrator has a lane and no workstream. _Avoid_: "lane" for a workstream.
 
