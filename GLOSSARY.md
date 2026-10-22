@@ -35,6 +35,15 @@ this work".
 Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
 default project".
 
+**Sitting** — a human's hands-on session in the platform project: the applies, imports and AWS
+reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
+the glossary keeps for agent sessions and the gateway's session records.
+
+**Unattended run** — one invocation of a script with its documented arguments only, from a shell
+that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
+with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
+read-back by hand showed the result right.
+
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
 a logical boundary inside one.
@@ -250,6 +259,12 @@ run's `Overnight <date>` issue. Not "approval".
 is one), which launches scripted sessions and tells each what to do. It is tracked and changes by a
 branch, a review and a landing like any other integrator change (ADR-0026). It is not a CI workflow
 under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
+
+**Reuse key** — the value a workflow script compares between launches to decide whether a phase's
+saved result still stands: equal keys reuse the result, a changed key runs the phase again. A phase
+here is the Workflow tool's unit of work, not a plan Phase such as Phase 1. A reuse key is only as
+fresh as the inputs it covers (`CODING_STANDARDS.md`). _Avoid_: "cache key" and "resume key" for
+this.
 
 **Project skill** — a skill under `.claude/skills/` that a foreground session runs in this
 repository (`wiz`, which walks a sitting, is one). It is tracked and changes by a branch, a review

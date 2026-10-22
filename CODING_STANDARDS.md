@@ -94,6 +94,31 @@ agrees with itself. The mock API's default ports are checked by reading `apis[].
 The same applies to a fixture that must agree with a contract, or with another fixture: read the
 other file.
 
+## An authorisation is read from its author
+
+A comment, a label or a file that unlocks an action counts only when the account the rule names
+wrote it. A `Confirm` comment is the human's act (`docs/agents/issue-tracker.md`), so code that
+matches its first word and not its author lets anyone who can comment on the repository take an
+action out of its dry run. #271's morning script read every comment beginning `Confirm`, and an
+outsider's `Confirm Q1` dispatched a commit applier (fixed in 58f5858).
+
+So ask of any code that acts on what a person wrote: who may write it, and whether the code checks
+that writer everywhere the writing is used, in what it confirms, what it overrides and what it
+switches on.
+
+## A reuse key covers every input the reused phase reads
+
+A phase whose saved result is reused while its key is unchanged is only as fresh as the key. A key
+built from the launch arguments, or from the inputs a test happened to change, reuses a stale result
+the first time another input moves. #271's retro script took two review rounds on this: the first
+fix fingerprinted the log files and missed the lane worktrees and ticket comments, and the second
+reads the record on every launch and reuses the later phases only on an unchanged index (59673e4).
+Rank's and File's keys had also left out the index both read.
+
+So ask of any cache or resume key: list what the phase reads, from its prompt or its code, and check
+that each item moves the key. Where listing them costs as much as the phase, run the phase again and
+key what follows on its result.
+
 ## Code that rests on vendor behaviour cites the vendor
 
 A bucket policy, a token-validation parameter or a library's default is load-bearing and invisible.
