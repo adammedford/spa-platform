@@ -30,7 +30,16 @@
 # Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced. It needs the AWS CLI, Terraform and python3. It never prints the account id.
+# sourced. It needs the AWS CLI, Terraform and python3.
+#
+# It redacts two kinds of value, and Terraform's output passes through the filter that does it
+# (cell-common.sh's redact_stream):
+#   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
+#   - each app's client id that infra/envs/poc/outputs.json lists becomes <client-id:appId>. The
+#     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
+#     (#251). The list is the outputs document's as this run starts: a client id the apps root
+#     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
+#     apps root.
 #
 # Exit status: 0 when the previous gateway runs steady and healthy; 1 when there is none to go back
 # to, or a step failed; 2 when it did not start (no outputs document among the reasons).
@@ -93,6 +102,9 @@ cell_start
 ECR_GATEWAY="$(outputs_field ecrGateway)"
 CLUSTER="$(outputs_field ecsCluster)"
 SERVICE="$(outputs_field ecsService)"
+# After the reads above, so that a missing or foreign outputs document is refused by them, naming
+# the field. Before anything prints: Terraform's plan names both apps' client ids (#251).
+redact_clients
 
 read_service
 CURRENT="$(revision_of "$TASK_DEFINITION")"
