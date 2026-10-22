@@ -32,7 +32,7 @@ public sealed partial class LoginTests
         // The same cookies on app 2's host, and app 1's callback, code and state, sent to app 2.
         await profile.Context.AddCookiesAsync([.. loginCookies.Select(cookie => On(app2, cookie))]);
         LogMark mark = stack.MarkLog();
-        IResponse? rejected = await profile.Page.GotoAsync(app2.Url("/signin-oidc" + callback.Query).ToString());
+        IResponse? rejected = await profile.GotoAsync(app2.Url("/signin-oidc" + callback.Query).ToString());
 
         await AssertRejectedAsync(stack, profile, app2, rejected, mark);
         if (stack is LocalStack local)
@@ -45,7 +45,7 @@ public sealed partial class LoginTests
         // above spent none, so it is still good here, seconds after it was issued.
 
         // Control: the same callback on its own app is a login.
-        await profile.Page.GotoAsync(callback.ToString());
+        await profile.GotoAsync(callback.ToString());
         await profile.WaitSignedInAsync(app1);
     }
 
@@ -66,7 +66,7 @@ public sealed partial class LoginTests
         stack.SignInAs(DeployedStack.User);
         Uri own = await victim.StopAtCallbackAsync(app2);
         LogMark mark = stack.MarkLog();
-        IResponse? rejected = await victim.Page.GotoAsync(app2.Url($"/signin-oidc?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(Query(own, "state"))}").ToString());
+        IResponse? rejected = await victim.GotoAsync(app2.Url($"/signin-oidc?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(Query(own, "state"))}").ToString());
 
         // On the cell the provider's refusal shows as the callback's; in H the provider says why.
         await AssertRejectedAsync(stack, victim, app2, rejected, mark);
@@ -105,7 +105,7 @@ public sealed partial class LoginTests
         }
 
         LogMark mark = stack.MarkLog();
-        IResponse? rejected = await profile.Page.GotoAsync(
+        IResponse? rejected = await profile.GotoAsync(
             app.Url($"/signin-oidc?code={Uri.EscapeDataString(Query(callback, "code"))}&state={Uri.EscapeDataString(state)}").ToString());
 
         await AssertRejectedAsync(stack, profile, app, rejected, mark);

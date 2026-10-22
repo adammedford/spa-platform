@@ -42,12 +42,12 @@ public sealed class ShellTests
         HarnessApp app = stack.App("app1");
         await profile.SignInAsync(app);
 
-        IResponse? deep = await profile.Page.GotoAsync(app.Url("/orders/42/edit").ToString());
+        IResponse? deep = await profile.GotoAsync(app.Url("/orders/42/edit").ToString());
         Assert.Equal(200, deep?.Status);
         Assert.Equal(Encoding.UTF8.GetString(FixtureFiles.Spa("app1")["index.html"]), await deep!.TextAsync());
         await Assertions.Expect(profile.Page.Locator("#session-state")).ToHaveTextAsync(Profile.SignedInState);
 
-        IResponse? missing = await profile.Page.GotoAsync(app.Url("/assets/missing.0badf00d.js").ToString());
+        IResponse? missing = await profile.GotoAsync(app.Url("/assets/missing.0badf00d.js").ToString());
         Assert.Equal(Contract.Error("not_found").Status, missing?.Status);
     }
 
@@ -73,17 +73,47 @@ public sealed class ShellTests
 
         try
         {
-            await stack.SwitchReleaseAsync(app, second);
+            await stack.SwitchReleaseAsync(app, second, TestContext.Current.CancellationToken);
             await ReloadUntilMarkerAsync(stack, profile, "Fixture SPA app1, second release");
         }
-        finally
+        catch (Exception failure)
         {
-            // Switched back even when the row fails, so the cell is left serving what it served.
-            await stack.SwitchReleaseAsync(app, first);
+            // Switched back even when the row fails, so the cell is left serving what it served. A
+            // switch-back that fails too is reported beside the row's own failure rather than in place of it.
+            try
+            {
+                await SwitchBackAsync(stack, app, first);
+            }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException(failure, cleanup);
+            }
+
+            throw;
         }
+
+        await SwitchBackAsync(stack, app, first);
 
         await ReloadUntilMarkerAsync(stack, profile, "Fixture SPA app1");
         await Assertions.Expect(profile.Page.Locator("#session-state")).ToHaveTextAsync(Profile.SignedInState);
+    }
+
+    /// <summary>
+    /// How long the switch-back may take: one <c>spactl release activate</c>, which on the cell may first
+    /// build spactl through <c>dotnet run</c> and then writes one registry revision, with no wait.
+    /// </summary>
+    private static readonly TimeSpan SwitchBackBound = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Switches the app back to <paramref name="release"/> under a bound of its own rather than the
+    /// test's token, as <see cref="DeployedStack.OffboardAsync"/> takes app 3 off: a row cancelled while
+    /// it waits for the second release (<see cref="ReloadUntilMarkerAsync"/>'s delay runs on the test's
+    /// token) would otherwise cancel the switch-back too and leave the cell serving the second release.
+    /// </summary>
+    private static async Task SwitchBackAsync(IBrowserStack stack, HarnessApp app, string release)
+    {
+        using CancellationTokenSource bound = new(SwitchBackBound);
+        await stack.SwitchReleaseAsync(app, release, bound.Token);
     }
 
     /// <summary>
@@ -96,7 +126,7 @@ public sealed class ShellTests
         System.Diagnostics.Stopwatch waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            await profile.Page.ReloadAsync();
+            await Redacted.PlaywrightAsync(() => profile.Page.ReloadAsync());
             string? text = await profile.Page.Locator("#marker").TextContentAsync();
             if (text == marker || waited.Elapsed >= stack.RegistryPropagation)
             {

@@ -35,7 +35,7 @@ public sealed class OnboardingTests
             HarnessApp app3 = await stack.OnboardAsync("app3");
 
             List<Uri> navigations = user.RecordNavigations();
-            await user.Page.GotoAsync(app3.Url("/").ToString());
+            await user.GotoAsync(app3.Url("/").ToString());
             await stack.CompleteLoginAsync(user, app3);
             await user.WaitSignedInAsync(app3);
 
@@ -60,7 +60,7 @@ public sealed class OnboardingTests
             // No restart: apps 1 and 2 kept their sessions throughout.
             foreach (HarnessApp app in new[] { app1, app2 })
             {
-                await user.Page.GotoAsync(app.Url("/").ToString());
+                await user.GotoAsync(app.Url("/").ToString());
                 await user.WaitSignedInAsync(app);
             }
 

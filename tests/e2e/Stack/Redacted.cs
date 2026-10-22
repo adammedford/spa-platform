@@ -1,3 +1,7 @@
+using System.Runtime.ExceptionServices;
+using System.Text.RegularExpressions;
+using Microsoft.Playwright;
+
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
@@ -6,7 +10,7 @@ namespace Gateway.E2ETests.Stack;
 /// authorization <c>code</c>, and a sitting posts its output on an issue; AGENTS.md has no code or
 /// state value printed anywhere.
 /// </summary>
-internal static class Redacted
+internal static partial class Redacted
 {
     public static string Url(Uri url) => url.GetLeftPart(UriPartial.Path);
 
@@ -15,4 +19,50 @@ internal static class Redacted
 
     /// <summary>The URLs in order, each as <see cref="Url(Uri)"/> prints it, joined with " -> ".</summary>
     public static string Urls(IEnumerable<Uri> urls) => string.Join(" -> ", urls.Select(Url));
+
+    /// <summary>
+    /// Runs a Playwright call and, when it fails, rethrows its failure with every URL in the message as
+    /// <see cref="Url(string)"/> prints it. A Playwright timeout's message carries a call log of the URLs
+    /// the page passed through (a login's callback with its code and state among them), and a failed
+    /// navigation names its target, which a row may have built with a code in it (#253). The failure
+    /// keeps its type (a timeout stays a <see cref="System.TimeoutException"/>, which is what
+    /// Microsoft.Playwright throws for one: https://playwright.dev/dotnet/docs/api/class-timeouterror
+    /// catches it as <c>TimeoutException</c>, and 1.63.0 declares no timeout type of its own) and its
+    /// stack trace, and loses its inner exception, whose message xUnit would print.
+    /// </summary>
+    public static async Task PlaywrightAsync(Func<Task> call)
+    {
+        try
+        {
+            await call();
+        }
+        catch (Exception failed) when (failed is PlaywrightException or System.TimeoutException)
+        {
+            throw Scrubbed(failed);
+        }
+    }
+
+    /// <inheritdoc cref="PlaywrightAsync(Func{Task})"/>
+    public static async Task<T> PlaywrightAsync<T>(Func<Task<T>> call)
+    {
+        try
+        {
+            return await call();
+        }
+        catch (Exception failed) when (failed is PlaywrightException or System.TimeoutException)
+        {
+            throw Scrubbed(failed);
+        }
+    }
+
+    private static Exception Scrubbed(Exception failed)
+    {
+        string message = AbsoluteUrl().Replace(failed.Message, url => Url(url.Value));
+        Exception scrubbed = failed is System.TimeoutException ? new System.TimeoutException(message) : new PlaywrightException(message);
+        return failed.StackTrace is { } trace ? ExceptionDispatchInfo.SetRemoteStackTrace(scrubbed, trace) : scrubbed;
+    }
+
+    /// <summary>A scheme, <c>://</c>, and everything up to whitespace, a quote or an angle bracket.</summary>
+    [GeneratedRegex("""[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+""")]
+    private static partial Regex AbsoluteUrl();
 }

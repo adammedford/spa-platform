@@ -129,7 +129,7 @@ public sealed class LocalStack : IBrowserStack
         Harness.PublishReleaseAsync(appId, release, files, TestContext.Current.CancellationToken);
 
     /// <summary>A new registry revision, written and polled at once (Gateway.TestHarness), as <c>spactl release activate</c> writes one.</summary>
-    public async Task SwitchReleaseAsync(HarnessApp app, string release)
+    public async Task SwitchReleaseAsync(HarnessApp app, string release, CancellationToken ct)
     {
         Platform.Registry.RefreshOutcome outcome = await Harness.UpdateRegistryAsync(document =>
         {
@@ -140,7 +140,7 @@ public sealed class LocalStack : IBrowserStack
                     entry["release"] = release;
                 }
             }
-        }, TestContext.Current.CancellationToken);
+        }, ct);
         Assert.Equal(Platform.Registry.RefreshOutcome.Swapped, outcome);
     }
 
@@ -203,7 +203,7 @@ public sealed class LocalStack : IBrowserStack
     public async Task OpenForeignPageAsync(Profile profile, Uri url, string html)
     {
         LoadBalancer.ServeForeign(url, html);
-        await profile.Page.GotoAsync(url.ToString());
+        await profile.GotoAsync(url.ToString());
     }
 
     /// <summary>The gateway's log lines, as JSON, whose <c>msg</c> starts with <paramref name="message"/>.</summary>

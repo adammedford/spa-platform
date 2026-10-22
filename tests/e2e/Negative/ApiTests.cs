@@ -118,7 +118,7 @@ public sealed class ApiTests
 
         // Controls: each token is good at its own API.
         Assert.Equal(200, (await profile.FetchAsync("/api/reports/whoami")).Status);
-        await profile.Page.GotoAsync(stack.App("app1").Url("/").ToString());
+        await profile.GotoAsync(stack.App("app1").Url("/").ToString());
         await profile.WaitSignedInAsync(stack.App("app1"));
         Assert.Equal(200, (await profile.FetchAsync("/api/orders/whoami")).Status);
     }
