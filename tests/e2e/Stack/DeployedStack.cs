@@ -67,12 +67,14 @@ public sealed class DeployedStack : IBrowserStack
     internal static readonly TimeSpan ClockMargin = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// How long after the last stack on the cell ended a new one starts (<see cref="StartDelay"/>). The
-    /// last stack's lines carry AWS times up to a moment after it ended, since the request line is
-    /// written after the rest of the pipeline returns (contracts/telemetry.md) and a request the browser
-    /// left in flight ends later still; and a mark reaches <see cref="ClockMargin"/> back of a workstation
-    /// clock that may itself be that far behind AWS's. Twice the margin and two seconds puts every such
-    /// line before this stack's start and every mark it makes.
+    /// How long after the last stack on the cell ended a new one starts (<see cref="StartDelay"/>). A mark
+    /// reaches <see cref="ClockMargin"/> back of a workstation clock that may itself be that far behind
+    /// AWS's. Twice the margin and two seconds puts before this stack's start and every mark it makes
+    /// each request line with a rule that the last stack caused, which is all
+    /// <see cref="AssertRuleLoggedAsync"/>, the one read after a mark, matches: a rule line is a refusal,
+    /// written as the pipeline returns from the stage that ended the request (contracts/telemetry.md), so a
+    /// moment after the request that caused it. It does not hold for every line the last stack caused: a
+    /// request the browser left in flight can end, and its line be written, later than that.
     /// </summary>
     internal static readonly TimeSpan Quiet = (2 * ClockMargin) + TimeSpan.FromSeconds(2);
 
@@ -84,8 +86,8 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>
     /// The request lines a rule assertion has already matched, by trace and span, in this process: a
     /// second refusal with the same rule must find its own line, not the first one's (N-06 asserts
-    /// four in a row). A line an earlier test caused, asserted or not, falls before this stack's marks
-    /// (<see cref="Quiet"/>).
+    /// four in a row). A rule line an earlier test caused, asserted or not, falls before this stack's
+    /// marks (<see cref="Quiet"/>); a line with no rule may not, and no read after a mark matches one.
     /// </summary>
     private static readonly HashSet<string> Claimed = [];
 
