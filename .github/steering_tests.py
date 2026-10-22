@@ -1650,8 +1650,8 @@ class SteeringTests(unittest.TestCase):
         sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn("STEERING FAILED: a commit sets a change request to decided on no confirmed "
-                      "answer.", out)
+        self.assertIn("STEERING FAILED: a commit sets a change request to a decision on no "
+                      "confirmed answer.", out)
         self.assertIn(undecides(sha, subject, request, "#143"), out)
 
     def test_a_change_request_added_as_decided_with_no_trailer_is_held(self):
@@ -1768,7 +1768,7 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
         self.assertIn(unreadable(sha, subject, request), out)
-        self.assertNotIn("a commit sets a change request to decided", out)
+        self.assertNotIn("a commit sets a change request to a decision", out)
 
     def test_a_change_request_naming_any_state_but_open_is_a_decision(self):
         """`accepted` decides a request as surely as `decided`: held on a ticket alone, passed on a
@@ -1784,7 +1784,7 @@ class SteeringTests(unittest.TestCase):
                 sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
                 code, out = self.check("--base", base)
                 self.assertEqual(1, code, out)
-                self.assertIn("STEERING FAILED: a commit sets a change request to decided on no "
+                self.assertIn("STEERING FAILED: a commit sets a change request to a decision on no "
                               "confirmed answer.", out)
                 self.assertIn(undecides(sha, subject, request, "#143", state=state), out)
                 self.git("reset", "--quiet", "--hard", base)
@@ -1807,6 +1807,80 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertNotIn("STEERING FAILED", out)
+
+    def test_a_second_status_naming_another_state_is_held_as_unreadable(self):
+        """The second #188 review: a request left `- **Status:** open` with a decided Status added
+        under a Decision heading read as open at the commit and at its parent, so the decision
+        passed with no confirmed answer. Two Status lines naming different states cannot say which
+        holds, so the file is held, added or edited, whatever the trailer cites."""
+        self.github(159)
+        self.comments({COMMENT_ID: COMMENT})
+        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
+        self.write(request, OPEN_REQUEST)
+        base = self.baseline()
+        self.append(request, "## Decision\n\n- **Status:** decided, 2026-10-22. Accepted.")
+        for authority in ("#159", COMMENT):
+            with self.subTest(edited_with=authority):
+                subject = f"The change request, decided under its open Status, on {authority}"
+                sha = self.commit(message(subject, authority), made=DECIDED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(UNREADABLE_HEADLINE, out)
+                self.assertIn(unreadable(sha, subject, request), out)
+                self.git("reset", "--quiet", "--soft", base)
+        self.git("reset", "--quiet", "--hard", base)
+        added = f"{steering.CHANGE_REQUESTS}issue-161-a-request.md"
+        self.write(added, OPEN_REQUEST + "\n## Decision\n\n- **Status:** accepted, 2026-10-22.\n")
+        subject = "Ask for a contract change, already accepted below"
+        sha = self.commit(message(subject), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(unreadable(sha, subject, added), out)
+
+    def test_a_status_named_twice_in_the_same_state_is_read_as_that_state(self):
+        """Only a disagreement is ambiguous: a request that repeats its state reads as that state,
+        so an open one added twice-labelled is still free, and a decided one is still a decision
+        a confirmed answer settles."""
+        self.github(159)
+        self.comments({COMMENT_ID: COMMENT})
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-1-a-request.md",
+                   OPEN_REQUEST + "\n## Status\n\n- **Status:** open, still.\n")
+        self.commit(message("Ask for a contract change, open twice"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        request = f"{steering.CHANGE_REQUESTS}issue-2-a-request.md"
+        self.write(request, DECIDED_REQUEST + "\n- **Status:** Decided, as above.\n")
+        subject = "The change request, decided twice on a ticket"
+        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertNotIn(UNREADABLE_HEADLINE, out)
+        self.assertIn(undecides(sha, subject, request, "#159"), out)
+        self.git("commit", "--quiet", "--amend", "-m",
+                 message("The change request, decided twice as Adam confirmed", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertNotIn("STEERING FAILED", out)
+
+    def test_an_open_status_in_another_shape_is_held_and_told_the_shape_to_write(self):
+        """The second #188 review: `open` in code marks or italics, or a plain `Status:` label,
+        says open and is held all the same. That is kept, not widened (#193, Q6 on #226): the rule
+        fails closed, and the message names the shape to write, so a held lane rewrites one line."""
+        base = self.baseline()
+        shapes = (("code", "- **Status:** `open`"), ("italic", "- **Status:** _open_"),
+                  ("plain label", "- Status: open"))
+        for number, (shape, line) in enumerate(shapes, start=1):
+            with self.subTest(shape=shape):
+                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
+                self.write(request, f"# A change request\n\n- **Raised by:** a lane\n{line}\n")
+                subject = f"Ask for a contract change, open as {shape}"
+                sha = self.commit(message(subject), made=DECIDED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(unreadable(sha, subject, request), out)
+                self.assertIn("`- **Status:** open`", out)
+                base = sha
 
     def test_offline_a_steering_commit_naming_no_authority_still_fails(self):
         """The trailer's presence needs no network, so no network is no excuse for its absence.
