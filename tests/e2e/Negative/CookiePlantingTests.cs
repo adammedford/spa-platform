@@ -94,9 +94,9 @@ public sealed class CookiePlantingTests
         Assert.DoesNotContain(await victim.Context.CookiesAsync(), cookie => loginState.Any(planted => planted.Name == cookie.Name));
 
         LogMark mark = stack.MarkLog();
-        IResponse? rejected = await victim.Page.RunAndWaitForResponseAsync(
+        IResponse? rejected = await Redacted.PlaywrightAsync(() => victim.Page.RunAndWaitForResponseAsync(
             () => victim.Page.EvaluateAsync("(url) => { window.location.assign(url); }", callback.ToString()),
-            response => response.Url == callback.ToString());
+            response => response.Url == callback.ToString()));
 
         // So the callback is rejected, and no session is created: not the attacker's, not anyone's.
         Assert.Equal(400, rejected.Status); // Not an Errors row: the callback's failure page (Errors prose), not a problem body.
@@ -111,7 +111,7 @@ public sealed class CookiePlantingTests
         // to, is a login. The victim's refusal was the missing cookies, not a broken code. Cognito's code
         // is good once (https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html), and
         // the victim's sign-in and the refusal took seconds and spent none, so on the cell it is still good here.
-        await attacker.Page.GotoAsync(callback.ToString());
+        await attacker.GotoAsync(callback.ToString());
         await attacker.WaitSignedInAsync(app1);
     }
 

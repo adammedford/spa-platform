@@ -227,7 +227,7 @@ public sealed class DeployedStack : IBrowserStack
     private async Task FillLoginFormIfShownAsync(Profile profile, Func<string, bool> arrived)
     {
         IPage page = profile.Page;
-        await page.WaitForURLAsync(url => arrived(url) || new Uri(url).Host == ProviderHost);
+        await Redacted.PlaywrightAsync(() => page.WaitForURLAsync(url => arrived(url) || new Uri(url).Host == ProviderHost));
         if (new Uri(page.Url).Host != ProviderHost)
         {
             return;
@@ -323,7 +323,7 @@ public sealed class DeployedStack : IBrowserStack
     public async Task OpenForeignPageAsync(Profile profile, Uri url, string html)
     {
         foreign.Serve(url, html);
-        await profile.Page.GotoAsync(url.ToString());
+        await profile.GotoAsync(url.ToString());
     }
 
     private static string ClaimOf(JsonElement line) =>
@@ -350,9 +350,12 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>Cognito signs the user out at its logout endpoint, so the next authorization shows its login form, and the browser stays there.</summary>
     public async Task StopAtProviderLoginAsync(Profile profile, Func<Task> action)
     {
-        await action();
-        await profile.Page.WaitForURLAsync(url => new Uri(url).Host == ProviderHost && new Uri(url).AbsolutePath != "/logout");
-        await Assertions.Expect(profile.Page.Locator("input[name='username']:visible").First).ToBeVisibleAsync();
+        await Redacted.PlaywrightAsync(async () =>
+        {
+            await action();
+            await profile.Page.WaitForURLAsync(url => new Uri(url).Host == ProviderHost && new Uri(url).AbsolutePath != "/logout");
+            await Assertions.Expect(profile.Page.Locator("input[name='username']:visible").First).ToBeVisibleAsync();
+        });
     }
 
     /// <summary>The release the live registry gives the app, read from the bucket (<see cref="CellAws.ReleaseOfAsync"/>).</summary>
@@ -383,8 +386,8 @@ public sealed class DeployedStack : IBrowserStack
         }
     }
 
-    public async Task SwitchReleaseAsync(HarnessApp app, string release) =>
-        await SpactlAsync(["release", "activate", app.AppId, release, "--config", PlatformConfig("switching a release on the cell runs spactl release activate"), "--outputs", outputsPath]);
+    public async Task SwitchReleaseAsync(HarnessApp app, string release, CancellationToken ct) =>
+        await SpactlAsync(["release", "activate", app.AppId, release, "--config", PlatformConfig("switching a release on the cell runs spactl release activate"), "--outputs", outputsPath], ct);
 
     /// <summary>
     /// The onboarding the plan gives for a third SPA (<see cref="CellOnboarding"/>): the apps root's
@@ -435,10 +438,12 @@ public sealed class DeployedStack : IBrowserStack
             ? [spactl]
             : ["dotnet", "run", "--project", Path.Combine(FixtureFiles.RepositoryRoot, "tools", "spactl"), "--"];
 
-    private static Task<string> SpactlAsync(string[] arguments)
+    private static Task<string> SpactlAsync(string[] arguments) => SpactlAsync(arguments, TestContext.Current.CancellationToken);
+
+    private static Task<string> SpactlAsync(string[] arguments, CancellationToken ct)
     {
         string[] command = Spactl();
-        return new ProcessCommandRunner().RunAsync(command[0], [.. command.Skip(1), .. arguments], TestContext.Current.CancellationToken);
+        return new ProcessCommandRunner().RunAsync(command[0], [.. command.Skip(1), .. arguments], ct);
     }
 
     private static bool MessageStarts(JsonElement line, string message) =>

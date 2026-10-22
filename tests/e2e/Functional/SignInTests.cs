@@ -26,7 +26,7 @@ public sealed class SignInTests
         // and its script reached that app's session: both are signed in at once in one browser.
         foreach (HarnessApp app in new[] { app1, app2 })
         {
-            await profile.Page.GotoAsync(app.Url("/").ToString());
+            await profile.GotoAsync(app.Url("/").ToString());
             await profile.WaitSignedInAsync(app);
             Assert.Equal(app.AppId, await profile.Page.Locator("#app").GetAttributeAsync("data-app"));
         }

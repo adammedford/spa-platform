@@ -25,17 +25,24 @@ public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage 
     /// </summary>
     public async Task SignInAsync(HarnessApp app)
     {
-        await Page.GotoAsync(app.Url("/bff/login").ToString());
-        await Stack.CompleteLoginAsync(this, app);
+        await GotoAsync(app.Url("/bff/login").ToString());
+        await Redacted.PlaywrightAsync(() => Stack.CompleteLoginAsync(this, app));
         await WaitSignedInAsync(app);
     }
 
     /// <summary>Waits until the page is the app's shell and the shell says it is signed in.</summary>
-    public async Task WaitSignedInAsync(HarnessApp app)
+    public Task WaitSignedInAsync(HarnessApp app) => Redacted.PlaywrightAsync(async () =>
     {
         await Page.WaitForURLAsync(app.Url("/").ToString());
         await Assertions.Expect(Page.Locator("#session-state")).ToHaveTextAsync(SignedInState);
-    }
+    });
+
+    /// <summary>
+    /// The page's navigation to <paramref name="url"/>, whose failure prints no URL's query
+    /// (<see cref="Redacted.PlaywrightAsync{T}"/>): the target may be a callback a row built with a code
+    /// and state, and a navigation that redirects through a login passes one.
+    /// </summary>
+    public Task<IResponse?> GotoAsync(string url) => Redacted.PlaywrightAsync(() => Page.GotoAsync(url));
 
     /// <summary>
     /// Puts the page on the app's origin without starting a login: <c>/healthz</c> answers on any host,
@@ -43,7 +50,7 @@ public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage 
     /// </summary>
     public async Task OnOriginOfAsync(HarnessApp app)
     {
-        IResponse? response = await Page.GotoAsync(app.Url("/healthz").ToString());
+        IResponse? response = await GotoAsync(app.Url("/healthz").ToString());
         Assert.Equal(200, response?.Status);
     }
 
@@ -54,7 +61,7 @@ public sealed class Profile(IBrowserStack stack, IBrowserContext context, IPage 
     /// callback URL.
     /// </summary>
     public Task<Uri> StopAtCallbackAsync(HarnessApp app, Func<Task>? start = null) =>
-        Stack.StopAtCallbackAsync(this, app, start ?? (() => Page.GotoAsync(app.Url("/bff/login").ToString())));
+        Redacted.PlaywrightAsync(() => Stack.StopAtCallbackAsync(this, app, start ?? (() => GotoAsync(app.Url("/bff/login").ToString()))));
 
     /// <summary>
     /// <c>fetch()</c> from the current page, as an SPA's script makes it, and what the script can read
