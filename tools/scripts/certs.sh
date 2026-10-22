@@ -37,7 +37,12 @@ umask 077
 
 CELL="${SPA_CELL:-poc}"
 DOMAIN="${SPA_CERT_DOMAIN:-spa-poc.test}"
-REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+# The Region is resolved as tools/preflight.sh resolves the one a shell builds in: AWS_REGION, then
+# AWS_DEFAULT_REGION, then the profile's configured Region, with --region over all three. There is
+# no fallback. A us-east-1 default once sent the import to a Region the platform root never reads,
+# from a shell preflight had passed on the profile's Region alone (#118, #241); resolve_region
+# refuses instead.
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 CERTS_DIR="${SPA_CERTS_DIR:-}"
 VERIFY_HOST=""
 VERIFY_PORT="${SPA_VERIFY_PORT:-8443}"
@@ -92,7 +97,9 @@ usage() {
 Options
   --cell NAME        Cell name. Default: ${CELL}. Part of every resource name.
   --domain NAME      Certificate domain, without the wildcard. Default: ${DOMAIN}.
-  --region NAME      AWS region for the ACM import. Default: ${REGION}.
+  --region NAME      AWS Region for ACM. Default: AWS_REGION, then
+                     AWS_DEFAULT_REGION, then the profile's region, as
+                     tools/preflight.sh resolves it. None of them is refused.
   --dir PATH         Where keys and certificates live. Default: <repo>/.certs.
   --host NAME        Host for 'verify'. Default: app1.<domain>.
   --port N           Port for 'verify'. Default: ${VERIFY_PORT}.
@@ -118,7 +125,11 @@ while [ $# -gt 0 ]; do
       ;;
     --cell) CELL="${2:-}"; shift ;;
     --domain) DOMAIN="${2:-}"; shift ;;
-    --region) REGION="${2:-}"; shift ;;
+    --region)
+      REGION="${2:-}"
+      [ -n "$REGION" ] || die "--region needs a Region name, such as the one tools/aws-project.env names"
+      shift
+      ;;
     --dir) CERTS_DIR="${2:-}"; shift ;;
     --host) VERIFY_HOST="${2:-}"; shift ;;
     --port) VERIFY_PORT="${2:-}"; shift ;;
@@ -203,8 +214,23 @@ pick_openssl() {
 
 OPENSSL_BIN="$(pick_openssl)"
 
-need_aws() {
+# Fills REGION from the profile when neither --region nor the environment named one, the last step
+# of preflight.sh's order, and leaves it empty when the profile names none either.
+lookup_region() {
+  [ -n "$REGION" ] && return 0
+  have aws || return 0
+  REGION="$(aws configure get region 2>/dev/null || true)"
+}
+
+resolve_region() {
   have aws || die "the AWS CLI v2 is not installed. brew install awscli"
+  lookup_region
+  [ -n "$REGION" ] ||
+    die "no Region: AWS_REGION, AWS_DEFAULT_REGION and the profile's region are all unset, and '${COMMAND}' will not guess one. set -a; . tools/aws-project.env; set +a, or pass --region."
+}
+
+need_aws() {
+  resolve_region
   aws sts get-caller-identity >/dev/null 2>&1 ||
     die "no working AWS credentials for region ${REGION}. Run 'aws configure sso' or 'aws configure', then retry."
 }
@@ -715,7 +741,8 @@ start_listener() {
 # --- status ------------------------------------------------------------------
 
 cmd_status() {
-  step "Status: cell ${CELL}, domain ${DOMAIN}, region ${REGION}"
+  lookup_region
+  step "Status: cell ${CELL}, domain ${DOMAIN}, region ${REGION:-not resolved}"
   note "directory: ${CERTS_DIR}"
 
   if [ -f "$CA_CERT" ]; then
@@ -737,7 +764,9 @@ cmd_status() {
     fi
   fi
 
-  if have aws && aws sts get-caller-identity >/dev/null 2>&1; then
+  if [ -z "$REGION" ]; then
+    note "ACM: not checked, because no Region resolves: AWS_REGION, AWS_DEFAULT_REGION and the profile's region are all unset"
+  elif have aws && aws sts get-caller-identity >/dev/null 2>&1; then
     local arn
     arn="$(find_acm_certificate)"
     if [ -n "$arn" ]; then
@@ -769,6 +798,8 @@ case "$COMMAND" in
   verify) cmd_verify ;;
   status) cmd_status ;;
   all)
+    # The import is last, so a missing Region refuses before anything is issued or trusted.
+    resolve_region
     cmd_issue
     cmd_trust
     cmd_import
