@@ -182,8 +182,7 @@ and command line, but for `-b`, which it refuses, with the cases on threads, one
 unless `SCRIPT_TESTS_JOBS` names another number. It uses nothing outside the standard library
 either, and has a companion of its own, `tools/companion_runner_tests.py`, in both jobs.
 
-The cell scripts under `tools/scripts/` have companions of the same shape, each in its own step in
-both jobs (#243). `tools/scripts/tunnel.sh` and `tools/scripts/verify-tunnel.sh` have
+`tools/scripts/tunnel.sh` and `tools/scripts/verify-tunnel.sh` have
 `tools/scripts/tunnel_tests.py` (#57), in both jobs: doubles for aws, session-manager-plugin and
 curl, and the real curl against two loopback listeners, so no case reaches AWS.
 `tools/scripts/seed.sh`, `deploy.sh`, `rollback.sh` and `teardown.sh` have
