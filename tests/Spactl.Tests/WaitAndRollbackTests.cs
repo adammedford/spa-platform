@@ -38,6 +38,10 @@ public sealed class WaitAndRollbackTests : IDisposable
 
         Assert.Equal(4, spactl.Readyz.Requests.Count);
         Assert.All(spactl.Readyz.Requests, uri => Assert.Equal(new Uri(Gateway + "/readyz"), uri));
+
+        // The stub's body names an instance now, as the gateway's does (change request P2-5); without
+        // --instances the wait reads the revision alone and says what it said before.
+        Assert.Equal($"Ready: {Gateway}/readyz reports revision 1.{Environment.NewLine}", spactl.Out.ToString());
     }
 
     [Fact]
@@ -67,6 +71,104 @@ public sealed class WaitAndRollbackTests : IDisposable
     {
         Assert.Equal(1, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "1", "--timeout", "0"));
         Assert.Contains("HTTP 503", spactl.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    // ---- --instances (change request P2-5, decision 5; issue #312) ------------------------------
+
+    /// <summary>
+    /// Two instances behind one URL, answered in turn as the ALB spreads reads. The wait ends on the
+    /// sixth read, the first at which both have answered at 2: one instance at 2 says nothing of the
+    /// other (P2-5, "The proof", item 2).
+    /// </summary>
+    [Fact]
+    public async Task Wait_with_instances_returns_only_after_every_listed_instance_answers_at_the_revision()
+    {
+        spactl.Readyz.Script.AddRange([
+            ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 1),
+            ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 1),
+            ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 2),
+            ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 2),
+        ]);
+
+        Assert.Equal(0, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "2", "--instances", "aaaa,bbbb"));
+
+        Assert.Equal(6, spactl.Readyz.Requests.Count);
+        Assert.Contains("aaaa", spactl.Out.ToString(), StringComparison.Ordinal);
+        Assert.Contains("bbbb", spactl.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Wait_with_instances_counts_a_later_revision_and_ignores_the_order_of_the_list()
+    {
+        spactl.Readyz.Script.AddRange([ReadyzAnswer.At("bbbb", 5), ReadyzAnswer.At("aaaa", 3)]);
+
+        Assert.Equal(0, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "3", "--instances", "aaaa,bbbb"));
+
+        Assert.Equal(2, spactl.Readyz.Requests.Count);
+    }
+
+    /// <summary>
+    /// At the deadline the wait names the instance still behind with the revision it last gave, and
+    /// not the one that reached it. The clock moves a second per read, so a five-second deadline
+    /// passes after several reads of each.
+    /// </summary>
+    [Fact]
+    public async Task Wait_with_instances_names_the_instance_still_behind_at_the_deadline()
+    {
+        spactl.Readyz.Script.AddRange([ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 1)]);
+        spactl.Readyz.Clock = spactl.Clock;
+
+        Assert.Equal(1, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "2", "--instances", "aaaa,bbbb", "--timeout", "5"));
+
+        string error = spactl.Error.ToString();
+        Assert.True(spactl.Readyz.Requests.Count > 2);
+        Assert.Contains("instance bbbb last answered revision 1", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("instance aaaa", error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A 503 carries no body, so it names no instance: it counts for none, is printed unattributed,
+    /// and the listed instance is named as never answered (P2-5, "The proof", item 2; decision 3).
+    /// </summary>
+    [Fact]
+    public async Task Wait_with_instances_prints_a_503_unattributed_and_names_the_listed_instance_never_answered()
+    {
+        Assert.Equal(1, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "1", "--instances", "aaaa", "--timeout", "0"));
+
+        string error = spactl.Error.ToString();
+        Assert.Contains("instance aaaa never answered", error, StringComparison.Ordinal);
+        Assert.Contains("the last answer that named no instance was HTTP 503", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("aaaa last answered", error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An instance that is not listed, such as a task that started during the wait and read the
+    /// registry when it did, is printed and neither required nor fatal (P2-5, decision 5).
+    /// </summary>
+    [Fact]
+    public async Task Wait_with_instances_prints_an_unlisted_instance_once_and_does_not_wait_for_it()
+    {
+        spactl.Readyz.Script.AddRange([
+            ReadyzAnswer.At("cccc", 1), ReadyzAnswer.At("cccc", 1), ReadyzAnswer.At("aaaa", 2),
+        ]);
+
+        Assert.Equal(0, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "2", "--instances", "aaaa"));
+
+        Assert.Equal(3, spactl.Readyz.Requests.Count);
+        string output = spactl.Out.ToString();
+        Assert.Equal(1, output.Split("cccc").Length - 1);
+    }
+
+    [Theory]
+    [InlineData("aaaa,,bbbb")]
+    [InlineData(",aaaa")]
+    [InlineData("aaaa,")]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task Wait_with_an_empty_instance_is_a_usage_error(string instances)
+    {
+        Assert.Equal(2, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "1", "--instances", instances));
+        Assert.Empty(spactl.Readyz.Requests);
     }
 
     [Theory]

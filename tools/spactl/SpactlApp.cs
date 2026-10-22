@@ -21,7 +21,8 @@ public static class SpactlApp
           spactl release activate  <appId> <release> --config <platform-config.json>
           spactl app add           <definition.json> [--release <release>] --config <platform-config.json>
           spactl app remove        <appId> --config <platform-config.json>
-          spactl wait              --url <gateway origin> --revision <N> [--timeout <seconds>]
+          spactl wait              --url <gateway origin> --revision <N> [--instances <id,id,...>]
+                                   [--timeout <seconds>]
 
         The bucket and region come from --outputs (default infra/envs/poc/outputs.json), or --bucket
         [--region] names them. --config is a platform configuration file in the shape of
@@ -41,7 +42,7 @@ public static class SpactlApp
         ["release activate"] = [.. Bucket, "--config"],
         ["app add"] = [.. Bucket, "--config", "--release"],
         ["app remove"] = [.. Bucket, "--config"],
-        ["wait"] = ["--url", "--revision", "--timeout"],
+        ["wait"] = ["--url", "--revision", "--instances", "--timeout"],
     };
 
     public static async Task<int> RunAsync(IReadOnlyList<string> args, SpactlEnvironment environment, CancellationToken ct)

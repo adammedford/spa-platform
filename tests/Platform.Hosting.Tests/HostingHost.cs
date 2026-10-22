@@ -79,11 +79,16 @@ public sealed class HostingHost : IAsyncDisposable
     /// <c>false</c> by default to exercise component pipelines without the feature, as required by
     /// contracts/changes/6.4-request-telemetry-feature.md.
     /// </param>
+    /// <param name="instance">
+    /// The instance <c>/readyz</c> names, registered before <c>AddPlatformHosting</c>; null leaves the
+    /// entry point's own, which off ECS is an id generated for this host.
+    /// </param>
     public static async Task<HostingHost> StartAsync(
         RegistrySnapshot initial,
         CancellationToken ct,
         IObjectStore? store = null,
-        bool telemetry = false)
+        bool telemetry = false,
+        GatewayInstance? instance = null)
     {
         InMemoryRegistry registry = new(initial);
         Terminal terminal = new();
@@ -98,6 +103,13 @@ public sealed class HostingHost : IAsyncDisposable
                     if (store is not null)
                     {
                         builder.Services.AddSingleton(store);
+                    }
+
+                    // Before AddPlatformHosting, as the harness gives one (change request P2-5, decision
+                    // 2): the entry point registers its own only when none is there.
+                    if (instance is not null)
+                    {
+                        builder.Services.AddSingleton(instance);
                     }
 
                     builder.AddPlatformHosting();

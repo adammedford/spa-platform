@@ -204,10 +204,13 @@ public sealed class HostResolutionTests
         await using HostingHost gateway = await HostingHost.StartAsync(
             Snapshots.With(3, App1, App2), Ct, telemetry: true);
 
+        // Only the request's lines: the host logs its instance id at start-up (Platform.Hosting.Instance,
+        // change request P2-5), which is not a rejection.
+        int before = gateway.Log.Lines.Count;
         AssertNotFound(await gateway.GetAsync("nope.example", "/", Ct));
 
         Assert.Equal("host.unknown", gateway.LastTelemetry?.Rule);
-        Assert.DoesNotContain(gateway.Log.Lines, line => line.Category == "Platform.Hosting"
+        Assert.DoesNotContain(gateway.Log.Lines.Skip(before), line => line.Category == "Platform.Hosting"
             || line.Category.StartsWith("Platform.Hosting.", StringComparison.Ordinal));
     }
 
