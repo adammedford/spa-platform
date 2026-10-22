@@ -516,7 +516,6 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertEqual([], case.start_sessions())
         self.assertIn(f"no running {CONTAINER} container", result.stderr)
 
-
     def test_the_session_s_own_exit_status_is_the_script_s(self):
         world = default_world()
         world["start_session_status"] = 255
