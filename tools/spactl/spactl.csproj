@@ -20,7 +20,10 @@
 
   <!-- The project's profile signs in with login_session, which the SDK's default chain resolves only
        when this assembly is present at runtime; it is loaded by name, so nothing fails at compile time
-       without it (#206, docs/dependencies.md). tests/Spactl.Tests/LoginSessionProfileTests guards it. -->
+       without it (#206, docs/dependencies.md). AWS documents the requirement: "Failure to reference
+       these packages will result in a runtime exception", under "Login using console credentials" at
+       https://docs.aws.amazon.com/sdk-for-net/v4/developer-guide/creds-idc.html#login-con-creds.
+       tests/Spactl.Tests/LoginSessionProfileTests guards it. -->
   <ItemGroup>
     <PackageReference Include="AWSSDK.Signin" />
   </ItemGroup>

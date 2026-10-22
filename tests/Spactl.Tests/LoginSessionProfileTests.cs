@@ -12,6 +12,8 @@ namespace Spactl.Tests;
 /// spactl failed at sitting C. spactl's live store builds its S3 client from the SDK's default chain
 /// (<see cref="SpactlEnvironment.Live"/>), so this test loads that chain against a profile file and needs
 /// the assembly to arrive through spactl's own references: this project references no AWS package.
+/// AWS documents the requirement under "Login using console credentials":
+/// https://docs.aws.amazon.com/sdk-for-net/v4/developer-guide/creds-idc.html#login-con-creds
 /// </summary>
 public sealed class LoginSessionProfileTests : IDisposable
 {
