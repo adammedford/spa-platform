@@ -1,4 +1,4 @@
-# ADR-0027: Back-channel logout outside `/bff`, ending a subject's sessions through a session index that lands with its endpoint
+# ADR-0028: Back-channel logout outside `/bff`, ending a subject's sessions through a session index that lands with its endpoint
 
 - **Status:** Accepted
 - **Date:** 2026-10-21
@@ -32,9 +32,9 @@ And `SessionRecord`, frozen at G1b, carries `AppId` and `Subject` and no provide
 2. **The endpoint validates the spec's mandatory steps** (section 2.6) through
    `JsonWebTokenHandler` against the scheme's discovery configuration, and checks six claims
    itself: `events`, no `nonce`, `sub`, `typ` absent or `logout+jwt`, `iat` present and no later
-   than now plus the handler's clock skew, and `jti` present. Section 2.4 requires `iat` and `jti`,
-   and the handler covers neither: its lifetime check reads only `nbf` and `exp`. A refused token
-   is a 400 rejection under a new rule id, `auth.backchannel`.
+   than now plus the handler's clock skew, and `jti` present as a non-empty string. Section 2.4
+   requires `iat` and `jti`, and the handler covers neither: its lifetime check reads only `nbf`
+   and `exp`. A refused token is a 400 rejection under a new rule id, `auth.backchannel`.
 3. **Sessions end by subject**, option (b) of the three weighed. The session index is `ISessionIndex.RemoveSubjectAsync(appId,
    subject, ct)`: it removes every live session of one subject on one app, never another app's, and
    returns the records it removed, from which the endpoint revokes refresh tokens. It hands out no

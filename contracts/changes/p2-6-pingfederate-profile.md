@@ -467,8 +467,9 @@ section 2.6, its step.
 - **The answers (Q5).** 200 with an empty body for any valid token, whether or not it matched a
   session (sections 2.7 and 2.8). 400 `application/problem+json` with `code: invalid_request`
   (`contracts/http-contract.md:92`) for a refused token: a failed step, a missing `iat` or `jti`,
-  a missing `logout_token`, a non-form body, a `jti` already seen on this task, or a `sid`-only token. That is a rejection under
-  `auth.backchannel`, and the Errors table gains one sentence, not a code. 400 with no rule id when
+  a missing `logout_token`, a non-form body, a `jti` already seen on this task, or a `sid`-only
+  token. That is a rejection under `auth.backchannel`, and the Errors table gains one sentence, not
+  a code. 400 with no rule id when
   the token was valid and the store failed, logged at Error by outcome, since no rule fired.
   `Cache-Control: no-store` on both. The logout token never reaches a log line: "tokens" is already
   on the never-logged row (`contracts/telemetry.md:16`), and N-16 covers it once the sender posts a
@@ -492,7 +493,7 @@ section 2.6, its step.
   `SessionEnd`'s revocation, factored to take a record (section 2.7). What it gives up is revoking a
   token a concurrent refresh produced in the same instant; the provider started the logout and
   holds that grant. Task 6.7's runbook, "ending every session for one user", is the same call.
-  ADR-0027 holds the options weighed.
+  ADR-0028 holds the options weighed.
 - **The session index's contract and when it lands (Q8, changed by Adam).** The contract is recorded
   now and lands at G7, with the endpoint, not between gates before P2-1's store. It takes the
   placement ADR-0024's consequence names: a new type beside `ISessionStore` in
@@ -547,12 +548,12 @@ section 2.6, its step.
 - **Vocabulary (Q12).** `GLOSSARY.md` gains **Back-channel logout** and **Session index** under
   Sessions. "Logout token" is a protocol term and gets no entry. The **Request gate** entry stays
   true, which is one more reason the path is outside `/bff`.
-- **The ADR (Q13).** ADR-0027 records the path outside `/bff`, removal by subject through the
+- **The ADR (Q13).** ADR-0028 records the path outside `/bff`, removal by subject through the
   session index, the index's landing at G7, the accepted cross-task replay and the `sid`-only
   refusal. No status line changes on ADR-0007, ADR-0011, ADR-0017 or ADR-0024: ADR-0024's
-  consequence still holds, since the index copies its placement and only the timing is ADR-0027's.
+  consequence still holds, since the index copies its placement and only the timing is ADR-0028's.
 - **This record (Q14, following Q8).** The `Status` line above and this item. It lands now, with
-  ADR-0027 and the two glossary entries; nothing in it moves a frozen artifact.
+  ADR-0028 and the two glossary entries; nothing in it moves a frozen artifact.
 
 What item 7 decides for the spec issue:
 
