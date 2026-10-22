@@ -240,7 +240,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             {
                 throw new InvalidOperationException(
                     "the first registry revision did not go live. The gateway log says why:" + Environment.NewLine
-                    + string.Join(Environment.NewLine, log.Lines.TakeLast(20)));
+                    + string.Join(Environment.NewLine, log.Rendered.TakeLast(20)));
             }
         }
         catch

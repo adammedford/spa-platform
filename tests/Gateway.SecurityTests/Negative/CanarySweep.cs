@@ -103,9 +103,14 @@ internal static class CanarySweep
         IReadOnlyList<string> values = Values;
 
         // An empty sweep is the hazard CODING_STANDARDS.md -> "A check that is vacuous today" names:
-        // with no lines or no canaries, a sweep reports an absence it never looked for.
+        // with no lines or no canaries, a sweep reports an absence it never looked for. Per harness,
+        // too: one whose console formatter went missing renders nothing, and the others' lines would
+        // hide that it was never searched.
         Xunit.Assert.NotEmpty(lines);
         Xunit.Assert.NotEmpty(values);
+        Xunit.Assert.True(
+            watched.All(harness => harness.Log.Rendered.Count > 0),
+            $"{what}: an enrolled harness rendered no log line, so the sweep could not search it.");
 
         IReadOnlyList<string> leaks = Leaks(lines, values);
         Xunit.Assert.True(
