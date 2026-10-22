@@ -3,7 +3,9 @@
 - **Raised by:** workstream 1, AWS and IaC, during #122 (task 1.5's verification script, for #92)
 - **Tasks:** 1.5; I-5, whose workflow holds every test companion's steps
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** decided, 2026-10-22, on
+  https://github.com/adammedford/spa-platform/issues/226#issuecomment-6319841927.
+  Accepted as asked; both edits are #243's. See the Decision section below.
 
 ## What changed
 
@@ -55,3 +57,17 @@ Not the sitting: Adam runs the script against the applied bucket whether or not 
 companion. Until this lands the companion runs only by hand, so a later edit to the script can break
 a case with nothing to say so, and the row cannot be done in AGENTS.md's sense, which asks for its
 tests to pass in CI and no change request open.
+
+## Decision
+
+Integrator, 2026-10-22, on Adam's confirmed answer,
+https://github.com/adammedford/spa-platform/issues/226#issuecomment-6319841927
+(Q3 of #193's questions on #226): **accepted as asked, decided with change requests 1.6b and 1.7.**
+He chose this over leaving it for a ticket of its own, which would have left one `tools/scripts/`
+companion manual while CI runs the others.
+
+1. **The two `ci.yml` steps** for `tools/scripts/verify_release_immutability_tests.py`, one per
+   job, are #243's to land, with the workflow's header naming the companion.
+2. **The D-3 sentence** in `docs/dependencies.md` is #243's too, in the words item 2 gives.
+
+Neither edit has landed when this Status is written; #243 cites this decision by commit.
