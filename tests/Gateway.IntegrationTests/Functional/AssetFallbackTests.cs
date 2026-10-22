@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using Gateway.TestHarness;
+using Platform.Testing;
 
 namespace Gateway.IntegrationTests.Functional;
 

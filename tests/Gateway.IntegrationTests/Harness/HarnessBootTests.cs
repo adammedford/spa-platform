@@ -5,6 +5,7 @@ using Gateway.TestHarness;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Platform.Abstractions;
+using Platform.Testing;
 using TestIdp;
 
 namespace Gateway.IntegrationTests.Harness;

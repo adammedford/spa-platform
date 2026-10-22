@@ -37,8 +37,8 @@ namespace Gateway.SecurityTests.Negative;
 /// </list>
 ///
 /// <para>The search is ordinal and case-sensitive over the <b>rendered</b> line, which is what
-/// <c>CapturedLog</c> holds: the bytes the deployed log stream would carry, formatter and redaction
-/// included, not the structured state behind them.</para>
+/// <c>CapturedLog.Rendered</c> holds: the bytes the deployed log stream would carry, formatter and
+/// redaction included, not the structured state behind them.</para>
 /// </summary>
 internal static class CanarySweep
 {
@@ -54,8 +54,8 @@ internal static class CanarySweep
     /// <summary>How many harnesses have been enrolled, which the sweep reports so an empty sweep cannot pass quietly.</summary>
     public static int Harnesses => watched.Count;
 
-    /// <summary>Every line every enrolled harness has logged so far.</summary>
-    public static IReadOnlyList<string> Lines => [.. watched.SelectMany(harness => harness.Log.Lines)];
+    /// <summary>Every line every enrolled harness has logged so far, as its formatter rendered it.</summary>
+    public static IReadOnlyList<string> Lines => [.. watched.SelectMany(harness => harness.Log.Rendered)];
 
     /// <summary>
     /// Every value that may not appear in a log line: the suite's own canaries, every client secret

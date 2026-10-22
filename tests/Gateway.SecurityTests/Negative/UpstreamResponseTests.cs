@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Gateway.TestHarness;
 using Platform.Registry;
+using Platform.Testing;
 
 namespace Gateway.SecurityTests.Negative;
 
