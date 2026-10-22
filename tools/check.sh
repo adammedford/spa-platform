@@ -24,7 +24,8 @@
 # tests, and the test companion of each script in tools/ or .github/ the change touches (#134), but
 # not tools/check_tests.py, which runs this file and so stays CI's. Its lines say "check:", and it
 # ends on one line, `check: pass: ...` or `check: fail: ...`, exiting non-zero on failure, so a
-# log's last line is the verdict.
+# log's last line is the verdict. Its first two lines name the bash running it and the file-mode
+# mask, so a log can be compared with another machine's (#230).
 #
 # tools/image-check.sh builds the gateway's image the way a workstation does, from a copy of the
 # tree it has first given a host obj/ and an owner-only appsettings.json, and starts it as the
@@ -157,6 +158,19 @@ quietly() {
     "$@" > /dev/null
   fi
 }
+
+# --- in full, the environment, before any check -----------------------------------------------
+#
+# Two lanes, #205's and #210's, found a companion red on their fork point that passed on main and
+# in CI, and #205's had had to force file modes under a restrictive mask; neither log said which
+# bash or which mask it ran under, so nothing could be compared (#230). The bash is this script's
+# interpreter, which is the one whose version matters (the bash 3.2 note above), not the caller's
+# login shell. The mask is printed as `umask` prints it, never normalised: 0077 is the finding.
+# Before the first check, so a log that stops at one still has both.
+if $full; then
+  echo "check: shell: $BASH, bash $BASH_VERSION"
+  echo "check: file-mode mask: $(umask)"
+fi
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"

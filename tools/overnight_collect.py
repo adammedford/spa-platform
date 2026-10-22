@@ -18,8 +18,7 @@ A pre-launch audit is the same command.
 
 The rules, as the collect step states them:
 - A ticket is an open issue carrying `ready-for-agent`, `ready-for-human` or `needs-triage`. An issue
-  with sub-issues is a spec, listed under "parents", and never a ticket. An issue whose body has a
-  `**Session:** foreground` line is worked in a foreground session, listed under "foreground".
+  with sub-issues is a spec, listed under "parents", and never a ticket.
 - id: the `**Plan row:** X` value when it is a plan row id, else `issue-<number>`.
 - owner: the first role the `**Owner:**` line names, by its place in the line, mapped to
   OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
@@ -31,10 +30,19 @@ The rules, as the collect step states them:
   repeating until nothing changes. An issue carrying two of the labels is one ticket, under the
   label this order puts first.
 - openBoxes: the `- [ ]` lines in the body, or -1 when it has no checkbox at all.
+- willEndPartial (#228): why a lane cannot finish the ticket, [] when nothing says so. Since #248
+  each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket
+  is written: {"rule", "reason"}, the rule's name and the line the check prints for it, in the
+  check's order. The ticket is judged under the label it is listed by, so the rules that read
+  `ready-for-agent` alone (sitting-or-landing, foreground) flag only a lane's ticket. A spec is a
+  parent and never judged. One grammar, then, at creation and at launch: a ticket the check fails
+  is a ticket the launch plan forecasts as partial. The launch plan forecasts from it.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
 Two tickets with one id stop it: exit 1, stdout empty, both issues named on stderr. A read that fails
-also exits 1, because a partial answer would send a lane at the wrong work. In JSON mode everything
+also exits 1, because a partial answer would send a lane at the wrong work, and so does a
+ticket-shape check that cannot load or judge (its script, .github/path-ownership.py or
+OWNERSHIP.md missing or broken), because a forecast with nothing judged would read as none flagged. In JSON mode everything
 but the answer goes to stderr.
 
 --from DIR reads ready-for-agent.json, ready-for-human.json and needs-triage.json (each the JSON of
@@ -44,6 +52,8 @@ line) and roadmap.json (`tools/roadmap.py --json`). Absent ones are read live.
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib.util
 import json
 import pathlib
 import re
@@ -66,7 +76,6 @@ PLAN_ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
 PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
-FOREGROUND = re.compile(r"(?m)^\*\*Session:\*\*[ \t]*foreground\b")
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
 
@@ -198,6 +207,43 @@ def others_land_apart(others: list[str]) -> str:
             "own pull requests")
 
 
+@functools.cache
+def ticket_shape():
+    """tools/ticket_shape.py, the check #247 runs where a ticket is written (#248). Loaded by path:
+    under -I the script's own directory is not on sys.path. It loads this script in turn, for
+    OWNER and ROLES, on its first judgement; that second copy is read-only and loads nothing back,
+    so the two never recurse."""
+    path = pathlib.Path(__file__).resolve().parent / "ticket_shape.py"
+    spec = importlib.util.spec_from_file_location("ticket_shape", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def ownership_rules() -> list[tuple[str, str]]:
+    """OWNERSHIP.md as A-05 reads it, through the check that judges by it. Read once a run."""
+    try:
+        return ticket_shape().ownership().rules()
+    except (Exception, SystemExit) as error:
+        # SystemExit is path-ownership.py's refusal of an OWNERSHIP.md with no rules.
+        raise Refused(f"the ticket-shape check could not load: {type(error).__name__}: "
+                      f"{error}") from error
+
+
+def will_end_partial(issue: Issue, rules: list[tuple[str, str]]) -> list[dict]:
+    """Why a lane cannot finish the ticket: ticket_shape's failures, judged under its label."""
+    try:
+        shape = ticket_shape()
+        judged = shape.Issue(number=issue.number, body=issue.body, labels=(issue.label,),
+                             sub_issues=issue.sub_issues, blockers=issue.blockers)
+        failures = shape.judge(judged, rules)
+    except (Exception, SystemExit) as error:
+        raise Refused(f"the ticket-shape check could not judge #{issue.number}: "
+                      f"{type(error).__name__}: {error}") from error
+    return [{"rule": failure.rule, "reason": f"{failure.rule}: {failure.detail}"}
+            for failure in failures]
+
+
 def open_boxes(body: str) -> int:
     return len(OPEN_BOX.findall(body)) if ANY_BOX.search(body) else -1
 
@@ -217,17 +263,18 @@ def landed_ids(road: dict) -> set[str]:
     return found
 
 
-def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict) -> dict:
-    """The answer, from what was read. Raises Refused when two tickets share an id."""
+def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict,
+            rules: list[tuple[str, str]] | None = None) -> dict:
+    """The answer, from what was read. Raises Refused when two tickets share an id, or when the
+    ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
+    with the rest of the input; None reads it here."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
-    parents, foreground, tickets = [], [], []
+    parents, tickets = [], []
     for issue in issues_of(listings):
         if issue.sub_issues > 0:
             parents.append({"issue": issue.number, "title": issue.title, "label": issue.label,
                             "subIssues": issue.sub_issues})
-        elif FOREGROUND.search(issue.body):
-            foreground.append({"issue": issue.number, "title": issue.title, "label": issue.label})
         else:
             tickets.append(issue)
 
@@ -242,6 +289,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         ) + ". Every run keys a ticket by its id, so one would overwrite the other: give one its "
             "own **Plan row:** (none, for an issue that is not a plan row) and run again.")
 
+    rules = ownership_rules() if rules is None else rules
     by_number = {issue.number: issue for issue in tickets}
     id_of = {issue.number: ticket_id(issue) for issue in tickets}
 
@@ -302,11 +350,11 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "owner": owner, "blockedBy": [blocker_id(b) for b in issue.blockers],
             "why": why[issue.number] + others_land_apart(others),
             "openBoxes": open_boxes(issue.body),
+            "willEndPartial": will_end_partial(issue, rules),
         })
     return {
         "tickets": resolved,
         "parents": parents,
-        "foreground": foreground,
         "landed": sorted(landed),
         "landedButOpen": [{"id": t["id"], "issue": t["issue"]} for t in resolved
                           if t["id"] in landed],
@@ -320,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Resolve tonight's overnight tickets from GitHub Issues, by the collect rules.",
     )
     parser.add_argument("--json", action="store_true", required=True,
-                        help="print the tickets, parents and foreground issues as JSON")
+                        help="print the tickets and parents as JSON")
     parser.add_argument("--from", dest="saved", metavar="DIR",
                         help="read saved gh listings (and optionally branches.txt, roadmap.json) "
                              "from DIR instead of asking GitHub")
@@ -346,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         branch_names = text.split() if text is not None else branches(root)
         text = kept("roadmap.json")
         road = json.loads(text) if text is not None else roadmap(root)
-        answer = resolve(listings, branch_names, road)
+        answer = resolve(listings, branch_names, road, ownership_rules())
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1
@@ -360,7 +408,8 @@ def main(argv: list[str] | None = None) -> int:
         counts[ticket["status"]] = counts.get(ticket["status"], 0) + 1
     print(f"overnight_collect: {len(answer['tickets'])} tickets "
           f"({', '.join(f'{v} {k}' for k, v in sorted(counts.items()))}), "
-          f"{len(answer['parents'])} parents, {len(answer['foreground'])} foreground.",
+          f"{len(answer['parents'])} parents; "
+          f"{sum(1 for t in answer['tickets'] if t['willEndPartial'])} will end partial.",
           file=sys.stderr)
     print(json.dumps(answer, indent=2))
     return 0

@@ -215,6 +215,12 @@ independence is counted. A sub-agent belongs to the session that dispatched it. 
 the integrator, may be many agent sessions. _Avoid_: bare "session" wherever the gateway's sessions
 (session record, session key) could be meant.
 
+**Claude Code process** — one launch of Claude Code, from a terminal or an editor, with every agent
+session it hosts: the foreground conversation, its subagents and the agents a workflow starts. It
+reads the checkout's settings when it starts, so a change to them reaches only a process launched
+afterwards. _Avoid_: "fresh session" or "new session" for this; a new agent session can run in an
+old process.
+
 **Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
 asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
 
@@ -234,6 +240,13 @@ run's `Overnight <date>` issue. Not "approval".
 is one), which launches scripted sessions and tells each what to do. It is tracked and changes by a
 branch, a review and a landing like any other integrator change (ADR-0026). It is not a CI workflow
 under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
+
+**Project skill** — a skill under `.claude/skills/` that a foreground session runs in this
+repository (`wiz`, which walks a sitting, is one). It is tracked and changes by a branch, a review
+and a landing like any other integrator change, and no sitting runs an edit to it that has not
+landed. Not a user-level skill under `~/.agents/skills` (such as `grilling` or
+`implement`), which is the human's own, shared across projects and outside this repository.
+_Avoid_: bare "skill" where the user-level kind could be meant; "wizard" for `wiz`.
 
 **Lane** — one owner's tickets in one overnight run, worked in that owner's worktree, each on a
 branch of its own. The integrator has a lane and no workstream. _Avoid_: "lane" for a workstream.
@@ -262,7 +275,9 @@ to one.
 
 **Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
 common directory. Concurrent sessions share it, so a session's branch work happens in a linked
-worktree of its own (`docs/agents/landing-work.md`, "Take a task").
+worktree of its own (`docs/agents/landing-work.md`, "Take a task"); the one change a session makes
+there is a fast-forward of a clean `main` to what has landed, `git merge --ff-only origin/main`
+(#200).
 
 **Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
 session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot

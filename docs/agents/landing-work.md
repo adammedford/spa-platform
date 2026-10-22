@@ -19,11 +19,22 @@ git config core.hooksPath .githooks   # once per clone, not per worktree
 
 **The main checkout is shared.** Concurrent sessions run in the clone's own working tree, and its
 branch is whichever one a session last left it on, so a commit, rebase or switch made there acts on
-another session's work. A session never moves the main checkout's branch or rewrites its history:
-its own branch lives in its own worktree, made as above. In a Claude Code session started in a
+another session's work. A session never moves the main checkout's branch, rewrites its history or
+changes its files or index: its own branch lives in its own worktree, made as above. The one
+exception is a fast-forward of a clean `main` to what has landed, which leaves the checkout no
+longer behind origin/main after a landing: `git fetch origin`, then exactly
+`git merge --ff-only origin/main`, while HEAD is `main` and no tracked file has changes (untracked
+files are allowed). `git pull` is not that fast-forward. In a Claude Code session started in a
 checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
-before each Bash call, and it refuses the branch-moving git commands in the main checkout and names
-this route (#114). A person's terminal runs no such hook.
+before each Bash call, and in the main checkout it refuses the branch-moving git commands and those
+that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and
+`git checkout -- <path>`), admits that one fast-forward, and names this route (#114, #200). A
+person's terminal runs no such hook.
+
+The same file sets `CLAUDE_CODE_SHELL=/bin/bash`, which a Claude Code process reads when it starts:
+after a change to `.claude/settings.json` or after trusting a checkout, restart Claude Code (the
+editor, for the extension), and confirm with `ps -p $$ -o comm=` in the Bash tool, which should
+print `/bin/bash` (#183).
 
 ## Build it
 

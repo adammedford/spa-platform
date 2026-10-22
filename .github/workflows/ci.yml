@@ -140,6 +140,18 @@ jobs:
           python3 -I .github/workflow_parse_tests.py
           python3 -I .github/workflow-parse.py
 
+      - name: The overnight script schedules its lanes as its test companion says
+        # .claude/workflows/overnight_tests.mjs runs overnight.js end to end with every agent mocked,
+        # on the tracked fixture of 2026-10-20, and checks what integrates, what skips for a blocker,
+        # and that a lane runs its first ready ticket rather than idling behind a blocked one. It is
+        # the script's only behavioural proof, so a scheduler edit fails at its push, before the
+        # launch it is for (ADR-0027, #213). It runs on every push with no path condition, like every
+        # step in this job, and takes about a second on the node the step above printed. It is
+        # wall-clock timed (a 1 ms tick against sleeps of 30 to 180 ms); a virtual clock comes only
+        # if it ever flakes here. tools/check.sh does not run it: CI on the landing pull request is
+        # what proves a scheduler edit before its launch (ADR-0026 decision 3).
+        run: node .claude/workflows/overnight_tests.mjs
+
       - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
         # session from the top of its context window. Every rule it holds was prose first, and prose
@@ -205,6 +217,24 @@ jobs:
         # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
         # case of each.
         run: python3 -I tools/review_record_tests.py
+
+      - name: The retro's record reader reads each record line the way its rules say
+        # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line
+        # is: a check log's verdict, a side log, an earlier round, a report's date, the noun merge, cost
+        # times recurrence, coverage and a ticket body's shape (#260). Its companion builds each shape to
+        # trip one rule, a RED log beside a GREEN one and a body without its owner line beside one with
+        # it, because a reader that read RED as GREEN would file nothing and look clean.
+        run: python3 -I tools/retro_record_tests.py
+
+      - name: The pins inventory classifies each pin the way its rules say, and renders the same table twice
+        # The pins sweep (#82) files its issues and the standing report's table from what
+        # tools/pins_inventory.py decides a pin is: its family, the projects that reference it, the
+        # documents and evidence that name its version, its advisories, a decision's hold, and its
+        # status by precedence (#269). Its companion builds each shape against throwaway copies of this
+        # checkout's pins file and project files, with every network input supplied from a file, because
+        # a classifier that read an advisory as current would leave the one warning nobody reads as the
+        # only place it appears.
+        run: python3 -I tools/pins_inventory_tests.py
 
       - name: The companions' runner reports every case it runs, each in its suite's order
         # tools/land_tests.py, tools/check_tests.py and tools/prune_branches_tests.py run their cases
