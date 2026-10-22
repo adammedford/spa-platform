@@ -150,7 +150,11 @@ jobs:
         # wall-clock timed (a 1 ms tick against sleeps of 30 to 180 ms); a virtual clock comes only
         # if it ever flakes here. tools/check.sh does not run it: CI on the landing pull request is
         # what proves a scheduler edit before its launch (ADR-0026 decision 3).
-        run: node .claude/workflows/overnight_tests.mjs
+        run: |
+          for i in $(seq 20); do
+            echo "run $i of 20"
+            node .claude/workflows/overnight_tests.mjs
+          done
 
       - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
