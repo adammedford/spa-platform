@@ -84,7 +84,7 @@ Each is read with `dotnet --list-runtimes`, the image's from inside it:
 | Where | Read on 22 October 2026 | Command |
 | --- | --- | --- |
 | The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.13; the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble` resolved to manifest list `sha256:8af87eba5e7cdafb1514d7388be287365da97c132509e84dfe252ffd552398ca` | `docker build --pull -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
-| CI's build job | SDK 10.0.402, runtime 10.0.13, as `actions/setup-dotnet` installs them from `global.json` | `dotnet --version && dotnet --list-runtimes`, the step after `setup-dotnet` in `.github/workflows/ci.yml` |
+| CI's build job | SDK 10.0.402, runtime 10.0.13, as `actions/setup-dotnet` installs them from `global.json`; this reading is from setup-dotnet's install log (run 39713194106 on main), since the step that reads it lands with #273 | `dotnet --version && dotnet --list-runtimes`, the step after `setup-dotnet` in `.github/workflows/ci.yml` |
 | This workstation | SDK 10.0.401, runtime 10.0.12 | `dotnet --version && dotnet --list-runtimes` |
 
 **The base image floats on purpose.** Both stages name a floating `10.0-noble` tag, so a build that

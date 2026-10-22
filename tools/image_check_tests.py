@@ -225,5 +225,63 @@ class ImageCheckWithAFakeDockerTests(unittest.TestCase):
                          "cannot read is one cause, which the Dockerfile's chmod clears.", last_line(result.stderr))
 
 
+# A docker whose container starts, so the script reaches its runtime reading, and whose
+# `run ... --list-runtimes` answers as RUNTIMES says: "fails" exits non-zero, "silent" prints nothing.
+FAKE_DOCKER_THAT_STARTS = """#!/bin/bash
+case "$1" in
+  image) [ "$2" = inspect ] && echo 1654; exit 0 ;;
+  run)
+    for arg in "$@"; do
+      if [ "$arg" = --list-runtimes ]; then
+        [ RUNTIMES = fails ] && exit 125
+        exit 0
+      fi
+    done
+    echo fake-container; exit 0 ;;
+  inspect) echo true; exit 0 ;;
+  logs) echo "Application started. Press Ctrl+C to shut down."; exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+class ImageCheckRuntimeReadingTests(unittest.TestCase):
+    """The runtime line informs and fails nothing, but a reading that cannot be taken is a failure
+    with its verdict, never a pass that read nothing (CODING_STANDARDS.md, "A check fails closed";
+    #273). Mutation: dropping the `|| fail` after the reading ends "fails" on a bare set -e exit,
+    and dropping the empty-reading guard lets "silent" pass; each fails its case."""
+
+    def run_with(self, runtimes: str) -> subprocess.CompletedProcess:
+        tree = Tree(self)
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        bin_dir = pathlib.Path(scratch.name) / "bin"
+        bin_dir.mkdir()
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep", "awk"):
+            found = shutil.which(tool)
+            self.assertIsNotNone(found, f"{tool} is not on PATH")
+            (bin_dir / tool).symlink_to(found)
+        docker = bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER_THAT_STARTS.replace("RUNTIMES", runtimes))
+        docker.chmod(0o755)
+        env = {"PATH": str(bin_dir), "HOME": scratch.name, "LC_ALL": "C"}
+        return subprocess.run(["/bin/bash", str(SCRIPT)], cwd=tree.dir, env=env, capture_output=True,
+                              text=True, stdin=subprocess.DEVNULL, timeout=60)
+
+    def test_a_reading_that_fails_ends_on_the_verdict(self):
+        result = self.run_with("fails")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: the built image's runtimes could not be read with dotnet "
+                         "--list-runtimes.", last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+
+    def test_a_reading_that_names_no_runtime_ends_on_the_verdict(self):
+        result = self.run_with("silent")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: dotnet --list-runtimes in the built image named no runtime.",
+                         last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+
+
 if __name__ == "__main__":
     runner.main()
