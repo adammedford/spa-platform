@@ -35,8 +35,14 @@
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
 # Terraform, python3, and Docker with buildx (decision D-2 in docs/dependencies.md).
 #
-# It never prints the account id: the repositories, the bucket and every ARN carry it, so Docker's
-# and Terraform's output pass through a filter that replaces it.
+# It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
+# does it (cell-common.sh's redact_stream):
+#   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
+#   - each app's client id that infra/envs/poc/outputs.json lists becomes <client-id:appId>. The
+#     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
+#     (#251). The list is the outputs document's as this run starts: a client id the apps root
+#     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
+#     apps root.
 #
 # Exit status: 0 when the applied gateway runs steady and healthy; 1 when a step failed; 2 when it
 # did not start (a usage error, a missing tool, no Region, no credentials, no outputs document).
@@ -85,6 +91,9 @@ ECR_GATEWAY="$(outputs_field ecrGateway)"
 ECR_MOCK_API="$(outputs_field ecrMockApi)"
 CLUSTER="$(outputs_field ecsCluster)"
 SERVICE="$(outputs_field ecsService)"
+# After the reads above, so that a missing or foreign outputs document is refused by them, naming
+# the field. Before anything prints: Terraform's plan names both apps' client ids (#251).
+redact_clients
 
 # --- 1. the registry -------------------------------------------------------------------------------
 #
