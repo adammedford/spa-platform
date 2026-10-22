@@ -142,6 +142,11 @@ public sealed class LogCanaryTests
         handler.LogInformation("held back at information");
         handler.LogError("held back at error");
 
+        // The control: Rendered is empty when no console formatter is configured, so a line from a
+        // category that is not held back must render, or the search below proves nothing.
+        host.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Platform.Identity.AuthenticationEvents").LogWarning("Safe callback outcome {Rule}", "auth.callback");
+        Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "Safe callback outcome auth.callback");
         Assert.DoesNotContain(host.Log.Rendered, line => line.Contains("held back", StringComparison.Ordinal));
     }
 }
