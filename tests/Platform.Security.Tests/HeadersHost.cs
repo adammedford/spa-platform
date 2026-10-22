@@ -1,11 +1,6 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -30,6 +25,8 @@ namespace Platform.Security.Tests;
 /// owns, plus two <c>Access-Control-*</c> headers, as a careless upstream would. An overwrite that
 /// failed would then show as a second value or the wrong one.</item>
 /// </list>
+///
+/// The listener, the captured log and the client are <see cref="StageHost"/>'s (#140).
 /// </summary>
 public sealed class HeadersHost : IAsyncDisposable
 {
@@ -49,21 +46,17 @@ public sealed class HeadersHost : IAsyncDisposable
         ["Access-Control-Allow-Credentials"] = "true",
     };
 
-    private readonly WebApplication app;
-    private readonly HttpClient client;
+    private readonly StageHost stage;
 
-    private HeadersHost(WebApplication app, Uri baseAddress, List<string> log)
+    private HeadersHost(StageHost stage)
     {
-        this.app = app;
-        BaseAddress = baseAddress;
-        Log = log;
-        client = new HttpClient(new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = false });
+        this.stage = stage;
     }
 
-    public Uri BaseAddress { get; }
+    public Uri BaseAddress => stage.BaseAddress;
 
-    /// <summary>Every log line the host wrote, formatted.</summary>
-    public List<string> Log { get; }
+    /// <summary>Every line the host logged, captured at Trace.</summary>
+    public CapturedLog Log => stage.Log;
 
     /// <param name="ct">The test's token.</param>
     /// <param name="apps">The registry the host-resolution stand-in reads, by <c>host</c>.</param>
@@ -74,63 +67,59 @@ public sealed class HeadersHost : IAsyncDisposable
     public static async Task<HeadersHost> StartAsync(
         CancellationToken ct, IEnumerable<AppDefinition> apps, IDictionary<string, string>? issuers = null)
     {
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
-
-        List<string> log = [];
-        builder.Logging.AddProvider(new ListLoggerProvider(log));
-
         List<KeyValuePair<string, string?>> settings = [new("ForwardedHeaders:TrustedNetworks:0", "127.0.0.0/8")];
         foreach ((string name, string origin) in issuers ?? new Dictionary<string, string> { ["primary"] = BrowserOrigin })
         {
             settings.Add(new($"Issuers:{name}:BrowserOrigin", origin));
         }
 
-        builder.Configuration.AddInMemoryCollection(settings);
-        builder.AddPlatformSecurity();
-
         Dictionary<string, AppDefinition> byHost = apps.ToDictionary(a => a.Host, StringComparer.Ordinal);
 
-        WebApplication web = builder.Build();
-        web.UsePlatformForwardedHeaders();
-        web.Use((context, next) =>
+        return new(await StageHost.StartAsync(new StageHostOptions
         {
-            if (byHost.TryGetValue(context.Request.Headers.Host.ToString(), out AppDefinition? pinned))
+            Services = builder =>
             {
-                context.Features.Set<IAppFeature>(SettableAppFeature.For(pinned));
-            }
-
-            return next(context);
-        });
-        web.UsePlatformSecurityHeaders();
-        web.UsePlatformRequestGate();
-        web.Run(context =>
-        {
-            foreach ((string name, string value) in UpstreamCopies)
+                builder.Configuration.AddInMemoryCollection(settings);
+                builder.AddPlatformSecurity();
+            },
+            Pipeline = web =>
             {
-                context.Response.Headers[name] = value;
-            }
+                web.UsePlatformForwardedHeaders();
 
-            string path = context.Request.Path.Value ?? "/";
-            (string type, string body) = path switch
-            {
-                "/" => ("text/html", "<!doctype html><title>shell</title>"),
-                "/bff/session" => ("application/json", "{\"sub\":\"alice\"}"),
-                _ when path.StartsWith("/api/", StringComparison.Ordinal) => ("application/json", "{\"upstream\":true}"),
-                _ => ("text/javascript", "console.log(1);"),
-            };
-            context.Response.ContentType = type;
-            return context.Response.WriteAsync(body, ct);
-        });
+                // Host resolution's stand-in: the app whose host is the request's Host header whole.
+                web.Use((context, next) =>
+                {
+                    if (byHost.TryGetValue(context.Request.Headers.Host.ToString(), out AppDefinition? pinned))
+                    {
+                        context.Features.Set<IAppFeature>(SettableAppFeature.For(pinned));
+                    }
 
-        await web.StartAsync(ct);
+                    return next(context);
+                });
 
-        Uri address = new(web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the host started without an address."));
+                web.UsePlatformSecurityHeaders();
+                web.UsePlatformRequestGate();
 
-        return new HeadersHost(web, address, log);
+                web.Run(context =>
+                {
+                    foreach ((string name, string value) in UpstreamCopies)
+                    {
+                        context.Response.Headers[name] = value;
+                    }
+
+                    string path = context.Request.Path.Value ?? "/";
+                    (string type, string body) = path switch
+                    {
+                        "/" => ("text/html", "<!doctype html><title>shell</title>"),
+                        "/bff/session" => ("application/json", "{\"sub\":\"alice\"}"),
+                        _ when path.StartsWith("/api/", StringComparison.Ordinal) => ("application/json", "{\"upstream\":true}"),
+                        _ => ("text/javascript", "console.log(1);"),
+                    };
+                    context.Response.ContentType = type;
+                    return context.Response.WriteAsync(body, ct);
+                });
+            },
+        }, ct));
     }
 
     /// <summary>
@@ -148,13 +137,8 @@ public sealed class HeadersHost : IAsyncDisposable
             request.Headers.TryAddWithoutValidation(name, value);
         }
 
-        return client.SendAsync(request, ct);
+        return stage.Client.SendAsync(request, ct);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        client.Dispose();
-        await app.StopAsync();
-        await app.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() => stage.DisposeAsync();
 }

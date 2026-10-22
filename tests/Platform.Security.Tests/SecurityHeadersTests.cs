@@ -103,13 +103,10 @@ public sealed class SecurityHeadersTests
             + "img-src 'self' https://ok.example.test; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
             + "base-uri 'self'; object-src 'none'; form-action 'self' https://login.idp.test",
             Single(response, "Content-Security-Policy"));
-        lock (host.Log)
-        {
-            Assert.Single(host.Log, line => line.Contains("app=app1", StringComparison.Ordinal)
-                && line.Contains("directive=default-src", StringComparison.Ordinal));
-            Assert.Single(host.Log, line => line.Contains("app=app1", StringComparison.Ordinal)
-                && line.Contains("directive=img-src", StringComparison.Ordinal));
-        }
+        Assert.Single(host.Log.Lines, line => line.Text.Contains("app=app1", StringComparison.Ordinal)
+            && line.Text.Contains("directive=default-src", StringComparison.Ordinal));
+        Assert.Single(host.Log.Lines, line => line.Text.Contains("app=app1", StringComparison.Ordinal)
+            && line.Text.Contains("directive=img-src", StringComparison.Ordinal));
     }
 
     [Fact]

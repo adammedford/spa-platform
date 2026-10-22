@@ -1,4 +1,5 @@
 using System.Net;
+using Platform.Testing;
 
 namespace Platform.Security.Tests;
 
@@ -22,8 +23,8 @@ namespace Platform.Security.Tests;
 ///
 /// <para>The method allowlist (<c>MethodAllowlist</c>, inside <c>UsePlatformForwardedHeaders</c>) is
 /// here too. <c>UsePlatformTelemetry</c> runs before it (ADR-0018), so its 405 sets <c>gate.method</c>
-/// like every other rejection, and the stand-in in <see cref="GateHost"/> sits in the same
-/// place.</para>
+/// like every other rejection, and <see cref="StageHost"/> installs the stand-in in the same place,
+/// outermost, in both hosts that compose that stage.</para>
 /// </summary>
 public sealed class RuleIdTelemetryTests
 {
@@ -41,7 +42,7 @@ public sealed class RuleIdTelemetryTests
     {
         Assert.Equal(status, response.StatusCode);
         Assert.Equal(rule, Assert.Single(host.TelemetryRules));
-        Assert.Single(host.LinesFor(rule));
+        Assert.Single(host.Log.LinesFor(rule));
         Assert.Equal(0, host.Reached);
     }
 
@@ -51,20 +52,20 @@ public sealed class RuleIdTelemetryTests
     public async Task The_gate_sets_path_invalid()
     {
         // Over a socket, because Uri resolves dot segments before the request leaves HttpClient.
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
-        string response = await host.RawAsync("GET /api/orders/../secret HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
+        RawResponse response = await host.RawAsync("GET", "/api/orders/../secret", Ct, ("Sec-Fetch-Site", "same-origin"));
 
-        Assert.StartsWith("HTTP/1.1 400 ", response);
+        Assert.Equal(400, response.StatusCode);
         Assert.Equal("path.invalid", Assert.Single(host.TelemetryRules));
-        Assert.Single(host.LinesFor("path.invalid"));
+        Assert.Single(host.Log.LinesFor("path.invalid"));
         Assert.Equal(0, host.Reached);
     }
 
     [Fact]
     public async Task The_gate_sets_gate_cookie_name()
     {
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/", Ct, ("Cookie", "__host-spa-session=planted"));
 
@@ -74,7 +75,7 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_sets_path_reserved()
     {
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/signout-oidc", Ct,
             FetchSite("same-origin"), Origin(GateHost.AppOrigin));
@@ -85,7 +86,7 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_sets_gate_fetch_site()
     {
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/api/orders/items", Ct, FetchSite("cross-site"));
 
@@ -95,7 +96,7 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_sets_gate_origin()
     {
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("POST", "/api/orders/items", Ct,
             FetchSite("same-origin"), Origin(GateHost.SiblingOrigin));
@@ -106,7 +107,7 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task The_gate_sets_gate_navigation()
     {
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("GET", "/bff/login", Ct, FetchSite("same-origin"));
 
@@ -118,7 +119,7 @@ public sealed class RuleIdTelemetryTests
     {
         // The request gate's own 405: the path takes a method it was not sent. The allowlist's 405 for
         // a method no path takes is The_method_allowlist_sets_gate_method, under the same id.
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync("POST", "/bff/session", Ct,
             FetchSite("same-origin"), Origin(GateHost.AppOrigin));
@@ -136,13 +137,13 @@ public sealed class RuleIdTelemetryTests
         // A method no path accepts, refused by the allowlist inside UsePlatformForwardedHeaders before
         // the request gate sees it. UsePlatformTelemetry runs first (ADR-0018), so the feature is
         // there.
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
-        string response = await host.RawAsync($"{method} /api/orders/items HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
+        RawResponse response = await host.RawAsync(method, "/api/orders/items", Ct, ("Sec-Fetch-Site", "same-origin"));
 
-        Assert.StartsWith("HTTP/1.1 405 ", response);
+        Assert.Equal(405, response.StatusCode);
         Assert.Equal("gate.method", Assert.Single(host.TelemetryRules));
-        Assert.Single(host.LinesFor("gate.method"));
+        Assert.Single(host.Log.LinesFor("gate.method"));
         Assert.Equal(0, host.Reached);
     }
 
@@ -154,7 +155,7 @@ public sealed class RuleIdTelemetryTests
     {
         // The field says "rejected under this rule", so a request that was not rejected carries none:
         // this fails if a stage writes the id on its way past as well as on a refusal.
-        await using GateHost host = await GateHost.StartAsync(Ct, telemetry: true);
+        await using GateHost host = await GateHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync(method, path, Ct,
             FetchSite("same-origin"), Origin(GateHost.AppOrigin));
@@ -169,21 +170,21 @@ public sealed class RuleIdTelemetryTests
     [Fact]
     public async Task Antiforgery_sets_csrf_token()
     {
-        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct, telemetry: true);
+        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct, telemetryStandIn: true);
 
         using HttpResponseMessage response = await host.SendAsync(
             "POST", "/api/orders/items", AntiforgeryHost.App1, "alice", Ct);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal("csrf.token", Assert.Single(host.TelemetryRules));
-        Assert.Single(host.LinesFor("csrf.token"));
+        Assert.Single(host.Log.LinesFor("csrf.token"));
         Assert.Equal(0, host.Reached);
     }
 
     [Fact]
     public async Task An_api_call_antiforgery_passes_leaves_the_rule_null()
     {
-        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct, telemetry: true);
+        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct, telemetryStandIn: true);
         AntiforgeryHost.Issued issued = await host.IssueAsync(AntiforgeryHost.App1, "alice", Ct);
 
         using HttpResponseMessage response = await host.SendAsync(
@@ -195,5 +196,26 @@ public sealed class RuleIdTelemetryTests
         // Two requests: /bff/session issued the pair, and neither was refused.
         Assert.All(host.TelemetryRules, rule => Assert.Null(rule));
         Assert.Equal(2, host.TelemetryRules.Count);
+    }
+
+    [Theory]
+    [InlineData("TRACE")]
+    [InlineData("PROPFIND")]
+    public async Task The_method_allowlist_sets_gate_method_ahead_of_antiforgery(string method)
+    {
+        // The antiforgery host composes UsePlatformForwardedHeaders too, so its allowlist's 405 must
+        // find the feature as the gate host's does. Its stand-in once sat after that stage, the reverse
+        // of the contract's order (ADR-0018 decision 1), and this request then left no feature at all;
+        // StageHost installs the stand-in outermost (#140). The allowlist ends the request before the
+        // pin runs, so the pin's host is never read.
+        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct, telemetryStandIn: true);
+
+        using HttpResponseMessage response = await host.SendAsync(
+            method, "/api/orders/items", AntiforgeryHost.App1, "alice", Ct);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.Equal("gate.method", Assert.Single(host.TelemetryRules));
+        Assert.Single(host.Log.LinesFor("gate.method"));
+        Assert.Equal(0, host.Reached);
     }
 }

@@ -35,12 +35,12 @@ public sealed class AntiforgeryTests
         // request got past the antiforgery check.
         Assert.DoesNotContain(response.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(reachedBefore, host.Reached);
-        Assert.Single(host.LinesFor("csrf.token"));
+        Assert.Single(host.Log.LinesFor("csrf.token"));
 
         // N-16: neither half of the pair is ever logged.
         foreach (string canary in canaries)
         {
-            Assert.False(host.Logged(canary), "a token or cookie value was logged");
+            Assert.False(host.Log.Contains(canary), "a token or cookie value was logged");
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class AntiforgeryTests
         using HttpResponseMessage response = await host.SendAsync(method, path, App1, "alice", Ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Empty(host.LinesFor("csrf.token"));
+        Assert.Empty(host.Log.LinesFor("csrf.token"));
     }
 
     // ---- N-06: another user's token ----
