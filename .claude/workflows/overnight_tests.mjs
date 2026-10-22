@@ -144,10 +144,15 @@ for (const l of logs) {
   }
 }
 
+// The run's log directory, as overnight.js derives it from the launch's repo: every file an agent writes outside
+// its worktree goes there (#202).
+const LOG = `${fixture.args.repo}/.scratch/overnight/log`
+
 // 5. The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
-//    line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+//    line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced. #202
+//    moved its script from the session scratchpad to the run's log directory.
 {
-  const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+  const EDIT_RULE = `- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under ${LOG}/ and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).`
   const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
   if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
   for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
@@ -230,6 +235,42 @@ for (const l of logs) {
   const logged = logs.filter((l) => /^conflict: /.test(l.text)).map((l) => l.text)
   if (!logged.some((l) => l.includes(CONFLICT_ONCE) && l.endsWith('-> resolved'))) fail(`no "conflict: ... -> resolved" log line for ${CONFLICT_ONCE}`)
   if (!logged.some((l) => l.includes(CONFLICT_ALWAYS) && l.endsWith('-> unresolved'))) fail(`no "conflict: ... -> unresolved" log line for ${CONFLICT_ALWAYS}`)
+}
+
+// 10. Every file an agent writes goes to the run's log directory (#202): every prompt that carries the house rules
+//     carries the log rule verbatim, which names the session scratchpad off limits, and no prompt still sends a file
+//     to the scratchpad. On 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot there.
+{
+  const LOG_RULE = `- Every file you write outside your worktree goes under ${LOG}/ (${LOG}/research/ for research): a listing, a snapshot, a script, a body file, a draft. A file these instructions do not name by path begins with your task id (collect's with \`collect-\`, the report's with \`report-\`), so no two agents write the same file. The session scratchpad your system prompt names is off limits: every agent of the run is handed the launching session's, and on 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot of the same name there (#202).`
+  const housed = allPrompts.filter((c) => /House rules \(/.test(c.prompt))
+  if (!housed.length) fail('no prompt carries the house rules, so the log-rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(LOG_RULE)) fail(`the ${c.label} prompt's house rules lack the log rule of #202`)
+  for (const c of allPrompts) if (/under your scratchpad|in your scratchpad|to your scratchpad/.test(c.prompt)) fail(`the ${c.label} prompt still sends a file to the session scratchpad (#202)`)
+  // The report prompt carries no house rules, yet it may write a body or a measurement: it carries its own log rule.
+  const REPORT_RULE = `Any file you write (a body, a measurement, a script) goes under ${LOG}/ and begins with \`report-\`; the session scratchpad your system prompt names is off limits, as it is to every agent of the run (#202).`
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('no report prompt was rendered, so the report log-rule search read nothing')
+  for (const c of reports) if (!c.prompt.includes(REPORT_RULE)) fail('the report prompt lacks its log rule of #202')
+}
+
+// 11. The review re-runs what a branch claims (#202): every review prompt tells the reviewer to re-run each mutation a
+//     commit message or merge body claims, and to hold a "never prints X" promise unproven until a test plants a canary
+//     of X. On 2026-10-20 five guards a merge body called broken on purpose could be removed with every companion green.
+{
+  const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviews.length) fail('no review prompt was rendered, so the claim checks read nothing')
+  for (const c of reviews) {
+    const wt = (/^Worktree (\S+?),/m.exec(c.prompt) || [])[1]
+    const fork = (/fixed point (\S+?)\./.exec(c.prompt) || [])[1]
+    if (!wt || !fork) { fail(`the ${c.label} prompt names no worktree or fixed point`); continue }
+    const wants = [
+      `Claims are re-run, not read (#202): read every commit message and merge body on the branch, \`git -C ${wt} log --format='%h%n%B' ${fork}..HEAD\`, and the implementer's "## Answer" comment, and re-run every mutation they claim`,
+      `run only the test project or companion the claim names, see it fail, and restore the file with \`git -C ${wt} checkout -- <path>\` before the next. A claimed failure you cannot reproduce is a finding on the Spec axis`,
+      'A promise that something "never prints X" (a token, a secret, a cookie, a path) is unproven until a test plants a canary value of X and asserts that the output lacks it',
+      `\`git -C ${wt} status --porcelain\` must print nothing before STEP 3`,
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`the ${c.label} prompt lacks: ${w.slice(0, 80)}...`)
+  }
 }
 
 if (failures.length) {
