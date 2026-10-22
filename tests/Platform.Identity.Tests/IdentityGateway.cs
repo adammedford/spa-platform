@@ -33,8 +33,8 @@ namespace Platform.Identity.Tests;
 /// It logs at Trace, the stage host's floor (#140), and writes to no provider of its own. A test that
 /// reads the log attaches a <see cref="CapturedLog"/> in its services delegate,
 /// <c>services.AddSingleton(log.Provider)</c>, so a never-logged search (N-16) sees every line a
-/// logger could write, the OpenID Connect handler's Trace line with the callback's code and state
-/// among them.
+/// logger could write, the OpenID Connect handler's Trace line with the callback's authorization code
+/// among them (<see cref="IdentityGatewayLogTests"/> pins it).
 /// </summary>
 internal sealed class IdentityGateway : IAsyncDisposable
 {
