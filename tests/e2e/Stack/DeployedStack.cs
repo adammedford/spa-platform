@@ -71,10 +71,10 @@ public sealed class DeployedStack : IBrowserStack
     /// reaches <see cref="ClockMargin"/> back of a workstation clock that may itself be that far behind
     /// AWS's. Twice the margin and two seconds puts before this stack's start and every mark it makes
     /// each request line with a rule that the last stack caused, which is all
-    /// <see cref="AssertRuleLoggedAsync"/>, the one read after a mark, matches: a rule line is a refusal
-    /// the gateway writes as soon as it refuses, a moment after the request that caused it. It does not
-    /// hold for every line the last stack caused: a request the browser left in flight can end, and its
-    /// line be written, later than that.
+    /// <see cref="AssertRuleLoggedAsync"/>, the one read after a mark, matches: a rule line is a refusal,
+    /// written as the pipeline returns from the stage that ended the request (contracts/telemetry.md), so a
+    /// moment after the request that caused it. It does not hold for every line the last stack caused: a
+    /// request the browser left in flight can end, and its line be written, later than that.
     /// </summary>
     internal static readonly TimeSpan Quiet = (2 * ClockMargin) + TimeSpan.FromSeconds(2);
 
