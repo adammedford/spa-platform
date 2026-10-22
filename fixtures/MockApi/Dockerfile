@@ -22,6 +22,15 @@ RUN dotnet restore fixtures/MockApi/MockApi.csproj -a "$TARGETARCH"
 COPY fixtures/MockApi/ fixtures/MockApi/
 RUN dotnet publish fixtures/MockApi/MockApi.csproj -a "$TARGETARCH" --no-restore -c Release -o /app
 
+# The final stage runs as $APP_UID, and COPY and publish keep the modes the files had in the build
+# context, so an owner-only file on a workstation reaches the image owner-only and the runtime user
+# cannot read it: the gateway died that way in WebApplication.CreateBuilder (#204). Everyone may read
+# every file and enter every directory, executables keep their bit, and no one but root may write.
+# The step is src/Gateway/Dockerfile's own, character for character (#233). The copy into the final
+# stage is owned by root, as COPY makes it without --chown.
+# https://docs.docker.com/reference/dockerfile/#copy---chown---chmod
+RUN chmod -R a+rX,go-w /app
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS final
 WORKDIR /app
 
