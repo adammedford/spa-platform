@@ -1,10 +1,11 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Four jobs. The documents job runs on every pull request and costs about a minute: the documents a
+# Four jobs. The documents job runs on every pull request and costs a few minutes: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
-# the branch cleanup land.sh runs and of the main-checkout guard, whether every tracked shell script
-# parses, and --
+# the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
+# scripts under tools/scripts/ (tunnel.sh and verify-tunnel.sh, seed.sh, deploy.sh, rollback.sh,
+# teardown.sh and verify-release-immutability.sh), whether every tracked shell script parses, and --
 # first, so the two expensive jobs can read the answer -- which halves of the repository the change
 # touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
@@ -26,9 +27,10 @@
 # override for the integrator's own cross-owner work, and an override nobody can verify -- one
 # author, one reviewer -- is a permissions model for a team of one.
 #
-# The fourth job runs the shell scripts' test companions and the parse check again on macOS, under
-# the bash 3.2 the scripts target, and the main-checkout guard's companion on macOS, where the
-# sessions here run the hook, on every push and pull request; the steps that run them say why.
+# The fourth job runs the shell scripts' test companions, six of the cell scripts' among them, and the
+# parse check again on macOS, under the bash 3.2 the scripts target, and the main-checkout guard's
+# companion on macOS, where the sessions here run the hook, on every push and pull request; the
+# steps that run them say why.
 #
 # Two jobs are deliberately partial on the skeleton and say so when they are: the plan policy
 # (P-01 to P-03) needs the read-only AWS role task 1.0 creates and the allowlist task 1.9 writes,
@@ -316,6 +318,46 @@ jobs:
         # owner-only tree. It needs no Docker.
         run: python3 -I tools/image_build_tests.py
 
+      - name: tunnel.sh and verify-tunnel.sh reach the ALB through the gateway task, and refuse TLS the workstation does not trust
+        # The cell scripts under tools/scripts/ are workstream 1's, and six of their companions run
+        # here because neither half in .github/touches.sh covers that directory, so this job is the
+        # one that sees a change to them (change requests 1.6b, 1.7 and issue-122, decided on #226).
+        # certs_tests.py, logs_tests.py and cell_doubles_tests.py run under tools/check.sh --full and
+        # in no job here. This companion runs
+        # the real scripts with doubles for aws, session-manager-plugin and curl, and the real curl
+        # against two loopback listeners, one with nothing on it and one whose certificate no trust
+        # store holds, so no case reaches AWS. Under bash 5 here; the job below runs it under 3.2.
+        run: python3 -I tools/scripts/tunnel_tests.py
+
+      - name: seed.sh writes the outputs document, publishes the fixture releases and writes the first registry
+        # Change request 1.7, decided on #226. seed.sh, deploy.sh, rollback.sh and teardown.sh share
+        # the doubles in tools/scripts/cell_doubles.py: aws, terraform, docker and dotnet, so no case
+        # reaches AWS, Docker or NuGet, and every run's output is searched for the doubles' canaries.
+        # Under bash 5 here; the job below runs it under 3.2.
+        run: python3 -I tools/scripts/seed_tests.py
+
+      - name: deploy.sh builds and pushes the images, applies their digests and checks the running gateway is the one pushed
+        # Change request 1.7. The shared doubles as above. Under bash 5 here; the job below runs it
+        # under 3.2.
+        run: python3 -I tools/scripts/deploy_tests.py
+
+      - name: rollback.sh puts the previous gateway back and checks it is the one running
+        # Change request 1.7. The shared doubles as above. Under bash 5 here; the job below runs it
+        # under 3.2.
+        run: python3 -I tools/scripts/rollback_tests.py
+
+      - name: teardown.sh destroys the three roots in reverse order and proves nothing tagged is left
+        # Change request 1.7. The shared doubles as above. Under bash 5 here; the job below runs it
+        # under 3.2.
+        run: python3 -I tools/scripts/teardown_tests.py
+
+      - name: verify-release-immutability.sh runs P-04's cases against the platform bucket one line each
+        # Change request issue-122, decided with 1.6b and 1.7 on #226. Doubles for aws, terraform and
+        # date, the doubled AWS keeping each case's bucket, policy, repositories and teardown role in
+        # a file, so no case reaches AWS. The slowest of the cell companions, about a minute and a
+        # half on a Mac. Under bash 5 here; the job below runs it under 3.2.
+        run: python3 -I tools/scripts/verify_release_immutability_tests.py
+
   scripts-bash-3-2:
     name: Scripts under bash 3.2
     runs-on: macos-latest
@@ -361,6 +403,43 @@ jobs:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/prune_branches_tests.py
 
+      - name: tunnel.sh and verify-tunnel.sh, under the bash 3.2 macOS ships
+        # A sitting runs the tunnel from this Mac, under 3.2 (change request 1.6b).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/tunnel_tests.py
+
+      - name: seed.sh, under the bash 3.2 macOS ships
+        # The deployment scripts run from this Mac, under 3.2 (change request 1.7).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/seed_tests.py
+
+      - name: deploy.sh, under the bash 3.2 macOS ships
+        # Change request 1.7, as the step above.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/deploy_tests.py
+
+      - name: rollback.sh, under the bash 3.2 macOS ships
+        # Change request 1.7, as the step above.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/rollback_tests.py
+
+      - name: teardown.sh, under the bash 3.2 macOS ships
+        # Change request 1.7, as the step above.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/teardown_tests.py
+
+      - name: verify-release-immutability.sh, under the bash 3.2 macOS ships
+        # P-04 is checked from this Mac against the applied bucket, under 3.2 (change request
+        # issue-122).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/verify_release_immutability_tests.py
+
       - name: Every tracked shell script parses under bash 3.2
         # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
         # here even though the documents job, under bash 5, passed it.
@@ -386,6 +465,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
+      - name: The SDK and the runtimes the test hosts load
+        # The test hosts run on the SDK's shared framework, not the gateway image's, so a patch in one
+        # is not a patch in the other. This reads them the way a workstation reads its own, and the way
+        # tools/image-check.sh reads the image's (#273). Informational: no version fails it.
+        run: dotnet --version && dotnet --list-runtimes
 
       # Package versions are central, so one key covers the whole solution.
       - uses: actions/cache@v4

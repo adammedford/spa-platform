@@ -52,9 +52,8 @@ public sealed class ExposureTests
         Assert.All(cookies, cookie => Assert.Equal(app.Origin.Host, cookie.Domain));
 
         // Web storage, as the page's own script sees it.
-        string storage = await profile.Page.EvaluateAsync<string>(
-            "() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } })");
-        Assert.Equal("""{"local":{},"session":{}}""", storage);
+        string storage = await profile.Page.EvaluateAsync<string>(WebStorage.Script);
+        WebStorage.AssertEmpty(storage);
 
         // Every response the browser received from the cell, with its headers, every cookie value, the
         // storage and the page as it stands.

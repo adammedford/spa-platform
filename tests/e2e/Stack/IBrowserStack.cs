@@ -64,8 +64,12 @@ public interface IBrowserStack : IAsyncDisposable
     /// <summary>Publishes a release of the app's files, as <c>spactl release publish</c> does; serving it is <see cref="SwitchReleaseAsync"/>'s.</summary>
     Task PublishReleaseAsync(string appId, string release, IReadOnlyDictionary<string, byte[]> files);
 
-    /// <summary>Points the app at another release in a new registry revision, with no deployment, as <c>spactl release activate</c> does.</summary>
-    Task SwitchReleaseAsync(HarnessApp app, string release);
+    /// <summary>
+    /// Points the app at another release in a new registry revision, with no deployment, as <c>spactl
+    /// release activate</c> does. A row passes its test's token for a switch it is testing and a bound of
+    /// its own for a switch that restores the stack, which must run after the row is cancelled (#253).
+    /// </summary>
+    Task SwitchReleaseAsync(HarnessApp app, string release, CancellationToken ct);
 
     /// <summary>The parent domain every app host sits under, without the leading dot.</summary>
     string ParentDomain { get; }

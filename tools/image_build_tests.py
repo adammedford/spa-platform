@@ -44,13 +44,16 @@ DOCKERIGNORE = ROOT / ".dockerignore"
 # The Dockerfiles whose final stage runs a published tree as `$APP_UID`, each built from the
 # repository root. tools/bench/floor/Dockerfile is in because its header says it follows the
 # gateway's line for line, so a difference between them is a difference in the startup floor (#173).
-DOCKERFILES = ("src/Gateway/Dockerfile", "tools/bench/floor/Dockerfile")
+# fixtures/MockApi/Dockerfile is workstream 5's, and is in since it carries the gateway's chmod step
+# (#233), so the runtime user's read holds for all three images (#234).
+DOCKERFILES = ("src/Gateway/Dockerfile", "tools/bench/floor/Dockerfile",
+               "fixtures/MockApi/Dockerfile")
 
-# Tracked Dockerfiles another owner writes, held to the context cases only: this file is the
-# integrator's, and A-05 keeps one branch to one owner, so a case here cannot ask for a line in a
-# file the same branch may not edit. #204 names fixtures/MockApi/Dockerfile as workstream 5's
-# (OWNERSHIP.md).
-OTHER_OWNERS = ("fixtures/MockApi/Dockerfile",)
+# Tracked Dockerfiles another owner writes that the runtime-read case does not yet hold, held to the
+# context cases only: this file is the integrator's, and A-05 keeps one branch to one owner, so a
+# case here cannot ask for a line in a file the same branch may not edit. One moves to DOCKERFILES
+# once its owner's branch has landed the step (#234). Empty since the mock API's did.
+OTHER_OWNERS: tuple[str, ...] = ()
 
 # One path for each thing #204's first box says the context must not carry, at the depths the
 # workstation puts them. Paths, not files: the matcher reads names, so none needs to exist.

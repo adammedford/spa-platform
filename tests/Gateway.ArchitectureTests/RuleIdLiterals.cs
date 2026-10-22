@@ -1,11 +1,22 @@
+using Platform.Abstractions;
+
 namespace Gateway.ArchitectureTests;
 
 /// <summary>
-/// No workstream project spells a rule id as a quoted literal. ADR-0015 put the twelve ids of
+/// No workstream project spells a rule id or a problem code as a quoted literal. ADR-0015 put the twelve ids of
 /// <c>contracts/request-gate.md</c> in <c>Platform.Abstractions.RuleIds</c> because four workstreams
 /// raise them, and a copy nobody checks is how the gateway comes to refuse under an id the contract
 /// does not list. <c>RuleIdsTests</c> in <c>tests/Platform.Abstractions.Tests</c> holds those
 /// constants to the contract's table; this holds the workstream projects to the constants (#154).
+/// The problem codes of <c>Platform.Abstractions.Problems</c>, the <c>code</c> of a problem body,
+/// are held the same way (#158): see <see cref="Ids"/>. They stay two terms, since several rule ids
+/// end in one code, but the rule treats them alike, so "id" below means either.
+///
+/// <para>The rule keeps no exemption list. A homonym, a string spelled like a rule id or a problem
+/// code that means something else, is written through a library constant of its own vocabulary, as
+/// Identity writes the OAuth error value <c>invalid_request</c> through
+/// <c>OidcConstants.TokenErrors.InvalidRequest</c>; where no such constant exists, its owner raises
+/// it with workstream 6 as a question rather than adding an exemption.</para>
 ///
 /// <para>A rule over directories and ids rather than an assertion about this repository, for the
 /// reason <see cref="ReferenceRules"/> gives: <see cref="RuleIdLiteralTests"/> feeds it sources that
@@ -21,6 +32,17 @@ namespace Gateway.ArchitectureTests;
 public static class RuleIdLiterals
 {
     /// <summary>
+    /// What the rule holds the workstream projects to: the twelve rule ids of <see cref="RuleIds.All"/>
+    /// and the eleven problem codes of <see cref="Problems.Rows"/>, the <c>code</c> column of
+    /// <c>contracts/http-contract.md</c> -> Errors (#158). Read from those two types, never listed
+    /// here: <c>RuleIdsTests</c> and <c>RejectionTableTests</c> hold the types to the contract tables, so a
+    /// row the contract gains reaches this rule without an edit to it. A code is a stable string four
+    /// workstreams write, the reason ADR-0015 gave for the rule ids, so a quoted copy of one is the
+    /// same fault.
+    /// </summary>
+    public static IEnumerable<string> Ids => [.. RuleIds.All, .. Problems.Rows.Select(row => row.Code)];
+
+    /// <summary>
     /// One <c>path:line: "id"</c> string for each id found quoted on a line of a project's C# sources,
     /// outside the build output under <c>bin/</c> and <c>obj/</c>; empty when the rule holds. The
     /// path starts at the project directory's own name, the one name the rule is given that a reader
@@ -28,7 +50,7 @@ public static class RuleIdLiterals
     /// lines', then the ids'.
     /// </summary>
     /// <param name="projects">Each project's directory.</param>
-    /// <param name="ids">The rule ids, <c>RuleIds.All</c> for the live assertion.</param>
+    /// <param name="ids">The strings to look for, <see cref="Ids"/> for the live assertion.</param>
     /// <exception cref="DirectoryNotFoundException">
     /// A project directory is not there. A scan over it would read no file and answer as a clean
     /// project does, so it is an error rather than an empty answer.

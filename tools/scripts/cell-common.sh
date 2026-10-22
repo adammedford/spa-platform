@@ -1,4 +1,5 @@
-# cell-common.sh -- what seed.sh, deploy.sh, rollback.sh and teardown.sh share. Sourced, never run.
+# cell-common.sh -- what seed.sh, deploy.sh, rollback.sh, teardown.sh, logs.sh and tunnel.sh share.
+# Sourced, never run.
 #
 # Task 1.7 (#58). The plumbing is tunnel.sh's and verify-release-immutability.sh's: every AWS call
 # names the Region and --output text, a failure is reported by its error code and never by its
@@ -6,6 +7,8 @@
 # are built and read by cell_documents.py beside this file, because bash 3.2 has no JSON reader.
 #
 # The caller sets PROGRAM before sourcing this, and calls cell_start once its arguments are read.
+# tunnel.sh is the exception: it asks AWS only for its service's tasks, never who the caller is, so
+# it sets REGION, WORK, OUT and ERR itself.
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.

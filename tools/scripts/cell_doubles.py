@@ -545,9 +545,19 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
                 raise Unexpected(f"terraform plan {rest}")
             plan = next(t for t in rest if t.startswith("-out="))[len("-out="):]
             pathlib.Path(plan).write_text(json.dumps(variables))
+            # The task definition's container_definitions as a real plan shows them: the mock API's
+            # environment carries both apps' client ids (MockApi__App1Client and MockApi__App2Client
+            # in infra/modules/cell/ecs.tf), which the platform root reads from the apps root's state
+            # and the scripts never pass, and the module's variable for them is not sensitive (#251).
+            clients = (world["roots"]["apps"] or {}).get("clients", {})
             sys.stdout.write(f"  # module.cell.aws_ecs_task_definition.gateway must be replaced\n"
-                             f"      ~ image = \"{variables.get('gateway_image')}\"\n"
-                             f"Plan: 1 to add, 1 to change, 1 to destroy.\n")
+                             f"      ~ image = \"{variables.get('gateway_image')}\"\n")
+            if variables.get("mock_api_image"):
+                sys.stdout.write(f"      ~ image = \"{variables['mock_api_image']}\"\n")
+                for app, name in (("app1", "MockApi__App1Client"), ("app2", "MockApi__App2Client")):
+                    if app in clients:
+                        sys.stdout.write(f"          + {{ name = \"{name}\", value = \"{clients[app]['clientId']}\" }},\n")
+            sys.stdout.write("Plan: 1 to add, 1 to change, 1 to destroy.\n")
             if world["faults"].get("plan"):
                 status = 1
         elif command == "apply":

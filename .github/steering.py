@@ -316,13 +316,16 @@ STEERING_DOCUMENTS = (
 # document, and AGENTS.md gives it to every workstream as the way to ask for a contract change, so
 # holding it would hold every lane that followed the rules. Only an added file passes: a change
 # request edited or removed afterwards is the integrator deciding it, which is a change to
-# contracts/ like any other. An added request that already says it is decided is a decision too,
-# and is held by the rule below (#187).
+# contracts/ like any other. An added request that already names any state but open is a decision
+# too, and is held by the rule below (#187).
 CHANGE_REQUESTS = "contracts/changes/"
 
 # A change request's Status line, as every request under CHANGE_REQUESTS writes it:
 # `- **Status:** open`, or `- **Status:** decided, <date>. <prose>`. The first word is the state, and
-# any state but open is a decision: `accepted` decides a request as surely as `decided` does.
+# any state but open is a decision: `accepted` decides a request as surely as `decided` does. A
+# file whose Status lines name different states, such as an `open` left above a `decided` added
+# under a Decision heading, cannot say which holds, so it is held as unreadable (the second #188
+# review); one that names the same state twice reads as that state.
 STATUS = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?\*\*Status:\*\*[ \t]*(?P<state>[A-Za-z]+)")
 
 # A line that uses Status as a field's label, in a shape STATUS may not read: after any list marker,
@@ -882,22 +885,26 @@ def steering_changes(root: pathlib.Path, sha: str) -> list[str]:
 
 def state_at(root: pathlib.Path, revision: str, path: str) -> str | None:
     """The first word of a change request's Status line at a revision, lower-cased, such as "open"
-    or "decided"; UNREADABLE when a line labels a Status that STATUS cannot read; "open" when no
-    line names a Status at all; None when the file is absent there."""
+    or "decided"; UNREADABLE when its Status lines name different states, or when a line labels a
+    Status that STATUS cannot read and none it can; "open" when no line names a Status at all; None
+    when the file is absent there."""
     shown = git(root, "show", f"{revision}:{path}")
     if shown.returncode != 0:
         return None
-    found = STATUS.search(shown.stdout)
-    if found:
-        return found.group("state").lower()
+    states = {found.group("state").lower() for found in STATUS.finditer(shown.stdout)}
+    if len(states) == 1:
+        return states.pop()
+    if states:
+        return UNREADABLE
     return UNREADABLE if STATUS_LABEL.search(shown.stdout) else "open"
 
 
 def request_changes(root: pathlib.Path, sha: str) -> tuple[list[tuple[str, str]], list[str]]:
     """The change requests a commit sets to a decision, each with the state it now names, and the
     ones whose Status it leaves unreadable. A request is set to a decision when it is added naming
-    any state but open, or edited to name one it did not name before; a request already decided and
-    edited again decides nothing new."""
+    any state but open, or edited to name one it did not name before, so an edit from `accepted` to
+    `decided` is a decision as much as one from `open`; an edit that leaves the state as it was
+    decides nothing new."""
     found = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
                 "--root", sha)
     fields = found.stdout.split("\0")
@@ -918,7 +925,7 @@ def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
     """The commits the authority rule holds, newest first: between base and HEAD, or every commit
     HEAD reaches when no base is named, that are not merges, were made from AUTHORITY_SINCE on, and
     change a steering document other than by adding an open change request. From DECIDED_SINCE on,
-    a commit that sets a change request to decided is held too, adding it or not.
+    a commit that sets a change request to any state but open is held too, adding it or not.
 
     The starting point is compared here, commit by commit, and not given to `git log --since`:
     git's manual says of `--since-as-filter` that it "visits all commits in the range, rather than
@@ -1204,7 +1211,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         report(
             undecided,
-            "STEERING FAILED: a commit sets a change request to decided on no confirmed answer.",
+            "STEERING FAILED: a commit sets a change request to a decision on no confirmed answer.",
             "ADR-0021 decision 4: a change request's status line is committed on a confirmed",
             "answer, so the commit that says decided names the comment holding it, in an",
             "Authority: <URL> trailer. A #<n> alone does not decide a request: a ticket asking a",
@@ -1217,8 +1224,9 @@ def main(argv: list[str] | None = None) -> int:
             "STEERING FAILED: a change request's Status cannot be read.",
             "The decision rule reads a Status written `- **Status:** open` or `- **Status:**",
             "decided, <date>. ...`, as every change request has written it. Another shape could",
-            "say decided, so it is held rather than read as open, whatever the Authority:",
-            "trailer cites. Write the Status line in one of those two shapes.",
+            "say decided, and two Status lines naming different states cannot say which holds, so",
+            "either is held rather than read as open, whatever the Authority: trailer cites. Write",
+            "one Status line, in one of those two shapes, and edit it in place to decide.",
         ),
         report(
             refused,

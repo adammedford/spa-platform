@@ -88,6 +88,16 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "output" and "-raw" in c["argv"]])
         self.assertEqual(A, json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())["gatewayImage"])
 
+    def test_the_plan_prints_no_client_id_from_the_outputs_document(self):
+        # #251, as deploy_tests.py's case of the same name: the plan shows the mock API's
+        # environment, which carries both apps' client ids.
+        world = deployed_twice()
+        _, result = self.rolled_back(world)
+        for app, entry in world["roots"]["apps"]["clients"].items():
+            self.assertNotIn(entry["clientId"], result.output, f"{app}'s client id was printed")
+        self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
+        self.assertIn('name = "MockApi__App2Client", value = "<client-id:app2>"', result.stdout)
+
     def test_a_revision_with_the_running_image_is_passed_over(self):
         world = deployed_twice()
         # Revision 4: an apply that changed something other than the image.

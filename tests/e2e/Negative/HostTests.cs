@@ -23,13 +23,13 @@ public sealed class HostTests
         List<Uri> navigations = profile.RecordNavigations();
 
         LogMark mark = stack.MarkLog();
-        IResponse? unknown = await profile.Page.GotoAsync($"https://unknown.{stack.ParentDomain}:{app.Origin.Port}/");
+        IResponse? unknown = await profile.GotoAsync($"https://unknown.{stack.ParentDomain}:{app.Origin.Port}/");
         Assert.Equal(Contract.Error("not_found").Status, unknown?.Status);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
 
         // The resolver rule sends every port to the same listener, so only the Host header differs.
         mark = stack.MarkLog();
-        IResponse? wrongPort = await profile.Page.GotoAsync(new UriBuilder(app.Origin) { Port = app.Origin.Port + 1000 }.Uri.ToString());
+        IResponse? wrongPort = await profile.GotoAsync(new UriBuilder(app.Origin) { Port = app.Origin.Port + 1000 }.Uri.ToString());
         Assert.Equal(Contract.Error("not_found").Status, wrongPort?.Status);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
 

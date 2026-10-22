@@ -946,6 +946,23 @@ SCRIPTS = {
 }
 
 
+# Libraries for LibraryTests: files under tools/ or .github/ with no companion of their own, which a
+# script or a companion names, as tools/scripts/deploy.sh sources tools/scripts/cell-common.sh, which
+# names tools/scripts/cell_documents.py, and the cell companions load tools/scripts/cell_doubles.py
+# (#237). Over SCRIPTS, so deep.sh names its library.
+LIBRARIES = {
+    "tools/scripts/deep.sh": '. "$(dirname "$0")/lib.sh"\n',
+    "tools/scripts/lib.sh": "python3 \"$here/lib2.py\"\n",
+    "tools/scripts/lib2.py": "# a library only lib.sh names\n",
+    "tools/scripts/deep_tests.py": "doubles = load('tools/scripts/doubles.py')\n",
+    "tools/scripts/doubles.py": "# a library only the companion names\n",
+    "tools/scripts/mylib.sh": "# a library with a longer name\n",
+    "tools/other.py": "# reads tools/scripts/mylib.sh\n",
+    "tools/scripts/ending.sh": "# a library one comment names at a sentence's end\n",
+    ".github/gizmo.py": "# Sources tools/scripts/ending.sh. Reads tools/scripts/lib.sh.bak too.\n",
+}
+
+
 def companion(path: str) -> list[str]:
     """The call that runs the companion at `path`."""
     return ["python3", "-I", path]
@@ -1020,7 +1037,7 @@ class CompanionTests(CheckTestCase):
                 self.assertEqual(0, result.status, result.stderr)
                 self.assertEqual([], companions_run(case))
                 self.assertIn("check: test companions skipped: no script with one in tools/ or "
-                              ".github/ changed.", result.stdout.splitlines())
+                              ".github/, nor a file one names, changed.", result.stdout.splitlines())
                 self.assertNotIn("test companion", result.last_line(result.stdout))
 
     def test_the_checks_own_companion_never_runs_from_the_check(self):
@@ -1037,8 +1054,8 @@ class CompanionTests(CheckTestCase):
                 self.assertTrue(result.last_line(result.stdout).endswith(
                     ", but not tools/check_tests.py, which is CI's."), result.stdout)
         case = Case(self, extra=SCRIPTS, change="tools/check_tests.py")
-        self.assertIn("check: test companions skipped: no other script with one in tools/ or .github/ "
-                      "changed.", self.full(case).stdout.splitlines())
+        self.assertIn("check: test companions skipped: no other script with one in tools/ or .github/, "
+                      "nor a file one names, changed.", self.full(case).stdout.splitlines())
 
     def test_the_hook_runs_no_companion(self):
         # The hook's checks are unchanged (#68); the companions are the full check's and CI's.
@@ -1087,6 +1104,127 @@ class CompanionTests(CheckTestCase):
                                        "tools/image_build_tests.py"})
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
+
+
+class LibraryTests(CheckTestCase):
+    """#237: under --full, a change to a library -- a file under tools/ or .github/ with no
+    companion of its own -- runs the companion of every script or companion that names it, followed
+    through the libraries that name it in turn. On 2026-10-20 a broken redaction in
+    tools/scripts/cell-common.sh passed the full check green, because the change touched no script
+    with a companion (#186 P6). A file with a companion of its own ends the chain: its companion is
+    what tests it."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def scripts(self, **override: str) -> dict[str, str]:
+        return {**SCRIPTS, **LIBRARIES, **override}
+
+    def test_a_library_a_script_names_runs_that_scripts_companion(self):
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS + [companion("tools/scripts/deep_tests.py")], case.calls())
+        self.assertEqual(f"check: pass: {FULL_RAN}, the test companion tools/scripts/deep_tests.py.",
+                         result.last_line(result.stdout))
+
+    def test_a_library_two_names_away_runs_it_too(self):
+        # lib2.py is named only by lib.sh, which deep.sh names: cell_documents.py's shape, which
+        # tools/scripts/cell-common.sh names and the cell scripts source.
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib2.py")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/scripts/deep_tests.py")], companions_run(case))
+
+    def test_a_library_a_companion_names_runs_that_companion(self):
+        case = Case(self, extra=self.scripts(), change="tools/scripts/doubles.py")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/scripts/deep_tests.py")], companions_run(case))
+
+    def test_a_failing_companion_a_library_reaches_fails_the_verdict(self):
+        # The committed break in a redaction: the companion that runs it fails, and so does the check.
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib2.py",
+                    fails_on={"python3": "tools/scripts/deep_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the test companion tools/scripts/deep_tests.py failed.",
+                         result.last_line(result.stderr))
+
+    def test_a_file_with_its_own_companion_ends_the_chain(self):
+        # thing.sh names deep.sh, and other.py names thing.sh. A change to deep.sh runs deep.sh's
+        # companion and thing.sh's, whose script names it; other.py's does not run, since thing.sh
+        # has a companion of its own and the chain stops there. Without the stop, a change to
+        # almost any script reached through tools/check.sh or the workflow ran 24 of the 30 real
+        # companions.
+        case = Case(self, extra=self.scripts(**{
+            "tools/thing.sh": "# runs tools/scripts/deep.sh\n",
+            "tools/other.py": "# runs tools/thing.sh\n",
+        }), change="tools/scripts/deep.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/scripts/deep_tests.py"), companion("tools/thing_tests.py")],
+                         companions_run(case))
+
+    def test_a_companion_passes_nothing_on(self):
+        # A changed companion runs itself alone, whoever names it: .github/workflows/ci.yml names
+        # every companion CI runs. And a file that names a companion earns nothing from its library.
+        case = Case(self, extra=self.scripts(**{".github/gizmo.py": "# runs tools/scripts/deep_tests.py\n"}),
+                    change=("tools/scripts/deep_tests.py",))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/scripts/deep_tests.py")], companions_run(case))
+        case = Case(self, extra=self.scripts(**{".github/gizmo.py": "# runs tools/scripts/deep_tests.py\n"}),
+                    change=("tools/scripts/doubles.py",))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/scripts/deep_tests.py")], companions_run(case))
+
+    def test_a_name_inside_a_longer_name_is_not_a_use(self):
+        # other.py names mylib.sh, not lib.sh; check.sh is not image-check.sh.
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertNotIn(companion("tools/other_tests.py"), case.calls())
+        case = Case(self, extra=self.scripts(), change="tools/scripts/mylib.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/other_tests.py")], companions_run(case))
+
+    def test_a_name_that_ends_a_sentence_is_a_use(self):
+        # The full stop after ending.sh ends the name; the one inside lib.sh.bak does not, so
+        # gizmo.py names ending.sh and not lib.sh. On 2026-10-22 the stop was read as part of the
+        # name, and a change to tools/scripts/logs.sh missed cell_doubles.py's "for logs.sh."
+        case = Case(self, extra=self.scripts(), change="tools/scripts/ending.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion(".github/gizmo_tests.py")], companions_run(case))
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertNotIn(companion(".github/gizmo_tests.py"), case.calls())
+
+    def test_a_library_no_one_names_runs_nothing(self):
+        case = Case(self, extra=self.scripts(), change="tools/lonely.sh")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], companions_run(case))
+        self.assertIn("check: test companions skipped: no script with one in tools/ or .github/, nor "
+                      "a file one names, changed.", result.stdout.splitlines())
+
+    def test_the_hook_runs_no_companion_for_a_library(self):
+        case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
+    def test_both_halves_runs_the_same_companions_with_libraries_present(self):
+        case = Case(self, extra=self.scripts())
+        result = self.full(case, "--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        expected = [".github/gizmo_tests.py", ".github/named-tests.py", ".github/two_words_tests.py",
+                    "tools/other_tests.py", "tools/scripts/deep_tests.py", "tools/thing_tests.py"]
+        self.assertEqual([companion(path) for path in expected], companions_run(case))
 
 
 class InterpreterTests(CheckTestCase):

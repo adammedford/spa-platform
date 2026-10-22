@@ -47,7 +47,7 @@ public sealed class CsrfTests
         BrowserContextCookiesResult app2Cookie = Assert.Single(await alice.CookiesOfAsync(app2), cookie => cookie.Name == csrfCookie);
         BrowserContextCookiesResult app1Cookie = Assert.Single(await alice.CookiesOfAsync(app1), cookie => cookie.Name == csrfCookie);
 
-        await alice.Page.GotoAsync(app1.Url("/").ToString());
+        await alice.GotoAsync(app1.Url("/").ToString());
         await alice.WaitSignedInAsync(app1);
         string own = await TokenAsync(alice);
 

@@ -1209,6 +1209,19 @@ run "the_execution_role_is_separate_and_holds_only_image_pull_and_log_writes" {
     ])
     error_message = "No action in the execution role carries a wildcard."
   }
+
+  # The statements above are the execution role's grant only while its document merges no other
+  # document in, the same closure the task role's run holds: the mock provider never renders the
+  # merged policy, so an entry in either list would add or override statements no assertion here
+  # reads (#59's review; #239). The task role's closure says why unset is null, and why the
+  # deprecated JSON forms need nothing.
+  assert {
+    condition = (
+      data.aws_iam_policy_document.task_execution.source_policy_documents == null
+      && data.aws_iam_policy_document.task_execution.override_policy_documents == null
+    )
+    error_message = "The execution role's document merges in no other policy document: source_policy_documents and override_policy_documents each add or override statements that no assertion here reads."
+  }
 }
 
 run "both_roles_are_assumable_only_by_ecs_tasks_in_this_account" {
@@ -1258,6 +1271,19 @@ run "both_roles_are_assumable_only_by_ecs_tasks_in_this_account" {
       ])) == toset(["aws:SourceAccount", "aws:SourceArn"])
     )
     error_message = "The trust policy must hold aws:SourceAccount and aws:SourceArn, or ECS in another account can be made to assume this role on that account's behalf."
+  }
+
+  # The single statement above is the trust only while the document merges no other document in:
+  # an override_policy_documents entry letting any principal assume both roles left every run green
+  # before this assertion, because the mock provider never renders the merged policy (#59's review;
+  # #239). The task role's closure says why unset is null, and why the deprecated JSON forms need
+  # nothing.
+  assert {
+    condition = (
+      data.aws_iam_policy_document.ecs_tasks_trust.source_policy_documents == null
+      && data.aws_iam_policy_document.ecs_tasks_trust.override_policy_documents == null
+    )
+    error_message = "The roles' trust document merges in no other policy document: source_policy_documents and override_policy_documents each add or override statements, a wider principal among them, that no assertion here reads."
   }
 }
 

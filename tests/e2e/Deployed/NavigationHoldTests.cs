@@ -22,7 +22,7 @@ public sealed class NavigationHoldTests
 
         // The callback is the third hop of a redirect chain that starts at /bff/login and passes the
         // provider, which a Playwright route would not see.
-        Uri held = await NavigationHold.HoldAsync(profile.Page, callback, () => profile.Page.GotoAsync(app.Url("/bff/login").ToString()));
+        Uri held = await NavigationHold.HoldAsync(profile.Page, callback, () => profile.GotoAsync(app.Url("/bff/login").ToString()));
 
         // Asserted without printing the code or the state (Redacted).
         Assert.Equal(callback, Redacted.Url(held));
@@ -34,7 +34,7 @@ public sealed class NavigationHoldTests
 
         // Released, the same callback is a login: the code was not spent, and the browser's later
         // requests are its own again, Fetch Metadata and all.
-        await profile.Page.GotoAsync(held.ToString());
+        await profile.GotoAsync(held.ToString());
         await profile.WaitSignedInAsync(app);
     }
 
@@ -50,7 +50,7 @@ public sealed class NavigationHoldTests
         Assert.Contains("/signin-oidc", missed.Message, StringComparison.Ordinal);
 
         // And the page is not left held: the next callback-shaped request reaches the gateway.
-        IResponse? passed = await profile.Page.GotoAsync(app.Url("/signin-oidc").ToString());
+        IResponse? passed = await profile.GotoAsync(app.Url("/signin-oidc").ToString());
         Assert.NotNull(passed);
         Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url.AbsolutePath == "/signin-oidc");
     }

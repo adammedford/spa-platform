@@ -1,4 +1,5 @@
 using Gateway.E2ETests.Stack;
+using Microsoft.Playwright;
 
 namespace Gateway.E2ETests.Deployed;
 
@@ -45,5 +46,38 @@ public sealed class RedactedTests
         string printed = Redacted.Url($"not a url ?code={Code}");
 
         Assert.DoesNotContain(Code, printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_playwright_timeout_is_rethrown_as_a_timeout_whose_call_log_prints_no_query()
+    {
+        string log = $"""
+            Timeout 30000ms exceeded.
+            =========================== logs ===========================
+            waiting for navigation to "https://app1.spa-poc.test:8443/" until "load"
+              navigated to "{Authorize}"
+              navigated to "{Callback}"
+            ============================================================
+            """;
+
+        System.TimeoutException thrown = await Assert.ThrowsAsync<System.TimeoutException>(
+            () => Redacted.PlaywrightAsync(() => throw new System.TimeoutException(log)));
+
+        Assert.DoesNotContain(Code, thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(State, thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("navigated to \"https://spa-poc.auth.us-east-1.amazoncognito.com/oauth2/authorize\"", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("navigated to \"https://app1.spa-poc.test:8443/signin-oidc\"", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("Timeout 30000ms exceeded.", thrown.Message, StringComparison.Ordinal);
+        Assert.Null(thrown.InnerException);
+    }
+
+    [Fact]
+    public async Task A_playwright_failure_that_is_not_a_timeout_keeps_its_type_and_its_value_comes_back_when_none_is_thrown()
+    {
+        PlaywrightException thrown = await Assert.ThrowsAsync<PlaywrightException>(
+            () => Redacted.PlaywrightAsync<int>(() => throw new PlaywrightException($"net::ERR_ABORTED at {Callback}")));
+
+        Assert.Equal("net::ERR_ABORTED at https://app1.spa-poc.test:8443/signin-oidc", thrown.Message);
+        Assert.Equal(42, await Redacted.PlaywrightAsync(() => Task.FromResult(42)));
     }
 }

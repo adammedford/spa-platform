@@ -47,7 +47,7 @@ public sealed class SessionTests
         // its callback, so the browser never reaches app 2's shell. On the cell the provider knows this
         // browser from app 1's login and sends it straight back to that callback.
         List<Uri> navigations = profile.RecordNavigations();
-        await profile.StopAtCallbackAsync(app2, () => profile.Page.GotoAsync(app2.Url("/").ToString()));
+        await profile.StopAtCallbackAsync(app2, () => profile.GotoAsync(app2.Url("/").ToString()));
         Uri[] authorizations = [.. navigations.Where(url => url.GetLeftPart(UriPartial.Path) == stack.AuthorizeEndpoint)];
         Assert.True(authorizations.Length == 1, $"{authorizations.Length} authorize requests in {Redacted.Urls(navigations)}");
         Assert.Equal(app2.ClientId, QueryHelpers.ParseQuery(authorizations[0].Query)["client_id"].ToString());
@@ -91,7 +91,7 @@ public sealed class SessionTests
         // is always 404.
         Contract.ErrorRow reserved = Contract.Error("not_found");
         LogMark mark = stack.MarkLog();
-        IResponse? get = await profile.Page.GotoAsync(app.Url("/signout-oidc").ToString());
+        IResponse? get = await profile.GotoAsync(app.Url("/signout-oidc").ToString());
         Assert.Equal(reserved.Status, get?.Status);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.PathReserved, app.AppId);
 
@@ -103,7 +103,7 @@ public sealed class SessionTests
         Assert.Equal("POST", post.Request.Method);
         await stack.AssertRuleLoggedAsync(mark, RuleIds.PathReserved, app.AppId);
 
-        await profile.Page.GotoAsync(app.Url("/").ToString());
+        await profile.GotoAsync(app.Url("/").ToString());
         await profile.WaitSignedInAsync(app);
     }
 }

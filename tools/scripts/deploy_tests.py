@@ -146,6 +146,18 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
                          sorted([t["id"], t["state"]] for t in world["target_group"]["targets"]))
         self.assertIn("pass:", result.stdout)
 
+    def test_the_plan_prints_no_client_id_from_the_outputs_document(self):
+        # #251: the plan shows the mock API's environment, which carries both apps' client ids. The
+        # client ids are not in cell_doubles.SECRETS (logs_tests.py says why), so this case searches
+        # for them itself, and names what took their place so a script that dropped the plan's
+        # lines would not pass.
+        world = seeded_world()
+        _, result = self.deployed(world)
+        for app, entry in world["roots"]["apps"]["clients"].items():
+            self.assertNotIn(entry["clientId"], result.output, f"{app}'s client id was printed")
+        self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
+        self.assertIn('name = "MockApi__App2Client", value = "<client-id:app2>"', result.stdout)
+
     def test_two_deployments_push_two_tags(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
         self.assertEqual(0, case.run(SCRIPT).status)
