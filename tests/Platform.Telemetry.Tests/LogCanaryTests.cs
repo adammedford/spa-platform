@@ -71,14 +71,14 @@ public sealed class LogCanaryTests
 
         await SendCanaries(host);
 
-        Assert.NotEmpty(host.Log.Lines);
+        Assert.NotEmpty(host.Log.Rendered);
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request");
 
         // The cookie canary is the session key: the API call's line carries its reference instead.
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request"
             && line.GetProperty("route").GetString() == "api"
             && line.GetProperty("session_ref").GetString() == Platform.Abstractions.SessionRef.Of(Cookie));
-        foreach (string line in host.Log.Lines)
+        foreach (string line in host.Log.Rendered)
         {
             foreach (string canary in Canaries)
             {
@@ -97,9 +97,9 @@ public sealed class LogCanaryTests
         // The framework's request log and the handler's own Trace line carry the callback's code and
         // state; the plainly named properties carry the rest.
         Assert.Contains(host.Log.Lines, line =>
-            line.Contains("Request starting", StringComparison.Ordinal) && line.Contains(Code, StringComparison.Ordinal));
+            line.Text.Contains("Request starting", StringComparison.Ordinal) && line.Text.Contains(Code, StringComparison.Ordinal));
         Assert.All(Canaries, canary =>
-            Assert.Contains(host.Log.Lines, line => line.Contains(canary, StringComparison.Ordinal)));
+            Assert.Contains(host.Log.Lines, line => line.Text.Contains(canary, StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -142,6 +142,11 @@ public sealed class LogCanaryTests
         handler.LogInformation("held back at information");
         handler.LogError("held back at error");
 
-        Assert.DoesNotContain(host.Log.Lines, line => line.Contains("held back", StringComparison.Ordinal));
+        // The control: Rendered is empty when no console formatter is configured, so a line from a
+        // category that is not held back must render, or the search below proves nothing.
+        host.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Platform.Identity.AuthenticationEvents").LogWarning("Safe callback outcome {Rule}", "auth.callback");
+        Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "Safe callback outcome auth.callback");
+        Assert.DoesNotContain(host.Log.Rendered, line => line.Contains("held back", StringComparison.Ordinal));
     }
 }

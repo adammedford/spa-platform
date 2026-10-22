@@ -1,18 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Logging.Console;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -24,19 +17,22 @@ namespace Platform.Telemetry.Tests;
 
 /// <summary>
 /// Workstream 6's own gateway, cut down to <c>UsePlatformTelemetry</c> and what stands either side of
-/// it: the telemetry entry points, a stand-in for host resolution that pins <c>app1</c> as <see cref="IAppFeature"/>
-/// (task 2.3's job; the composed gateway cannot run past its stub yet, contracts/pipeline.md), a
-/// stand-in for the later stages that write <see cref="IRequestTelemetryFeature"/>, the framework's
-/// authentication with one real OpenID Connect scheme, and a terminal that calls an upstream over a
-/// real socket with the request's own query string.
+/// it, built on <see cref="StageHost"/> (#140, #152): the telemetry entry points, a stand-in for host
+/// resolution that pins <c>app1</c> as <see cref="IAppFeature"/>, a stand-in for the later stages
+/// that write <see cref="IRequestTelemetryFeature"/>, the framework's authentication with one real
+/// OpenID Connect scheme, and a terminal that calls an upstream over a real socket with the
+/// request's own query string.
 ///
-/// Every log line the host writes is captured as the gateway's own JSON formatter renders it, so a
-/// test reads the same bytes stdout would carry. The console logger is still registered, so the
-/// lines also reach the test output.
+/// The stage host's telemetry stand-in stays off: the real <c>UsePlatformTelemetry</c> is the first
+/// thing in the pipeline delegate. <c>AddPlatformTelemetry</c> clears the providers and adds the
+/// console logger back inside the services delegate, and the stage host registers its capture after
+/// that, so <see cref="CapturedLog.Rendered"/> and <see cref="CapturedLog.Json"/> carry what stdout
+/// would, rendered by the platform's JSON formatter found by its configured name.
 ///
 /// <paramref name="telemetry"/> false is the control: the same host and the same traffic with no
-/// telemetry entry points, its lines captured as each logger's own formatted message. It is what
-/// shows the canaries do reach the logging pipeline, so N-16's "none appear" can fail.
+/// telemetry entry points and no console logger, so the capture holds only the plain records
+/// (<see cref="CapturedLog.Lines"/>). It is what shows the canaries do reach a log with no
+/// telemetry, so N-16's "none appear" can fail.
 /// </summary>
 public sealed class TelemetryHost : IAsyncDisposable
 {
@@ -48,18 +44,17 @@ public sealed class TelemetryHost : IAsyncDisposable
     /// <summary>A header naming the rule id the later-stage stand-in rejects the request under.</summary>
     public const string RejectHeader = "X-Test-Reject";
 
-    private readonly WebApplication app;
+    private readonly StageHost host;
     private readonly EchoUpstreamListener upstream;
+    private readonly ConcurrentQueue<Activity> spans;
 
-    private TelemetryHost(WebApplication app, EchoUpstream echo, EchoUpstreamListener upstream, Uri baseAddress,
-        CapturedLog log, ConcurrentQueue<Activity> spans, List<Metric> metrics)
+    private TelemetryHost(StageHost host, EchoUpstream echo, EchoUpstreamListener upstream,
+        ConcurrentQueue<Activity> spans, List<Metric> metrics)
     {
-        this.app = app;
+        this.host = host;
         this.upstream = upstream;
-        Upstream = echo;
-        BaseAddress = baseAddress;
-        Log = log;
         this.spans = spans;
+        Upstream = echo;
         Metrics = metrics;
     }
 
@@ -78,11 +73,10 @@ public sealed class TelemetryHost : IAsyncDisposable
         }
     }
 
-    public Uri BaseAddress { get; }
+    public Uri BaseAddress => host.BaseAddress;
 
-    public CapturedLog Log { get; }
-
-    private readonly ConcurrentQueue<Activity> spans;
+    /// <summary>The stage host's capture: plain records always, and the rendered JSON lines when telemetry is on.</summary>
+    public CapturedLog Log => host.Log;
 
     // Export callbacks can append after a response reaches the client; readers need a stable
     // snapshot for N-16 and F-11 instead of enumerating a list while another host exports.
@@ -93,7 +87,7 @@ public sealed class TelemetryHost : IAsyncDisposable
     /// <summary>The upstream's recorder, which saw what the terminal sent.</summary>
     public EchoUpstream Upstream { get; }
 
-    public IServiceProvider Services => app.Services;
+    public IServiceProvider Services => host.Services;
 
     public static async Task<TelemetryHost> StartAsync(
         CancellationToken ct,
@@ -104,11 +98,36 @@ public sealed class TelemetryHost : IAsyncDisposable
         EchoUpstream echo = new();
         EchoUpstreamListener listener = await echo.ListenAsync(ct);
 
-        WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        ConcurrentQueue<Activity> spans = new();
+        List<Metric> metrics = [];
+        AppDefinition entry = TestApps.Entry(AppId);
+
+        StageHost host;
+        try
         {
-            EnvironmentName = "Production",
-        });
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
+            host = await StageHost.StartAsync(new StageHostOptions
+            {
+                Services = builder => ConfigureServices(builder, telemetry, configuration, listener.BaseAddress, spans, metrics),
+                Pipeline = web => ComposePipeline(web, telemetry, entry, unknownHostRule),
+            }, ct);
+        }
+        catch
+        {
+            await listener.DisposeAsync();
+            throw;
+        }
+
+        return new TelemetryHost(host, echo, listener, spans, metrics);
+    }
+
+    private static void ConfigureServices(
+        WebApplicationBuilder builder,
+        bool telemetry,
+        IDictionary<string, string?>? configuration,
+        Uri upstreamAddress,
+        ConcurrentQueue<Activity> spans,
+        List<Metric> metrics)
+    {
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Platform:Cell"] = "test-cell",
@@ -118,25 +137,16 @@ public sealed class TelemetryHost : IAsyncDisposable
             builder.Configuration.AddInMemoryCollection(configuration);
         }
 
-        ConcurrentQueue<Activity> spans = new();
-        List<Metric> metrics = [];
-        CapturedLog log = new();
-
         if (telemetry)
         {
+            // Clears the providers and adds the console logger with the platform's JSON formatter;
+            // the stage host registers its capture after this delegate, so the capture survives.
             builder.AddPlatformTelemetry();
             builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddProcessor(new SimpleActivityExportProcessor(new CapturedActivityExporter(spans))));
             builder.Services.ConfigureOpenTelemetryMeterProvider(meters => meters.AddInMemoryExporter(metrics));
-            builder.Logging.Services.AddSingleton<ILoggerProvider>(services => new CapturingProvider(log,
-                services.GetServices<ConsoleFormatter>().Single(f => f.Name == PlatformJsonFormatter.FormatterName)));
-        }
-        else
-        {
-            builder.Logging.ClearProviders();
-            builder.Logging.Services.AddSingleton<ILoggerProvider>(new CapturingProvider(log, formatter: null));
         }
 
-        builder.Services.AddHttpClient("upstream", client => client.BaseAddress = listener.BaseAddress);
+        builder.Services.AddHttpClient("upstream", client => client.BaseAddress = upstreamAddress);
 
         // One real OpenID Connect scheme, so the callback below reaches the shipped handler, which
         // logs the full callback URL at Trace (ADR-0007 -> Logging rules this forces). The
@@ -154,9 +164,10 @@ public sealed class TelemetryHost : IAsyncDisposable
                     TokenEndpoint = "https://idp.invalid/token",
                 };
             });
+    }
 
-        WebApplication web = builder.Build();
-
+    private static void ComposePipeline(WebApplication web, bool telemetry, AppDefinition entry, string unknownHostRule)
+    {
         if (telemetry)
         {
             web.UsePlatformTelemetry();
@@ -166,7 +177,6 @@ public sealed class TelemetryHost : IAsyncDisposable
         // the host.unknown rule id (overridable to isolate metric tests) the real stage gives an
         // unknown host (change request 6.4 ->
         // Decision). Written null-conditionally, as every real stage writes it.
-        AppDefinition entry = TestApps.Entry(AppId);
         web.Use(async (context, next) =>
         {
             if (context.Request.Headers["X-Test-Unknown-Host"].Count > 0)
@@ -220,94 +230,18 @@ public sealed class TelemetryHost : IAsyncDisposable
                 ? int.Parse(code.Value!.TrimStart('/'), System.Globalization.CultureInfo.InvariantCulture)
                 : StatusCodes.Status200OK;
         });
-
-        await web.StartAsync(ct);
-
-        Uri address = new(web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the host started without an address."));
-
-        return new TelemetryHost(web, echo, listener, address, log, spans, metrics);
     }
 
     /// <summary>Exports what the providers hold, so spans and metrics are in the lists.</summary>
     public void Flush()
     {
-        app.Services.GetService<TracerProvider>()?.ForceFlush();
-        app.Services.GetService<MeterProvider>()?.ForceFlush();
+        host.Services.GetService<TracerProvider>()?.ForceFlush();
+        host.Services.GetService<MeterProvider>()?.ForceFlush();
     }
 
     public async ValueTask DisposeAsync()
     {
-        await app.StopAsync();
-        await app.DisposeAsync();
+        await host.DisposeAsync();
         await upstream.DisposeAsync();
-    }
-
-    /// <summary>Every line written, and those that are JSON parsed for assertions.</summary>
-    public sealed class CapturedLog
-    {
-        private readonly List<string> lines = [];
-
-        public IReadOnlyList<string> Lines
-        {
-            get
-            {
-                lock (lines)
-                {
-                    return [.. lines];
-                }
-            }
-        }
-
-        public IReadOnlyList<JsonElement> Json =>
-            [.. Lines.Select(line => JsonDocument.Parse(line).RootElement.Clone())];
-
-        internal void Add(string line)
-        {
-            lock (lines)
-            {
-                lines.Add(line);
-            }
-        }
-    }
-
-    /// <summary>
-    /// A logger provider that renders each entry with the gateway's own formatter, the one the
-    /// console logger uses, into a line of its own. With no formatter (the control), it keeps the
-    /// logger's own formatted message.
-    /// </summary>
-    private sealed class CapturingProvider(CapturedLog log, ConsoleFormatter? formatter) : ILoggerProvider
-    {
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(log, formatter, categoryName);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class CapturingLogger(CapturedLog log, ConsoleFormatter? formatter, string category) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-                Func<TState, Exception?, string> render)
-            {
-                if (formatter is null)
-                {
-                    log.Add(render(state, exception) + " " + exception);
-                    return;
-                }
-
-                using StringWriter writer = new();
-                formatter.Write(new LogEntry<TState>(logLevel, category, eventId, state, exception, render),
-                    new LoggerExternalScopeProvider(), writer);
-                foreach (string line in writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    log.Add(line);
-                }
-            }
-        }
     }
 }
