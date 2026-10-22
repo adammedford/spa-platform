@@ -368,8 +368,8 @@ Worktree ${WT(t)}, branch ${impl.branch}, fork point ${impl.forkSha}. Merging it
 The implementer's summary: ${impl.summary}
 The reviewer's summary: ${rev.summary}
 
-STEP 0 — durable state: tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
-STEP 1 — the back-merge. Record before=\`git -C ${WT(t)} rev-parse HEAD\`, then \`git -C ${WT(t)} merge --no-ff ${INT_BRANCH}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
+STEP 0 — durable state: tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
+STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${INT_BRANCH}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
 STEP 2 — the check, against the run branch's tip that was merged in, so the diff judged is this ticket's change and its resolution:
 ${GATE({ dir: WT(t), log: `${LOG}/${t.id}-resolve.txt`, kind: 'task', fork: '<tip>', port: PORT(t.n) })}
   Red: fix the resolution only (never the ticket's own behaviour) and re-run, at most two runs in total. Still red: \`git -C ${WT(t)} reset --hard <before>\` and return "unresolved" with the failing lines.
@@ -529,13 +529,15 @@ const implement = async (t) => {
     return impl
 }
 
-// Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136).
-const finish = async (t, impl) => {
+// Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
+// names the stage it is in, so a throw from the tail is reported against that stage, not always review.
+const finish = async (t, impl, at) => {
     const rev = await withSlot(() => agent(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
     if (!rev) return fail(t, 'review', { why: 'agent died', impl })
     if (rev.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev, impl }; grill(t, `The reviewer stopped on: ${rev.question}`); return false }
     if (rev.outcome !== 'committed') return fail(t, 'review', { ...rev, impl })
 
+    at.stage = 'integrate'
     // One ticket at a time (#136): the lock covers the first merge, a conflict's resolve and the one retry.
     const merge = (retry, head) => withSlot(() => agent(integratePrompt(t, head, rev, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT }))
     const { integ, conflict } = await serial(async () => {
@@ -572,7 +574,7 @@ const runLane = async (owner, queue) => {
     settled[t.id] = ok === true   // set here, before the promise's own handler runs, so this lane's next pick sees it
     resolveDone[t.id](ok === true)
   }
-  const guard = (t, stage, p) => p.catch((e) => fail(t, stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
+  const guard = (t, at, p) => p.catch((e) => fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
     const t = queue.find(ready)
     if (!t) {
@@ -582,8 +584,9 @@ const runLane = async (owner, queue) => {
       continue
     }
     queue.splice(queue.indexOf(t), 1)
-    const out = await guard(t, 'implement', implement(t))
-    if (out && typeof out === 'object') tails.push(guard(t, 'review', finish(t, out)).then((ok) => settle(t, ok)))
+    const out = await guard(t, { stage: 'implement' }, implement(t))
+    const at = { stage: 'review' }
+    if (out && typeof out === 'object') tails.push(guard(t, at, finish(t, out, at)).then((ok) => settle(t, ok)))
     else settle(t, out)
   }
   await Promise.all(tails)
