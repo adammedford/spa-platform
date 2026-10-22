@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Platform.Testing;
 
 namespace Platform.Security.Tests;
 
@@ -35,11 +36,8 @@ public sealed class RequestLimitsTests
 
         // The rule id is in the refusal's log line; the method itself is not, because the client
         // chose it. (The framework's own request log names it; task 6.4 replaces that log.)
-        lock (host.Log)
-        {
-            string refusal = Assert.Single(host.Log, line => line.Contains("rule=gate.method"));
-            Assert.DoesNotContain(method, refusal);
-        }
+        CapturedLine refusal = Assert.Single(host.Log.LinesFor("gate.method"));
+        Assert.DoesNotContain(method, refusal.Text);
     }
 
     [Theory]
@@ -62,10 +60,10 @@ public sealed class RequestLimitsTests
     {
         await using SecurityHost host = await SecurityHost.StartAsync(Ct, "10.20.0.0/16");
 
-        string response = await host.RawAsync(
+        RawResponse response = await host.RawAsync(
             $"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nConnection: close", Ct);
 
-        Assert.StartsWith("HTTP/1.1 405 ", response);
+        Assert.Equal(405, response.StatusCode);
     }
 
     [Fact]
@@ -74,11 +72,11 @@ public sealed class RequestLimitsTests
         await using SecurityHost host = await SecurityHost.StartAsync(Ct, "10.20.0.0/16");
 
         // One byte past the configured total, in a single header.
-        string response = await host.RawAsync(
+        RawResponse response = await host.RawAsync(
             $"GET / HTTP/1.1\r\nHost: {host.BaseAddress.Authority}\r\nX-Big: {new string('a', PlatformSecurityLimits.MaxRequestHeadersTotalSize)}", Ct);
 
-        Assert.StartsWith("HTTP/1.1 431 ", response);
-        Assert.Contains("Content-Length: 0", response);
+        Assert.Equal(431, response.StatusCode);
+        Assert.Equal("0", response.Header("Content-Length"));
     }
 
     [Fact]
@@ -88,10 +86,10 @@ public sealed class RequestLimitsTests
 
         string many = string.Join("\r\n",
             Enumerable.Range(0, PlatformSecurityLimits.MaxRequestHeaderCount + 1).Select(i => $"X-H{i}: v"));
-        string response = await host.RawAsync(
+        RawResponse response = await host.RawAsync(
             $"GET / HTTP/1.1\r\nHost: {host.BaseAddress.Authority}\r\n{many}", Ct);
 
-        Assert.StartsWith("HTTP/1.1 431 ", response);
+        Assert.Equal(431, response.StatusCode);
     }
 
     [Fact]
@@ -99,10 +97,10 @@ public sealed class RequestLimitsTests
     {
         await using SecurityHost host = await SecurityHost.StartAsync(Ct, "10.20.0.0/16");
 
-        string response = await host.RawAsync(
+        RawResponse response = await host.RawAsync(
             $"GET / HTTP/1.1\r\nHost: {host.BaseAddress.Authority}\r\nConnection: close\r\nX-Big: {new string('a', PlatformSecurityLimits.MaxRequestHeadersTotalSize - 1024)}", Ct);
 
-        Assert.StartsWith("HTTP/1.1 200 ", response);
+        Assert.Equal(200, response.StatusCode);
     }
 
     [Fact]

@@ -4,13 +4,9 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -40,6 +36,9 @@ namespace Platform.Security.Tests;
 /// had been read before it, then echoes the body, and it sends <c>Access-Control-Allow-Origin</c>, so a
 /// refusal that carries none shows the request stopped at the antiforgery check.</item>
 /// </list>
+///
+/// The listener, the telemetry stand-in, the captured log and the client are
+/// <see cref="StageHost"/>'s (#140).
 /// </summary>
 public sealed class AntiforgeryHost : IAsyncDisposable
 {
@@ -49,45 +48,24 @@ public sealed class AntiforgeryHost : IAsyncDisposable
 
     public const string UserHeader = "X-Test-User";
 
-    private readonly WebApplication app;
-    private readonly HttpClient client;
-    private readonly List<SettableRequestTelemetryFeature> telemetryFeatures;
+    private StageHost stage = null!;
     private int reached;
     private long lastBodyBytesRead = -1;
 
-    private AntiforgeryHost(
-        WebApplication app, Uri baseAddress, List<string> log, List<SettableRequestTelemetryFeature> telemetryFeatures)
+    private AntiforgeryHost()
     {
-        this.app = app;
-        BaseAddress = baseAddress;
-        Log = log;
-        this.telemetryFeatures = telemetryFeatures;
-
-        // No cookie container: each test plays a browser, or an attacker, and writes Cookie itself.
-        client = new HttpClient(new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = false });
     }
 
-    public Uri BaseAddress { get; }
+    public Uri BaseAddress => stage.BaseAddress;
 
-    /// <summary>Every log line the host wrote, formatted.</summary>
-    public List<string> Log { get; }
+    /// <summary>Every line the host logged, captured at Trace.</summary>
+    public CapturedLog Log => stage.Log;
 
     /// <summary>
-    /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, in the order the
-    /// requests entered the telemetry middleware, with null for a request that left none. Empty unless
-    /// the host was started with <c>telemetry: true</c>, because UsePlatformTelemetry is the only thing
-    /// that creates that feature and this host is cut down to one stage.
+    /// The rule id each request left on <see cref="IRequestTelemetryFeature"/>, null where none was left.
+    /// Empty unless the host was started with <c>telemetryStandIn: true</c>.
     /// </summary>
-    public IReadOnlyList<string?> TelemetryRules
-    {
-        get
-        {
-            lock (telemetryFeatures)
-            {
-                return [.. telemetryFeatures.Select(feature => feature.Rule)];
-            }
-        }
-    }
+    public IReadOnlyList<string?> TelemetryRules => stage.TelemetryRules;
 
     /// <summary>How many requests reached the terminal, which stands for everything after this stage.</summary>
     public int Reached => Volatile.Read(ref reached);
@@ -100,136 +78,108 @@ public sealed class AntiforgeryHost : IAsyncDisposable
     /// Runs after <c>AddPlatformSecurity</c>, for a test that puts back a framework default to show what
     /// the platform's setting prevents.
     /// </param>
-    /// <param name="telemetry">
-    /// true installs UsePlatformTelemetry's stand-in, a <see cref="SettableRequestTelemetryFeature"/>
-    /// per request, and records what each request left on it in <see cref="TelemetryRules"/>.
+    /// <param name="telemetryStandIn">
+    /// true asks <see cref="StageHost"/> for the telemetry stand-in, outermost as
+    /// <c>UsePlatformTelemetry</c> is, so the method allowlist's 405 inside
+    /// <c>UsePlatformForwardedHeaders</c> finds the feature too. Off, every stage here runs with no
+    /// feature installed, and its write stays proven null-conditional (change request 6.4).
     /// </param>
     public static async Task<AntiforgeryHost> StartAsync(
-        CancellationToken ct, Action<IServiceCollection>? configure = null, bool telemetry = false)
+        CancellationToken ct, Action<IServiceCollection>? configure = null, bool telemetryStandIn = false)
     {
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Trace);
-
-        List<string> log = [];
-        builder.Logging.AddProvider(new ListLoggerProvider(log));
-        builder.Configuration.AddInMemoryCollection(
-            [new KeyValuePair<string, string?>("ForwardedHeaders:TrustedNetworks:0", "127.0.0.0/8")]);
-
-        builder.AddPlatformSecurity();
-
-        // Keys in memory, so a test run writes no key ring under the user's profile.
-        builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
-        configure?.Invoke(builder.Services);
-
-        WebApplication web = builder.Build();
-        AntiforgeryHost? self = null;
-        List<SettableRequestTelemetryFeature> telemetryFeatures = [];
-
-        web.UsePlatformForwardedHeaders();
-
-        // UsePlatformTelemetry's stand-in, when a test asks for it: the feature that stage sets on the
-        // request before calling the rest of the pipeline and reads back once it returns
-        // (contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line"). It is off
-        // by default, so every other test here runs the stage with no feature installed; the write is
-        // Rejection's and null-conditional, proven in tests/Platform.Abstractions.Tests (#142, Q10).
-        //
-        // The feature is recorded before the request runs rather than after: each stage sets the rule
-        // id before it writes the response, so a test reading the recorded feature cannot race the
-        // response body back to the client.
-        if (telemetry)
+        AntiforgeryHost self = new();
+        self.stage = await StageHost.StartAsync(new StageHostOptions
         {
-            web.Use((context, next) =>
+            TelemetryStandIn = telemetryStandIn,
+            Services = builder =>
             {
-                SettableRequestTelemetryFeature feature = new();
-                lock (telemetryFeatures)
+                builder.Configuration.AddInMemoryCollection(
+                    [new KeyValuePair<string, string?>("ForwardedHeaders:TrustedNetworks:0", "127.0.0.0/8")]);
+
+                builder.AddPlatformSecurity();
+
+                // Keys in memory, so a test run writes no key ring under the user's profile.
+                builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
+                configure?.Invoke(builder.Services);
+            },
+            Pipeline = web =>
+            {
+                web.UsePlatformForwardedHeaders();
+
+                // Host resolution's stand-in: the app whose host the request names. Any other host is a
+                // test error. It compares the host without its port, where UsePlatformHostResolution
+                // compares the full authority, port included (contracts/pipeline.md); #147 records the
+                // difference and leaves it, because every request here names an app's host with no port.
+                web.Use((context, next) =>
                 {
-                    telemetryFeatures.Add(feature);
-                }
+                    AppDefinition pinned = context.Request.Host.Host switch
+                    {
+                        var h when h == App1.Host => App1,
+                        var h when h == App2.Host => App2,
+                        var h => throw new InvalidOperationException($"The test host serves {App1.Host} and {App2.Host}, not {h}."),
+                    };
+                    context.Features.Set<IAppFeature>(SettableAppFeature.For(pinned));
+                    return next(context);
+                });
 
-                context.Features.Set<IRequestTelemetryFeature>(feature);
-                return next(context);
-            });
-        }
+                // Authentication's stand-in: the signed-in user, if the test names one.
+                web.Use((context, next) =>
+                {
+                    string? user = context.Request.Headers[UserHeader];
+                    if (user is not null)
+                    {
+                        context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], authenticationType: "test"));
+                    }
 
-        // Host resolution's stand-in: the app whose host the request names. Any other host is a test
-        // error.
-        web.Use((context, next) =>
-        {
-            AppDefinition pinned = context.Request.Host.Host switch
-            {
-                var h when h == App1.Host => App1,
-                var h when h == App2.Host => App2,
-                var h => throw new InvalidOperationException($"The test host serves {App1.Host} and {App2.Host}, not {h}."),
-            };
-            context.Features.Set<IAppFeature>(SettableAppFeature.For(pinned));
-            return next(context);
-        });
+                    return next(context);
+                });
 
-        // Authentication's stand-in: the signed-in user, if the test names one.
-        web.Use((context, next) =>
-        {
-            string? user = context.Request.Headers[UserHeader];
-            if (user is not null)
-            {
-                context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], authenticationType: "test"));
-            }
+                // Counts what anything after this point reads of the body, so a test can show the
+                // antiforgery check read none.
+                web.Use(async (context, next) =>
+                {
+                    CountingStream counting = new(context.Request.Body);
+                    context.Request.Body = counting;
+                    context.Items[typeof(CountingStream)] = counting;
+                    Interlocked.Exchange(ref self.lastBodyBytesRead, -1);
+                    await next(context);
+                    if (context.Items.ContainsKey("terminal") is false)
+                    {
+                        Interlocked.Exchange(ref self.lastBodyBytesRead, counting.BytesRead);
+                    }
+                });
 
-            return next(context);
-        });
+                web.UsePlatformAntiforgery();
 
-        // Counts what anything after this point reads of the body, so a test can show the antiforgery
-        // check read none.
-        web.Use(async (context, next) =>
-        {
-            CountingStream counting = new(context.Request.Body);
-            context.Request.Body = counting;
-            context.Items[typeof(CountingStream)] = counting;
-            Interlocked.Exchange(ref self!.lastBodyBytesRead, -1);
-            await next(context);
-            if (context.Items.ContainsKey("terminal") is false)
-            {
-                Interlocked.Exchange(ref self.lastBodyBytesRead, counting.BytesRead);
-            }
-        });
+                web.Run(async context =>
+                {
+                    ICsrfTokens tokens = context.RequestServices.GetRequiredService<ICsrfTokens>();
 
-        web.UsePlatformAntiforgery();
+                    if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/bff/session")
+                    {
+                        await context.Response.WriteAsJsonAsync(new { csrfToken = tokens.Issue(context) }, ct);
+                        return;
+                    }
 
-        web.Run(async context =>
-        {
-            ICsrfTokens tokens = context.RequestServices.GetRequiredService<ICsrfTokens>();
+                    if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/bff/logout")
+                    {
+                        tokens.Clear(context);
+                        return;
+                    }
 
-            if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/bff/session")
-            {
-                await context.Response.WriteAsJsonAsync(new { csrfToken = tokens.Issue(context) }, ct);
-                return;
-            }
+                    CountingStream counting = (CountingStream)context.Items[typeof(CountingStream)]!;
+                    context.Items["terminal"] = true;
+                    Interlocked.Exchange(ref self.lastBodyBytesRead, counting.BytesRead);
+                    Interlocked.Increment(ref self.reached);
 
-            if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/bff/logout")
-            {
-                tokens.Clear(context);
-                return;
-            }
+                    using StreamReader reader = new(context.Request.Body);
+                    string body = await reader.ReadToEndAsync(ct);
+                    context.Response.Headers.AccessControlAllowOrigin = "*";
+                    await context.Response.WriteAsync("passed:" + body, ct);
+                });
+            },
+        }, ct);
 
-            CountingStream counting = (CountingStream)context.Items[typeof(CountingStream)]!;
-            context.Items["terminal"] = true;
-            Interlocked.Exchange(ref self!.lastBodyBytesRead, counting.BytesRead);
-            Interlocked.Increment(ref self.reached);
-
-            using StreamReader reader = new(context.Request.Body);
-            string body = await reader.ReadToEndAsync(ct);
-            context.Response.Headers.AccessControlAllowOrigin = "*";
-            await context.Response.WriteAsync("passed:" + body, ct);
-        });
-
-        await web.StartAsync(ct);
-
-        Uri address = new(web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the host started without an address."));
-
-        self = new AntiforgeryHost(web, address, log, telemetryFeatures);
         return self;
     }
 
@@ -266,7 +216,7 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             request.Headers.TryAddWithoutValidation("X-CSRF-TOKEN", csrfHeader);
         }
 
-        return client.SendAsync(request, ct);
+        return stage.Client.SendAsync(request, ct);
     }
 
     /// <summary>
@@ -291,36 +241,13 @@ public sealed class AntiforgeryHost : IAsyncDisposable
             ? values.FirstOrDefault(v => v.StartsWith("__Host-spa-csrf=", StringComparison.Ordinal))
             : null;
 
-    /// <summary>The log lines that name <paramref name="rule"/>.</summary>
-    public IReadOnlyList<string> LinesFor(string rule)
-    {
-        lock (Log)
-        {
-            return [.. Log.Where(line => line.Contains("rule=" + rule, StringComparison.Ordinal))];
-        }
-    }
-
-    /// <summary>Whether any log line contains <paramref name="value"/>.</summary>
-    public bool Logged(string value)
-    {
-        lock (Log)
-        {
-            return Log.Any(line => line.Contains(value, StringComparison.Ordinal));
-        }
-    }
-
     /// <summary>A form body carrying <paramref name="token"/> in the framework's default form field.</summary>
     public static FormUrlEncodedContent FormWithToken(string token) =>
         new([new KeyValuePair<string, string>(new AntiforgeryOptions().FormFieldName, token), new("order", "7")]);
 
     public static StringContent Json(string json) => new(json, new MediaTypeHeaderValue("application/json"));
 
-    public async ValueTask DisposeAsync()
-    {
-        client.Dispose();
-        await app.StopAsync();
-        await app.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() => stage.DisposeAsync();
 
     /// <summary>A request token, and the antiforgery cookie as the browser would send it back.</summary>
     public sealed record Issued(string RequestToken, string? Cookie, string? SetCookie);
