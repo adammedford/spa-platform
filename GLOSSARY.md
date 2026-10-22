@@ -164,6 +164,16 @@ the metric say "rejection", and that is the word.
 is the `rule` field of the request line and the tag of `security.rejections`; the `code` in a
 problem body is deliberately less specific.
 
+**Problem code** — the stable `code` of a problem body, from the Errors table of
+`contracts/http-contract.md`, held once as `Platform.Abstractions.Problems`. It is less specific
+than a rule id. Several rule ids end in one code (`host.unknown` and `path.reserved` both end in
+`not_found`), and an answer that is not a rejection carries a code with no rule id.
+_Avoid_: "error code".
+
+**OAuth error value** — the `error` parameter of an identity provider's token-endpoint response
+(RFC 6749). It is provider-controlled text, and it reaches a log line only as a fixed category
+(N-16). It is never a problem code, even where the two are spelled the same (`invalid_request`).
+
 **Request line** — the one JSON log line `UsePlatformTelemetry` writes per request, after the rest of
 the pipeline has returned, with exactly the fields the "Log fields" row of `contracts/telemetry.md`
 names. It carries no value forwarded headers settle, which is what lets the first stage write it.
