@@ -31,6 +31,37 @@ public sealed class RuleIdLiteralTests : IDisposable
     }
 
     [Fact]
+    public void A_quoted_problem_code_is_one_violation_at_its_line_and_the_constant_and_the_prose_are_none()
+    {
+        // The same three shapes for a code of contracts/http-contract.md -> Errors (#158): the rule
+        // takes the eleven codes as well as the twelve rule ids.
+        Write(
+            "Answers.cs",
+            [
+                "/// <summary>A 404, <c>not_found</c>, for an asset that is not there.</summary>",
+                "return Problems.WriteAsync(context, Problems.NotFound);",
+                "return Problems.WriteAsync(context, \"not_found\");",
+            ]);
+
+        Assert.Equal(
+            [$"{Path.GetFileName(project)}/Answers.cs:3: \"not_found\""],
+            RuleIdLiterals.Violations([project], RuleIdLiterals.Ids));
+    }
+
+    [Fact]
+    public void The_ids_are_the_twelve_rule_ids_and_the_eleven_problem_codes()
+    {
+        // Counted from the two contract tables, contracts/request-gate.md -> Rule ids and
+        // contracts/http-contract.md -> Errors, not from the types the rule reads: RuleIdsTests and
+        // RejectionTableTests hold those types to the tables, and this holds the rule to both types.
+        Assert.Equal(23, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("host.unknown", RuleIdLiterals.Ids);
+        Assert.Contains("api.unknown", RuleIdLiterals.Ids);
+        Assert.Contains("invalid_request", RuleIdLiterals.Ids);
+        Assert.Contains("upstream_timeout", RuleIdLiterals.Ids);
+    }
+
+    [Fact]
     public void A_quoted_id_in_the_build_output_or_outside_a_cs_file_is_none()
     {
         // The build writes generated copies under obj/ and bin/, and a project carries other files

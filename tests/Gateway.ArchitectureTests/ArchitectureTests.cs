@@ -1,5 +1,3 @@
-using Platform.Abstractions;
-
 namespace Gateway.ArchitectureTests;
 
 /// <summary>
@@ -77,12 +75,12 @@ public sealed class ArchitectureTests
     }
 
     [Fact]
-    public void No_workstream_project_spells_a_rule_id_as_a_literal()
+    public void No_workstream_project_spells_a_rule_id_or_a_problem_code_as_a_literal()
     {
         // The six projects A-03 binds, so Hosting, Registry and Telemetry are covered by construction
         // and Platform.Abstractions, where the literals belong, is not. Test projects are left out on
-        // purpose: see RuleIdLiterals.
-        Assert.Empty(RuleIdLiterals.Violations(ReferenceRules.WorkstreamProjects.Select(DirectoryOf), RuleIds.All));
+        // purpose: see RuleIdLiterals. The ids are the rule ids and the problem codes (#158).
+        Assert.Empty(RuleIdLiterals.Violations(ReferenceRules.WorkstreamProjects.Select(DirectoryOf), RuleIdLiterals.Ids));
     }
 
     [Fact]
@@ -91,14 +89,20 @@ public sealed class ArchitectureTests
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
         // same rule runs here over the one project that must hold the literals: the twelve declarations
-        // in RuleIds, and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the
-        // scan reads comments too. The count moves with its subject: a quoted id added to or removed
-        // from Platform.Abstractions moves it.
-        string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIds.All)];
+        // in RuleIds, the eleven code declarations in Problems (#158), and the one quoted id in
+        // IRequestTelemetryFeature's doc comment, which proves the scan reads comments too. No doc
+        // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
+        // The count moves with its subject: a quoted id or code added to or removed from
+        // Platform.Abstractions moves it.
+        string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(13, hits.Length);
+        Assert.Equal(24, hits.Length);
         Assert.Equal(
-            [("Platform.Abstractions/IRequestTelemetryFeature.cs", 1), ("Platform.Abstractions/RuleIds.cs", 12)],
+            [
+                ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
+                ("Platform.Abstractions/Problems.cs", 11),
+                ("Platform.Abstractions/RuleIds.cs", 12),
+            ],
             hits
                 .GroupBy(hit => hit[..hit.IndexOf(':', StringComparison.Ordinal)], StringComparer.Ordinal)
                 .Select(file => (file.Key, file.Count()))
