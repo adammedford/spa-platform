@@ -140,6 +140,7 @@ const jsonAfter = (prompt, marker) => {
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
 //           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
+//           filerDrops: [title],
 //           rewrite: [issue], after: {...}, nothingFrom: [label], the agents that return nothing,
 //           as a failed agent does }
 function stub(env, scriptArgs, served) {
@@ -219,7 +220,9 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'followups-file') {
         // The filer files each follow-up it is given, as gh issue create would, and remembers it in
         // env, so a rerun on the same checkout reads it back as filed.
-        const items = jsonAfter(prompt, 'FOLLOW-UPS') || []
+        // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
+        // lost one would.
+        const items = (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
         env.filed = env.filed || []
         const filed = items.map((it) => {
           const number = 900 + env.filed.length
@@ -638,6 +641,10 @@ try {
     // A read agent that returns nothing is named, never read as a queue with nothing to file.
     const dead = await execute(newRepo(), { date: DATE }, { followUps: FU287, nothingFrom: ['followups'] })
     if (!dead.result.refusals.some((r) => /follow-ups agent returned nothing/.test(r))) fail(`follow-ups: a dead read agent is not named: ${JSON.stringify(dead.result.refusals)}`)
+    // A filer that returns a follow-up neither filed nor skipped has not accounted for it: the run
+    // names it, never reads the silence as done (CODING_STANDARDS.md -> "A check fails closed").
+    const lost = await execute(newRepo(), { date: DATE }, { followUps: FU287, filerDrops: [FINDING_Q9] })
+    if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
   }
 
   // 18. The follow-ups table has one grammar: morning.js's copy of its header, its "this record" cell,

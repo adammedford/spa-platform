@@ -790,6 +790,11 @@ else {
     else {
       followUps.filed.push(...fd.filed)
       followUps.already.push(...fd.skipped)
+      // A follow-up the filer accounts for in neither list is named, never read as filed: the hand-over
+      // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
+      const told = [...fd.filed, ...fd.skipped]
+      const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
+      if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${lost.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} neither filed nor skipped; relaunch to file them`)
       if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
     }
   }
