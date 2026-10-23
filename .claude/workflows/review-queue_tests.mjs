@@ -36,7 +36,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ownership: { owners: ['integrator'], ok: true, output: 'path-ownership: one owner' },
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
-  candidates: [], statedMutations: [],
+  candidates: [], statedMutations: [], reviewCommits: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -641,6 +641,102 @@ try {
     if (r.range !== null || r.earlierRecord !== null) fail(`PR 207 with ${what}: range ${JSON.stringify(r.range)}, earlierRecord ${JSON.stringify(r.earlierRecord)}, expected null`)
     const full = commentOf(env, 207).split('\n').find((l) => l.startsWith('Full review:')) || ''
     if (!full.includes(OLD_RECORD('merge').html_url)) fail(`PR 207 with ${what}: no "Full review:" line naming the earlier record`)
+  }
+
+  // 17b. A full review after a hold (#289), in #287's shape: the latest record held on a head that is
+  //      no ancestor of this one, its Mutations table naming two LibraryTests cases in one did-not-fail
+  //      cell; two `Review:` commits since the fork point; a Dockerfile candidate that record reproduced
+  //      and nothing since touches, and a WebStorage candidate an older record reproduced, likewise
+  //      untouched. The held tests are mutated first, under the stated rule, by the break the record
+  //      named; the candidate a `Review:` commit touches comes next, ahead of one listed before it; the
+  //      two reproduced candidates are skipped and named as cleared by their records; the cap's cut is
+  //      still named.
+  checks++
+  {
+    const H1 = sha('1'); const H2 = sha('2'); const H3 = sha('3')
+    const LIB1 = 'LibraryTests.test_a_name_inside_a_longer_name_is_not_a_use'
+    const LIB2 = 'LibraryTests.test_a_name_that_ends_a_sentence_is_a_use'
+    const DOCKER = 'MockApiDockerfileTests.The_build_stage_opens_the_published_tree_after_publish_and_before_the_final_stage'
+    const STORAGE = 'WebStorageTests.Empty_storage_passes_the_check'
+    const LIB_BREAK = 'tools/check.sh users_of(): added `[ "$name" = lib.sh ] \\| return 2`, so the run ends early'
+    const table = (rows) => ['## Mutations', '', TABLE_HEAD, '| --- | --- | --- | --- | --- |',
+      ...rows.map(([t, broken, counts, result]) => `| ${t} | ${broken} | ${counts} | ${result} | /log/mutation.txt |`)].join('\n')
+    const record = (url, at, head, verdict, rows) => ({ author_association: 'OWNER', created_at: at, html_url: url,
+      body: `## Review\n\nHead ${head}.\n\n${table(rows)}\n\nNot mutated, cut by the cap of 3: Other.\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${head} against ${FORK}: ${verdict}` })
+    const OLDER = record('https://github.com/o/r/pull/287#issuecomment-1', '2026-10-22T08:00:00Z', H1, 'hold', [
+      [STORAGE, 'replaced the early return in AssertEmpty', '2 of 111', 'reproduced: it went red'],
+    ])
+    const HELD = record('https://github.com/o/r/pull/287#issuecomment-2', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [`tools/check_tests.py: ${LIB1} (first half) and ${LIB2} (second half)`, LIB_BREAK, '3 of 71', 'did-not-fail: both named tests stayed green'],
+      [DOCKER, 'deleted the chmod line from fixtures/MockApi/Dockerfile', '2 of 199', 'reproduced: it failed at line 31'],
+    ])
+    const lib = (test) => ({ test, project: 'tools/check_tests.py', file: 'tools/check_tests.py', guards: 'a library use', breaks: 'tools/check.sh' })
+    const SHAPE = { 287: pr(287, ['tools/check_tests.py', 'tools/check.sh', 'fixtures/MockApi/Dockerfile', 'tests/Platform.Registry.Tests/ReviewFixed.cs'], {
+      head: H3, commits: [H3, sha('e'), sha('f')], comments: [OLDER, HELD],
+      reviewCommits: [
+        { sha: sha('e'), subject: 'Review: assert the status in the lib.sh halves', files: ['tools/check_tests.py'] },
+        { sha: sha('f'), subject: 'Review: tighten ReviewFixed', files: ['tests/Platform.Registry.Tests/ReviewFixed.cs'] },
+      ],
+      candidates: [
+        { test: DOCKER, project: 'fixtures/Fixtures.Tests', file: 'fixtures/Fixtures.Tests/MockApiDockerfileTests.cs', guards: 'the chmod step', breaks: 'fixtures/MockApi/Dockerfile' },
+        { test: STORAGE, project: 'tests/e2e', file: 'tests/e2e/WebStorageTests.cs', guards: 'empty storage passes', breaks: 'tests/e2e/Stack/WebStorage.cs' },
+        cand('Filler'), lib(LIB1), lib(LIB2), cand('ReviewFixed'),
+      ],
+    }) }
+    // The range since the held head: not an ancestor (the run branch was rebuilt); what changed since
+    // each recorded head is read all the same, and neither reproduced candidate's files are in it.
+    const range = { 287: { from: H2, ancestor: false, commits: [], merges: [], error: '',
+      changedFiles: ['tools/check_tests.py', 'tools/check.sh', 'tests/Platform.Registry.Tests/ReviewFixed.cs'],
+      since: [{ head: H1, changedFiles: ['tools/check_tests.py', 'fixtures/MockApi/Dockerfile'], error: '' }] } }
+    env = run({ prs: [287] }, SHAPE, { range })
+    result = await execute(env)
+    const r = resultOf(287, result)
+    const ran = env.mutations.map((m) => m.test)
+    if (JSON.stringify(ran) !== JSON.stringify([LIB1, LIB2, 'ReviewFixed'])) fail(`PR 287's shape: mutated ${JSON.stringify(ran)}, expected the held tests first, then the candidate a Review: commit touches: ${JSON.stringify([LIB1, LIB2, 'ReviewFixed'])}`)
+    for (const m of env.mutations.filter((x) => x.test === LIB1 || x.test === LIB2)) {
+      if (!m.prompt.includes(LIB_BREAK.replace('\\|', '|'))) fail(`PR 287's shape: the held mutation of ${m.test} is not told the break the held record named`)
+      if (!m.prompt.includes(HELD.html_url)) fail(`PR 287's shape: the held mutation of ${m.test} does not name the held record`)
+    }
+    if (env.prompts['range:287'] && !env.prompts['range:287'].includes(H1)) fail('PR 287\'s shape: the range agent is not asked what changed since the older record\'s head')
+    const body = commentOf(env, 287)
+    const lines = body.split('\n')
+    const cleared = lines.find((l) => /^Not mutated, cleared by/.test(l)) || ''
+    if (!cleared.includes(DOCKER) || !cleared.includes(HELD.html_url)) fail(`PR 287's shape: the cleared line ${JSON.stringify(cleared)} does not name the Dockerfile candidate and the record that reproduced it`)
+    if (!cleared.includes(STORAGE) || !cleared.includes(OLDER.html_url)) fail(`PR 287's shape: the cleared line ${JSON.stringify(cleared)} does not name the WebStorage candidate and the older record that reproduced it`)
+    if (JSON.stringify((r.clearedByEarlier || []).map((c) => c.test).sort()) !== JSON.stringify([DOCKER, STORAGE].sort())) fail(`PR 287's shape: clearedByEarlier ${JSON.stringify(r.clearedByEarlier)}`)
+    const cutLine = lines.find((l) => /^Not mutated, cut by the cap/.test(l)) || ''
+    if (!cutLine.includes('Filler') || cutLine.includes(DOCKER)) fail(`PR 287's shape: the cap's line ${JSON.stringify(cutLine)} does not name Filler alone`)
+    if (JSON.stringify(r.notMutated) !== '["Filler"]') fail(`PR 287's shape: notMutated ${JSON.stringify(r.notMutated)}, expected ["Filler"]`)
+    if (r.verdict !== 'merge') fail(`PR 287's shape with every held test reproduced: verdict ${r.verdict}, expected merge`)
+    // A held test that does not reproduce holds, under the stated rule: did-not-fail and could-not-run both.
+    for (const res of ['did-not-fail', 'could-not-run']) {
+      env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: row(res) } })
+      result = await execute(env)
+      if (resultOf(287, result).verdict !== 'hold') fail(`PR 287's shape with the held ${LIB2} ${res}: verdict ${resultOf(287, result).verdict}, expected hold`)
+    }
+    // A reproduced candidate whose source changed since the record is mutated again, not cleared.
+    const moved = { 287: { ...range[287], changedFiles: [...range[287].changedFiles, 'fixtures/MockApi/Dockerfile'] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: moved })
+    result = await execute(env)
+    if (!env.mutations.some((m) => m.test === DOCKER)) fail('PR 287\'s shape with the Dockerfile changed since the held record: the Dockerfile candidate was not mutated')
+    if ((resultOf(287, result).clearedByEarlier || []).some((c) => c.test === DOCKER)) fail('PR 287\'s shape with the Dockerfile changed since the held record: it is still listed as cleared')
+    // No range read: nothing is cleared, since what changed is unknown.
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: 'null' } })
+    result = await execute(env)
+    if ((resultOf(287, result).clearedByEarlier || []).length) fail(`PR 287's shape with no range read: cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}, expected nothing`)
+    if (JSON.stringify(env.mutations.slice(0, 2).map((m) => m.test)) !== JSON.stringify([LIB1, LIB2])) fail('PR 287\'s shape with no range read: the held tests are not first')
+    // A held cell that names no candidate is still mutated first, by its own name.
+    const LONE = { 287: { ...SHAPE[287], candidates: SHAPE[287].candidates.filter((c) => !c.test.startsWith('LibraryTests')) } }
+    env = run({ prs: [287] }, LONE, { range })
+    await execute(env)
+    if (!(env.mutations[0] || { test: '' }).test.includes(LIB1)) fail(`PR 287's shape with no LibraryTests candidate: the first mutation is ${JSON.stringify((env.mutations[0] || {}).test)}, expected the held cell itself`)
+    // A delta review after the same hold: the held tests are not "outside the range" when the range
+    // leaves their files alone; they are mutated first all the same.
+    const delta = { 287: { ...range[287], ancestor: true, commits: [H3], changedFiles: ['tests/Platform.Registry.Tests/ReviewFixed.cs'] } }
+    env = run({ prs: [287] }, SHAPE, { range: delta, earlier: { 287: [{ finding: 'the lib.sh halves cannot fail', answered: true, how: 'asserted' }] } })
+    result = await execute(env)
+    if (JSON.stringify(env.mutations.slice(0, 2).map((m) => m.test)) !== JSON.stringify([LIB1, LIB2])) fail(`PR 287's shape as a delta: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected the held tests first`)
+    if ((resultOf(287, result).outsideRange || []).some((t) => t === LIB1 || t === LIB2)) fail('PR 287\'s shape as a delta: a held test is listed as outside the range, cleared by the record that held on it')
   }
 
   // 18. The open queue (#86), empty: launched with no list, the queue agent runs, the stubbed gh lists

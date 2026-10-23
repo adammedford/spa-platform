@@ -57,6 +57,14 @@ export const meta = {
 // names the current head. Anything else, a force-push or a range nobody could read, is a full
 // review, and the comment says which.
 //
+// A review after a hold (#289), full or delta: the tests the held record's Mutations table lists as
+// did-not-fail are mutated first, with the break that record named and under the stated mutation's
+// hold rule, since a rebuilt branch is no descendant of the held head and a full review would
+// otherwise put them back in inventory order. The candidates a `Review: ...` commit touches come
+// next among the candidates. A candidate an earlier record reproduced is not mutated again while
+// neither its test file nor the source it breaks has changed since that record's head; the comment
+// names it as cleared by that record, beside the cap's cut.
+//
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
 // the run-level headMoved list) so the operator runs again. GitHub unreachable at posting time is
@@ -130,13 +138,33 @@ const recordsIn = (inv) => {
     if (!REPOSITORY_ACCOUNTS.includes(entry.author_association)) return
     for (const raw of entry.body.split(PY_LINE_BREAK)) {
       const m = RECORD.exec(raw.replace(PY_STRIP, ''))
-      if (m) found.push({ head: m[1], base: m[2], verdict: m[3], url: entry.html_url || '', at: entry[at] || '' })
+      if (m) found.push({ head: m[1], base: m[2], verdict: m[3], url: entry.html_url || '', at: entry[at] || '', body: entry.body })
     }
   }
   for (const c of inv.comments || []) read(c, 'created_at')
   for (const r of inv.reviews || []) if (r && r.state === 'COMMENTED') read(r, 'submitted_at')
   return found.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0))
 }
+// The rows of a review comment's Mutations table, as mutationLines below writes it (#289): one
+// { test, broken, result } per row, each cell unescaped as cell() escaped it, result the leading word
+// of the Result cell. A comment with no such table, a human's or an older shape's, yields none.
+const MUTATION_HEAD = '| Test | What was broken | Failed of total | Result | Log file |'
+const mutationTableOf = (body) => {
+  const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
+  const at = lines.indexOf(MUTATION_HEAD)
+  if (at < 0) return []
+  const rows = []
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith('|') || !line.endsWith('|')) break
+    const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+    const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run)\b/.exec(cells[3])
+    if (result && cells[0]) rows.push({ test: cells[0], broken: cells[1], result: result[1] })
+  }
+  return rows
+}
+// Whether a row's Test cell names a test: the cell is the name, or holds it whole, as #287's first
+// record held two LibraryTests cases in one cell.
+const names = (cellText, test) => !!test && new RegExp(`(?<![\\w.])${test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`).test(cellText)
 
 // ---------------------------------------------------------------- agents and slots
 let agentsRun = 0
@@ -189,15 +217,19 @@ const CANDIDATE = {
   required: ['test', 'project', 'file', 'guards', 'breaks'],
 }
 // What the range agent reads for a delta review: whether the head the latest record names is an
-// ancestor of the current head, and the commits, merges and files since it.
+// ancestor of the current head, and the commits, merges and files since it. changedFiles is read
+// whether or not it is an ancestor, and since holds the files changed since each other recorded head
+// the script asks about: a candidate an earlier record reproduced is cleared by them (#289).
 const RANGE = {
   type: 'object',
   properties: {
     from: { type: 'string' }, ancestor: { type: 'boolean' },
     commits: { type: 'array', items: { type: 'string' } }, merges: { type: 'array', items: { type: 'string' } },
-    changedFiles: { type: 'array', items: { type: 'string' } }, error: { type: 'string' },
+    changedFiles: { type: 'array', items: { type: 'string' } },
+    since: { type: 'array', items: { type: 'object', properties: { head: { type: 'string' }, changedFiles: { type: 'array', items: { type: 'string' } }, error: { type: 'string' } }, required: ['head', 'changedFiles', 'error'] } },
+    error: { type: 'string' },
   },
-  required: ['from', 'ancestor', 'commits', 'merges', 'changedFiles', 'error'],
+  required: ['from', 'ancestor', 'commits', 'merges', 'changedFiles', 'since', 'error'],
 }
 // A mutation the pull request's body states, quoted, with its counts (-1 when the body gives none).
 const STATED = {
@@ -221,6 +253,8 @@ const INVENTORY = {
     head: { type: 'string' }, baseTip: { type: 'string' }, forkPoint: { type: 'string' },
     commits: { type: 'array', items: { type: 'string' } },
     changedFiles: { type: 'array', items: { type: 'string' } },
+    // The commits since the fork point titled `Review: ...`, each with the files it touches (#289).
+    reviewCommits: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, subject: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, required: ['sha', 'subject', 'files'] } },
     ownership: { type: 'object', properties: { owners: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' }, output: { type: 'string' } }, required: ['owners', 'ok', 'output'] },
     ci: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, state: { type: 'string' } }, required: ['name', 'state'] } },
     cites: { type: 'object', properties: { planRow: { type: 'string' }, issues: { type: 'array', items: { type: 'integer' } }, mergeSubject: { type: 'string' } }, required: ['planRow', 'issues', 'mergeSubject'] },
@@ -231,7 +265,7 @@ const INVENTORY = {
     reviews: { type: 'array', items: ENTRY },
     error: { type: 'string' },
   },
-  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
+  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'reviewCommits', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
 }
 const FINDING = {
   type: 'object',
@@ -321,6 +355,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 1. \`git -C ${REPO} fetch origin --tags\`. Then \`cd ${REPO} && gh pr view ${n} --json number,title,author,headRefName,baseRefName,headRefOid,state,body,statusCheckRollup\`.
 2. If the pull request is not OPEN or its base is not main, set error to say which, fill what you read, and stop.
 3. head = headRefOid (40 hex). baseTip = \`git -C ${REPO} rev-parse origin/main\`. forkPoint = \`git -C ${REPO} merge-base origin/main <head>\`. commits = \`git -C ${REPO} log --format=%H <forkPoint>..<head>\`. changedFiles = \`git -C ${REPO} diff --name-only <forkPoint>...<head>\`.
+3b. reviewCommits: from \`git -C ${REPO} log --format='%H%x09%s' <forkPoint>..<head>\`, one entry per commit whose subject starts \`Review:\`: sha, subject, and files = \`git -C ${REPO} diff-tree --no-commit-id --name-only -r <sha>\` (for a merge, \`git -C ${REPO} diff --name-only <sha>^1 <sha>\`). [] when none.
 4. ownership: run \`cd ${REPO} && python3 -I .github/path-ownership.py <forkPoint> <head>\`; owners = the owner sets it names, ok = whether it exited 0, output = its last lines.
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
@@ -328,16 +363,17 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
-const rangePrompt = (n, inv, from) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
+const rangePrompt = (n, inv, from, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
 
 ${HOUSE}
 
 OUTPUT FILE: ${DIR(n)}/range.json
 
 1. \`git -C ${REPO} fetch origin --tags\`. from = ${from}; the current head is ${inv.head}.
-2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push dropped the recorded head); leave commits, merges and changedFiles empty and go to step 4. If ${from} cannot be read at all, ancestor is false and error says why.
-3. commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`. merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`. changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`.
-4. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
+2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push or a rebuilt branch dropped the recorded head); leave commits and merges empty. If ${from} cannot be read at all, ancestor is false and error says why.
+3. When ancestor is true: commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`, merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`. Either way, when ${from} can be read: changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`, which compares the two trees and needs no ancestry.
+4. since: ${sinceHeads.length ? `one entry for each of these earlier recorded heads: ${sinceHeads.join(', ')}. head is the sha; changedFiles = \`git -C ${REPO} diff --name-only <head> ${inv.head}\`; error is "" or why that head cannot be read, with changedFiles [].` : '[].'}
+5. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 // What the axes and the verdict are told about a delta review, and what the comment says of it.
 const deltaRange = (d) => `${d.from}..${d.to}`
@@ -376,15 +412,16 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
 The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
-${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}
+${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test the latest record held on as did-not-fail, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated mutation that did not reproduce. A could-not-run on a stated or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
 
 const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
 const mutationLog = (n, i) => `${DIR(n)}/mutation-${i}.txt`
 const mutatePrompt = (n, inv, m, i) => {
   const wt = mutationWorktree(n, i)
+  const project = m.project || 'the project that runs it alone (find it from its name)'
   return `Run one mutation for the review of pull request #${n}: break what one test guards, and see whether the test goes red. You wrote none of its commits.
 
 ${HOUSE}
@@ -393,41 +430,99 @@ OUTPUT FILE: ${mutationLog(n, i)}
 WORKTREE: ${wt}
 TEST: ${m.test}
 
-The test: ${m.test}, run by ${m.project}. ${m.kind === 'stated'
+The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
     ? `The author states this mutation; apply it exactly as stated: ${m.mutation}. The body says: ${JSON.stringify(m.quote)}${m.failed >= 0 ? ` (failed ${m.failed}${m.total >= 0 ? ` of ${m.total}` : ''})` : ''}.`
+    : m.kind === 'held'
+    ? `The review record ${m.heldBy} held because this test did not fail with this broken: ${m.mutation}. Apply that break again, exactly as it says, never in the test${m.cell !== m.test ? ` (the record's row named ${JSON.stringify(m.cell)}; judge ${m.test} alone)` : ''}, and see whether the test goes red now.`
     : `${m.kind === 'nominated' ? `The Standards axis suspects it cannot fail: ${m.why}. ` : ''}It guards: ${m.guards || '(say what it guards, from reading it)'}. Break that in the source it guards (${m.breaks || 'find it'}), never in the test, with the smallest change that should turn it red.`}
 
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
-3. Make the mutation in ${wt} only. Run only ${m.project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
+3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
 4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why. broken: what you broke, in one line.
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
 
-// The mutation list: the body's stated mutations, then the Standards axis's nominations, then the
-// inventory's remaining candidates, deduplicated by test and cut at the cap. kind decides the hold
-// rule a could-not-run row falls under. In a delta review a stated mutation or a candidate whose
-// file and broken source the range leaves alone was cleared by the earlier record and is listed as
-// outside the range; a nomination comes from the range's own review and always runs, as does a
-// stated mutation naming no file the inventory knows.
-const mutationList = (inv, standards, d) => {
-  const byTest = new Map((inv.candidates || []).map((c) => [c.test, c]))
+// What the earlier records say about this review's mutation list (#289). held: when the latest record
+// held on another head, its url and its Mutations table's did-not-fail rows. clearers: newest first,
+// each earlier record whose head the range agent diffed against this one, with its url, the files
+// changed since its head, and the Test cells of the rows it reproduced. With no range read, nothing
+// is known to be unchanged, so nothing clears.
+const priorOf = (records, inv, rg) => {
+  const latest = records[records.length - 1]
+  const held = latest && latest.head !== inv.head && latest.verdict === 'hold'
+    ? { url: latest.url, rows: mutationTableOf(latest.body).filter((r) => r.result === 'did-not-fail') }
+    : null
+  const changed = new Map()
+  if (rg && !rg.error && latest) {
+    if (Array.isArray(rg.changedFiles)) changed.set(latest.head, rg.changedFiles)
+    for (const s of rg.since || []) if (s && !s.error && Array.isArray(s.changedFiles) && !changed.has(s.head)) changed.set(s.head, s.changedFiles)
+  }
+  const clearers = records.filter((r) => r.head !== inv.head && changed.has(r.head)).reverse()
+    .map((r) => ({ url: r.url, files: changed.get(r.head), reproduced: mutationTableOf(r.body).filter((x) => x.result === 'reproduced').map((x) => x.test) }))
+  return { held, clearers }
+}
+// The earlier recorded heads, other than the latest's, whose records reproduced a test the inventory
+// lists as a candidate: the heads the range agent is asked to diff for prior.clearers.
+const sinceHeadsOf = (records, inv) => {
+  const latest = records[records.length - 1]
+  const heads = records.filter((r) => r.head !== inv.head && (!latest || r.head !== latest.head)
+    && mutationTableOf(r.body).some((x) => x.result === 'reproduced' && (inv.candidates || []).some((c) => names(x.test, c.test))))
+    .map((r) => r.head)
+  return [...new Set(heads)]
+}
+
+// The mutation list: first the tests the latest record held on as did-not-fail, when it held (#289);
+// then the body's stated mutations, then the Standards axis's nominations, then the candidates whose
+// file or broken source a commit titled `Review: ...` since the fork point touches, then the
+// inventory's remaining candidates; deduplicated by test and cut at the cap. A held row whose Test
+// cell names candidates becomes one held mutation per candidate it names; one naming none is mutated
+// by the cell itself, its project left for the mutation agent to find. kind decides the hold rule a
+// row falls under; a held mutation falls under the stated one. In a delta review a stated mutation or
+// a candidate whose file and broken source the range leaves alone was cleared by the earlier record
+// and is listed as outside the range; a nomination comes from the range's own review and always runs,
+// as does a held test and a stated mutation naming no file the inventory knows. A candidate an
+// earlier record reproduced is cleared by that record, and not mutated, when neither its file nor its
+// broken source changed since that record's head.
+const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
+  const candidates = inv.candidates || []
+  const byTest = new Map(candidates.map((c) => [c.test, c]))
+  const held = prior.held ? prior.held.rows.flatMap((h) => {
+    const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: prior.held.url, cell: h.test }
+    const named = candidates.filter((c) => names(h.test, c.test))
+    return named.length ? named.map((c) => ({ ...c, ...base })) : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
+  }) : []
+  const reviewed = new Set((inv.reviewCommits || []).filter((c) => c && /^Review:/.test(c.subject || '')).flatMap((c) => c.files || []))
+  const touched = (c) => [c.file, c.breaks].some((f) => f && reviewed.has(f))
   const all = [
+    ...held,
     ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
     ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
-    ...(inv.candidates || []).map((c) => ({ ...c, kind: 'candidate' })),
+    ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
+    ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]
   const seen = new Set()
   const deduped = all.filter((m) => m.test && !seen.has(m.test) && seen.add(m.test))
   const inRange = (m) => {
-    if (!d || m.kind === 'nominated') return true
+    if (!d || m.kind === 'nominated' || m.kind === 'held') return true
     const files = [m.file, m.breaks].filter(Boolean)
     return !files.length || files.some((f) => d.changedFiles.includes(f))
   }
-  const list = deduped.filter(inRange)
-  return { list: list.slice(0, MUTATION_CAP), cut: list.slice(MUTATION_CAP).map((m) => m.test), outside: deduped.filter((m) => !inRange(m)).map((m) => m.test) }
+  const clearedBy = (m) => {
+    const files = [m.file, m.breaks].filter(Boolean)
+    if (m.kind !== 'candidate' || !files.length) return null
+    return prior.clearers.find((c) => c.reproduced.some((t) => names(t, m.test)) && !files.some((f) => c.files.includes(f))) || null
+  }
+  const cleared = []
+  const list = deduped.filter(inRange).filter((m) => {
+    const by = clearedBy(m)
+    if (by) cleared.push({ test: m.test, url: by.url })
+    return !by
+  })
+  return { list: list.slice(0, MUTATION_CAP), cut: list.slice(MUTATION_CAP).map((m) => m.test), outside: deduped.filter((m) => !inRange(m)).map((m) => m.test), cleared }
 }
+const clearedText = (cleared) => cleared.map((c) => `${c.test} (cleared by ${c.url})`).join(', ')
 
 // One row per mutation. An agent that dies, returns nothing or returns a result that is none of the
 // three is a could-not-run row, so a dead agent never reads as a pass and the verdict still runs.
@@ -449,6 +544,7 @@ const mutationRow = (n, m, i, got) => {
 const mutationHolds = (rows) => rows.flatMap((r) => {
   if (r.result === 'did-not-fail') return [`${r.test} did not fail with ${r.broken || 'what it guards'} broken`]
   if (r.kind === 'stated' && r.result !== 'reproduced') return [`the stated mutation of ${r.test} did not reproduce (${r.result})`]
+  if (r.kind === 'held' && r.result !== 'reproduced') return [`the held test ${r.test} did not reproduce with the break the held record named (${r.result})`]
   if (r.kind === 'nominated' && r.result === 'could-not-run') return [`the nominated mutation of ${r.test} could not run: ${r.why}`]
   return []
 })
@@ -479,14 +575,17 @@ const findingLines = (list) => (list.length
 const cell = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
 const mutationLines = (mut) => [
   ...(mut.rows.length
-    ? ['| Test | What was broken | Failed of total | Result | Log file |', '| --- | --- | --- | --- | --- |',
+    ? [MUTATION_HEAD, '| --- | --- | --- | --- | --- |',
       ...mut.rows.map((r) => `| ${[r.test, r.broken || '-', `${r.failed} of ${r.total}`,
         r.result + (r.countsMatched === true ? ', counts match the stated claim' : r.countsMatched === false ? ', counts differ from the stated claim' : '') + (r.why ? `: ${r.why}` : ''),
         r.logFile].map(cell).join(' | ')} |`)]
-    : [mut.outside.length ? 'No mutations run: the range touches no candidate invariant test and no stated mutation.' : 'No mutations run: the diff adds or changes no candidate invariant test and the body states no mutation.']),
+    : [mut.outside.length ? 'No mutations run: the range touches no candidate invariant test and no stated mutation.'
+      : mut.cleared.length ? 'No mutations run: every candidate invariant test was cleared by an earlier record, and the body states no mutation.'
+      : 'No mutations run: the diff adds or changes no candidate invariant test and the body states no mutation.']),
   '',
   mut.cut.length ? `Not mutated, cut by the cap of ${MUTATION_CAP}: ${mut.cut.join(', ')}.` : `Not mutated: nothing; the cap of ${MUTATION_CAP} cut nothing.`,
   ...(mut.outside.length ? [`Not mutated, outside the range, cleared by the earlier record: ${mut.outside.join(', ')}.`] : []),
+  ...(mut.cleared.length ? [`Not mutated, cleared by an earlier record that reproduced it, neither its test file nor the source it breaks changed since that record's head: ${clearedText(mut.cleared)}.`] : []),
 ]
 // The line after the head line: the delta's earlier record and range, or why a pull request with an
 // earlier record got a full review.
@@ -538,7 +637,7 @@ const commentBody = (inv, v, record, mut, d, full) => [
 const blank = (n) => ({
   number: n, head: '', base: '', baseTip: '', verdict: '', outcome: 'failed', stage: '', recordUrl: '',
   findings: { verified: [], suspected: [] }, mutations: [], notMutated: [], skippedBecauseRecorded: false,
-  headMoved: false, earlierRecords: [], earlierRecord: null, range: null, outsideRange: [], commentFile: '',
+  headMoved: false, earlierRecords: [], earlierRecord: null, range: null, outsideRange: [], clearedByEarlier: [], commentFile: '',
 })
 const failed = (res, stage) => ({ ...res, outcome: 'failed', stage, verdict: '', recordUrl: '' })
 const review = async (n) => {
@@ -574,10 +673,10 @@ const reviewOne = async (n, res, at) => {
   let d = null
   let full = null
   const latestRecord = records[records.length - 1]
+  let rg = null
   if (latestRecord && latestRecord.head !== inv.head) {
     at.stage = 'range'
-    let rg = null
-    try { rg = await run(rangePrompt(n, inv, latestRecord.head), { label: `range:${n}`, phase: 'Inventory', schema: RANGE }) } catch (e) { rg = null }
+    try { rg = await run(rangePrompt(n, inv, latestRecord.head, sinceHeadsOf(records, inv)), { label: `range:${n}`, phase: 'Inventory', schema: RANGE }) } catch (e) { rg = null }
     if (rg && rg.ancestor && !rg.error) {
       d = { from: latestRecord.head, to: inv.head, fork: inv.forkPoint, url: latestRecord.url, verdict: latestRecord.verdict, commits: rg.commits || [], merges: rg.merges || [], changedFiles: rg.changedFiles || [] }
       res.earlierRecord = { url: d.url, head: d.from, verdict: d.verdict }
@@ -599,15 +698,16 @@ const reviewOne = async (n, res, at) => {
   if (missing.length) return failed(res, `review: the ${missing.join(' and ')} axis returned nothing`)
 
   at.stage = 'mutate'
-  const { list, cut, outside } = mutationList(inv, standards, d)
+  const { list, cut, outside, cleared } = mutationList(inv, standards, d, priorOf(records, inv, rg))
   const got = await parallel(list.map((m, i) => async () => {
     try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
   }))
   const rows = list.map((m, i) => mutationRow(n, m, i + 1, got && got[i]))
-  const mut = { rows, cut, outside, holds: mutationHolds(rows) }
+  const mut = { rows, cut, outside, cleared, holds: mutationHolds(rows) }
   res.mutations = rows
   res.notMutated = cut
   res.outsideRange = outside
+  res.clearedByEarlier = cleared
 
   at.stage = 'verdict'
   const v = await run(verdictPrompt(n, inv, mut, d), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
