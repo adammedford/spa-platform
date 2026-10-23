@@ -85,6 +85,7 @@ public sealed class DeployedStack : IBrowserStack
 
     private readonly IBrowser browser;
     private readonly CellAws aws;
+    private readonly ICommandRunner runner;
     private readonly CellRuleLog rules;
     private readonly ForeignSites foreign;
     private readonly string outputsPath;
@@ -96,11 +97,12 @@ public sealed class DeployedStack : IBrowserStack
     private string user = User;
     private HttpClient? raw;
 
-    private DeployedStack(Cell cell, CellAws aws, IBrowser browser, ForeignSites foreign, string outputsPath, int tunnelPort, DateTimeOffset started,
+    private DeployedStack(Cell cell, ICommandRunner runner, IBrowser browser, ForeignSites foreign, string outputsPath, int tunnelPort, DateTimeOffset started,
         System.Net.Security.RemoteCertificateValidationCallback? rawValidation, TimeSpan ruleArrival)
     {
         Cell = cell;
-        this.aws = aws;
+        this.runner = runner;
+        aws = new CellAws(cell, runner);
         rules = new CellRuleLog(aws, ruleArrival);
         this.rawValidation = rawValidation;
         this.browser = browser;
@@ -180,7 +182,7 @@ public sealed class DeployedStack : IBrowserStack
                 $"--host-resolver-rules={foreign.ResolverRules}, {cell.ResolverRule(port)}",
                 ForeignSites.TrustSwitch([foreign.Spki, .. setup.TrustedKeys]));
 
-            return new DeployedStack(cell, new CellAws(cell, setup.Runner), browser, foreign, setup.OutputsPath, port, DateTimeOffset.UtcNow - ClockMargin, setup.RawValidation, setup.RuleArrival ?? LogArrival);
+            return new DeployedStack(cell, setup.Runner, browser, foreign, setup.OutputsPath, port, DateTimeOffset.UtcNow - ClockMargin, setup.RawValidation, setup.RuleArrival ?? LogArrival);
         }
         catch
         {
@@ -299,10 +301,12 @@ public sealed class DeployedStack : IBrowserStack
         rules.AssertLoggedAsync(after.At, rule, appId, TestContext.Current.CancellationToken);
 
     /// <summary>Through the tunnel, validating the ALB's certificate as the workstation does (<see cref="RawClient"/>).</summary>
-    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
+    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request) => SendRawAsync(request, TestContext.Current.CancellationToken);
+
+    private Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request, CancellationToken ct)
     {
         raw ??= RawClient.To($"127.0.0.1:{tunnelPort}", rawValidation);
-        return raw.SendAsync(request, TestContext.Current.CancellationToken);
+        return raw.SendAsync(request, ct);
     }
 
     /// <summary>
@@ -406,15 +410,19 @@ public sealed class DeployedStack : IBrowserStack
 
     /// <summary>
     /// <c>spactl wait</c> reads <c>/readyz</c> on app 1's host through the tunnel: the name resolves to
-    /// loopback through the hosts-file line certs.sh asks for, and the port is the tunnel's.
+    /// loopback through the hosts-file line certs.sh asks for, and the port is the tunnel's. The new app
+    /// is asked for through the raw client, which goes to the tunnel's port whatever the host. Terraform
+    /// and spactl run on this stack's runner, as the project's profile.
     /// </summary>
-    private CellOnboarding Onboarding(string why) => new(Cell, aws, new ProcessCommandRunner(), new OnboardingSetup(
+    private CellOnboarding Onboarding(string why) => new(Cell, aws, runner, new OnboardingSetup(
         FixtureFiles.RepositoryRoot,
         Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "apps"),
         outputsPath,
         PlatformConfig(why),
         new Uri($"https://{App("app1").Host.Split(':')[0]}:{tunnelPort}/"),
-        Spactl()));
+        Spactl(),
+        AwsProject.Read(AwsProject.PathIn(FixtureFiles.RepositoryRoot)),
+        SendRawAsync));
 
     private static string PlatformConfig(string why) =>
         Environment.GetEnvironmentVariable(PlatformConfigVariable) is { Length: > 0 } named
