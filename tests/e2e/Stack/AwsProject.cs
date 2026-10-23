@@ -6,6 +6,13 @@ namespace Gateway.E2ETests.Stack;
 /// file is the integrator's and is sourced by hand before an apply; F-07's onboarding sets the two over
 /// whatever the shell exported, so it writes to the project the file names (#212, #235). The file says
 /// why the profile is pinned: on 2026-10-15 a sitting applied into the wrong project.
+///
+/// <para>The profile is what pins the project. The SDKs and the AWS CLI use the profile
+/// <c>AWS_PROFILE</c> names (https://docs.aws.amazon.com/sdkref/latest/guide/file-format.html#set-named-profile),
+/// and so does the Terraform AWS provider when its block sets no <c>profile</c>. The Region is only a
+/// fallback for Terraform: the provider applies its own arguments before environment variables
+/// (https://registry.terraform.io/providers/hashicorp/aws/latest/docs#configuration-precedence), and
+/// the apps root sets <c>region = var.region</c>, so its <c>terraform.tfvars</c> decides the Region there.</para>
 /// </summary>
 public static class AwsProject
 {
