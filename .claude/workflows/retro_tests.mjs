@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -135,8 +135,9 @@ function stub(env, scriptArgs, served) {
           parent: { number: 0, url: '', title: `Retro ${DATE}`, file: files[0] || '' }, tickets: [], dryRun: false, refused: '', unreachable: true,
         } : {
           parent: { number: dry ? 0 : 900, url: dry ? '' : 'https://github.com/o/r/issues/900', title: `Retro ${DATE}`, file: files[0] || '' },
-          tickets: list.map((f, i) => ({ number: dry ? 0 : 901 + i, url: dry ? '' : `https://github.com/o/r/issues/${901 + i}`, title: `${f.type}: ${f.title}`, label: 'ready-for-agent', noun: f.noun, file: files[i + 1] || '', blockedBy: [] })),
-          dryRun: dry, refused: '', unreachable: false,
+          tickets: list.map((f, i) => ({ number: dry ? 0 : 901 + i, url: dry ? '' : `https://github.com/o/r/issues/${901 + i}`, title: `${f.type}: ${f.title}`, label: 'ready-for-agent', noun: f.noun, file: files[i + 1] || '', blockedBy: [] }))
+            .filter((t, i) => !(served.fileRefused && i === 1)),
+          dryRun: dry, refused: served.fileRefused || '', unreachable: false,
         }
       } else throw new Error(`unexpected agent label ${label}`)
       const bad = validate(opts.schema, out)
@@ -377,6 +378,49 @@ try {
   const gp = gatherCall ? gatherCall.prompt : ''
   if (!/versions/.test(gp) || !/updatedAt/.test(gp) || !/retro_record\.py fingerprint/.test(gp)) fail('the Gather prompt does not ask for versions: the files\' digest and each lane ticket\'s updatedAt')
   if (!/git -C <path> status --short/.test(gp)) fail('the Gather prompt does not read each lane worktree\'s status')
+
+  // 19. The ticket-shape check (#314, #248's third place): the File prompt, real and dry, checks each
+  //     ticket body with tools/ticket_shape.py by the collect step's recipe before any ticket's
+  //     `gh issue create`, and files nothing for a body that fails. The recipe is taken from the
+  //     prompt and run for real, so a prompt without it, or with one that cannot judge, fails here.
+  checks++
+  {
+    const RECIPE = /`cd (\S+) && (python3 -I -c '[^']*' (\S+\/ticket-<NN>\.md) <label> <each blocked-by number> \| python3 -I tools\/ticket_shape\.py -)`/
+    const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-shape-'))
+    made.push(bodyDir)
+    const body = (extra) => `**Owner:** integrator\n**Plan row:** none\n${extra}\n**What to build:** the evidence \`/x/log/a.txt:3\`, quoted.\n## Acceptance\n- [ ] no lane's log in a later run's record shows the repair\n`
+    fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
+    fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
+    const shapeOf = (cmd, file, blockers) => {
+      const sh = cmd.replace(/\S+\/ticket-<NN>\.md/, file).replace('<label>', 'ready-for-agent').replace(' <each blocked-by number>', blockers.map((n) => ` ${n}`).join(''))
+      return spawnSync('sh', ['-c', sh], { cwd: top, encoding: 'utf8' })
+    }
+    for (const dry of [false, true]) {
+      const what = dry ? 'a dry run' : 'a real run'
+      env = newRepo()
+      const run = await execute(env, { date: DATE, dryRun: dry }, { index: indexFor(THREE) })
+      const fp = (run.calls.find((c) => c.label === 'file') || {}).prompt || ''
+      const m = RECIPE.exec(fp)
+      if (!m) { fail(`${what}: the File prompt carries no tools/ticket_shape.py check of each ticket body by the collect step's recipe`); continue }
+      if (m[1] !== env.repo) fail(`${what}: the check runs in ${m[1]}, not the main checkout ${env.repo}`)
+      if (!m[3].startsWith(path.join(env.repo, SCRATCH_REL))) fail(`${what}: the check reads ${m[3]}, not a ticket file under the scratch directory`)
+      const create = fp.indexOf('gh issue create --title "<type>: <title>"')
+      if (!dry && (create < 0 || m.index > create)) fail(`${what}: the check does not come before the tickets' gh issue create`)
+      const good = shapeOf(m[2], path.join(bodyDir, 'good.md'), dry ? [] : [900])
+      if (good.status !== 0 || !/^ticket-shape: pass:/m.test(good.stdout)) fail(`${what}: the prompt's check did not pass a well-shaped body: exit ${good.status}, ${(good.stdout + good.stderr).trim()}`)
+      const bad = shapeOf(m[2], path.join(bodyDir, 'bad.md'), [])
+      if (bad.status !== 1 || !/^ticket-shape: foreground:/m.test(bad.stdout)) fail(`${what}: the prompt's check did not fail a foreground body on its rule: exit ${bad.status}, ${(bad.stdout + bad.stderr).trim()}`)
+      for (const [rule, re] of [['files only on exit 0', /only when that exits 0, its last line starting "ticket-shape: pass:"/], ['names each rule line in refused on exit 1', /On exit 1[^:]*file nothing for that ticket: leave it out of tickets, keep its file, and name in refused the ticket \(its file and title\) and each "ticket-shape: <rule>:" line/], ['says on any other exit the check did not judge it', /on any other exit[^.]*did not judge it/], ['never rewords a body to pass', /Never reword a body to get past the check/]]) {
+        if (!re.test(fp)) fail(`${what}: the File prompt does not say the check ${rule}`)
+      }
+    }
+    // The script returns what File refused, and a refusal leaves filed false (filed means filed in full).
+    env = newRepo()
+    const REFUSED = 'ticket-02.md "misleading-instruction: about noun-2": ticket-shape: foreground: a ready-for-agent ticket says **Session:** foreground'
+    const refusedRun = await execute(env, { date: DATE }, { index: indexFor(THREE), fileRefused: REFUSED })
+    if (refusedRun.result.refused !== REFUSED || refusedRun.result.filed !== false) fail(`a ticket the check refused: returned refused ${JSON.stringify(refusedRun.result.refused)}, filed ${refusedRun.result.filed}`)
+    if ((refusedRun.result.tickets || []).map((t) => t.noun).join() !== 'noun-1') fail(`a ticket the check refused: tickets ${JSON.stringify((refusedRun.result.tickets || []).map((t) => t.noun))}, expected noun-1 alone`)
+  }
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
