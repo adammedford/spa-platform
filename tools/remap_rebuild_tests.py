@@ -343,6 +343,25 @@ class Worktrees(Case):
         self.assertEqual(self.l4, heads["four"])
         self.assertRegex(done.stdout, rf"not in the old graph: {re.escape(str(self.lanes['four']))}")
 
+    def test_a_worktree_whose_ancestry_git_cannot_judge_stops_rather_than_reading_as_outside(self):
+        # A check fails closed (CODING_STANDARDS.md): merge-base --is-ancestor's error status is
+        # not its "no". A worktree whose HEAD names an object that does not exist gets that error;
+        # `git worktree list --porcelain` prints the oid without reading the object.
+        self.rebuild()
+        self.write_body()
+        broken = self.wtroot / "broken"
+        self.git("worktree", "add", "-q", "--detach", str(broken), self.base)
+        admin = pathlib.Path(self.git("rev-parse", "--absolute-git-dir", cwd=broken))
+        (admin / "HEAD").write_text("1" * 40 + "\n")
+        before = self.heads()
+
+        done = self.remap("--apply")
+
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertTrue(self.last_line(done).startswith("remap_rebuild: stopped:"), self.last_line(done))
+        self.assertEqual([], self.gh_writes())
+        self.assertEqual(before, self.heads())
+
     def test_the_dry_run_moves_no_worktree(self):
         self.rebuild()
         self.write_body()

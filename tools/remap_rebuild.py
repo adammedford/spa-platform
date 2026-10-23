@@ -33,7 +33,8 @@ on that, and the old-to-new map was rebuilt by hand in git.
    failure does not stack them. The diff is printed.
 3. **The worktrees.** Each worktree under the root whose tip the rebuild replaced is moved to the
    rebuilt commit with `git reset --keep`, branch and all, when `git status --porcelain` prints
-   nothing; a dirty one is named and left, for its owner to settle. A tip already reached from the
+   nothing; `--keep` aborts rather than overwrite a change made since that read
+   (https://git-scm.com/docs/git-reset). A dirty one is named and left, for its owner to settle. A tip already reached from the
    new tip needs nothing, and a tip outside the old graph, a failed lane's, is named and left: the
    morning expects it (morning.js, Verify step 3).
 4. **The comment.** One comment on the Overnight issue with both tips, the session and the map.
@@ -84,9 +85,16 @@ def git(repo: pathlib.Path, *args: str) -> str:
     return done.stdout
 
 
-def git_ok(repo: pathlib.Path, *args: str) -> bool:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                          check=False).returncode == 0
+def is_ancestor(repo: pathlib.Path, commit: str, tip: str) -> bool:
+    """Whether `tip` reaches `commit`. git answers 0 for yes and 1 for no, and signals an error with
+    any other non-zero status (https://git-scm.com/docs/git-merge-base, --is-ancestor), so an error
+    stops rather than reading as "no": a worktree it could not judge is not one to leave unnamed."""
+    done = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, tip],
+                          capture_output=True, text=True, check=False)
+    if done.returncode in (0, 1):
+        return done.returncode == 0
+    raise Stopped(f"git merge-base --is-ancestor {commit} {tip}: "
+                  f"{done.stderr.strip() or 'exit ' + str(done.returncode)}")
 
 
 def gh(repo: pathlib.Path, *args: str) -> str:
@@ -196,7 +204,7 @@ def plan_worktrees(repo, root, mapping, new):
         if head in mapping:
             status = git(path, "status", "--porcelain")
             plan.append(("dirty" if status.strip() else "move", path, head, mapping[head]))
-        elif git_ok(repo, "merge-base", "--is-ancestor", head, new):
+        elif is_ancestor(repo, head, new):
             plan.append(("current", path, head, ""))
         else:
             plan.append(("outside", path, head, ""))
@@ -281,7 +289,7 @@ def run(args) -> int:
     try:
         for _, path, head, target in moves:
             git(path, "reset", "-q", "--keep", target)
-            if not git_ok(repo, "merge-base", "--is-ancestor", target, new):
+            if not is_ancestor(repo, target, new):
                 raise Stopped(f"{path} moved to {target}, which {new} does not reach")
             print(f"moved: {path} from {head[:12]} to {target[:12]}")
             done.append(f"moved {path}")
