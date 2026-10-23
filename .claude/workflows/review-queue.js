@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes every severity and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -54,8 +54,22 @@ export const meta = {
 // commits since that head with the whole diff for context, each merge in the range audited on its
 // own; only the candidates the range touches are mutated; a held record's findings are checked for
 // an answer in the range; the comment names the earlier record and the range, and the new record
-// names the current head. Anything else, a force-push or a range nobody could read, is a full
-// review, and the comment says which.
+// names the current head.
+//
+// A rebuilt head (#293): when the latest record's head is no ancestor, the range agent maps the
+// recorded head's commits onto the new ones with `git range-diff` and reports, for each new commit,
+// the old one whose tree it equals, or none. range-diff's own `=` means an equal patch, which a
+// rebase onto a moved main keeps while every tree changes, so the pairing is range-diff's and the
+// equality is the trees' (https://git-scm.com/docs/git-range-diff: `=` marks commits whose patches
+// are the same; range-diff also prints abbreviated shas, so the agent expands each pair with
+// rev-parse, and rebuildOf takes only a full sha). When at least one new commit maps, the review
+// is a delta over the ones that do not: the axes read each of them, and the content diff
+// `git diff <recorded> <head>`, which needs no ancestry; the comment says it was a rebuild and
+// names the mapping. On #287 each rebuild
+// of the run branch cost a full review, about 700k to 860k subagent tokens and 17 to 18 minutes,
+// though most trees were unchanged. A rebuild that maps no commit, a mapping that leaves out a
+// commit of the head or names no sha, a force-push, or a range nobody could read is a full review,
+// and the comment says which.
 //
 // A review after a hold (#289), full or delta: the tests the earlier records' Mutations tables list
 // as did-not-fail, and no later record reproduced, are mutated first, with the break the record named
@@ -264,7 +278,10 @@ const CANDIDATE = {
 // What the range agent reads for a delta review: whether the head the latest record names is an
 // ancestor of the current head, and the commits, merges and files since it. changedFiles is read
 // whether or not it is an ancestor, and since holds the files changed since each other recorded head
-// the script asks about: a candidate an earlier record reproduced is cleared by them (#289).
+// the script asks about: a candidate an earlier record reproduced is cleared by them (#289). mapping
+// is read when the head is no ancestor (#293): one entry per commit of the head since its fork point,
+// equals the old commit range-diff pairs it with when their trees are equal, "" otherwise; merges
+// then lists the merges among the head's commits, so an unmapped one is audited on its own.
 const RANGE = {
   type: 'object',
   properties: {
@@ -272,9 +289,10 @@ const RANGE = {
     commits: { type: 'array', items: { type: 'string' } }, merges: { type: 'array', items: { type: 'string' } },
     changedFiles: { type: 'array', items: { type: 'string' } },
     since: { type: 'array', items: { type: 'object', properties: { head: { type: 'string' }, changedFiles: { type: 'array', items: { type: 'string' } }, error: { type: 'string' } }, required: ['head', 'changedFiles', 'error'] } },
+    mapping: { type: 'array', items: { type: 'object', properties: { commit: { type: 'string' }, equals: { type: 'string' } }, required: ['commit', 'equals'] } },
     error: { type: 'string' },
   },
-  required: ['from', 'ancestor', 'commits', 'merges', 'changedFiles', 'since', 'error'],
+  required: ['from', 'ancestor', 'commits', 'merges', 'changedFiles', 'since', 'mapping', 'error'],
 }
 // A mutation the pull request's body states, quoted, with its counts (-1 when the body gives none).
 const STATED = {
@@ -411,21 +429,28 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
-const rangePrompt = (n, inv, from, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
+const rangePrompt = (n, inv, from, oldFork, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
 
 ${HOUSE}
 
 OUTPUT FILE: ${DIR(n)}/range.json
 
 1. \`git -C ${REPO} fetch origin --tags\`. from = ${from}; the current head is ${inv.head}.
-2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push or a rebuilt branch dropped the recorded head); leave commits and merges empty. If ${from} cannot be read at all, ancestor is false and error says why.
-3. When ancestor is true: commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`, merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`. Either way, when ${from} can be read: changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`, which compares the two trees and needs no ancestry.
+2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push or a rebuilt branch dropped the recorded head); leave commits empty. If ${from} cannot be read at all, ancestor is false and error says why.
+3. When ancestor is true: commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`, merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`, and mapping is [].
+3b. When ancestor is false and ${from} can be read, map the recorded head's commits onto the new ones: \`git -C ${REPO} range-diff ${oldFork}..${from} ${inv.forkPoint}..${inv.head}\` (${oldFork} is the fork point the record names). mapping: one entry for each commit of \`git -C ${REPO} log --format=%H ${inv.forkPoint}..${inv.head}\`, merges included: commit is its sha, and equals is the full 40-hex sha (\`git -C ${REPO} rev-parse <old>\`, since range-diff prints abbreviated ones) of the old commit range-diff pairs it with when \`git -C ${REPO} rev-parse <old>^{tree}\` prints the same tree as \`git -C ${REPO} rev-parse <commit>^{tree}\`, else "". range-diff's \`=\` is an equal patch, not an equal tree, so compare the trees for every pair. A commit range-diff pairs with none, a merge among them, maps to the commit of ${oldFork}..${from} whose tree equals its own, if one does. merges = \`git -C ${REPO} log --merges --format=%H ${inv.forkPoint}..${inv.head}\`. If range-diff cannot run, error says why. Either way, when ${from} can be read: changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`, which compares the two trees and needs no ancestry.
 4. since: ${sinceHeads.length ? `one entry for each of these earlier recorded heads: ${sinceHeads.join(', ')}. head is the sha; changedFiles = \`git -C ${REPO} diff --name-only <head> ${inv.head}\`; error is "" or why that head cannot be read, with changedFiles [].` : '[].'}
 5. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
-// What the axes and the verdict are told about a delta review, and what the comment says of it.
+// What the axes and the verdict are told about a delta review, and what the comment says of it. A
+// rebuild's delta is no range: from..to over a head that does not descend from the recorded one
+// lists the whole branch, so it is named by its unmapped commits and read through the content diff.
 const deltaRange = (d) => `${d.from}..${d.to}`
-const deltaBrief = (d) => `This is a delta review. The latest review record on this pull request, ${d.url}, names ${d.from} (${d.verdict}), an ancestor of the head. Review the range ${deltaRange(d)}: \`git -C ${REPO} diff ${deltaRange(d)}\` and \`git -C ${REPO} log ${deltaRange(d)} --oneline\` (${d.commits.length} commit(s); files: ${d.changedFiles.join(', ') || '(none)'}). Read the whole diff, \`git -C ${REPO} diff ${d.fork}...${d.to}\`, for context only: what the earlier record cleared is not re-reviewed.${d.merges.length ? ` The range holds merge commit(s) ${d.merges.join(', ')}: audit each one's resolution on its own, with \`git -C ${REPO} show --remerge-diff <merge>\`, as the review guide requires.` : ''}${d.verdict === 'hold' ? ` The earlier record held: read ${d.url} and check each of its findings for an answer in the range.` : ''}`
+const deltaScope = (d) => (d.rebuilt ? `the unmapped commit(s) ${d.commits.join(', ') || '(none)'}` : `the range ${deltaRange(d)}`)
+const mappingText = (d) => d.mapping.filter((m) => m.equals).map((m) => `${m.commit} = ${m.equals}`).join(', ')
+const deltaBrief = (d) => `This is a delta review. The latest review record on this pull request, ${d.url}, names ${d.from} (${d.verdict}), ${d.rebuilt
+    ? `which is no ancestor of the head: the branch was rebuilt. These new commits have the tree of an old one (new = old): ${mappingText(d)}; what the earlier record cleared there is not re-reviewed. Review the commit(s) that map onto none, ${d.commits.join(', ') || '(none: every commit maps)'}, each with \`git -C ${REPO} show <sha>\`, and the content diff from the recorded head, \`git -C ${REPO} diff ${d.from} ${d.to}\` (files: ${d.changedFiles.join(', ') || '(none)'}).`
+    : `an ancestor of the head. Review the range ${deltaRange(d)}: \`git -C ${REPO} diff ${deltaRange(d)}\` and \`git -C ${REPO} log ${deltaRange(d)} --oneline\` (${d.commits.length} commit(s); files: ${d.changedFiles.join(', ') || '(none)'}).`} Read the whole diff, \`git -C ${REPO} diff ${d.fork}...${d.to}\`, for context only: what the earlier record cleared is not re-reviewed.${d.merges.length ? ` The range holds merge commit(s) ${d.merges.join(', ')}: audit each one's resolution on its own, with \`git -C ${REPO} show --remerge-diff <merge>\`, as the review guide requires.` : ''}${d.verdict === 'hold' ? ` The earlier record held: read ${d.url} and check each of its findings for an answer in ${d.rebuilt ? 'the content diff' : 'the range'}.` : ''}`
 
 const axisPrompt = (axis, n, inv, d) => `You are the ${axis} axis of a review of pull request #${n}: ${inv.title}. You are a fresh agent and wrote none of its commits.
 
@@ -656,10 +681,13 @@ const mutationLines = (mut) => [
 // The line after the head line: the delta's earlier record and range, or why a pull request with an
 // earlier record got a full review.
 const scopeLines = (d, full) => (d
-  ? [`Delta review: since the record ${d.url} (${d.verdict}) on ${d.from}, the range ${deltaRange(d)}, ${d.commits.length} commit(s)${d.merges.length ? `, merge(s) ${d.merges.join(', ')} audited on their own` : ''}; the whole diff from the fork point was read for context.`]
+  ? d.rebuilt
+    ? [`Delta review: a rebuild, since the record ${d.url} (${d.verdict}) names ${d.from}, no ancestor of the head; ${d.mapping.filter((m) => m.equals).length} of ${d.mapping.length} new commit(s) map onto an old one with an equal tree, and ${deltaScope(d)}${d.merges.length ? `, merge(s) ${d.merges.join(', ')} audited on their own` : ''} and the content diff ${d.from} ${d.to} were reviewed, with the whole diff from the fork point for context.`,
+      `Rebuild mapping (new = old, equal trees): ${mappingText(d)}.`]
+    : [`Delta review: since the record ${d.url} (${d.verdict}) on ${d.from}, the range ${deltaRange(d)}, ${d.commits.length} commit(s)${d.merges.length ? `, merge(s) ${d.merges.join(', ')} audited on their own` : ''}; the whole diff from the fork point was read for context.`]
   : full ? [`Full review: the latest record, ${full.url}, names ${full.head}, ${full.why}.`] : [])
 const earlierLines = (d, v) => (d && d.verdict === 'hold'
-  ? ['## The earlier hold', '', `The findings of ${d.url}, checked for an answer in ${deltaRange(d)}:`,
+  ? ['## The earlier hold', '', `The findings of ${d.url}, checked for an answer in ${d.rebuilt ? `${deltaScope(d)} and the content diff ${d.from} ${d.to}` : deltaRange(d)}:`,
     ...(v.earlierFindings.length ? v.earlierFindings.map((f) => `- ${f.finding}: ${f.answered ? 'answered' : 'not answered'}. ${f.how}`) : ['- The verdict listed none, so the hold stands: a held record\'s findings are never dropped unchecked.']), '']
   : [])
 const followUpLines = (list) => ['## Follow-ups', '',
@@ -700,6 +728,25 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   '',
   record,
 ].join('\n')
+
+// ---------------------------------------------------------------- a rebuilt head
+// The range agent's mapping judged against the inventory's commits (#293): null when it cannot be
+// trusted, so the review is full, as a range nobody could read is. It must name every commit of the
+// head and no other, each once, with equals a full sha or "". mapped is whether any commit maps;
+// unmapped is the named set the delta reviews, in the mapping's order.
+const SHA = /^[0-9a-f]{40}$/
+const rebuildOf = (inv, rg) => {
+  const mapping = Array.isArray(rg.mapping) ? rg.mapping : []
+  const heads = new Set(inv.commits || [])
+  const seen = new Set()
+  for (const m of mapping) {
+    if (!m || !heads.has(m.commit) || seen.has(m.commit) || !(m.equals === '' || SHA.test(m.equals))) return null
+    seen.add(m.commit)
+  }
+  if (!heads.size || seen.size !== heads.size) return null
+  const unmapped = mapping.filter((m) => !m.equals).map((m) => m.commit)
+  return { mapping: mapping.map((m) => ({ commit: m.commit, equals: m.equals })), unmapped, mapped: unmapped.length < mapping.length }
+}
 
 // ---------------------------------------------------------------- one pull request
 // A stage that fails fails its pull request alone (#86): the result is outcome failed with the stage,
@@ -743,20 +790,26 @@ const reviewOne = async (n, res, at) => {
   }
 
   // A delta review when the latest record names another head and that head is an ancestor of this
-  // one. A range agent that dies, or a head that is not an ancestor, is a full review, said so.
+  // one, or when this head rebuilt it and some of its commits keep an old tree (#293). A range agent
+  // that dies, or a head that is neither, is a full review, said so.
   let d = null
   let full = null
   const latestRecord = records[records.length - 1]
   let rg = null
   if (latestRecord && latestRecord.head !== inv.head) {
     at.stage = 'range'
-    try { rg = await run(rangePrompt(n, inv, latestRecord.head, sinceHeadsOf(records, inv)), { label: `range:${n}`, phase: 'Inventory', schema: RANGE }) } catch (e) { rg = null }
+    try { rg = await run(rangePrompt(n, inv, latestRecord.head, latestRecord.base, sinceHeadsOf(records, inv)), { label: `range:${n}`, phase: 'Inventory', schema: RANGE }) } catch (e) { rg = null }
+    const rebuild = rg && !rg.ancestor && !rg.error ? rebuildOf(inv, rg) : null
     if (rg && rg.ancestor && !rg.error) {
-      d = { from: latestRecord.head, to: inv.head, fork: inv.forkPoint, url: latestRecord.url, verdict: latestRecord.verdict, commits: rg.commits || [], merges: rg.merges || [], changedFiles: rg.changedFiles || [] }
+      d = { from: latestRecord.head, to: inv.head, fork: inv.forkPoint, url: latestRecord.url, verdict: latestRecord.verdict, commits: rg.commits || [], merges: rg.merges || [], changedFiles: rg.changedFiles || [], rebuilt: false, mapping: [] }
+    } else if (rebuild && rebuild.mapped) {
+      d = { from: latestRecord.head, to: inv.head, fork: inv.forkPoint, url: latestRecord.url, verdict: latestRecord.verdict, commits: rebuild.unmapped, merges: (rg.merges || []).filter((m) => rebuild.unmapped.includes(m)), changedFiles: rg.changedFiles || [], rebuilt: true, mapping: rebuild.mapping }
+    }
+    if (d) {
       res.earlierRecord = { url: d.url, head: d.from, verdict: d.verdict }
-      res.range = { from: d.from, to: d.to, commits: d.commits, merges: d.merges }
+      res.range = { from: d.from, to: d.to, commits: d.commits, merges: d.merges, rebuilt: d.rebuilt, mapping: d.mapping }
     } else {
-      full = { url: latestRecord.url, head: latestRecord.head, why: !rg ? 'and the range agent returned nothing, so its ancestry is unread' : rg.error ? `and its range could not be read: ${rg.error}` : 'which is not an ancestor of the head' }
+      full = { url: latestRecord.url, head: latestRecord.head, why: !rg ? 'and the range agent returned nothing, so its ancestry is unread' : rg.error ? `and its range could not be read: ${rg.error}` : `which is not an ancestor of the head, ${rebuild ? 'and no commit of the rebuild maps onto an old one with an equal tree' : 'and the rebuild\'s mapping does not cover every commit of the head with a sha or ""'}` }
       log(`#${n}: full review; the latest record ${latestRecord.url} names ${latestRecord.head}, ${full.why}`)
     }
   }
