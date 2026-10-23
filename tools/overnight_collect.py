@@ -24,11 +24,20 @@ The rules, as the collect step states them:
   OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
   they land in their own pull requests.
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
-- status, in this order: ready-for-human; needs-triage; claimed (an assignee, or a `task/<id>-`
-  branch on a row not landed); ready-for-agent when every open blocker is itself a ready-for-agent
-  ticket tonight; blocked otherwise. The last two depend on each other, so they are settled by
-  repeating until nothing changes. An issue carrying two of the labels is one ticket, under the
-  label this order puts first.
+- status, in this order: ready-for-human; needs-triage; needs-triage again for a ready-for-agent
+  label some other account applied (#316); claimed (an assignee, or a `task/<id>-` branch on a row
+  not landed); ready-for-agent when every open blocker is itself a ready-for-agent ticket tonight;
+  blocked otherwise. The last two depend on each other, so they are settled by repeating until
+  nothing changes. An issue carrying two of the labels is one ticket, under the label this order
+  puts first.
+- Who labelled it (#316): `ready-for-agent` is a lane's promise (docs/agents/triage-labels.md), and
+  CODING_STANDARDS.md -> "An authorisation is read from its author" says it counts only when the
+  account the rule names applied it. So each ticket listed under it has its timeline read, and the
+  actor of the last `labeled` event that applied `ready-for-agent` must be the account
+  docs/agents/issue-tracker.md names in its "The human's account is `@<login>`." line, or the
+  repository's owner (from the issue's own URL) while the guide names none. Any other actor, a
+  deleted one, or no such event, and the ticket is needs-triage with the actor in "why": whoever
+  can label an issue cannot send a lane at it.
 - openBoxes: the `- [ ]` lines in the body, or -1 when it has no checkbox at all.
 - willEndPartial (#228): why a lane cannot finish the ticket, [] when nothing says so. Since #248
   each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket
@@ -50,7 +59,9 @@ but the answer goes to stderr.
 
 --from DIR reads ready-for-agent.json, ready-for-human.json and needs-triage.json (each the JSON of
 `gh issue list`; a missing file is an empty list), and optionally branches.txt (one branch name a
-line) and roadmap.json (`tools/roadmap.py --json`). Absent ones are read live.
+line) and roadmap.json (`tools/roadmap.py --json`). Absent ones are read live. It also reads
+timelines/<n>.json for each ticket listed under ready-for-agent, the JSON array GitHub's timeline
+endpoint gives; one missing is refused, not read live and not read as labelled by the account.
 """
 from __future__ import annotations
 
@@ -65,6 +76,7 @@ import sys
 import typing
 
 LABELS = ("ready-for-agent", "ready-for-human", "needs-triage")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # The labels in the order the collect step's status rule reads them. A human relabelling by hand can
 # leave two of them on one issue, which then comes back in two listings: it is one ticket, under the
@@ -79,6 +91,25 @@ PLAN_ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
 PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
+# Who may apply `ready-for-agent` (#316): the account the tracker guide names on a line of this
+# shape, matched narrowly so that prose about accounts is not read as naming one.
+# .github/steering.py reads the same line for who may write a `Confirm`, and
+# overnight_collect_tests.py holds the two equal.
+GUIDE = "docs/agents/issue-tracker.md"
+ACCOUNT_LINE = re.compile(
+    r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
+)
+# The repository's owner, read off a URL GitHub gave for one of its issues, while the guide names
+# no account: no further call, and the owner GitHub says rather than one typed here.
+URL_OWNER = re.compile(r"^https://github\.com/(?P<owner>[^/\s]+)/")
+# Where a ticket's timeline is read: every `labeled` event, oldest first, one JSON object a line.
+# gh fills {owner}/{repo} from the remote of the directory it runs in, and {number} is the issue.
+# https://docs.github.com/en/rest/issues/timeline#list-timeline-events-for-an-issue
+GH_TIMELINE = (
+    "gh", "api", "--paginate", "repos/{owner}/{repo}/issues/{number}/timeline?per_page=100",
+    "--jq", '.[] | select(.event == "labeled") | tojson',
+)
+
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
 
@@ -146,6 +177,26 @@ def branches(root: pathlib.Path) -> list[str]:
     return names
 
 
+def timeline(root: pathlib.Path, number: int) -> list[dict]:
+    """The issue's `labeled` events, oldest first, as GitHub's timeline gives them. A line that is
+    not a JSON object is refused, not skipped: a skipped one could be the label's last write."""
+    command = [part.replace("{number}", str(number)) for part in GH_TIMELINE]
+    events = []
+    for line in run(command, root).splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise Refused(f"the timeline of #{number} gave a line that is not JSON: "
+                          f"{line[:60]!r}") from error
+        if not isinstance(event, dict):
+            raise Refused(f"the timeline of #{number} gave something other than events: "
+                          f"{line[:60]!r}")
+        events.append(event)
+    return events
+
+
 def roadmap(root: pathlib.Path) -> dict:
     """tools/roadmap.py --json, which says which rows have landed and the plan's order."""
     script = str(root / "tools" / "roadmap.py")
@@ -179,6 +230,56 @@ def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
                                       if node["state"] != "OPEN"),
             )
     return list(found.values())
+
+
+def labelled_for_agent(listings: dict[str, list[dict]]) -> list[int]:
+    """The tickets listed under ready-for-agent, whose labeller the status rule reads: each issue
+    issues_of() keeps under that label and does not hold as a spec."""
+    return [issue.number for issue in issues_of(listings)
+            if issue.label == "ready-for-agent" and issue.sub_issues == 0]
+
+
+def named_account(guide: str | None) -> str | None:
+    """The account the tracker guide names on its "The human's account is `@<login>`." line, or
+    None when it names none (or there is no guide)."""
+    found = ACCOUNT_LINE.search(guide or "")
+    return found.group("login") if found else None
+
+
+def account_for(named: str | None, url: str) -> tuple[str, str]:
+    """Who may apply ready-for-agent to the issue at url, and where that comes from: the guide's
+    account, else the repository's owner as the issue's URL names it."""
+    if named:
+        return named, f"the account {GUIDE} names"
+    found = URL_OWNER.match(url)
+    owner = found.group("owner") if found else ""
+    return owner, f"the repository's owner, since {GUIDE} names no account"
+
+
+def last_labeller(events: list[dict]) -> str | None:
+    """The actor of the last `labeled` event that applied ready-for-agent: its login, "" when
+    GitHub names no account (a deleted one), or None when no event applied the label. Raises
+    KeyError or TypeError, which main() reports as unreadable, on an event not in GitHub's shape."""
+    found = None
+    for event in events:
+        if event["event"] == "labeled" and event["label"]["name"] == "ready-for-agent":
+            found = (event.get("actor") or {}).get("login") or ""
+    return found
+
+
+def unauthorised_label(issue: Issue, events: list[dict], named: str | None) -> str | None:
+    """Why the ticket's ready-for-agent label does not count, or None when the account applied
+    it."""
+    account, source = account_for(named, issue.url)
+    actor = last_labeller(events)
+    if actor is None:
+        return (f"ready-for-agent, but its timeline shows no `labeled` event applying it, so "
+                f"nothing says @{account} did, {source}")
+    if not account or actor.casefold() != account.casefold():
+        who = f"@{actor}" if actor else "an account GitHub no longer names"
+        return (f"ready-for-agent was last applied by {who}, not by @{account}, {source}; a "
+                "lane goes only where that account applied it")
+    return None
 
 
 def ticket_id(issue: Issue) -> str:
@@ -296,11 +397,15 @@ def landed_ids(road: dict) -> set[str]:
 
 def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict,
             rules: list[tuple[str, str]] | None = None,
-            states: dict[int, str] | None = None) -> dict:
+            states: dict[int, str] | None = None,
+            timelines: dict[int, list[dict]] | None = None,
+            guide: str | None = None) -> dict:
     """The answer, from what was read. Raises Refused when two tickets share an id, or when the
     ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
     with the rest of the input; None reads it here. states gives what a number the prose names is,
-    beyond the listed issues; prose_states() asks GitHub for the rest."""
+    beyond the listed issues; prose_states() asks GitHub for the rest. timelines gives each
+    ready-for-agent ticket's timeline events, and timeline() asks GitHub for any it lacks; guide is
+    the text of docs/agents/issue-tracker.md, which names the account that may apply the label."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
     parents, tickets = [], []
@@ -330,15 +435,23 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     def blocker_id(number: int) -> str:
         return id_of.get(number, f"issue-{number}")
 
+    named = named_account(guide)
+    timelines = dict(timelines or {})
     status: dict[int, str] = {}
     why: dict[int, str] = {}
     for issue in tickets:
         tid = id_of[issue.number]
         claim = next((name for name in branch_names if name.startswith(f"task/{tid}-")), None)
+        if issue.label == "ready-for-agent" and issue.number not in timelines:
+            timelines[issue.number] = timeline(ROOT, issue.number)
+        unlabelled = (unauthorised_label(issue, timelines[issue.number], named)
+                      if issue.label == "ready-for-agent" else None)
         if issue.label == "ready-for-human":
             status[issue.number], why[issue.number] = "ready-for-human", "labelled ready-for-human"
         elif issue.label == "needs-triage":
             status[issue.number], why[issue.number] = "needs-triage", "labelled needs-triage"
+        elif unlabelled:
+            status[issue.number], why[issue.number] = "needs-triage", unlabelled
         elif issue.assigned:
             status[issue.number], why[issue.number] = "claimed", "ready-for-agent with an assignee"
         elif claim and tid not in landed:
@@ -404,10 +517,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", required=True,
                         help="print the tickets and parents as JSON")
     parser.add_argument("--from", dest="saved", metavar="DIR",
-                        help="read saved gh listings (and optionally branches.txt, roadmap.json) "
-                             "from DIR instead of asking GitHub")
+                        help="read saved gh listings, timelines/<n>.json for each ready-for-agent "
+                             "ticket, and optionally branches.txt and roadmap.json from DIR "
+                             "instead of asking GitHub")
     arguments = parser.parse_args(argv)
-    root = pathlib.Path(__file__).resolve().parent.parent
+    root = ROOT
     saved = pathlib.Path(arguments.saved) if arguments.saved else None
 
     def kept(name: str) -> str | None:
@@ -428,7 +542,17 @@ def main(argv: list[str] | None = None) -> int:
         branch_names = text.split() if text is not None else branches(root)
         text = kept("roadmap.json")
         road = json.loads(text) if text is not None else roadmap(root)
-        answer = resolve(listings, branch_names, road, ownership_rules())
+        timelines = {}
+        if saved is not None:
+            for number in labelled_for_agent(listings):
+                text = kept(f"timelines/{number}.json")
+                if text is None:
+                    raise Refused(f"{saved / 'timelines' / f'{number}.json'} is missing, so who "
+                                  f"applied ready-for-agent to #{number} is unread")
+                timelines[number] = json.loads(text)
+        guide = (root / GUIDE).read_text() if (root / GUIDE).exists() else None
+        answer = resolve(listings, branch_names, road, ownership_rules(), timelines=timelines,
+                         guide=guide)
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1

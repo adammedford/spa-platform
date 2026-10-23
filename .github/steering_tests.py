@@ -387,10 +387,16 @@ class SteeringTests(unittest.TestCase):
         """What the lookup says when GitHub cannot be asked: no numbers, and the reason."""
         steering.issued_numbers = lambda root: (set(), set(), why)
 
-    def comments(self, kept: dict[str, str], why: str = "") -> None:
-        """What GitHub would answer for a comment id: the URL it keeps that comment at, or None for
-        an id it has no comment under here; or, given `why`, that it could not be asked."""
-        steering.comment_url = lambda root, comment: (None, why) if why else (kept.get(comment), "")
+    def comments(self, kept: dict[str, str], why: str = "", author: str = "adammedford") -> None:
+        """What GitHub would answer for a comment id: the URL it keeps that comment at and who
+        wrote it, by default the repository's owner, or None for an id it has no comment under
+        here; or, given `why`, that it could not be asked."""
+        def answer(root, comment):
+            if why:
+                return None, why
+            url = kept.get(comment)
+            return (steering.Comment(url, author) if url else None), ""
+        steering.comment_url = answer
 
     def commit(self, subject_or_message: str, *, made: datetime.datetime = AFTER,
                authored: datetime.datetime | None = None) -> str:
@@ -1546,6 +1552,76 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         self.assertIn("1 commit changing a steering document cites its authority.", out)
 
+    def test_a_comment_another_account_wrote_fails_naming_its_author(self):
+        """#316: a `Confirm` is the human's act, so a comment by any other account that can
+        comment on the repository authorises nothing, and the line says who wrote it. With no
+        guide in the tree, the account is the repository's owner, read off GitHub's URL."""
+        for author, who in (("mallory", "@mallory"), ("", "an account GitHub no longer names")):
+            with self.subTest(author=author):
+                self.comments({COMMENT_ID: COMMENT}, author=author)
+                base = self.baseline()
+                self.write("GLOSSARY.md", f"# Glossary {author}\n")
+                subject = "The glossary, on someone else's Confirm"
+                sha = self.commit(message(subject, COMMENT))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                                      f"is a comment by {who}, not by @adammedford, the "
+                                      "repository's owner, since docs/agents/issue-tracker.md "
+                                      "names no account"), out)
+                self.assertIn("STEERING FAILED: an Authority: comment was written by an account "
+                              "that does not confirm.", out)
+                self.assertNotIn("cites its authority", out)
+
+    def test_the_owners_login_is_compared_without_case(self):
+        self.comments({COMMENT_ID: COMMENT}, author="AdamMedford")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, as Adam confirmed", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
+    def test_the_account_the_guide_names_confirms_and_the_owner_then_does_not(self):
+        """The account is read from the guide, not assumed: once docs/agents/issue-tracker.md
+        names one, its comment vouches and the owner's no longer does."""
+        guide = ("# Issue tracker\n\n## This repository's additions\n\n"
+                 "- **The human's account is `@adam-m`.** A `Confirm` comment counts only when\n"
+                 "  this account wrote it.\n")
+        self.write(steering.GUIDE, guide)
+        for author, code_wanted in (("adam-m", 0), ("adammedford", 1)):
+            with self.subTest(author=author):
+                self.comments({COMMENT_ID: COMMENT}, author=author)
+                base = self.baseline()
+                self.write("GLOSSARY.md", f"# Glossary {author}\n")
+                subject = "The glossary, on a Confirm"
+                sha = self.commit(message(subject, COMMENT))
+                code, out = self.check("--base", base)
+                self.assertEqual(code_wanted, code, out)
+                if code_wanted:
+                    self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                                          "is a comment by @adammedford, not by @adam-m, the "
+                                          "account docs/agents/issue-tracker.md names for a "
+                                          "Confirm"), out)
+
+    def test_a_range_that_renames_the_account_cannot_vouch_itself(self):
+        """#316 review: the account is read from the guide at the base. A range that writes the
+        guide naming @mallory, citing @mallory's comment for that change and for another, is
+        judged against the owner the base's guide leaves, so both commits fail."""
+        self.comments({COMMENT_ID: COMMENT}, author="mallory")
+        base = self.baseline()
+        self.write(steering.GUIDE, "# Issue tracker\n\n## This repository's additions\n\n"
+                                   "- **The human's account is `@mallory`.** It confirms.\n")
+        guide_sha = self.commit(message("Name the account", COMMENT))
+        self.write("GLOSSARY.md", "# Glossary\n")
+        glossary_sha = self.commit(message("The glossary, on mallory's Confirm", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        why = ("is a comment by @mallory, not by @adammedford, the repository's owner, since "
+               "docs/agents/issue-tracker.md names no account")
+        self.assertIn(refuses(guide_sha, "Name the account", (steering.GUIDE,), COMMENT, why), out)
+        self.assertIn(refuses(glossary_sha, "The glossary, on mallory's Confirm",
+                              ("GLOSSARY.md",), COMMENT, why), out)
+
     def test_a_url_that_is_not_a_comment_fails_without_asking_github(self):
         """A page that is not a comment, an issue's own URL, a review comment, and prose citing a
         number: none is either form, and the stubs in setUp prove GitHub was asked nothing."""
@@ -2066,12 +2142,22 @@ class SteeringTests(unittest.TestCase):
         self.assertTrue(why.startswith("gh answered with something other than numbers"), why)
 
     def test_the_comment_lookup_returns_the_url_github_keeps_the_comment_at(self):
-        """The id goes where the command names {comment}, and the answer is the URL gh prints."""
-        steering.GH_COMMENT = self.stand_in(
-            "import sys; print('https://github.com/o/r/issues/1#issuecomment-' + sys.argv[1])",
-            "{comment}")
-        self.assertEqual(("https://github.com/o/r/issues/1#issuecomment-5", ""),
-                         REAL_COMMENT_URL(self.root, "5"))
+        """The id goes where the command names {comment}, and the answer is the URL gh prints
+        and the login after it; a deleted author, which the --jq writes as no login, is ""."""
+        for printed, author in ((" mallory", "mallory"), (" ", ""), ("", "")):
+            with self.subTest(author=author, printed=printed):
+                steering.GH_COMMENT = self.stand_in(
+                    "import sys; print('https://github.com/o/r/issues/1#issuecomment-' + "
+                    f"sys.argv[1] + {printed!r})", "{comment}")
+                self.assertEqual(
+                    (steering.Comment("https://github.com/o/r/issues/1#issuecomment-5", author),
+                     ""),
+                    REAL_COMMENT_URL(self.root, "5"))
+
+    def test_the_comment_lookup_asks_for_the_author(self):
+        """The --jq writes the login after the URL, so the rule reads who wrote the comment."""
+        self.assertIn(".user.login", steering.GH_COMMENT[-1])
+        self.assertTrue(steering.GH_COMMENT[-1].startswith('"\\(.html_url) '))
 
     def test_the_comment_lookup_reads_a_404_as_no_comment(self):
         """GitHub's answer for an id this repository has no comment under: an answer, not a

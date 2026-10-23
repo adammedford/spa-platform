@@ -457,6 +457,19 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   }
 }
 
+// 16. The status the collect tool gives is the ticket's (#316): only tools/overnight_collect.py reads who applied
+//     ready-for-agent, so the collect prompt copies its status and why, and a tool that did not run starts no lane.
+{
+  const COPIED = 'The status the tool gives is the ticket\'s (#316): give each ticket in "tickets" the "status" and "why" of the tool\'s ticket with the same issue number, copied as printed, in place of yours'
+  const UNREAD = 'give every ticket whose status would be "ready-for-agent" the status "blocked"'
+  const collects = allPrompts.filter((c) => c.label === 'collect')
+  if (!collects.length) fail('no collect prompt was rendered, so the status check reads nothing')
+  for (const c of collects) {
+    if (!c.prompt.includes(COPIED)) fail('the collect prompt does not take each ticket\'s status from tools/overnight_collect.py (#316)')
+    if (!c.prompt.includes(UNREAD)) fail('the collect prompt lets a ticket stay ready-for-agent when tools/overnight_collect.py did not run (#316)')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
