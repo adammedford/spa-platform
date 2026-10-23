@@ -700,8 +700,10 @@ class ThroughGh(unittest.TestCase):
         gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(base),
                     "GH_FIXTURES": str(self.fixtures), "GH_LOG": str(self.log)}
-        # The repository's branches and roadmap are this checkout's; the cases pin them.
-        for name, value in (("branches", lambda root: []), ("roadmap", lambda root: ROAD)):
+        # The repository's branches, roadmap and tracker guide are this checkout's; the cases pin
+        # them. A guide naming no account leaves the fixtures' owner as the one who may label (#316).
+        for name, value in (("branches", lambda root: []), ("roadmap", lambda root: ROAD),
+                            ("tracker_guide", lambda root: None)):
             patcher = mock.patch.object(collect, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -743,6 +745,21 @@ class ThroughGh(unittest.TestCase):
         self.assertEqual([[], []], [t["willEndPartial"] for t in answer["tickets"]])
         self.assertEqual([("1.7", "ready-for-agent"), ("issue-2", "ready-for-human")],
                          [(t["id"], t["status"]) for t in answer["tickets"]])
+
+    def test_the_account_the_guide_names_is_the_one_whose_label_counts(self):
+        """The guide's account line, read through main(), outranks the repository's owner (#316)."""
+        guide = "- **The human's account is `@someone`.** A `Confirm` comment counts only from it.\n"
+        self.listings(agent=[issue(1, body("1.7"))])
+        with mock.patch.object(collect, "tracker_guide", lambda root: guide):
+            code, out, err = self.run_main("--json")
+        self.assertEqual(0, code, err)
+        self.assertEqual([("1.7", "needs-triage")],
+                         [(t["id"], t["status"]) for t in json.loads(out)["tickets"]])
+        self.listings(agent=[issue(1, body("1.7"))], actor="someone")
+        with mock.patch.object(collect, "tracker_guide", lambda root: guide):
+            code, out, err = self.run_main("--json")
+        self.assertEqual([("1.7", "ready-for-agent")],
+                         [(t["id"], t["status"]) for t in json.loads(out)["tickets"]])
 
     def test_the_json_marks_a_ticket_that_will_end_partial_and_stderr_counts_it(self):
         self.listings(agent=[issue(204, FILED[204]), issue(198, FILED[198])])
