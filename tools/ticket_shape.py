@@ -371,8 +371,10 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
                                         f"{text[:120]}"))
         for box in OPEN_BOX.finditer(issue.body):
             text = box.group("text")
+            # The ticket's own number is its own commit, not another ticket's.
             numbers = list(dict.fromkeys(f"#{found.group('number')}" for pattern in SHARED_COMMIT
-                                         for found in pattern.finditer(text)))
+                                         for found in pattern.finditer(text)
+                                         if int(found.group("number")) != issue.number))
             if numbers:
                 failures.append(Failure("shared-commit", f"an open box requires {said(numbers)}'s "
                                         "commit on this ticket's branch, which a lane that "

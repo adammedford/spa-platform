@@ -1063,13 +1063,19 @@ class SharedCommit(unittest.TestCase):
     def test_the_words_of_a_shared_commit_fail(self):
         for text in ("The pull request carries #146's workstream-6 commit.",
                      "Its branch carries #12's commit.",
-                     "The commit sits on #145's pull request.",
+                     "The commit sits on #12's pull request.",
                      "It sits on #12's branch.",
                      "The change goes in #12's pull request.",
                      "The branch includes the commit of #12.",
                      "The branch has #12's two commits on it."):
             with self.subTest(text):
                 self.assertIn("shared-commit", self.box(text))
+
+    def test_the_tickets_own_commit_is_not_another_tickets(self):
+        # The box helper judges ticket 145: a box naming #145's commit asks for its own work, which
+        # its own lane has.
+        self.assertEqual(self.box("The merge carries #145's commit and its count."), [])
+        self.assertIn("shared-commit", self.box("The merge carries #146's commit and its count."))
 
     def test_a_ticked_box_is_not_judged(self):
         for number in (145, 146):
