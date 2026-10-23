@@ -271,7 +271,7 @@ function stub(env, scriptArgs, served) {
           pr: { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400' },
           prBodyFile: `${env.repo}/${MORNING_REL}/pr-body.md`, mergeBodyFile: `${env.repo}/${MORNING_REL}/merge-body.md`,
           mergeSubject: jsonAfter(prompt, 'MERGE SUBJECT') || '',
-          prBody: v.prBody || '', merges: v.merges || [],
+          prReused: !!v.prReused, prBody: v.prBody || '', merges: v.merges || [],
           ci: v.ci || 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/1', failingJobs: v.failingJobs || [],
           pushed: true, mainMoved: false, findings: [],
           worktrees: [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true }],
@@ -790,7 +790,7 @@ try {
   checks++
   {
     const NOW = '76704c53c36ea51a9a4a81a206b76de7cf46e98c'
-    const reran = { verify: { head: NOW, prBody: BODY_287_FIRST, merges: MERGES_287 }, agentRecord: { verdict: 'hold', head: NOW, url: R287[1], reader: 'exit 1: hold' } }
+    const reran = { verify: { head: NOW, prReused: true, prBody: BODY_287_FIRST, merges: MERGES_287 }, agentRecord: { verdict: 'hold', head: NOW, url: R287[1], reader: 'exit 1: hold' } }
     const r = await execute(newRepo(), { date: DATE }, reran)
     const wrote = (/BEGIN DESCRIPTION\n([\s\S]*)\nEND DESCRIPTION/.exec(r.prompt('pr-refresh')) || [])[1]
     if (r.labels.filter((l) => l === 'pr-refresh').length !== 1 || wrote === undefined) fail(`2026-10-22's re-run: dispatched ${r.labels.join(', ')}, expected one description writer`)
@@ -848,6 +848,8 @@ try {
     if (headless.labels.includes('pr-refresh') || !headless.result.refusals.some((x) => /names no head/.test(x))) fail(`a description naming no head: dispatched ${headless.labels.join(', ')}, refusals ${JSON.stringify(headless.result.refusals)}`)
     const stray = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, merges: MERGES_287.filter((m) => !/issue-198:/.test(m.subject)) } })
     if (stray.labels.includes('pr-refresh') || !stray.result.refusals.some((x) => /row for issue-198 names no task merge on the branch/.test(x))) fail(`a row with no merge on the branch: dispatched ${stray.labels.join(', ')}, refusals ${JSON.stringify(stray.result.refusals)}`)
+    const blankRead = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: '' } })
+    if (blankRead.labels.includes('pr-refresh') || !blankRead.result.refusals.some((x) => x.includes(`reused ${cite(400)} but returned no description`))) fail(`a reused pull request read with no description: dispatched ${blankRead.labels.join(', ')}, refusals ${JSON.stringify(blankRead.result.refusals)}`)
     const unwritten = await execute(newRepo(), { date: DATE }, { ...reran, refresh: { edited: false, reason: 'headRefOid is 1111111' } })
     if (!unwritten.result.refusals.some((x) => /was not rewritten: headRefOid is 1111111/.test(x)) || !/not rewritten \(headRefOid is 1111111\)/.test(unwritten.result.handover.text)) fail(`a writer that did not edit: refusals ${JSON.stringify(unwritten.result.refusals)}`)
     // The Verify prompt reads the open description and the first-parent merges, and edits neither.
