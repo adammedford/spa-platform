@@ -261,7 +261,10 @@ def look_up(numbers: list[int]) -> dict[int, str]:
     """Each number's kind, from one GraphQL query of the repository gh resolves (GH_REPO in the
     Action, the checkout's remote elsewhere). gh exits 1 when a number is no issue or pull request
     and still prints the data with a NOT_FOUND error for it, so the answer is read whatever the
-    exit; any other error, or an answer that does not parse, is Unreadable."""
+    exit; any other error, or an answer that does not parse, is Unreadable. gh fills the
+    `{owner}` and `{repo}` field values from that repository (https://cli.github.com/manual/gh_api),
+    and `issueOrPullRequest` is the repository field that answers for either kind
+    (https://docs.github.com/en/graphql/reference/objects#repository)."""
     fields = " ".join(f"n{n}: issueOrPullRequest(number: {n}) "
                       "{ __typename ... on Issue { state } ... on PullRequest { state } }"
                       for n in numbers)
