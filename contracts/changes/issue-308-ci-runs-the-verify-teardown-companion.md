@@ -4,7 +4,9 @@
 - **Tasks:** #308; #243, which adds the cell scripts' companions to CI and is the natural place for
   this one
 - **Date:** 2026-10-23
-- **Status:** open
+- **Status:** decided, 2026-10-23, on
+  https://github.com/adammedford/spa-platform/issues/232#issuecomment-6375865081.
+  Both items accepted as asked; they land with this Status. See the Decision section below.
 
 ## What changed
 
@@ -41,3 +43,13 @@ The script, the companion and `teardown.sh`'s call, all green under `tools/check
 
 Nothing at runtime. Until it lands a later edit that breaks a reader is caught by the local full
 check and by `teardown_tests.py` in CI, but not by the reader's own cases in CI.
+
+## Decision
+
+Integrator, 2026-10-23, on Adam's confirmed answer,
+https://github.com/adammedford/spa-platform/issues/232#issuecomment-6375865081: **both items accepted as asked.**
+
+1. `.github/workflows/ci.yml` runs `python3 -I tools/scripts/verify_teardown_tests.py` in the cell
+   companions' job under bash 5, beside `teardown_tests.py`, and again in `scripts-bash-3-2` with
+   `SCRIPT_TESTS_REQUIRE_BASH: "3.2"`.
+2. D-3 in `docs/dependencies.md` gains the sentence as proposed.

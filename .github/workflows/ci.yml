@@ -416,6 +416,13 @@ jobs:
         # under 3.2.
         run: python3 -I tools/scripts/teardown_tests.py
 
+      - name: verify-teardown.sh proves nothing platform-tagged is left, through each of its four readers
+        # Change request issue-308. The shared doubles as above, with #118 step 2's records: INACTIVE
+        # ECS entries, the tagging index's lag, a role standing by tag and by name. teardown_tests.py
+        # runs the script at the end of every teardown; this runs the readers' own cases. Under bash 5
+        # here; the job below runs it under 3.2.
+        run: python3 -I tools/scripts/verify_teardown_tests.py
+
       - name: verify-release-immutability.sh runs P-04's cases against the platform bucket one line each
         # Change request issue-122, decided with 1.6b and 1.7 on #226. Doubles for aws, terraform and
         # date, the doubled AWS keeping each case's bucket, policy, repositories and teardown role in
@@ -502,6 +509,13 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/scripts/teardown_tests.py
+
+      - name: verify-teardown.sh, under the bash 3.2 macOS ships
+        # P-05 is checked from this Mac at the end of every teardown, under 3.2 (change request
+        # issue-308).
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/verify_teardown_tests.py
 
       - name: verify-release-immutability.sh, under the bash 3.2 macOS ships
         # P-04 is checked from this Mac against the applied bucket, under 3.2 (change request
