@@ -250,7 +250,7 @@ class Case:
             runner.link_tool(self.bin / tool, os.path.realpath(found))
         (self.bin / "bash").symlink_to(BASH)
         fails_on = fails_on or {}
-        for name, loud in (("python3", ""), ("dotnet", "yes"), ("terraform", "yes")):
+        for name, loud in (("python3", ""), ("dotnet", "yes"), ("terraform", "yes"), ("node", "yes")):
             if name not in missing:
                 reports = path_terraform if name == "terraform" else ""
                 self.write_executable(self.bin / name,
@@ -1225,6 +1225,167 @@ class LibraryTests(CheckTestCase):
         expected = [".github/gizmo_tests.py", ".github/named-tests.py", ".github/two_words_tests.py",
                     "tools/other_tests.py", "tools/scripts/deep_tests.py", "tools/thing_tests.py"]
         self.assertEqual([companion(path) for path in expected], companions_run(case))
+
+
+# Workflow scripts and their test companions, for WorkflowCompanionTests: a script's companion is
+# `<its name, extension dropped, hyphens kept>_tests.mjs` beside it, as overnight.js's is
+# overnight_tests.mjs and pins-sweep.js's is pins-sweep_tests.mjs. The fixture is what the overnight
+# companion reads, so a change to it is a workflow change too.
+WORKFLOW_SCRIPTS = {
+    ".claude/workflows/alpha.js": "// a workflow script\n",
+    ".claude/workflows/alpha_tests.mjs": "// its companion\n",
+    ".claude/workflows/two-words.js": "// a hyphenated workflow script\n",
+    ".claude/workflows/two-words_tests.mjs": "// its companion\n",
+    ".claude/workflows/fixtures/tickets.json": "{}\n",
+    ".claude/workflows/fixtures/helper.js": "// not a workflow script: it is a level down\n",
+}
+WORKFLOW_COMPANIONS = [".claude/workflows/alpha_tests.mjs", ".claude/workflows/two-words_tests.mjs"]
+WORKFLOW_SKIPPED = "check: workflow test companions skipped: nothing under .claude/workflows/ changed."
+
+
+def node_calls(case: Case) -> list[list[str]]:
+    """The calls of the case that ran node."""
+    return [call for call in case.calls() if call[0] == "node"]
+
+
+class WorkflowCompanionTests(CheckTestCase):
+    """#276: under --full, a change under .claude/workflows/ runs every workflow script's test
+    companion with node, and the verdict names each; a red one fails the verdict below its own lines;
+    a script with no companion fails it, naming the script; a change elsewhere skips them unless
+    --both-halves is given; and without node the check fails rather than skips."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def test_a_workflow_change_runs_every_companion_and_the_verdict_names_each(self):
+        for change in (".claude/workflows/alpha.js", ".claude/workflows/fixtures/tickets.json"):
+            with self.subTest(change=change):
+                case = Case(self, extra=WORKFLOW_SCRIPTS, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                # Every companion, not only the changed script's: they share the fixtures.
+                self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+                self.assertEqual(f"check: pass: {FULL_RAN}, the workflow test companions "
+                                 + ", ".join(WORKFLOW_COMPANIONS) + ".", result.last_line(result.stdout))
+                # Shown, not hidden: a companion's lines are the log a lane reads.
+                self.assertIn("node double ran: .claude/workflows/alpha_tests.mjs", result.stdout)
+
+    def test_a_change_elsewhere_skips_them_and_says_so(self):
+        for change in ("docs/notes.md", "src/App/App.cs", ".claude/settings.json"):
+            with self.subTest(change=change):
+                case = Case(self, extra=WORKFLOW_SCRIPTS, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], node_calls(case))
+                self.assertIn(WORKFLOW_SKIPPED, result.stdout.splitlines())
+                self.assertNotIn("workflow", result.last_line(result.stdout))
+
+    def test_both_halves_runs_them_on_an_empty_diff(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS)
+        result = self.full(case, "--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+        self.assertNotIn("skipped", result.stdout)
+
+    def test_a_red_companion_fails_the_verdict_below_its_own_lines(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js",
+                    fails_on={"node": ".claude/workflows/alpha_tests.mjs"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual(["node double failed: .claude/workflows/alpha_tests.mjs",
+                          "check: fail: the workflow test companion .claude/workflows/alpha_tests.mjs failed."],
+                         result.stderr.splitlines()[-2:])
+        # Stopped at the first failure.
+        self.assertEqual([["node", ".claude/workflows/alpha_tests.mjs"]], node_calls(case))
+
+    def test_a_script_with_no_companion_fails_naming_the_script(self):
+        scripts = dict(WORKFLOW_SCRIPTS)
+        scripts[".claude/workflows/lonely.js"] = "// a workflow script that lost its companion\n"
+        case = Case(self, extra=scripts, change=".claude/workflows/alpha.js")
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the workflow script .claude/workflows/lonely.js has no test companion; "
+                         "add .claude/workflows/lonely_tests.mjs beside it.", result.last_line(result.stderr))
+        self.assertEqual([], node_calls(case))
+
+    def test_without_node_the_check_fails_rather_than_skips(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js", missing=("node",))
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: node is not on PATH.", result.last_line(result.stderr))
+
+    def test_no_companion_tracked_is_said_under_both_halves(self):
+        case = Case(self)
+        result = self.full(case, "--both-halves")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertIn("check: no workflow test companion is tracked in .claude/workflows/.",
+                      result.stdout.splitlines())
+
+    def test_the_hook_runs_no_workflow_companion(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertLines([HOOK_BUILD_SKIPPED, HOOK_TERRAFORM_SKIPPED, f"pre-push: {HOOK_RAN} pass."],
+                         result.stdout)
+
+
+class CiWorkflowCompanionTests(CheckTestCase):
+    """#276's first box: CI's Documents job runs the same companions, as the workflow holds the step,
+    and fails on a red one and on a script without one. Which pushes run it is the decision step's,
+    and .github/touches_tests.py runs that."""
+
+    STEP_ID = "workflow-companions"
+
+    def step(self) -> tuple[str, str]:
+        """The step's `if` and its run block, as ci.yml holds them."""
+        workflow = WORKFLOW.read_text()
+        marker = f"        id: {self.STEP_ID}\n"
+        self.assertEqual(1, workflow.count(marker), f"ci.yml has no single step with id {self.STEP_ID}")
+        step = workflow.split(marker, 1)[1].split("\n      - ", 1)[0]
+        condition = next(line.strip() for line in step.splitlines() if line.strip().startswith("if:"))
+        return condition, textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+    def run_step(self, case: Case) -> subprocess.CompletedProcess:
+        return subprocess.run([BASH, "-c", self.step()[1]], cwd=case.work, env=case.env(),
+                              capture_output=True, text=True, timeout=30)
+
+    def test_it_runs_when_the_decision_step_says_a_workflow_file_changed(self):
+        self.assertEqual("if: ${{ steps.touches.outputs.workflows != 'false' }}", self.step()[0])
+
+    def test_it_runs_every_companion(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS)
+        completed = self.run_step(case)
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual([["node", "--version"]] + [["node", path] for path in WORKFLOW_COMPANIONS],
+                         node_calls(case))
+
+    def test_a_red_companion_fails_it(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, fails_on={"node": ".claude/workflows/alpha_tests.mjs"})
+        completed = self.run_step(case)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("::error::the workflow test companion .claude/workflows/alpha_tests.mjs failed.",
+                      completed.stdout)
+
+    def test_a_script_with_no_companion_fails_it(self):
+        scripts = dict(WORKFLOW_SCRIPTS)
+        scripts[".claude/workflows/lonely.js"] = "// no companion\n"
+        case = Case(self, extra=scripts)
+        completed = self.run_step(case)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("::error::the workflow script .claude/workflows/lonely.js has no test companion; "
+                      "add .claude/workflows/lonely_tests.mjs beside it.", completed.stdout)
+        self.assertEqual([], [call for call in node_calls(case) if call != ["node", "--version"]])
+
+    def test_without_node_it_fails(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, missing=("node",))
+        completed = self.run_step(case)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("::error::node is not on PATH.", completed.stdout)
+
+    def test_the_overnight_step_is_folded_into_it(self):
+        # #213's own step ran the overnight companion alone; this step runs it with the rest.
+        self.assertNotIn("run: node .claude/workflows/overnight_tests.mjs", WORKFLOW.read_text())
 
 
 class InterpreterTests(CheckTestCase):
