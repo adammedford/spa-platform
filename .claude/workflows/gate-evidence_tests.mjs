@@ -110,7 +110,8 @@ const testsFor = (served, id) => {
 
 // served: { ladder, tagsReachable, tagsAll, originMain, baseResolved, gates, rowStates, changeRequests,
 //           openIssues, ci, merges, tests: {id: [test]}, outcome: {test: 'proved'|'did-not-fail'|
-//           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds }
+//           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds,
+//           nothingFrom: [label], the agents that return nothing, as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -128,6 +129,7 @@ function stub(env, scriptArgs, served) {
     try {
       await new Promise((r) => setTimeout(r, 3))
       calls.push({ label, prompt, schema: opts.schema })
+      if ((served.nothingFrom || []).includes(label)) return null
       let out
       if (label === 'scope') {
         const want = dataLine(prompt, 'GATE')
@@ -530,6 +532,23 @@ try {
     const gi = fs.readFileSync(path.join(top, '.gitignore'), 'utf8').split('\n')
     if (!gi.includes('!.claude/workflows/gate-evidence_tests.mjs')) fail('.gitignore has no line !.claude/workflows/gate-evidence_tests.mjs')
     if (gi.some((l) => /^!\.claude\/workflows\/\*?_?tests|^!\.claude\/workflows\/\*\.mjs/.test(l))) fail('.gitignore opens the workflows folder wider than the named companion')
+  }
+
+  // 12. A Locate or Row-audit agent that returns nothing is named as failed in the reasons and the
+  //     report (#277), never read as ids no test cites or rows nobody audited. Paired with the same
+  //     run with every agent answering, which names no agent.
+  checks++
+  {
+    const served = { gates: { G3: READY } }
+    const named = (r, re) => r.result.reasons.some((x) => re.test(x)) && re.test(r.result.report.text)
+    const LOCATE = /locate-1 returned nothing: N-01 was not located/
+    const AUDIT = /audit-1 returned nothing: rows? 4\.1, 4\.2 (was|were) not audited/
+    const all = await execute(newRepo(), { gate: 'G3' }, served)
+    if (named(all, LOCATE) || named(all, AUDIT)) fail(`with every agent answering, a Locate or Row-audit agent is named as failed: ${JSON.stringify(all.result.reasons)}`)
+    const locate = await execute(newRepo(), { gate: 'G3' }, { ...served, nothingFrom: ['locate-1'] })
+    if (locate.result.verdict !== 'tag withheld' || !named(locate, LOCATE)) fail(`a null locate-1 is not named in the reasons and the report: ${JSON.stringify(locate.result.reasons)}`)
+    const audit = await execute(newRepo(), { gate: 'G3' }, { ...served, nothingFrom: ['audit-1'] })
+    if (audit.result.verdict !== 'tag withheld' || !named(audit, AUDIT)) fail(`a null audit-1 is not named in the reasons and the report: ${JSON.stringify(audit.result.reasons)}`)
   }
 
   if (driftAll.length) fail(`schema drift or thrown thunks:\n  ${driftAll.join('\n  ')}`)

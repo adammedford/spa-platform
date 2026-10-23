@@ -415,7 +415,7 @@ const mutationList = (inv, standards, d) => {
   const byTest = new Map((inv.candidates || []).map((c) => [c.test, c]))
   const all = [
     ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })),
+    ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...(inv.candidates || []).map((c) => ({ ...c, kind: 'candidate' })),
   ]
   const seen = new Set()

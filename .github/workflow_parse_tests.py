@@ -147,6 +147,63 @@ class WorkflowParseTests(unittest.TestCase):
         self.assertEqual(1, result.status, result.stdout)
         self.assertIn("workflow-parse: found no tracked workflow script", result.stderr)
 
+    # An agent's result read as an empty list (#277). `(x && x.field) || []` turns an agent that
+    # returned nothing into a stage that found nothing, so the check fails the line unless it carries
+    # the exemption marker with a reason.
+    def assertSwallows(self, result: Result, name: str, line: int):
+        self.assertEqual(1, result.status, result.stdout + result.stderr)
+        self.assertIn(f"workflow-parse: {name}:{line} reads an agent result as an empty list", result.stderr)
+
+    def test_an_agent_result_read_through_or_empty_fails_naming_file_and_line(self):
+        for site in ("(r && r.claims) || []",
+                     "(first && !first.ok && first.conflictFiles) || []",
+                     "(clustered && Array.isArray(clustered.findings) && clustered.findings) || []"):
+            with self.subTest(site=site):
+                repository = Repository(self)
+                name = repository.write(".claude/workflows/swallow.js",
+                                        "export const meta = {}\nconst r = await agent('x')\n"
+                                        f"for (const c of {site}) log(c)\n")
+                result = repository.check()
+                self.assertSwallows(result, name, 3)
+                self.assertIn("1 of 1 tracked workflow scripts", result.stderr)
+
+    def test_a_guard_on_another_name_and_a_plain_default_are_not_sites(self):
+        # `(ok && got.names)` guards on a judgement already made, and `x.list || []` reads no
+        # possibly-missing agent result through a guard; neither is the pattern.
+        repository = Repository(self)
+        name = repository.write(".claude/workflows/fine.js",
+                                "export const meta = {}\nconst got = await agent('x')\nconst ok = !!got\n"
+                                "const a = (ok && got.names) || []\nconst b = (got.list || [])\n")
+        self.assertParses(repository.check(), 1, name)
+
+    def test_an_exempted_site_passes(self):
+        repository = Repository(self)
+        name = repository.write(".claude/workflows/exempt.js",
+                                "export const meta = {}\nconst r = await agent('x')\n"
+                                "for (const c of (r && r.rows) || []) log(c) // empty-ok: a null r is named in failed above\n")
+        self.assertParses(repository.check(), 1, name)
+
+    def test_an_exemption_with_no_reason_fails(self):
+        for marker in ("// empty-ok:", "// empty-ok:   ", "// empty-ok"):
+            with self.subTest(marker=marker):
+                repository = Repository(self)
+                name = repository.write(".claude/workflows/bare.js",
+                                        "export const meta = {}\nconst r = await agent('x')\n"
+                                        f"for (const c of (r && r.rows) || []) log(c) {marker}\n")
+                result = repository.check()
+                self.assertEqual(1, result.status, result.stdout + result.stderr)
+                self.assertIn(f"workflow-parse: {name}:3 has an empty-ok exemption with no reason", result.stderr)
+
+    def test_an_exemption_on_a_line_with_no_site_fails(self):
+        # A marker left behind after its site was fixed would exempt whatever moves onto the line.
+        repository = Repository(self)
+        name = repository.write(".claude/workflows/stale.js",
+                                "export const meta = {}\nconst r = await agent('x')\n"
+                                "for (const c of r.rows) log(c) // empty-ok: a null r is named in failed above\n")
+        result = repository.check()
+        self.assertEqual(1, result.status, result.stdout + result.stderr)
+        self.assertIn(f"workflow-parse: {name}:3 has an empty-ok exemption but no site to exempt", result.stderr)
+
     def test_this_repository_tracks_the_overnight_script(self):
         # A guard that reads the thing it guards: the check, run on this repository, finds the
         # overnight script and no companion or fixture beside it.
