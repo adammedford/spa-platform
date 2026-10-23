@@ -676,6 +676,16 @@ class LabelledBy(unittest.TestCase):
         self.assertIn(collect.named_account(text), (None, *[m.group("login") for m in
                                                             collect.ACCOUNT_LINE.finditer(text)]))
 
+    def test_main_reads_the_guide_from_the_checkout_and_none_when_it_is_absent(self):
+        """tracker_guide() is main()'s one read of the guide, which ThroughGh pins (#331)."""
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            self.assertIsNone(collect.tracker_guide(root))
+            guide = root / collect.GUIDE
+            guide.parent.mkdir(parents=True)
+            guide.write_text("- **The human's account is `@someone`.** Only it confirms.\n")
+            self.assertEqual("someone", collect.named_account(collect.tracker_guide(root)))
+
     def test_the_account_line_is_the_steering_checks(self):
         """One line names the account for both readers: the label here, a `Confirm` there."""
         spec = importlib.util.spec_from_file_location("steering", ROOT / ".github" / "steering.py")
