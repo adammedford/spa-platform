@@ -172,6 +172,18 @@ def default_world() -> dict:
         "tasks": [task],
         "target_group": {"path": "/", "targets": [{"id": task_ip(task), "state": "healthy"}]},
         "tagged": [],
+        # IAM, which the tagging API cannot list (#118): every role in the project with its tags, and
+        # the customer managed policies. Bootstrap's two roles carry its own value (ADR-0013), the
+        # cell's two the platform tag and go with the platform root (infra/modules/cell/iam.tf), and
+        # the service-linked role ECS creates carries none and outlives every teardown.
+        "roles": {
+            f"spa-platform-{CELL}-ci-plan": {"tags": {"Platform": "spa-platform-bootstrap", "Cell": CELL}},
+            TEARDOWN_ROLE: {"tags": {"Platform": "spa-platform-bootstrap", "Cell": CELL}},
+            f"{FAMILY}-task-execution": {"tags": {"Platform": "spa-platform", "Cell": CELL}, "root": "platform"},
+            f"{FAMILY}-task": {"tags": {"Platform": "spa-platform", "Cell": CELL}, "root": "platform"},
+            "AWSServiceRoleForECS": {"tags": {}},
+        },
+        "policies": {},
         # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
         # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
         # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
@@ -193,6 +205,21 @@ class ServiceError(Exception):
         self.code, self.operation, self.message = code, operation, message
 
 
+# The EC2 describes verify-teardown.sh confirms a listed id with: its option, the field its answer
+# lists the id under, and the error code EC2 answers for an id it does not know.
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+EC2_DESCRIBES = {
+    "describe-security-groups": ("group-ids", "security-group", "InvalidGroup.NotFound", "SecurityGroups[].GroupId"),
+    "describe-security-group-rules": ("security-group-rule-ids", "security-group-rule",
+                                      "InvalidSecurityGroupRuleId.NotFound", "SecurityGroupRules[].SecurityGroupRuleId"),
+    "describe-vpcs": ("vpc-ids", "vpc", "InvalidVpcID.NotFound", "Vpcs[].VpcId"),
+    "describe-subnets": ("subnet-ids", "subnet", "InvalidSubnetID.NotFound", "Subnets[].SubnetId"),
+    "describe-internet-gateways": ("internet-gateway-ids", "internet-gateway", "InvalidInternetGatewayID.NotFound",
+                                   "InternetGateways[].InternetGatewayId"),
+    "describe-route-tables": ("route-table-ids", "route-table", "InvalidRouteTableID.NotFound", "RouteTables[].RouteTableId"),
+}
+
+
 def text(value) -> str:
     """--output text as awscli/text.py writes a query's result: a list of scalars tab-separated, a
     list of lists one line each, an empty list as nothing, Python's str() for True, False and None."""
@@ -205,7 +232,8 @@ def text(value) -> str:
     return f"{value}\n"
 
 
-MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters"}
+MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
+                "clusters", *(entry[0] for entry in EC2_DESCRIBES.values())}
 
 
 def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
@@ -230,6 +258,11 @@ def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
             words.append(token)
             index += 1
     return words, options
+
+
+def index_entry(world: dict, arn: str, kind: str) -> dict | None:
+    """The tagging index's entry for an ECS resource, by ARN, when describe would still know it."""
+    return next((entry for entry in world["tagged"] if entry["arn"] == arn and entry["type"] == kind), None)
 
 
 def task_definition_name(reference: str) -> str:
@@ -299,6 +332,16 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         pathlib.Path(outfile[0]).write_text(json.dumps(world["registry"]))
         # The CLI prints the object's metadata, as text with --output text.
         return [len(json.dumps(world["registry"])), "application/json", '"etag"']
+    if command == "ecs describe-clusters":
+        # A cluster ECS does not know is a failure with reason MISSING, not an error, so the query
+        # answers nothing: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeClusters.html
+        if query != "clusters[].status":
+            raise Unexpected(f"describe-clusters --query {query!r}")
+        return [index_entry(world, arn, "ecs:cluster").get("status", "ACTIVE") for arn in options["clusters"]
+                if index_entry(world, arn, "ecs:cluster")]
+    if command == "ecs describe-services" and query == "services[].status":
+        found = [index_entry(world, arn, "ecs:service") for arn in options["services"]]
+        return [entry.get("status", "ACTIVE") for entry in found if entry]
     if words[:2] == ["ecs", "describe-services"]:
         service = world["service"]
         if service is None:
@@ -309,6 +352,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
             return [td_arn(service["taskDefinition"]), service["rolloutState"], service["deployments"], TARGET_GROUP_ARN]
         raise Unexpected(f"describe-services --query {query!r}")
+    if command == "ecs describe-task-definition" and query == "taskDefinition.status":
+        # A deleted revision answers DELETE_IN_PROGRESS until ECS removes it, and then is unknown.
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteTaskDefinitions.html
+        definition = world["task_definitions"].get(task_definition_name(options["task-definition"]))
+        if definition is None:
+            raise ServiceError("ClientException", "DescribeTaskDefinition", "Unable to describe task definition.")
+        return definition["status"]
     if command == "ecs describe-task-definition":
         name = task_definition_name(options["task-definition"])
         definition = world["task_definitions"].get(name)
@@ -380,9 +430,39 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             raise Unexpected(f"delete-object of a version that is not there: {key} {version}")
         return None
     if command == "iam get-role":
-        if options.get("role-name") != TEARDOWN_ROLE:
+        name = options.get("role-name")
+        if name != TEARDOWN_ROLE and name not in world.get("roles", {}):
             raise ServiceError("NoSuchEntity", "GetRole")
-        return TEARDOWN_ROLE_ARN
+        if query != "Role.Arn":
+            raise Unexpected(f"get-role --query {query!r}")
+        return f"arn:aws:iam::{ACCOUNT}:role/{name}"
+    # IAM's own listings, which verify-teardown.sh reads the platform tag through: the tagging API's
+    # GetResources does not support IAM roles (#118).
+    # https://docs.aws.amazon.com/IAM/latest/APIReference/API_ListRoleTags.html
+    if command == "iam list-roles":
+        if query != "Roles[].RoleName":
+            raise Unexpected(f"list-roles --query {query!r}")
+        return sorted(world.get("roles", {}))
+    if command == "iam list-role-tags":
+        role = world.get("roles", {}).get(options.get("role-name"))
+        if role is None:
+            raise ServiceError("NoSuchEntity", "ListRoleTags")
+        match = re.fullmatch(r"Tags\[\?Key=='([A-Za-z]+)'\]\.Value", query or "")
+        if not match:
+            raise Unexpected(f"list-role-tags --query {query!r}")
+        return [value for key, value in role["tags"].items() if key == match[1]]
+    if command == "iam list-policies":
+        if options.get("scope") != "Local" or query != "Policies[].Arn":
+            raise Unexpected(f"list-policies {options}")
+        return sorted(world.get("policies", {}))
+    if command == "iam list-policy-tags":
+        policy = world.get("policies", {}).get(options.get("policy-arn"))
+        if policy is None:
+            raise ServiceError("NoSuchEntity", "ListPolicyTags")
+        match = re.fullmatch(r"Tags\[\?Key=='([A-Za-z]+)'\]\.Value", query or "")
+        if not match:
+            raise Unexpected(f"list-policy-tags --query {query!r}")
+        return [value for key, value in policy["tags"].items() if key == match[1]]
     if command == "sts assume-role":
         if options.get("role-arn") != TEARDOWN_ROLE_ARN:
             raise ServiceError("AccessDenied", "AssumeRole")
@@ -404,11 +484,24 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
                  and (not types or entry["type"] in types)]
         countdown = world.get("tag_lag", 0)
         # The tagging API lags a deletion (docs/plan/05-infrastructure-and-cost.md, Teardown): a
-        # deleted task definition answers the platform query for a few more calls.
+        # deleted log group, which no describe confirms, answers the platform query for a few more calls.
         if countdown and not types:
             world["tag_lag"] = countdown - 1
-            found = found + [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{FAMILY}:99"]
+            found = found + [f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}"]
         return found
+    if words[:1] == ["ec2"] and words[1:2] and words[1] in EC2_DESCRIBES:
+        option, kind, missing, expected = EC2_DESCRIBES[words[1]]
+        if query != expected or len(options.get(option, [])) != 1:
+            raise Unexpected(f"ec2 {words[1]} {options}")
+        ident = options[option][0]
+        entry = next((entry for entry in world["tagged"] if entry["arn"].endswith(f":{kind}/{ident}")), None)
+        # "describe_knows": how many more describes still find a resource the destroy removed, as EC2
+        # does for a while after a deletion; absent, the resource stands.
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError(missing, words[1])
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return [ident]
     if command == "acm delete-certificate":
         arn = options["certificate-arn"]
         # ACM counts a certificate in use for a while after the listener that held it is deleted:
@@ -687,8 +780,18 @@ def destroy_root(world: dict, root: str, stdout):
         world["service"] = None
         world["tasks"] = []
     world["roots"][root] = None
-    world["tagged"] = [entry for entry in world["tagged"]
-                       if entry.get("root") != root or entry["type"] == "ecs:task-definition"]
+    # What #118 step 2 read after the platform root's destroy: the tagging index went on listing
+    # ECS's INACTIVE cluster and service and EC2's deleted security groups and rules. An entry with
+    # "after_destroy" stays listed, changed as it says ({"status": "INACTIVE"}, {"describe_knows": 0}).
+    kept = []
+    for entry in world["tagged"]:
+        if entry.get("root") != root or entry["type"] == "ecs:task-definition":
+            kept.append(entry)
+        elif "after_destroy" in entry:
+            entry.update(entry.pop("after_destroy"))
+            kept.append(entry)
+    world["tagged"] = kept
+    world["roles"] = {name: role for name, role in world.get("roles", {}).items() if role.get("root") != root}
     if address:
         stdout.write(f"{address}: Destruction complete after 1s\n\nDestroy complete! Resources: 30 destroyed.\n")
     else:

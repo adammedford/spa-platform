@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # teardown.sh -- empty the platform bucket, destroy the three roots in reverse order, delete what
-# Terraform leaves behind, and prove the account holds nothing with the platform tag that the tag
-# query can list (test P-05). IAM roles are the exception: it cannot list them (#118).
+# Terraform leaves behind, and prove that nothing carrying the platform tag remains in the platform
+# project (test P-05), by ending on tools/scripts/verify-teardown.sh (#308).
 #
 # Task 1.7 (#58); docs/plan/05-infrastructure-and-cost.md, Teardown: "teardown.sh empties the bucket
 # and repositories, destroys the three roots in reverse order, deletes the imported certificate and
@@ -25,12 +25,13 @@
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
 #      still counts it in use after the listener went; and the cell's inactive task definitions,
 #      which keep their tags until deleted.
-#   4. The tagging API is asked for every resource whose Platform tag is exactly spa-platform
-#      (contracts/resource-tags.md), until it answers none or the wait runs out. The bootstrap root's
-#      three resources carry spa-platform-bootstrap and do not answer; they, and the state bucket,
-#      are removed by hand. The cell's two IAM roles (infra/modules/cell/iam.tf) carry the platform
-#      tag and never answer either, because the tagging API cannot list IAM roles: they go with the
-#      platform root's destroy, and the tag query cannot show them gone (#118).
+#   4. tools/scripts/verify-teardown.sh, and its exit status is this script's (#308). Its readers
+#      look for Platform = spa-platform exactly (contracts/resource-tags.md): IAM roles and customer
+#      managed policies by their tags, which the tagging API cannot list (#118); the cell's roles by
+#      name; and the tag query in the selected Region, which drops the ECS records a correct destroy
+#      leaves INACTIVE and the EC2 ids EC2 no longer knows (#118 step 2). Each retries for the wait
+#      below. The bootstrap root's three resources carry spa-platform-bootstrap and do not answer;
+#      they, and the state bucket, are removed by hand.
 #
 # --yes is required: nothing here can be undone.
 #
@@ -39,8 +40,8 @@
 # Terraform and python3. It never prints the account id: of a resource still tagged it names the
 # ARN with the account replaced.
 #
-# Exit status: 0 when the tag query answers nothing; 1 when a step failed or a resource is still
-# tagged; 2 when it did not start.
+# Exit status: 0 when verify-teardown.sh passes; 1 when a step failed or it found something still
+# standing; 2 when it, or verify-teardown.sh, did not start.
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -58,6 +59,8 @@ CONFIRMED=0
 PLATFORM_TAG_KEY="Platform"
 PLATFORM_TAG_VALUE="spa-platform"
 # "Retries for a few minutes": five, every thirty seconds, unless the environment says otherwise.
+# verify-teardown.sh reads the same two from the environment; they are checked here too, so that a
+# bad value refuses before anything is destroyed.
 TAG_WAIT_SECONDS="${SPA_TEARDOWN_TAG_WAIT:-300}"
 TAG_POLL_SECONDS="${SPA_TEARDOWN_TAG_POLL:-30}"
 # How long the certificate's delete retries while ACM still counts it in use, polling as the tag
@@ -76,8 +79,8 @@ Options
   -h, --help    This text.
 
 Environment
-  SPA_TEARDOWN_TAG_WAIT   Seconds the tag query retries for. Default 300.
-  SPA_TEARDOWN_TAG_POLL   Seconds between its attempts, and the certificate delete's. Default 30.
+  SPA_TEARDOWN_TAG_WAIT   Seconds verify-teardown.sh's readers retry for. Default 300.
+  SPA_TEARDOWN_TAG_POLL   Seconds between their attempts, and the certificate delete's. Default 30.
   SPA_TEARDOWN_CERT_WAIT  Seconds the certificate delete retries while ACM says it is in use.
                           Default 1200.
 EOF
@@ -289,27 +292,12 @@ done
 flush
 note "deleted ${removed} inactive task definitions of ${FAMILY}"
 
-# --- 4. the platform tag ----------------------------------------------------------------------------
+# --- 4. the proof ------------------------------------------------------------------------------------
 
-note "querying for ${PLATFORM_TAG_KEY}=${PLATFORM_TAG_VALUE}, for up to ${TAG_WAIT_SECONDS} seconds"
-waited=0
-while :; do
-  # --tag-filters matches a value exactly: no prefix, no wildcard (contracts/resource-tags.md).
-  # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_TagFilter.html
-  aws_read "the platform tag query" resourcegroupstaggingapi get-resources \
-    --tag-filters "Key=${PLATFORM_TAG_KEY},Values=${PLATFORM_TAG_VALUE}" \
-    --query 'ResourceTagMappingList[].ResourceARN'
-  remaining="$(tr '\t' '\n' < "$OUT" | awk 'NF')"
-  if [ -z "$remaining" ]; then
-    note "pass: nothing in ${REGION} that the tag query can list carries ${PLATFORM_TAG_KEY}=${PLATFORM_TAG_VALUE} (P-05); it cannot list IAM roles, so the cell's two are not proved gone (#118). The bootstrap root and the state bucket go last, by hand."
-    exit 0
-  fi
-  [ "$waited" -lt "$TAG_WAIT_SECONDS" ] || break
-  sleep "$TAG_POLL_SECONDS"
-  waited=$((waited + TAG_POLL_SECONDS))
-  [ "$TAG_POLL_SECONDS" -gt 0 ] || waited=$((waited + 1))
-done
-
-printf '%s: fail: after %s seconds these still carry %s=%s:\n' "$PROGRAM" "$TAG_WAIT_SECONDS" "$PLATFORM_TAG_KEY" "$PLATFORM_TAG_VALUE" >&2
-printf '%s\n' "$remaining" | redact_stream | sed 's/^/  /' >&2
-exit 1
+# verify-teardown.sh reads SPA_TEARDOWN_TAG_WAIT and SPA_TEARDOWN_TAG_POLL from the environment this
+# script was started with. It runs under this bash, $BASH, rather than through its #! line, so that
+# it runs under the same one. Not exec'd: the EXIT trap still removes this script's scratch directory.
+note "proving nothing carrying ${PLATFORM_TAG_KEY}=${PLATFORM_TAG_VALUE} remains: tools/scripts/verify-teardown.sh"
+status=0
+"$BASH" "${SCRIPTS_DIR}/verify-teardown.sh" --cell "$CELL" || status=$?
+exit "$status"

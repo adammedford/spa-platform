@@ -3,7 +3,9 @@
 
 Task 1.7 (#58): "Teardown ends with a tag query that must return nothing" (P-05), with the exact
 value contracts/resource-tags.md fixes, and it reads the bucket from the platform root's state so a
-bucket_name override is honoured (change request 1.5a). The doubles, the world they share and the
+bucket_name override is honoured (change request 1.5a). Since #308 that query is one of
+verify-teardown.sh's readers, which teardown.sh ends by running; verify_teardown_tests.py proves the
+readers, and these cases that teardown.sh ends on them and takes their verdict. The doubles, the world they share and the
 universal every run holds (no output names the account id) are tools/scripts/cell_doubles.py's.
 
 Run: python3 -I tools/scripts/teardown_tests.py
@@ -190,6 +192,39 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
                    if "resource-type-filters" not in c["options"]]
         self.assertEqual(3, len(queries))
 
+    def test_it_ends_on_verify_teardown_whose_readers_each_report(self):
+        # #308: teardown.sh ends by running verify-teardown.sh, whose readers see what the tag query
+        # cannot (#118), and its pass line is the last thing teardown prints.
+        case, result = self.torn_down()
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[-1].startswith("verify-teardown: pass:"), result.output)
+        for reader in ("IAM roles by tag", "IAM customer managed policies by tag", "the cell's roles by name",
+                       f"the tag query in {REGION}"):
+            self.assertTrue(any(line.startswith(f"verify-teardown: {reader}: ") for line in lines), reader)
+        self.assertEqual(sorted(f"{cell.FAMILY}-{suffix}" for suffix in ("task", "task-execution")),
+                         sorted(c["options"]["role-name"] for c in case.aws("iam get-role")
+                                if c["options"]["role-name"] != cell.TEARDOWN_ROLE))
+
+    def test_what_a_correct_destroy_leaves_listed_passes(self):
+        # #118 step 2, after the platform root's destroy: the index went on listing the INACTIVE
+        # cluster and service, and a security group and four rules EC2 no longer knew. teardown.sh on
+        # main before #308 exited 1 on exactly that.
+        world = deployed_world()
+        ec2 = f"arn:aws:ec2:{REGION}:{ACCOUNT}"
+        world["tagged"] += [
+            dict(tagged(f"arn:aws:ecs:{REGION}:{ACCOUNT}:service/{cell.CLUSTER}/{cell.SERVICE}", "ecs:service", "platform"),
+                 after_destroy={"status": "INACTIVE"}),
+            dict(tagged(f"{ec2}:security-group/sg-0123456789abcdef0", "ec2:security-group", "platform"),
+                 after_destroy={"describe_knows": 0}),
+        ] + [dict(tagged(f"{ec2}:security-group-rule/sgr-0123456789abcde{n}", "ec2:security-group-rule", "platform"),
+                  after_destroy={"describe_knows": 0}) for n in "0123"]
+        cluster = next(entry for entry in world["tagged"] if entry["type"] == "ecs:cluster")
+        cluster["after_destroy"] = {"status": "INACTIVE"}
+        case, result = self.torn_down(world)
+        self.assertIn("2 ECS records INACTIVE", result.stdout)
+        self.assertIn("5 EC2 ids describe does not know", result.stdout)
+        self.assertEqual(7, len([e for e in case.load()["tagged"] if e["tags"]["Platform"] == PLATFORM_VALUE]))
+
     def test_an_empty_bucket_and_destroyed_state_still_end_on_the_query(self):
         world = deployed_world()
         world["roots"]["platform"] = None
@@ -212,6 +247,19 @@ class TeardownFails(cell.CompanionTestCase):
         self.assertIn("log-group:/spa-platform/poc/stray", result.stderr)
         self.assertIn("<account>", result.stderr)
         self.assertNotIn("pass:", result.stdout)
+
+    def test_its_exit_status_is_verify_teardown_s(self):
+        # A cell role Terraform's state never held, so the destroy leaves it standing; it has lost its
+        # tags, so only the name reader sees it (#308).
+        world = deployed_world()
+        world["roles"][f"{cell.FAMILY}-task"] = {"tags": {}}
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("verify-teardown: the cell's roles by name: fail:", result.stderr)
+        self.assertIn(f"  {cell.FAMILY}-task", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
+        self.assertNoUnexpectedCall(case)
 
     def test_a_certificate_in_use_past_the_wait_fails_and_says_so(self):
         world = deployed_world()
