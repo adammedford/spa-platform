@@ -712,6 +712,15 @@ try {
     const race = await execute(raceEnv, { date: DATE }, { issue: two, kinds: {}, classes: { 1: { ...classes[2], removeBoxes: [BOX2] }, 2: { ...classes[2], removeBoxes: [BOX3] }, 3: classes[1] } })
     if (raceEnv.peaks.edit !== 1) fail(`#320: two appliers edited #62's body at once (${raceEnv.peaks.edit} in flight)`)
     if (!/^edited #62: removed 1 box\(es\)[^\n]*\(Q1\)$/m.test(race.result.apply.done.join('\n')) || !/^edited #62: removed 1 box\(es\)[^\n]*\(Q2\)$/m.test(race.result.apply.done.join('\n'))) fail(`#320: the two edits of #62 were not both applied:\n${race.result.apply.done.join('\n')}`)
+    // A follow-up planOf refuses (it names no path, so no owner) is a refusal, and its ticket, with
+    // nothing else to do, is sent no applier.
+    const bare = issueWith([
+      comment(43, `## Questions: ${cite(313)}, issue-313, Bare\n\n${q(1, 313, 'File a follow-up?')}`, '2026-10-21T06:30:00Z'),
+      comment(93, 'Confirm Q1 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const refusedRun = await execute(newRepo(), { date: DATE }, { issue: bare, kinds: {}, classes: { 1: { ...classes[1], followUp: { ...classes[1].followUp, touches: [] } } } })
+    if (!refusedRun.result.refusals.some((r) => /^Q1 asks for a follow-up that names no path/.test(r))) fail(`#320: a follow-up naming no path is not refused: ${JSON.stringify(refusedRun.result.refusals)}`)
+    if (APPLIERS(refusedRun.labels).length) fail(`#320: a ticket whose only follow-up was refused was sent an applier: ${refusedRun.labels.join(', ')}`)
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across

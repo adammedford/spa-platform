@@ -676,8 +676,10 @@ const planOf = (date, issue, q, c) => {
 // a time anyway, and the tracker-only tickets share the rest round-robin. The chain is the tickets
 // that commit, on one branch, and those that write a ticket body another applier may write too: an
 // edit of a ticket's boxes, or the rewrite of a ticket such an edit targets (#320), since two
-// appliers writing one body at once would each clobber the other's.
-const TRACKER_KINDS = ['workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
+// appliers writing one body at once would each clobber the other's. A follow-up or ticket-edit
+// question's work is the followUps, edits and edges planOf made of it, so a question planOf refused
+// sends its ticket no applier with nothing to do.
+const TRACKER_KINDS = ['workstream-ticket', 'decision-to-record']
 const unitsFor = (byTicket) => {
   const committing = (t) => t.questions.some((q) => q.kind === 'integrator-edit')
   const targets = new Set(byTicket.flatMap((t) => t.edits.map((e) => e.target)))
@@ -1114,16 +1116,14 @@ if (!verdict.ok) {
       const k = key({ unit: u, date: DATE, issue: ISSUE })
       return reuse(`apply/${u.key}`, k, (r) => !r.refused && !r.unreachable) || await run(applyPrompt(DATE, ISSUE, u, k), { label: `apply:${u.kind}:${u.key}`, phase: 'Apply', schema: APPLIED })
     }
-    // Commit appliers share one branch and run one at a time; tracker-only appliers run beside
-    // them, bounded by the slots (#78 -> "Apply").
     // Chained appliers, those that commit or write a ticket body another may write, run one at a
     // time; tracker-only appliers run beside them, bounded by the slots (#78 -> "Apply"; #320).
-    const commitChain = async () => {
+    const runChain = async () => {
       const out = []
       for (const u of units.chain) out.push(await runUnit(u))
       return out
     }
-    const results = await parallel([commitChain, ...units.tracker.map((u) => () => runUnit(u))])
+    const results = await parallel([runChain,...units.tracker.map((u) => () => runUnit(u))])
     for (const r of results.flat().filter(Boolean)) {
       for (const c of r.commits) apply.done.push(`commit ${c.sha} on ${P.morningBranch}: ${c.subject} (${c.questions.map((q) => 'Q' + q).join(', ')})`)
       for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
