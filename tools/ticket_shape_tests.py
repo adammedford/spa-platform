@@ -531,6 +531,70 @@ None (can start immediately).
 }
 
 
+# The two bodies #295 names, as they stood on 2026-10-22, when #145 built its half and failed the
+# whole-solution build because only #146's commit removes the CS0104 clash it creates. Neither was
+# edited after 2026-10-19T20:16:48Z. Both were ready-for-agent; #145's one edge, to #143, was closed
+# (2026-10-20T13:37:26Z), and #146's edges were #145, open, and #143.
+PAIRED = {
+    # #145: the revision of 2026-10-19T20:16:48Z. Box 6 asks that its pull request carry #146's
+    # commit.
+    145: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(), closed=(143,),
+        body="""\
+**Owner:** integrator
+**Plan row:** none
+
+## Parent
+
+Part of #140, the `stage-host` spec. Ticket 2 of 10: the expand.
+
+## What to build
+
+A test host is started on `StageHost` over a real socket and keeps only what is its own. `Platform.Testing` gains three public modules. `StageHost.StartAsync(StageHostOptions, CancellationToken)` takes a `Services` delegate over the builder, a required `Pipeline` delegate over the built application and `TelemetryStandIn`, false by default, and returns a started host with `BaseAddress`, `Services`, `Log`, `Client`, `RawAsync` in two forms, `TelemetryRules`, `LastTelemetry` and `DisposeAsync`. The construction order is part of the interface: slim builder in the `Production` environment; a loopback URL on port zero; every logger provider cleared; the floor set to Trace; the `Services` delegate; the capture registered; `Build()`; the stand-in if asked, outermost as `UsePlatformTelemetry` is, recording each request's feature before the next middleware runs; the `Pipeline` delegate; start; the address read. The module calls no `Add*`, `Use*` or `Map*` entry point; composing them is the test host's job. A start that yields no address throws `InvalidOperationException`; a server that closes without answering a raw request throws `InvalidDataException`; a connect after dispose fails.
+
+`CapturedLog` is every line a host logged as `CapturedLine` records with `Category`, `Level`, `Message`, `Exception` and `State`, `Text` joining message and exception, `Lines` as a snapshot, `LinesFor(rule, level?)` reading the `Rule` state property, `Contains(value)` over `Text`, and `Rendered` and `Json` present only when a console formatter is configured, resolved on first use by its configured name and never by type. For a caller with no host it offers `Provider`, `ProviderFor(services)` and `CreateLogger<T>()`. `RawHttp` keeps the gateway test harness's endpoint-taking forms and returns the one `RawResponse`: `StatusCode`, `StatusLine`, `Headers` in order with repeats kept, `Body` as the bytes on the wire, `BodyText` de-chunked, `Values(name)` and `Header(name)`; `StageHost.RawAsync` is that sender bound to `BaseAddress`. `Client` is one `HttpClient` with the base address set, no cookie container and no automatic redirect. `EchoUpstreamListener` is rebuilt on the stage host's private loopback seam, which has two callers inside `Platform.Testing` and no public name.
+
+The ticket also carries the steering edits the change request (#143) asked for, citing #140's acceptance as their authority: the test doubles row of `contracts/README.md`, the project file's description, and the six glossary entries from #140's Further Notes (test host, stage host, telemetry stand-in, captured log, terminal, pin). No new package or project. The pull request also carries the gateway test harness's adoption commit (#146), because two composed suites import both namespaces and would stop compiling the moment `Platform.Testing` gains `RawHttp` and `RawResponse`.
+
+## Acceptance criteria
+
+- [ ] `StageHost`, `CapturedLog` and `RawHttp` exist in `Platform.Testing` with the interface above, and `Platform.Testing` references `Platform.Abstractions` and the framework only.
+- [ ] `tests/Platform.Testing.Tests` proves the modules over a real socket with the thirteen tests of #140's Testing Decisions, each named for the mutation that fails it, and the merge body carries each mutation and its count: stand-in off by default; stand-in before the `Pipeline` delegate; feature recorded while the request is in flight; every line captured at Trace with exception text in `Text`; `LinesFor` finds a "refused under {Rule}" template; rendering by the configured formatter's name among two registered; capture survives a `Services` delegate that clears providers; no formatter means records but empty `Rendered`; the request line reaches the terminal as written for a dot-segment target; two `Set-Cookie` values come back as two; `BodyText` de-chunked and `Body` not; `Client` keeps no cookie and follows no redirect; a connect after dispose fails.
+- [ ] `EchoUpstreamListener` starts on the private loopback seam and its existing tests pass unchanged.
+- [ ] The test doubles row of `contracts/README.md`, the project file's description and `GLOSSARY.md` carry the widened charter and the six entries, each edit citing #140's acceptance as its authority.
+- [ ] The merge body states that the reset-after-answer tolerance in the raw sender is kept and deliberately untested, and why.
+- [ ] The pull request carries #146's workstream-6 commit, and `dotnet build` and the whole test solution are green on its head.
+
+"""),
+    # #146: as filed at 2026-10-19T20:15:13Z, never edited. Box 4 asks that its commit sit on #145's
+    # pull request; box 5 only cites #144's overload.
+    146: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(145,), closed=(143,),
+        body="""\
+**Owner:** 6 Verification and operations
+**Plan row:** none
+
+## Parent
+
+Part of #140, the `stage-host` spec. Ticket 3 of 10: the gateway test harness and the composed suites adopt the shared modules. This is a workstream-6 commit on the expand ticket's (#145) pull request, not a pull request of its own: it cannot start before that branch exists, and the two land together.
+
+## What to build
+
+The composed suites run their never-logged searches and raw sends on `Platform.Testing`'s `CapturedLog` and `RawHttp`, and the gateway test harness's own three copies are gone. Two composed security suites import both the harness namespace and `Platform.Testing` and name `RawHttp` and `RawResponse`, so the moment the expand lands those names they fail to compile on an ambiguous reference unless the harness's copies leave in the same pull request. The harness registers the shared capture after its own services are configured and resolves the console formatter by its configured name, as it does today; the composed N-16 reads `Rendered` and `Json`. The de-chunking helper that existed only because the harness's sender refused to de-chunk retires, its callers reading `BodyText`. The harness's endpoint-taking raw sends keep working with the gateway's address and no stage host. The contract reader stays in the harness; it is #139's. If the test identity provider's `AddClient` overload (#144) has landed, the harness registers its client through it; otherwise the merge body carries an `Outstanding:` line naming that adoption.
+
+A two-owner pull request with one commit per owner is the shape ADR-0018 used, and the ownership check audits each commit within one owner's set.
+
+## Acceptance criteria
+
+- [ ] The gateway test harness's `CapturedLog`, `RawHttp` and the composed suites' `RawBody` are deleted, and every caller in the harness, the composed suites and the end-to-end tests uses `Platform.Testing`'s.
+- [ ] The composed suites that assert repeated headers and parse chunked bodies pass unchanged in behaviour, reading `Values`, `Header` and `BodyText`.
+- [ ] The composed N-16 canary search reads the rendered lines through the formatter the harness configures by name, and the harness boot tests pass.
+- [ ] The commit touches only workstream 6's paths and sits on #145's pull request, whose head is green.
+- [ ] The harness registers its client through #144's overload, or the merge body carries an `Outstanding:` line saying so.
+"""),
+}
+
+
 def raw(number: int, filed: Filed, body: str | None = None) -> dict:
     """The issue as `gh issue view --json number,body,labels,subIssuesSummary,blockedBy` gives it."""
     return {
@@ -951,6 +1015,79 @@ class AsFiled(unittest.TestCase):
         for number in (147, 198):
             with self.subTest(number):
                 self.assertEqual(rules_broken(number), [])
+
+
+class SharedCommit(unittest.TestCase):
+    """#295: under ready-for-agent, no open box needs another ticket's commit on this ticket's
+    branch or in its pull request. The overnight run integrates each ticket alone, so such a box
+    cannot go green, and every ticket it blocks is skipped (#286)."""
+
+    def details(self, number: int, body: str | None = None, **changes) -> list[str]:
+        return [failure.detail for failure in judged(number, body, table=PAIRED, **changes)[0]
+                if failure.rule == "shared-commit"]
+
+    def box(self, text: str, labels: tuple[str, ...] = ("ready-for-agent",)) -> list[str]:
+        return [failure.rule for failure in judged(
+            145, build_ticket("**Touches:** `tools/x.py`").replace("Its tests pass.", text),
+            table=PAIRED, labels=labels, closed=())[0]]
+
+    def test_145_fails_on_the_box_that_carries_146s_commit(self):
+        details = self.details(145)
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("#146", details[0])
+        self.assertIn("The pull request carries #146's workstream-6 commit", details[0])
+
+    def test_146_fails_on_the_box_that_sits_on_145s_pull_request(self):
+        details = self.details(146)
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("#145", details[0])
+        self.assertIn("sits on #145's pull request", details[0])
+
+    def test_the_pair_as_filed_breaks_these_rules(self):
+        # Both boxes also say "pull request", which the sitting-or-landing list flagged that night
+        # as it would a misfire; shared-commit names the structure.
+        for number in (145, 146):
+            with self.subTest(number):
+                self.assertEqual([f.rule for f in judged(number, table=PAIRED)[0]],
+                                 ["sitting-or-landing", "shared-commit"])
+
+    def test_a_box_that_only_cites_another_ticket_passes(self):
+        # #146's box 5 names #144's overload, which a lane uses or reports as outstanding.
+        self.assertEqual(self.box("The harness registers its client through #144's overload."), [])
+        for text in ("The reader stays in the harness; it is #139's.",
+                     "The suite reads the floor #12 set, as #12's tests do.",
+                     "It follows #12's review, and the commit names each mutation."):
+            with self.subTest(text):
+                self.assertEqual(self.box(text), [])
+
+    def test_the_words_of_a_shared_commit_fail(self):
+        for text in ("The pull request carries #146's workstream-6 commit.",
+                     "Its branch carries #12's commit.",
+                     "The commit sits on #12's pull request.",
+                     "It sits on #12's branch.",
+                     "The change goes in #12's pull request.",
+                     "The branch includes the commit of #12.",
+                     "The branch has #12's two commits on it."):
+            with self.subTest(text):
+                self.assertIn("shared-commit", self.box(text))
+
+    def test_the_tickets_own_commit_is_not_another_tickets(self):
+        # The box helper judges ticket 145: a box naming #145's commit asks for its own work, which
+        # its own lane has.
+        self.assertEqual(self.box("The merge carries #145's commit and its count."), [])
+        self.assertIn("shared-commit", self.box("The merge carries #146's commit and its count."))
+
+    def test_a_ticked_box_is_not_judged(self):
+        for number in (145, 146):
+            with self.subTest(number):
+                self.assertEqual(self.details(number, PAIRED[number].body.replace("- [ ]", "- [x]")),
+                                 [])
+
+    def test_only_ready_for_agent_is_judged(self):
+        for labels in (("ready-for-human",), ("needs-triage",), ()):
+            with self.subTest(labels):
+                self.assertEqual(self.details(145, labels=labels), [])
+                self.assertEqual(self.box("It sits on #12's branch.", labels=labels), [])
 
 
 # The fake gh: logs its arguments to GH_LOG, fails as gh does when GH_FAIL is set, and answers
