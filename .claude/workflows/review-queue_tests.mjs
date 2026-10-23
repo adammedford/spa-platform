@@ -668,6 +668,8 @@ try {
     result = await execute(env)
     const r = resultOf(207, result)
     const rp = env.prompts['range:207'] || ''
+    // range-diff prints abbreviated shas and rebuildOf takes only full ones, so the prompt must ask for them.
+    if (!/full 40-hex sha[^.]*rev-parse <old>/.test(rp)) fail('a rebuild: the range agent is not asked for the full sha of each old commit, so range-diff\'s abbreviated ones fail every mapping')
     if (!rp.includes(`range-diff ${OLD_BASE}..${H_OLD} ${FORK}..${NEW_HEAD}`)) fail('a rebuild: the range agent is not asked to map the old commits onto the new with git range-diff from the record\'s fork point')
     if (!/\^\{tree\}/.test(rp)) fail('a rebuild: the range agent is not asked to compare trees, only patches')
     if (r.outcome !== 'recorded') fail(`a rebuild: outcome ${r.outcome}`)

@@ -60,9 +60,12 @@ export const meta = {
 // recorded head's commits onto the new ones with `git range-diff` and reports, for each new commit,
 // the old one whose tree it equals, or none. range-diff's own `=` means an equal patch, which a
 // rebase onto a moved main keeps while every tree changes, so the pairing is range-diff's and the
-// equality is the trees'. When at least one new commit maps, the review is a delta over the ones
-// that do not: the axes read each of them, and the content diff `git diff <recorded> <head>`, which
-// needs no ancestry; the comment says it was a rebuild and names the mapping. On #287 each rebuild
+// equality is the trees' (https://git-scm.com/docs/git-range-diff: `=` marks commits whose patches
+// are the same; range-diff also prints abbreviated shas, so the agent expands each pair with
+// rev-parse, and rebuildOf takes only a full sha). When at least one new commit maps, the review
+// is a delta over the ones that do not: the axes read each of them, and the content diff
+// `git diff <recorded> <head>`, which needs no ancestry; the comment says it was a rebuild and
+// names the mapping. On #287 each rebuild
 // of the run branch cost a full review, about 700k to 860k subagent tokens and 17 to 18 minutes,
 // though most trees were unchanged. A rebuild that maps no commit, a mapping that leaves out a
 // commit of the head or names no sha, a force-push, or a range nobody could read is a full review,
@@ -435,7 +438,7 @@ OUTPUT FILE: ${DIR(n)}/range.json
 1. \`git -C ${REPO} fetch origin --tags\`. from = ${from}; the current head is ${inv.head}.
 2. ancestor: whether \`git -C ${REPO} merge-base --is-ancestor ${from} ${inv.head}\` exits 0. If it exits 1, ancestor is false (a force-push or a rebuilt branch dropped the recorded head); leave commits empty. If ${from} cannot be read at all, ancestor is false and error says why.
 3. When ancestor is true: commits = \`git -C ${REPO} log --format=%H ${from}..${inv.head}\`, merges = \`git -C ${REPO} log --merges --format=%H ${from}..${inv.head}\`, and mapping is [].
-3b. When ancestor is false and ${from} can be read, map the recorded head's commits onto the new ones: \`git -C ${REPO} range-diff ${oldFork}..${from} ${inv.forkPoint}..${inv.head}\` (${oldFork} is the fork point the record names). mapping: one entry for each commit of \`git -C ${REPO} log --format=%H ${inv.forkPoint}..${inv.head}\`, merges included: commit is its sha, and equals is the old commit range-diff pairs it with when \`git -C ${REPO} rev-parse <old>^{tree}\` prints the same tree as \`git -C ${REPO} rev-parse <commit>^{tree}\`, else "". range-diff's \`=\` is an equal patch, not an equal tree, so compare the trees for every pair. A commit range-diff pairs with none, a merge among them, maps to the commit of ${oldFork}..${from} whose tree equals its own, if one does. merges = \`git -C ${REPO} log --merges --format=%H ${inv.forkPoint}..${inv.head}\`. If range-diff cannot run, error says why. Either way, when ${from} can be read: changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`, which compares the two trees and needs no ancestry.
+3b. When ancestor is false and ${from} can be read, map the recorded head's commits onto the new ones: \`git -C ${REPO} range-diff ${oldFork}..${from} ${inv.forkPoint}..${inv.head}\` (${oldFork} is the fork point the record names). mapping: one entry for each commit of \`git -C ${REPO} log --format=%H ${inv.forkPoint}..${inv.head}\`, merges included: commit is its sha, and equals is the full 40-hex sha (\`git -C ${REPO} rev-parse <old>\`, since range-diff prints abbreviated ones) of the old commit range-diff pairs it with when \`git -C ${REPO} rev-parse <old>^{tree}\` prints the same tree as \`git -C ${REPO} rev-parse <commit>^{tree}\`, else "". range-diff's \`=\` is an equal patch, not an equal tree, so compare the trees for every pair. A commit range-diff pairs with none, a merge among them, maps to the commit of ${oldFork}..${from} whose tree equals its own, if one does. merges = \`git -C ${REPO} log --merges --format=%H ${inv.forkPoint}..${inv.head}\`. If range-diff cannot run, error says why. Either way, when ${from} can be read: changedFiles = \`git -C ${REPO} diff --name-only ${from} ${inv.head}\`, which compares the two trees and needs no ancestry.
 4. since: ${sinceHeads.length ? `one entry for each of these earlier recorded heads: ${sinceHeads.join(', ')}. head is the sha; changedFiles = \`git -C ${REPO} diff --name-only <head> ${inv.head}\`; error is "" or why that head cannot be read, with changedFiles [].` : '[].'}
 5. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
