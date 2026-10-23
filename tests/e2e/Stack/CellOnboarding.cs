@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Gateway.TestHarness;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace Gateway.E2ETests.Stack;
 
@@ -8,9 +9,13 @@ namespace Gateway.E2ETests.Stack;
 /// Onboarding an app on the deployed cell while it serves the others, as F-07 does it (#212), in the
 /// steps of docs/plan/05-infrastructure-and-cost.md -> Onboarding a third SPA: the apps root's plan
 /// with the onboarding definition, read before it is applied and applied only when it adds that app's
-/// own resources and nothing else; <c>spactl release publish</c> and <c>spactl app add</c>; and
-/// <c>spactl wait</c> for the revision that names the app. <see cref="OffboardAsync"/> undoes it, so
-/// a second sitting plans the same onboarding again.
+/// own resources and nothing else; <c>spactl release publish</c> and <c>spactl app add</c>;
+/// <c>spactl wait</c> for the revision that names the app; and the app answering through the tunnel
+/// with a login at its own client. The gateway's running task is read before the plan and after the
+/// app answers, and must be the same task on the same task definition revision (04-tests F-07, tier
+/// D: no restart, no new task definition, no deployment). Terraform and spactl run as the project's
+/// profile (<see cref="AwsProject"/>), whatever profile the shell had. <see cref="OffboardAsync"/>
+/// undoes it, so a second sitting plans the same onboarding again.
 ///
 /// <para>The onboarding definition is planned through the root's <c>definition_dirs</c> variable, as
 /// its own P-02 test plans it (infra/envs/poc/apps/tests/root.tftest.hcl), rather than copied into
@@ -46,11 +51,18 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
 
         RequireInitialised();
         string[] expected = PerAppAddresses(appId);
+        RunningTask before = await aws.RunningTaskAsync(ct);
         string work = PrivateDirectory();
         try
         {
             string plan = Path.Combine(work, "apps.tfplan");
             IReadOnlyList<PlannedChange> planned = await PlanAsync(plan, ["-var", OnboardingDirectories], ct);
+            if (planned.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"the apps root's plan with the onboarding definition shows no resource change, so it cannot show {appId}'s onboarding and nothing was applied.");
+            }
+
             Require(planned, [.. expected.Select(address => new PlannedChange(address, "create"))], "onboarding " + appId);
 
             await TerraformAsync(["apply", "-input=false", "-no-color", plan], ct);
@@ -75,7 +87,17 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
             }
 
             await WaitAsync(registry.Revision, ct);
-            return new Onboarded(cell.App(appId, client["clientId"]!.GetValue<string>()), planned, registry.Revision);
+            HarnessApp app = cell.App(appId, client["clientId"]!.GetValue<string>());
+            await AnswersAsync(app, ct);
+
+            RunningTask after = await aws.RunningTaskAsync(ct);
+            if (after != before)
+            {
+                throw new InvalidOperationException(
+                    $"the gateway's task changed while {appId} was onboarded, which F-07 says it must not: before {before}, after {after}.");
+            }
+
+            return new Onboarded(app, planned, registry.Revision, before);
         }
         finally
         {
@@ -108,6 +130,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
             IReadOnlyList<PlannedChange> planned = await PlanAsync(plan, [], ct);
             if (planned.Count == 0)
             {
+                // Nothing of the app is left to destroy: its resources never came, or an earlier clean-up took them.
                 return;
             }
 
@@ -123,10 +146,45 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     /// <summary>The root's own definitions directory and the onboarding one, in the form root.tftest.hcl's P-02 run gives them.</summary>
     private const string OnboardingDirectories = """definition_dirs=["../../../../fixtures/apps","../../../../fixtures/onboarding"]""";
 
+    /// <summary>
+    /// The root's plan, saved to <paramref name="plan"/>, and its changes. Under <c>-detailed-exitcode</c>
+    /// Terraform exits 0 for no changes, 2 for changes present and 1 for an error
+    /// (https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode), so an empty plan
+    /// is read from the exit and never shown, and an error stays a failure rather than an empty plan.
+    /// </summary>
     private async Task<IReadOnlyList<PlannedChange>> PlanAsync(string plan, string[] variables, CancellationToken ct)
     {
-        await TerraformAsync(["plan", "-input=false", "-no-color", "-out=" + plan, .. variables], ct);
-        return TerraformPlan.Changes(await TerraformAsync(["show", "-json", "-no-color", plan], ct));
+        CommandResult planned = await runner.RunAsync(
+            Terraform(["plan", "-input=false", "-no-color", "-detailed-exitcode", "-out=" + plan, .. variables]) with { AcceptedExits = [0, 2] }, ct);
+        return planned.ExitCode == 0 ? [] : TerraformPlan.Changes(await TerraformAsync(["show", "-json", "-no-color", plan], ct));
+    }
+
+    /// <summary>
+    /// Whether the app answers through the tunnel: a login navigation on its host
+    /// (contracts/request-gate.md, <c>/bff/login</c>) is sent on to the cell's authorize endpoint with
+    /// the app's own client (contracts/http-contract.md). An unknown host would be 404 (N-08). The
+    /// redirect carries the login's state, so only its status and endpoint are ever named.
+    /// </summary>
+    private async Task AnswersAsync(HarnessApp app, CancellationToken ct)
+    {
+        using HttpRequestMessage login = new(HttpMethod.Get, app.Url("/bff/login"));
+        login.Headers.Add("Sec-Fetch-Mode", "navigate");
+        login.Headers.Add("Sec-Fetch-Dest", "document");
+        login.Headers.Add("Sec-Fetch-Site", "none");
+        using HttpResponseMessage answer = await setup.Tunnel(login, ct);
+
+        Uri? location = answer.Headers.Location;
+        bool ownClient = (int)answer.StatusCode is >= 300 and < 400
+            && location is { IsAbsoluteUri: true }
+            && location.GetLeftPart(UriPartial.Path) == cell.AuthorizeEndpoint
+            && QueryHelpers.ParseQuery(location.Query).TryGetValue("client_id", out Microsoft.Extensions.Primitives.StringValues clientId)
+            && clientId == app.ClientId;
+        if (!ownClient)
+        {
+            string sent = location is { IsAbsoluteUri: true } ? "to " + location.GetLeftPart(UriPartial.Path) : "nowhere";
+            throw new InvalidOperationException(
+                $"after spactl wait, {app.AppId} did not answer a login through the tunnel by sending it to {cell.AuthorizeEndpoint} with its own client {app.ClientId}: it answered {(int)answer.StatusCode}, sending it {sent}.");
+        }
     }
 
     /// <summary>Refuses, naming addresses and actions only, a plan whose changes are not exactly <paramref name="expected"/>.</summary>
@@ -154,11 +212,14 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
         }
     }
 
-    private Task<string> TerraformAsync(string[] arguments, CancellationToken ct) =>
-        runner.RunAsync("terraform", ["-chdir=" + setup.AppsRoot, .. arguments], ct);
+    private Command Terraform(string[] arguments) =>
+        new("terraform", ["-chdir=" + setup.AppsRoot, .. arguments]) { Environment = setup.Project };
 
-    private Task<string> SpactlAsync(string[] arguments, CancellationToken ct) =>
-        runner.RunAsync(setup.Spactl[0], [.. setup.Spactl.Skip(1), .. arguments], ct);
+    private async Task<string> TerraformAsync(string[] arguments, CancellationToken ct) =>
+        (await runner.RunAsync(Terraform(arguments), ct)).Output;
+
+    private async Task<string> SpactlAsync(string[] arguments, CancellationToken ct) =>
+        (await runner.RunAsync(new Command(setup.Spactl[0], [.. setup.Spactl.Skip(1), .. arguments]) { Environment = setup.Project }, ct)).Output;
 
     private Task<string> WaitAsync(long revision, CancellationToken ct) =>
         SpactlAsync(["wait", "--url", setup.ReadyOrigin.ToString(), "--revision", revision.ToString(CultureInfo.InvariantCulture), "--timeout", WaitSeconds], ct);
@@ -179,9 +240,18 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
 /// <summary>
 /// Where the onboarding runs: the repository (its fixtures), the apps root, the outputs document, the
 /// platform configuration spactl bounds the registry with, the gateway origin <c>spactl wait</c> reads
-/// <c>/readyz</c> on, and the spactl command line.
+/// <c>/readyz</c> on, the spactl command line, the project's AWS variables Terraform and spactl run
+/// with (<see cref="AwsProject"/>), and the way through the tunnel to the cell's load balancer.
 /// </summary>
-public sealed record OnboardingSetup(string RepositoryRoot, string AppsRoot, string OutputsPath, string PlatformConfig, Uri ReadyOrigin, IReadOnlyList<string> Spactl);
+public sealed record OnboardingSetup(
+    string RepositoryRoot,
+    string AppsRoot,
+    string OutputsPath,
+    string PlatformConfig,
+    Uri ReadyOrigin,
+    IReadOnlyList<string> Spactl,
+    IReadOnlyDictionary<string, string> Project,
+    Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Tunnel);
 
-/// <summary>An onboarded app, the plan read before it was applied, and the registry revision that named it.</summary>
-public sealed record Onboarded(HarnessApp App, IReadOnlyList<PlannedChange> Planned, long Revision);
+/// <summary>An onboarded app, the plan read before it was applied, the registry revision that named it, and the gateway task that served throughout.</summary>
+public sealed record Onboarded(HarnessApp App, IReadOnlyList<PlannedChange> Planned, long Revision, RunningTask Gateway);

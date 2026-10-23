@@ -83,29 +83,28 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>When the last stack on the cell ended, on the workstation's clock; written and read under <see cref="OneAtATime"/>, which orders the two.</summary>
     private static DateTimeOffset? lastEnded;
 
-    /// <summary>
-    /// The request lines a rule assertion has already matched, by trace and span, in this process: a
-    /// second refusal with the same rule must find its own line, not the first one's (N-06 asserts
-    /// four in a row). A rule line an earlier test caused, asserted or not, falls before this stack's
-    /// marks (<see cref="Quiet"/>); a line with no rule may not, and no read after a mark matches one.
-    /// </summary>
-    private static readonly HashSet<string> Claimed = [];
-
     private readonly IBrowser browser;
     private readonly CellAws aws;
+    private readonly ICommandRunner runner;
+    private readonly CellRuleLog rules;
     private readonly ForeignSites foreign;
     private readonly string outputsPath;
     private readonly int tunnelPort;
     private readonly DateTimeOffset started;
     private readonly BrowserExchanges exchanges;
     private readonly Dictionary<string, Password> passwords = [];
+    private readonly System.Net.Security.RemoteCertificateValidationCallback? rawValidation;
     private string user = User;
     private HttpClient? raw;
 
-    private DeployedStack(Cell cell, CellAws aws, IBrowser browser, ForeignSites foreign, string outputsPath, int tunnelPort, DateTimeOffset started)
+    private DeployedStack(Cell cell, ICommandRunner runner, IBrowser browser, ForeignSites foreign, string outputsPath, int tunnelPort, DateTimeOffset started,
+        System.Net.Security.RemoteCertificateValidationCallback? rawValidation, TimeSpan ruleArrival)
     {
         Cell = cell;
-        this.aws = aws;
+        this.runner = runner;
+        aws = new CellAws(cell, runner);
+        rules = new CellRuleLog(aws, ruleArrival);
+        this.rawValidation = rawValidation;
         this.browser = browser;
         this.foreign = foreign;
         this.outputsPath = outputsPath;
@@ -153,14 +152,26 @@ public sealed class DeployedStack : IBrowserStack
         }
 
         Cell cell = Cell.Parse(await File.ReadAllTextAsync(outputsPath, ct));
-        int port = TunnelPort();
+        return await StartAsync(new DeployedStackSetup(cell, outputsPath, new ProcessCommandRunner(), TunnelPort()));
+    }
+
+    /// <summary>
+    /// The stack over a given cell, tunnel port and command runner: what <see cref="StartAsync()"/> builds
+    /// from the environment, and what a test builds over a loopback listener standing in for the tunnel
+    /// and a recorded runner standing in for AWS (#211).
+    /// </summary>
+    internal static async Task<DeployedStack> StartAsync(DeployedStackSetup setup)
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Cell cell = setup.Cell;
+        int port = setup.TunnelPort;
         await TunnelIsUpAsync(port, ct);
 
         await OneAtATime.WaitAsync(ct);
         ForeignSites? foreign = null;
         try
         {
-            await Task.Delay(StartDelay(DateTimeOffset.UtcNow, lastEnded, Quiet), ct);
+            await Task.Delay(StartDelay(DateTimeOffset.UtcNow, lastEnded, setup.Quiet ?? Quiet), ct);
 
             // Every app host goes to the tunnel, whatever the hosts file says, except the sibling, which
             // goes with the site elsewhere to this run's own foreign listener; the provider is reached on
@@ -169,9 +180,9 @@ public sealed class DeployedStack : IBrowserStack
             foreign = await ForeignSites.StartAsync(cell.Domain, ct);
             IBrowser browser = await Chromium.LaunchAsync(
                 $"--host-resolver-rules={foreign.ResolverRules}, {cell.ResolverRule(port)}",
-                ForeignSites.TrustSwitch(foreign.Spki));
+                ForeignSites.TrustSwitch([foreign.Spki, .. setup.TrustedKeys]));
 
-            return new DeployedStack(cell, new CellAws(cell, new ProcessCommandRunner()), browser, foreign, outputsPath, port, DateTimeOffset.UtcNow - ClockMargin);
+            return new DeployedStack(cell, setup.Runner, browser, foreign, setup.OutputsPath, port, DateTimeOffset.UtcNow - ClockMargin, setup.RawValidation, setup.RuleArrival ?? LogArrival);
         }
         catch
         {
@@ -282,31 +293,20 @@ public sealed class DeployedStack : IBrowserStack
     public LogMark MarkLog() => new(0, DateTimeOffset.UtcNow - ClockMargin);
 
     /// <summary>
-    /// Read from CloudWatch: the request lines since the mark, one of which carries the rule and no
-    /// earlier assertion has matched (<see cref="Claimed"/>).
+    /// Read from CloudWatch (<see cref="CellRuleLog"/>): the request lines since the mark, one of which
+    /// carries the rule and no earlier assertion has matched. A rule line an earlier test caused,
+    /// asserted or not, falls before this stack's marks (<see cref="Quiet"/>).
     /// </summary>
-    public async Task AssertRuleLoggedAsync(LogMark after, string rule, string? appId = null)
-    {
-        JsonElement line = await aws.WaitForGatewayLineAsync(
-            after.At,
-            line => line.TryGetProperty("msg", out JsonElement msg) && msg.GetString() == "request"
-                && line.TryGetProperty("rule", out JsonElement value) && value.GetString() == rule
-                && (appId is null || (line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == appId))
-                && !IsClaimed(line),
-            LogArrival,
-            $"a request line with rule {rule}{(appId is null ? "" : " for " + appId)} that no earlier assertion matched",
-            TestContext.Current.CancellationToken);
-        lock (Claimed)
-        {
-            Claimed.Add(ClaimOf(line));
-        }
-    }
+    public Task AssertRuleLoggedAsync(LogMark after, string rule, string? appId = null) =>
+        rules.AssertLoggedAsync(after.At, rule, appId, TestContext.Current.CancellationToken);
 
     /// <summary>Through the tunnel, validating the ALB's certificate as the workstation does (<see cref="RawClient"/>).</summary>
-    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
+    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request) => SendRawAsync(request, TestContext.Current.CancellationToken);
+
+    private Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        raw ??= RawClient.To($"127.0.0.1:{tunnelPort}");
-        return raw.SendAsync(request, TestContext.Current.CancellationToken);
+        raw ??= RawClient.To($"127.0.0.1:{tunnelPort}", rawValidation);
+        return raw.SendAsync(request, ct);
     }
 
     /// <summary>
@@ -329,17 +329,6 @@ public sealed class DeployedStack : IBrowserStack
     {
         foreign.Serve(url, html);
         await profile.GotoAsync(url.ToString());
-    }
-
-    private static string ClaimOf(JsonElement line) =>
-        $"{(line.TryGetProperty("trace_id", out JsonElement trace) ? trace.GetString() : "")}/{(line.TryGetProperty("span_id", out JsonElement span) ? span.GetString() : "")}";
-
-    private static bool IsClaimed(JsonElement line)
-    {
-        lock (Claimed)
-        {
-            return Claimed.Contains(ClaimOf(line));
-        }
     }
 
     /// <summary>
@@ -421,15 +410,19 @@ public sealed class DeployedStack : IBrowserStack
 
     /// <summary>
     /// <c>spactl wait</c> reads <c>/readyz</c> on app 1's host through the tunnel: the name resolves to
-    /// loopback through the hosts-file line certs.sh asks for, and the port is the tunnel's.
+    /// loopback through the hosts-file line certs.sh asks for, and the port is the tunnel's. The new app
+    /// is asked for through the raw client, which goes to the tunnel's port whatever the host. Terraform
+    /// and spactl run on this stack's runner, as the project's profile.
     /// </summary>
-    private CellOnboarding Onboarding(string why) => new(Cell, aws, new ProcessCommandRunner(), new OnboardingSetup(
+    private CellOnboarding Onboarding(string why) => new(Cell, aws, runner, new OnboardingSetup(
         FixtureFiles.RepositoryRoot,
         Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "apps"),
         outputsPath,
         PlatformConfig(why),
         new Uri($"https://{App("app1").Host.Split(':')[0]}:{tunnelPort}/"),
-        Spactl()));
+        Spactl(),
+        AwsProject.Read(AwsProject.PathIn(FixtureFiles.RepositoryRoot)),
+        SendRawAsync));
 
     private static string PlatformConfig(string why) =>
         Environment.GetEnvironmentVariable(PlatformConfigVariable) is { Length: > 0 } named
@@ -491,4 +484,25 @@ public sealed class DeployedStack : IBrowserStack
             OneAtATime.Release();
         }
     }
+}
+
+/// <summary>
+/// What a <see cref="DeployedStack"/> runs over. In a sitting: the outputs document's cell, the AWS CLI,
+/// the tunnel's port, the workstation's trust store and the full quiet. In a test (#211): a cell whose
+/// clients are a local harness's, a recorded runner, a loopback listener's port, that listener's key
+/// trusted by the browser and the raw client, and no quiet, since each test's recorded log is its own.
+/// </summary>
+internal sealed record DeployedStackSetup(Cell Cell, string OutputsPath, ICommandRunner Runner, int TunnelPort)
+{
+    /// <summary>Certificate keys the browser trusts beyond the workstation's store and the foreign listener's.</summary>
+    public IReadOnlyList<string> TrustedKeys { get; init; } = [];
+
+    /// <summary>The raw client's certificate check; the machine's trust store when null.</summary>
+    public System.Net.Security.RemoteCertificateValidationCallback? RawValidation { get; init; }
+
+    /// <summary>How long a rule assertion waits for its line; CloudWatch's arrival time when null.</summary>
+    public TimeSpan? RuleArrival { get; init; }
+
+    /// <summary>The wait after the last stack ended; <see cref="DeployedStack.Quiet"/> when null.</summary>
+    public TimeSpan? Quiet { get; init; }
 }

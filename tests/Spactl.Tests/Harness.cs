@@ -1,7 +1,9 @@
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Time.Testing;
 using Platform.Abstractions;
+using Platform.Testing;
 using Spactl;
 
 namespace Spactl.Tests;
@@ -28,6 +30,12 @@ internal sealed class Harness : IDisposable
     public VersionedStore Store { get; } = new();
 
     public ReadyzStub Readyz { get; }
+
+    /// <summary>
+    /// The clock the command reads its deadline from. It stands still unless a test moves it, as
+    /// <see cref="ReadyzStub.Clock"/> does once per read.
+    /// </summary>
+    public FakeTimeProvider Clock { get; } = TestClock.New();
 
     /// <summary>When set, the store commands see instead of <see cref="Store"/>.</summary>
     public IObjectStore? StoreOverride { get; set; }
@@ -74,6 +82,7 @@ internal sealed class Harness : IDisposable
             Out = Out,
             Error = Error,
             PollInterval = TimeSpan.Zero,
+            Time = Clock,
         };
         return SpactlApp.RunAsync(args, environment, TestContext.Current.CancellationToken);
     }
@@ -111,36 +120,66 @@ internal sealed class Harness : IDisposable
 }
 
 /// <summary>
-/// <c>/readyz</c> as the gateway answers it (contracts/pipeline.md, Health endpoints): 503 until a
-/// snapshot is live, then 200 with <c>{"revision": N}</c>. The revision is the live registry object's,
-/// so a test sees what a gateway that has polled would report. <see cref="Lag"/> answers 503 that many
-/// times first, a gateway that has not polled yet.
+/// <c>/readyz</c> as the gateway answers it (contracts/pipeline.md, Health endpoints): 503 with no body
+/// until a snapshot is live, then 200 with <c>{"revision": N, "instance": "stub"}</c>. The revision is the
+/// live registry object's, so a test sees what a gateway that has polled would report. <see cref="Lag"/>
+/// answers 503 that many times first, a gateway that has not polled yet.
+///
+/// <see cref="Script"/>, when a test fills it, answers instead, in turn and round again, as an ALB
+/// spreads reads over several instances (change request P2-5).
 /// </summary>
 internal sealed class ReadyzStub(VersionedStore store) : HttpMessageHandler
 {
+    /// <summary>The instance the store-backed answer names.</summary>
+    public const string Instance = "stub";
+
     public int Lag { get; set; }
 
     public List<Uri> Requests { get; } = [];
 
+    public List<ReadyzAnswer> Script { get; } = [];
+
+    /// <summary>When set, moved on a second after each read, so a deadline passes after a few reads.</summary>
+    public FakeTimeProvider? Clock { get; set; }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request.RequestUri!);
+        Clock?.Advance(TimeSpan.FromSeconds(1));
         if (request.RequestUri!.AbsolutePath != "/readyz")
         {
             return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        if (Script.Count > 0)
+        {
+            return Script[(Requests.Count - 1) % Script.Count].Response();
         }
 
         string? live = await store.TextAsync(Harness.RegistryKey);
         if (Lag > 0 || live is null)
         {
             Lag--;
-            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            return ReadyzAnswer.NotReady.Response();
         }
 
-        long revision = JsonNode.Parse(live)!["revision"]!.GetValue<long>();
-        return new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("{\"revision\":" + revision + "}", Encoding.UTF8, "application/json"),
-        };
+        return ReadyzAnswer.At(Instance, JsonNode.Parse(live)!["revision"]!.GetValue<long>()).Response();
     }
+}
+
+/// <summary>One <c>/readyz</c> answer: an instance at a revision, or the bodiless 503.</summary>
+internal sealed record ReadyzAnswer(string? Instance, long? Revision)
+{
+    public static readonly ReadyzAnswer NotReady = new(null, null);
+
+    public static ReadyzAnswer At(string instance, long revision) => new(instance, revision);
+
+    public HttpResponseMessage Response() =>
+        Revision is null
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"revision\":" + Revision + ",\"instance\":\"" + Instance + "\"}", Encoding.UTF8, "application/json"),
+            };
 }

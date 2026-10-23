@@ -90,7 +90,7 @@ public sealed partial class DeployedSubsetTests
     }
 
     /// <summary>The ids of the rows in the negative table whose Tier cell names D.</summary>
-    private static string[] DeployedRows(string page)
+    internal static string[] DeployedRows(string page)
     {
         int start = page.IndexOf("## Negative security tests", StringComparison.Ordinal);
         Assert.True(start >= 0, "docs/plan/04-tests.md has no negative table.");

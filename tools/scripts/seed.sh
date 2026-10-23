@@ -89,25 +89,8 @@ trap cell_cleanup EXIT
 trap 'exit 130' INT TERM
 
 need_terraform
-if [ -z "${SPACTL:-}" ]; then
-  need_tool dotnet "brew install --cask dotnet-sdk"
-fi
+need_spactl
 cell_start
-
-spactl() {
-  if [ -n "${SPACTL:-}" ]; then
-    "$SPACTL" "$@"
-  else
-    dotnet run --project "${REPO_ROOT}/tools/spactl" -- "$@"
-  fi
-}
-
-# spactl's own output, through the redaction, and its status kept.
-spactl_shown() {
-  local status=0
-  spactl "$@" 2>&1 | redact_stream || status=$?
-  return "$status"
-}
 
 # --- 1 and 2 ---------------------------------------------------------------------------------------
 

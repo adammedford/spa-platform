@@ -172,6 +172,18 @@ def default_world() -> dict:
         "tasks": [task],
         "target_group": {"path": "/", "targets": [{"id": task_ip(task), "state": "healthy"}]},
         "tagged": [],
+        # IAM, which the tagging API cannot list (#118): every role in the project with its tags, and
+        # the customer managed policies. Bootstrap's two roles carry its own value (ADR-0013), the
+        # cell's two the platform tag and go with the platform root (infra/modules/cell/iam.tf), and
+        # the service-linked role ECS creates carries none and outlives every teardown.
+        "roles": {
+            f"spa-platform-{CELL}-ci-plan": {"tags": {"Platform": "spa-platform-bootstrap", "Cell": CELL}},
+            TEARDOWN_ROLE: {"tags": {"Platform": "spa-platform-bootstrap", "Cell": CELL}},
+            f"{FAMILY}-task-execution": {"tags": {"Platform": "spa-platform", "Cell": CELL}, "root": "platform"},
+            f"{FAMILY}-task": {"tags": {"Platform": "spa-platform", "Cell": CELL}, "root": "platform"},
+            "AWSServiceRoleForECS": {"tags": {}},
+        },
+        "policies": {},
         # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
         # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
         # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
@@ -193,6 +205,21 @@ class ServiceError(Exception):
         self.code, self.operation, self.message = code, operation, message
 
 
+# The EC2 describes verify-teardown.sh confirms a listed id with: its option, the field its answer
+# lists the id under, and the error code EC2 answers for an id it does not know.
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+EC2_DESCRIBES = {
+    "describe-security-groups": ("group-ids", "security-group", "InvalidGroup.NotFound", "SecurityGroups[].GroupId"),
+    "describe-security-group-rules": ("security-group-rule-ids", "security-group-rule",
+                                      "InvalidSecurityGroupRuleId.NotFound", "SecurityGroupRules[].SecurityGroupRuleId"),
+    "describe-vpcs": ("vpc-ids", "vpc", "InvalidVpcID.NotFound", "Vpcs[].VpcId"),
+    "describe-subnets": ("subnet-ids", "subnet", "InvalidSubnetID.NotFound", "Subnets[].SubnetId"),
+    "describe-internet-gateways": ("internet-gateway-ids", "internet-gateway", "InvalidInternetGatewayID.NotFound",
+                                   "InternetGateways[].InternetGatewayId"),
+    "describe-route-tables": ("route-table-ids", "route-table", "InvalidRouteTableID.NotFound", "RouteTables[].RouteTableId"),
+}
+
+
 def text(value) -> str:
     """--output text as awscli/text.py writes a query's result: a list of scalars tab-separated, a
     list of lists one line each, an empty list as nothing, Python's str() for True, False and None."""
@@ -205,7 +232,8 @@ def text(value) -> str:
     return f"{value}\n"
 
 
-MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters"}
+MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
+                "clusters", *(entry[0] for entry in EC2_DESCRIBES.values())}
 
 
 def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
@@ -230,6 +258,22 @@ def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
             words.append(token)
             index += 1
     return words, options
+
+
+def index_entry(world: dict, arn: str, kind: str) -> dict | None:
+    """The tagging index's entry for an ECS resource, by ARN, when describe would still know it."""
+    return next((entry for entry in world["tagged"] if entry["arn"] == arn and entry["type"] == kind), None)
+
+
+def ecs_answer(entry: dict | None) -> str:
+    """What DescribeClusters or DescribeServices answers for one resource: its status, or the
+    failure's reason, MISSING for one ECS does not know. An entry's describe_failure sets the reason;
+    an empty one is an answer that carries neither."""
+    if entry is None:
+        return "MISSING"
+    if "describe_failure" in entry:
+        return entry["describe_failure"]
+    return entry.get("status", "ACTIVE")
 
 
 def task_definition_name(reference: str) -> str:
@@ -299,6 +343,14 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         pathlib.Path(outfile[0]).write_text(json.dumps(world["registry"]))
         # The CLI prints the object's metadata, as text with --output text.
         return [len(json.dumps(world["registry"])), "application/json", '"etag"']
+    if command == "ecs describe-clusters":
+        # A cluster ECS does not know is a failure with reason MISSING, not an error:
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeClusters.html
+        if query != "[clusters[].status, failures[].reason][]":
+            raise Unexpected(f"describe-clusters --query {query!r}")
+        return [ecs_answer(index_entry(world, arn, "ecs:cluster")) for arn in options["clusters"]]
+    if command == "ecs describe-services" and query == "[services[].status, failures[].reason][]":
+        return [ecs_answer(index_entry(world, arn, "ecs:service")) for arn in options["services"]]
     if words[:2] == ["ecs", "describe-services"]:
         service = world["service"]
         if service is None:
@@ -309,6 +361,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
             return [td_arn(service["taskDefinition"]), service["rolloutState"], service["deployments"], TARGET_GROUP_ARN]
         raise Unexpected(f"describe-services --query {query!r}")
+    if command == "ecs describe-task-definition" and query == "taskDefinition.status":
+        # A deleted revision answers DELETE_IN_PROGRESS until ECS removes it, and then is unknown.
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteTaskDefinitions.html
+        definition = world["task_definitions"].get(task_definition_name(options["task-definition"]))
+        if definition is None:
+            raise ServiceError("ClientException", "DescribeTaskDefinition", "Unable to describe task definition.")
+        return definition["status"]
     if command == "ecs describe-task-definition":
         name = task_definition_name(options["task-definition"])
         definition = world["task_definitions"].get(name)
@@ -380,9 +439,39 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             raise Unexpected(f"delete-object of a version that is not there: {key} {version}")
         return None
     if command == "iam get-role":
-        if options.get("role-name") != TEARDOWN_ROLE:
+        name = options.get("role-name")
+        if name != TEARDOWN_ROLE and name not in world.get("roles", {}):
             raise ServiceError("NoSuchEntity", "GetRole")
-        return TEARDOWN_ROLE_ARN
+        if query != "Role.Arn":
+            raise Unexpected(f"get-role --query {query!r}")
+        return f"arn:aws:iam::{ACCOUNT}:role/{name}"
+    # IAM's own listings, which verify-teardown.sh reads the platform tag through: the tagging API's
+    # GetResources does not support IAM roles (#118).
+    # https://docs.aws.amazon.com/IAM/latest/APIReference/API_ListRoleTags.html
+    if command == "iam list-roles":
+        if query != "Roles[].RoleName":
+            raise Unexpected(f"list-roles --query {query!r}")
+        return sorted(world.get("roles", {}))
+    if command == "iam list-role-tags":
+        role = world.get("roles", {}).get(options.get("role-name"))
+        if role is None:
+            raise ServiceError("NoSuchEntity", "ListRoleTags")
+        match = re.fullmatch(r"Tags\[\?Key=='([A-Za-z]+)'\]\.Value", query or "")
+        if not match:
+            raise Unexpected(f"list-role-tags --query {query!r}")
+        return [value for key, value in role["tags"].items() if key == match[1]]
+    if command == "iam list-policies":
+        if options.get("scope") != "Local" or query != "Policies[].Arn":
+            raise Unexpected(f"list-policies {options}")
+        return sorted(world.get("policies", {}))
+    if command == "iam list-policy-tags":
+        policy = world.get("policies", {}).get(options.get("policy-arn"))
+        if policy is None:
+            raise ServiceError("NoSuchEntity", "ListPolicyTags")
+        match = re.fullmatch(r"Tags\[\?Key=='([A-Za-z]+)'\]\.Value", query or "")
+        if not match:
+            raise Unexpected(f"list-policy-tags --query {query!r}")
+        return [value for key, value in policy["tags"].items() if key == match[1]]
     if command == "sts assume-role":
         if options.get("role-arn") != TEARDOWN_ROLE_ARN:
             raise ServiceError("AccessDenied", "AssumeRole")
@@ -404,11 +493,24 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
                  and (not types or entry["type"] in types)]
         countdown = world.get("tag_lag", 0)
         # The tagging API lags a deletion (docs/plan/05-infrastructure-and-cost.md, Teardown): a
-        # deleted task definition answers the platform query for a few more calls.
+        # deleted log group, which no describe confirms, answers the platform query for a few more calls.
         if countdown and not types:
             world["tag_lag"] = countdown - 1
-            found = found + [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{FAMILY}:99"]
+            found = found + [f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}"]
         return found
+    if words[:1] == ["ec2"] and words[1:2] and words[1] in EC2_DESCRIBES:
+        option, kind, missing, expected = EC2_DESCRIBES[words[1]]
+        if query != expected or len(options.get(option, [])) != 1:
+            raise Unexpected(f"ec2 {words[1]} {options}")
+        ident = options[option][0]
+        entry = next((entry for entry in world["tagged"] if entry["arn"].endswith(f":{kind}/{ident}")), None)
+        # "describe_knows": how many more describes still find a resource the destroy removed, as EC2
+        # does for a while after a deletion; absent, the resource stands.
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError(missing, words[1])
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return [ident]
     if command == "acm delete-certificate":
         arn = options["certificate-arn"]
         # ACM counts a certificate in use for a while after the listener that held it is deleted:
@@ -635,6 +737,12 @@ def apply_platform(world: dict, variables: dict):
     world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
                        "taskDefinition": previous if world["faults"].get("running_definition") else name,
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
+    # "extra_tasks": more tasks of the applied deployment, each with its own healthy target, as a
+    # cell that runs more than one task has (P2-4).
+    for _ in range(world["faults"].get("extra_tasks", 0)):
+        world["next_task"] += 1
+        world["tasks"].append({"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING", "taskDefinition": name,
+                               "gatewayDigest": digest})
     # "new_target": the new task's target in another state than healthy, or None for not registered.
     # "extra_targets": more targets in the group, as [id, state] pairs.
     group = world["target_group"]
@@ -643,6 +751,7 @@ def apply_platform(world: dict, variables: dict):
     new_state = world["faults"].get("new_target", "healthy")
     if new_state is not None:
         group["targets"].append({"id": task_ip(world["tasks"][0]), "state": new_state})
+    group["targets"] += [{"id": task_ip(task), "state": "healthy"} for task in world["tasks"][1:]]
     group["targets"] += [{"id": ident, "state": state} for ident, state in world["faults"].get("extra_targets", [])]
 
 
@@ -687,8 +796,18 @@ def destroy_root(world: dict, root: str, stdout):
         world["service"] = None
         world["tasks"] = []
     world["roots"][root] = None
-    world["tagged"] = [entry for entry in world["tagged"]
-                       if entry.get("root") != root or entry["type"] == "ecs:task-definition"]
+    # What #118 step 2 read after the platform root's destroy: the tagging index went on listing
+    # ECS's INACTIVE cluster and service and EC2's deleted security groups and rules. An entry with
+    # "after_destroy" stays listed, changed as it says ({"status": "INACTIVE"}, {"describe_knows": 0}).
+    kept = []
+    for entry in world["tagged"]:
+        if entry.get("root") != root or entry["type"] == "ecs:task-definition":
+            kept.append(entry)
+        elif "after_destroy" in entry:
+            entry.update(entry.pop("after_destroy"))
+            kept.append(entry)
+    world["tagged"] = kept
+    world["roles"] = {name: role for name, role in world.get("roles", {}).items() if role.get("root") != root}
     if address:
         stdout.write(f"{address}: Destruction complete after 1s\n\nDestroy complete! Resources: 30 destroyed.\n")
     else:
@@ -738,9 +857,84 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
     return status
 
 
+def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
+    """`spactl wait --url <origin> --revision <N> --instances <id,...>` (tools/spactl/Commands.cs,
+    WaitAsync), with each running task answering /readyz through the load balancer. Every task serves
+    the registry's live revision, but "behind": n leaves the last n tasks one revision short, and
+    "unsampled": n means the load balancer never hands a read to the last n. It answers as spactl
+    does: 0 and a Ready line when every listed id answered at N or later, else 1 and the timeout that
+    names each id behind or never answered (InstanceWait.Behind). A listed id that is no task's, an
+    empty element or a missing option is not a call the scripts make."""
+    options = {}
+    for index in range(1, len(args), 2):
+        if not args[index].startswith("--") or index + 1 >= len(args) or args[index] in options:
+            raise Unexpected(f"spactl {args}")
+        options[args[index]] = args[index + 1]
+    if set(options) - {"--url", "--revision", "--instances", "--timeout"} or not {"--url", "--revision", "--instances"} <= set(options):
+        raise Unexpected(f"spactl {args}")
+    if not re.fullmatch(r"https?://[^/]+", options["--url"]) or not re.fullmatch(r"[1-9][0-9]*", options["--revision"]):
+        raise Unexpected(f"spactl wait {options}")
+    listed = options["--instances"].split(",")
+    tasks = [task["id"] for task in world["tasks"]]
+    if any(not re.fullmatch(r"[0-9a-f]{32}", ident) or ident not in tasks for ident in listed):
+        raise Unexpected(f"spactl wait --instances {options['--instances']}: not the running tasks' ids")
+    live = (world["registry"] or {}).get("revision", 0)
+    behind = tasks[len(tasks) - world["faults"].get("behind", 0):]
+    unsampled = tasks[len(tasks) - world["faults"].get("unsampled", 0):]
+    revision = int(options["--revision"])
+    readyz = options["--url"] + "/readyz"
+    answered = {ident: (None if ident in unsampled else live - 1 if ident in behind else live) for ident in listed}
+    short = [(ident, at) for ident, at in answered.items() if at is None or at < revision]
+    if not short:
+        summary = ", ".join(f"instance {ident} at revision {at}" for ident, at in answered.items())
+        stdout.write(f"Ready: {readyz} reports revision {revision} or later from {summary}.\n")
+        return 0
+    named = "; ".join(f"instance {ident} never answered" if at is None else f"instance {ident} last answered revision {at}"
+                      for ident, at in short)
+    stderr.write(f"{readyz} did not report revision {revision} or later from every listed instance within "
+                 f"{options.get('--timeout', '300')} seconds: {named}.\n")
+    return 1
+
+
+def spactl_change(world: dict, args: list[str], record: dict) -> int:
+    """`spactl release publish` and `spactl app add`, the two commands seed.sh runs."""
+    status = 0
+    options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
+    outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
+    bucket = outputs["bucket"]
+    if args[:2] == ["release", "publish"]:
+        app, directory, release = args[2:5]
+        root = pathlib.Path(directory)
+        for file in sorted(p for p in root.rglob("*") if p.is_file()):
+            key = f"apps/{app}/releases/{release}/{file.relative_to(root).as_posix()}"
+            if not any(entry["Key"] == key for entry in world["objects"]):
+                world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
+        sys.stdout.write(f"Published apps/{app}/releases/{release}/ to {bucket}.\n")
+    elif args[:2] == ["app", "add"]:
+        definition = json.loads(pathlib.Path(args[2]).read_text())
+        config = json.loads(pathlib.Path(options["--config"]).read_text())
+        record["config"] = config
+        app = definition["appId"]
+        if app not in outputs["clients"]:
+            sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
+            status = 1
+        else:
+            registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
+            registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
+            registry["apps"].append({"appId": app, "release": options["--release"]})
+            registry["revision"] += 1
+            world["registry"] = registry
+            world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})
+            sys.stdout.write(f"Added {app} at release {options['--release']}. Revision {registry['revision']}.\n")
+    else:
+        raise Unexpected(f"spactl {args}")
+    return status
+
+
 def spactl_double(argv: list[str], case: pathlib.Path) -> int:
     """`dotnet run --project <tools/spactl> -- <spactl arguments>`, answering as spactl does for the
-    two commands seed.sh runs, with the bucket's objects and registry in the world."""
+    two commands seed.sh runs, with the bucket's objects and registry in the world, and for the wait
+    deploy.sh runs (spactl_wait)."""
     world = json.loads((case / "world.json").read_text())
     record = {"tool": "dotnet", "argv": argv}
     status = 0
@@ -750,35 +944,10 @@ def spactl_double(argv: list[str], case: pathlib.Path) -> int:
         record["project"] = argv[2]
         args = argv[4:]
         record["spactl"] = args
-        options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
-        outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
-        bucket = outputs["bucket"]
-        if args[:2] == ["release", "publish"]:
-            app, directory, release = args[2:5]
-            root = pathlib.Path(directory)
-            for file in sorted(p for p in root.rglob("*") if p.is_file()):
-                key = f"apps/{app}/releases/{release}/{file.relative_to(root).as_posix()}"
-                if not any(entry["Key"] == key for entry in world["objects"]):
-                    world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
-            sys.stdout.write(f"Published apps/{app}/releases/{release}/ to {bucket}.\n")
-        elif args[:2] == ["app", "add"]:
-            definition = json.loads(pathlib.Path(args[2]).read_text())
-            config = json.loads(pathlib.Path(options["--config"]).read_text())
-            record["config"] = config
-            app = definition["appId"]
-            if app not in outputs["clients"]:
-                sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
-                status = 1
-            else:
-                registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
-                registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
-                registry["apps"].append({"appId": app, "release": options["--release"]})
-                registry["revision"] += 1
-                world["registry"] = registry
-                world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})
-                sys.stdout.write(f"Added {app} at release {options['--release']}. Revision {registry['revision']}.\n")
+        if args[:1] == ["wait"]:
+            status = spactl_wait(world, args, sys.stdout, sys.stderr)
         else:
-            raise Unexpected(f"spactl {args}")
+            status = spactl_change(world, args, record)
     except Unexpected as error:
         record["unexpected"] = str(error)
         sys.stderr.write(f"dotnet double: unexpected call: {error}\n")

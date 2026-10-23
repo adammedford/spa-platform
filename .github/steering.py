@@ -88,9 +88,14 @@ so a caller cannot skip the rule by naming nothing. A merge passes because what 
 commits, each held on its own; a commit made before the starting point passes because it could not
 have known the rule, and rewording one would mean rewriting a branch that has landed. The citation
 is checked the way the `#NNN` rule checks one, in the same single listing, which also says whether
-a number is an issue or a pull request, and a ticket is an issue; a URL is checked against the
-comment GitHub keeps under its id. Offline, the trailer is still required, and its citations are
-reported as not checked; the line the rule passes prints how many held commits GitHub vouched for.
+a number is an issue or a pull request, and a ticket is an issue. The listing can come back short
+with no error (#297), so a number it lacks is asked about alone before it is refused: a 404 or a
+410 refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
+against the comment GitHub keeps under its id, and that comment's author against the account
+that confirms (#316): the one docs/agents/issue-tracker.md names at the base, or the repository's
+owner while it names none, since a `Confirm` by any other account that can comment confirms
+nothing. Offline, the trailer is still required, and its citations are reported as not checked;
+the line the rule passes prints how many held commits GitHub vouched for.
 
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py --base origin/main
 """
@@ -276,13 +281,28 @@ ISSUE_CITATION = re.compile(r"(?<![\w/&#])#(?P<number>\d{1,4})\b")
 # the listing and the two forms share one sequence; --paginate follows the pages and --jq keeps
 # one line per number, saying which of the two it is, from the `pull_request` key the API gives a
 # pull request alone. The `#NNN` rule takes either; the authority rule takes an issue only, since
-# a ticket is an issue, and this listing is the one call that can tell them apart. gh fills
-# {owner}/{repo} from the remote of the directory it runs in, and signs in from its keyring or from
-# GH_TOKEN, which is what CI hands it.
+# a ticket is an issue, and this listing tells the two apart. gh fills {owner}/{repo} from the
+# remote of the directory it runs in, and signs in from its keyring or from GH_TOKEN, which is what
+# CI hands it.
 # https://docs.github.com/en/rest/issues/issues#list-repository-issues
 GH_ISSUES = (
     "gh", "api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100",
     "--jq", r'.[] | "\(.number) \(if .pull_request then "pull" else "issue" end)"',
+)
+
+# Where one number is looked up when the listing lacks it. The listing can exit 0 with fewer pages
+# than the repository holds: on 2026-10-22 one push's run refused trailers citing #185, #135 and
+# #159, each a real issue, and the next run over the same tree vouched for them (#297). So a number
+# the listing lacks is not taken as one GitHub never issued until GitHub says so of that number
+# alone. The endpoint serves an issue or a pull request by its number and answers 404 for a number
+# it never issued, and 404 or 410 for a deleted issue; --jq writes the listing's line for it, the
+# number first, so an answer about another number -- a transferred issue, which GitHub redirects to
+# its new home -- is not read as this one. gh fills {owner}/{repo} as it does for GH_ISSUES, and
+# {number} is the number.
+# https://docs.github.com/en/rest/issues/issues#get-an-issue
+GH_ISSUE = (
+    "gh", "api", "repos/{owner}/{repo}/issues/{number}",
+    "--jq", r'"\(.number) \(if .pull_request then "pull" else "issue" end)"',
 )
 
 # How long to wait for gh before saying so. The hook runs this check on every push, and a check that
@@ -386,10 +406,34 @@ COMMENT_AUTHORITY = re.compile(
 
 # Where a comment is looked up: the endpoint serving an issue comment by its id, which covers a
 # pull request's conversation too, answers 404 for an id this repository has no comment under, and
-# gives the comment's own URL as `html_url`. gh fills {owner}/{repo} as it does for GH_ISSUES, and
-# {comment} is the id.
+# gives the comment's own URL as `html_url` and its author's login as `user.login`, on one line,
+# the URL first; a deleted author is a null user, written as no login. gh fills {owner}/{repo} as it
+# does for GH_ISSUES, and {comment} is the id.
 # https://docs.github.com/en/rest/issues/comments#get-an-issue-comment
-GH_COMMENT = ("gh", "api", "repos/{owner}/{repo}/issues/comments/{comment}", "--jq", ".html_url")
+GH_COMMENT = (
+    "gh", "api", "repos/{owner}/{repo}/issues/comments/{comment}",
+    "--jq", r'"\(.html_url) \(.user.login // "")"',
+)
+
+# Who may write the comment an `Authority: <URL>` cites (#316). docs/agents/issue-tracker.md says a
+# `Confirm` comment is the human's act, and CODING_STANDARDS.md -> "An authorisation is read from
+# its author" counts one only when the account the rule names wrote it. The account is the one the
+# guide names on a line of this shape, matched narrowly so that prose about accounts is not read as
+# naming one; while it names none, the repository's owner, read off the URL GitHub keeps the comment
+# at. tools/overnight_collect.py reads the same line for who may apply `ready-for-agent`, and
+# tools/overnight_collect_tests.py holds the two equal.
+GUIDE = "docs/agents/issue-tracker.md"
+ACCOUNT_LINE = re.compile(
+    r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
+)
+URL_OWNER = re.compile(r"^https://github\.com/(?P<owner>[^/\s]+)/")
+
+
+class Comment(typing.NamedTuple):
+    """A comment as GitHub keeps it: where, and the login of who wrote it ("" for a deleted one)."""
+
+    url: str
+    author: str
 
 # What the rule reads of each commit, in one `git log`: the commit, when it was made, its subject,
 # and the values of its Authority: trailers, in fields no subject or trailer value carries.
@@ -811,9 +855,9 @@ def first_complaint(asked: subprocess.CompletedProcess) -> str:
     return said or f"gh exited {asked.returncode} and said nothing"
 
 
-def comment_url(root: pathlib.Path, comment: str) -> tuple[str | None, str]:
-    """Where GitHub keeps the comment with this id on this repository: its URL; None when this
-    repository has no comment under the id; or, with None, why GitHub could not be asked.
+def comment_url(root: pathlib.Path, comment: str) -> tuple[Comment | None, str]:
+    """Where GitHub keeps the comment with this id on this repository and who wrote it; None when
+    this repository has no comment under the id; or, with None, why GitHub could not be asked.
 
     One call per comment a held commit cites, which is a handful a run and usually none. A 404 is
     an answer, the one the rule fails on; anything else gh says is a reason the citation went
@@ -833,8 +877,60 @@ def comment_url(root: pathlib.Path, comment: str) -> tuple[str | None, str]:
         said = first_complaint(asked)
         # gh's line for an id the repository has no comment under: `gh: Not Found (HTTP 404)`.
         return (None, "") if "(HTTP 404)" in said else (None, said)
-    kept = asked.stdout.strip()
-    return (kept, "") if kept else (None, "gh answered with no URL for the comment")
+    url, _, author = asked.stdout.strip().partition(" ")
+    if not url:
+        return None, "gh answered with no URL for the comment"
+    return Comment(url, author.strip()), ""
+
+
+def named_account(guide: str | None) -> str | None:
+    """The account the tracker guide names on its "The human's account is `@<login>`." line, or
+    None when it names none (or the tree has no guide)."""
+    found = ACCOUNT_LINE.search(guide or "")
+    return found.group("login") if found else None
+
+
+def issue_kind(root: pathlib.Path, number: int) -> tuple[str | None, str]:
+    """What GitHub says this one number is on this repository: "issue" or "pull"; None when it
+    never issued the number; or, with None, why GitHub could not say.
+
+    Asked only for a number an `Authority: #<n>` trailer cites and the listing lacks, which is
+    none on a run whose listing came back whole. A 404 or a 410 is an answer, the one the rule
+    refuses on; anything else gh says is a reason the trailer went unchecked, as comment_url()
+    reports its own. The cases on the check's rules replace this function; the cases on this
+    function point GH_ISSUE at a stand-in for gh.
+    """
+    command = tuple(part.replace("{number}", str(number)) for part in GH_ISSUE)
+    try:
+        asked = subprocess.run(
+            command, cwd=root, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT
+        )
+    except FileNotFoundError:
+        return None, "gh is not on PATH"
+    except subprocess.TimeoutExpired:
+        return None, f"gh did not answer within {GH_TIMEOUT} seconds"
+    if asked.returncode != 0:
+        said = first_complaint(asked)
+        # gh's line for a number the repository holds no issue under ends `(HTTP 404)`, or
+        # `(HTTP 410)` for an issue deleted from it: GitHub answers a deleted issue with one or the
+        # other by the reader's access alone, and the listing never held either, so both refuse
+        # as a number missing from the listing did before #297.
+        # https://docs.github.com/en/rest/issues/issues#get-an-issue
+        gone = "(HTTP 404)" in said or "(HTTP 410)" in said
+        return (None, "") if gone else (None, said)
+    answered, _, kind = asked.stdout.strip().partition(" ")
+    if answered != str(number) or kind not in ("issue", "pull"):
+        return None, (
+            f"gh answered #{number} with something other than its line: {asked.stdout[:60]!r}"
+        )
+    return kind, ""
+
+
+def wanted_numbers(held: list[Held], listed: set[int]) -> list[int]:
+    """The numbers the held commits' `Authority: #<n>` trailers cite and the listing lacks, each
+    once, for issue_kind() to look up."""
+    found = (ISSUE_AUTHORITY.fullmatch(value) for commit in held for value in commit.authorities)
+    return sorted({int(match.group("number")) for match in found if match} - listed)
 
 
 def dangling_issues(cited: list[tuple[str, int, int]], issued: set[int]) -> list[str]:
@@ -988,18 +1084,33 @@ def judged(
     issues: set[int],
     pulls: set[int],
     numbers_unread: str,
-    comments: dict[str, tuple[str | None, str]],
+    looked_up: dict[int, tuple[str | None, str]],
+    comments: dict[str, tuple[Comment | None, str]],
+    account: str | None = None,
 ) -> tuple[str, str]:
     """What one Authority: value comes to: ("vouched", ""), ("refused", why it resolves to
-    nothing), or ("unchecked", why GitHub could not say)."""
+    nothing), ("unconfirmed", who wrote the comment it cites, when that is not the account that
+    confirms), or ("unchecked", why GitHub could not say). account is the one the tracker guide
+    names, None when it names none, which leaves the repository's owner.
+
+    A number the listing lacks is judged on what issue_kind() said of it alone, in `looked_up`:
+    the listing may have stopped short, so its silence is not GitHub's 404."""
     issue = ISSUE_AUTHORITY.fullmatch(authority)
     if issue:
         if numbers_unread:
             return "unchecked", numbers_unread
         number = int(issue.group("number"))
         if number in issues:
+            kind, why = "issue", ""
+        elif number in pulls:
+            kind, why = "pull", ""
+        else:
+            kind, why = looked_up[number]
+        if why:
+            return "unchecked", why
+        if kind == "issue":
             return "vouched", ""
-        if number in pulls:
+        if kind == "pull":
             return "refused", "names a pull request, not an issue"
         return "refused", "names no issue of this repository"
     comment = COMMENT_AUTHORITY.fullmatch(authority)
@@ -1010,9 +1121,19 @@ def judged(
         if kept is None:
             return "refused", "names no comment on this repository"
         # GitHub's owner and repository names are case-insensitive, so the URL is compared so.
-        if kept.casefold() != authority.casefold():
-            where = f"is not where GitHub keeps comment {comment.group('comment')}: {kept}"
+        if kept.url.casefold() != authority.casefold():
+            where = f"is not where GitHub keeps comment {comment.group('comment')}: {kept.url}"
             return "refused", where
+        if account:
+            source = f"the account {GUIDE} names for a Confirm"
+        else:
+            owner = URL_OWNER.match(kept.url)
+            account = owner.group("owner") if owner else ""
+            source = f"the repository's owner, since {GUIDE} names no account"
+        # Logins are case-insensitive too.
+        if not account or kept.author.casefold() != account.casefold():
+            who = f"@{kept.author}" if kept.author else "an account GitHub no longer names"
+            return "unconfirmed", f"is a comment by {who}, not by @{account}, {source}"
         return "vouched", ""
     return "refused", "is neither #<n> nor the URL of a comment on this repository"
 
@@ -1022,17 +1143,19 @@ def unauthorised(
     issues: set[int],
     pulls: set[int],
     numbers_unread: str,
-    comments: dict[str, tuple[str | None, str]],
-) -> tuple[list[str], list[str], list[str], int, list[str]]:
+    looked_up: dict[int, tuple[str | None, str]],
+    comments: dict[str, tuple[Comment | None, str]],
+    account: str | None = None,
+) -> tuple[list[str], list[str], list[str], int, list[str], list[str]]:
     """The held commits naming no authority, the authorities that resolve to nothing, why each
     authority GitHub could not be asked about went unchecked, how many held commits GitHub
-    vouched for every authority of, and the commits that decide a change request on no confirmed
-    answer's URL.
+    vouched for every authority of, the commits that decide a change request on no confirmed
+    answer's URL, and the authorities citing a comment someone other than the account wrote.
 
     Every authority a commit names is judged, not the first that resolves: a second trailer citing
     nothing is a pointer at nothing, which every other rule here fails.
     """
-    missing, refused, unchecked, vouched, undecided = [], [], [], 0, []
+    missing, refused, unchecked, vouched, undecided, unconfirmed = [], [], [], 0, [], []
     for commit in held:
         if not commit.paths:
             continue  # held only for a Status it cannot read, which unreadable_statuses() says
@@ -1048,17 +1171,20 @@ def unauthorised(
                 f"{AUTHORITY}: {', '.join(commit.authorities)}"
             )
         verdicts = [
-            (authority, *judged(authority, issues, pulls, numbers_unread, comments))
+            (authority,
+             *judged(authority, issues, pulls, numbers_unread, looked_up, comments, account))
             for authority in commit.authorities
         ]
         for authority, verdict, why in verdicts:
             if verdict == "refused":
                 refused.append(f"{named}, and {AUTHORITY}: {authority} {why}")
+            elif verdict == "unconfirmed":
+                unconfirmed.append(f"{named}, and {AUTHORITY}: {authority} {why}")
             elif verdict == "unchecked":
                 unchecked.append(why)
         if all(verdict == "vouched" for _, verdict, _ in verdicts):
             vouched += 1
-    return missing, refused, unchecked, vouched, undecided
+    return missing, refused, unchecked, vouched, undecided, unconfirmed
 
 
 def report(lines: list[str], headline: str, *advice: str) -> bool:
@@ -1108,16 +1234,33 @@ def main(argv: list[str] | None = None) -> int:
     shared, numbered = shared_numbers(root)
     cited, untracked = issue_citations(root)
     held = held_commits(root, base)
-    # One lookup per run, and none when nothing cites: a tree with no `#NNN` and a range with no
+    # One listing per run, and none when nothing cites: a tree with no `#NNN` and a range with no
     # `Authority: #<n>` owe GitHub no call.
     cites_issues = cited or any(
         ISSUE_AUTHORITY.fullmatch(value) for commit in held for value in commit.authorities
     )
     issues, pulls, unchecked = issued_numbers(root) if cites_issues else (set(), set(), "")
     unissued = [] if unchecked else dangling_issues(cited, issues | pulls)
+    # A number a trailer cites and the listing lacks is asked about alone before it is refused,
+    # since the listing can come back short (#297); none is asked when the listing itself failed,
+    # whose reason already leaves every such trailer unchecked.
+    looked_up = {} if unchecked else {
+        number: issue_kind(root, number) for number in wanted_numbers(held, issues | pulls)
+    }
     comments = {comment: comment_url(root, comment) for comment in wanted_comments(held)}
-    nameless, refused, unverified, vouched, undecided = unauthorised(
-        held, issues, pulls, unchecked, comments
+    # The account is read from the guide as it stood at the base, not from the tree being judged:
+    # a range that renamed the account in the guide would otherwise vouch its own steering commits,
+    # the guide's renaming among them, on comments the new account wrote (#316 review). With no
+    # base, the whole history is judged and the tree is the only guide there is.
+    if base is None:
+        guide = root / GUIDE
+        account = named_account(guide.read_text() if guide.is_file() else None)
+    else:
+        # base resolved above, so a failure here is a guide the base does not have.
+        shown = git(root, "show", f"{base}:{GUIDE}")
+        account = named_account(shown.stdout if shown.returncode == 0 else None)
+    nameless, refused, unverified, vouched, undecided, unconfirmed = unauthorised(
+        held, issues, pulls, unchecked, looked_up, comments, account
     )
     unread = unreadable_statuses(held)
 
@@ -1242,6 +1385,16 @@ def main(argv: list[str] | None = None) -> int:
             "A #<n> names an issue, not a pull request, and a URL names a comment as GitHub links",
             "it: https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>. Fix the trailer;",
             "whether what it cites decides the change is the reviewer's call, not this check's.",
+        ),
+        report(
+            unconfirmed,
+            "STEERING FAILED: an Authority: comment was written by an account that does not "
+            "confirm.",
+            "A Confirm comment is the human's act (docs/agents/issue-tracker.md), and",
+            "CODING_STANDARDS.md -> \"An authorisation is read from its author\" counts one only",
+            "when the account the rule names wrote it: the account docs/agents/issue-tracker.md",
+            "names, or the repository's owner while it names none. Cite that account's comment",
+            "holding the confirmed answer, or leave the steering document as it was.",
         ),
     ]
 

@@ -1,12 +1,6 @@
-using System.Net.Sockets;
-using System.Text;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
 
@@ -17,6 +11,10 @@ namespace Platform.Hosting.Tests;
 /// then <c>UsePlatformHostResolution</c>, over an <see cref="InMemoryRegistry"/> the test swaps by
 /// hand. The in-memory registry isolates these stages from object-store configuration; workstream 6
 /// proves them again in the composed gateway.
+///
+/// The listener, the log capture, the telemetry stand-in and the raw sender are
+/// <see cref="StageHost"/>'s (#140, ticket #149); this class holds only what is hosting's own: the
+/// stages it proves, in the contract's order, and the terminal behind them.
 ///
 /// The terminal stands for everything after host resolution, <c>UsePlatformSecurityHeaders</c> to
 /// the endpoints. It records the <see cref="IAppFeature"/> it was handed and answers 200 with
@@ -33,32 +31,37 @@ public sealed class HostingHost : IAsyncDisposable
 {
     public const string Passed = "passed";
 
-    private readonly WebApplication web;
-    private readonly TelemetryStand? telemetry;
-    private int reached;
+    private readonly StageHost stage;
+    private readonly Terminal terminal;
 
-    private HostingHost(WebApplication web, Uri baseAddress, InMemoryRegistry registry, TelemetryStand? telemetry)
+    private HostingHost(StageHost stage, InMemoryRegistry registry, Terminal terminal)
     {
-        this.web = web;
-        this.telemetry = telemetry;
-        BaseAddress = baseAddress;
+        this.stage = stage;
+        this.terminal = terminal;
         Registry = registry;
     }
 
-    public Uri BaseAddress { get; }
+    public Uri BaseAddress => stage.BaseAddress;
 
     public InMemoryRegistry Registry { get; }
+
+    /// <summary>Every line the host logged, captured at Trace.</summary>
+    public CapturedLog Log => stage.Log;
 
     /// <summary>
     /// How many requests reached the terminal, which stands for every stage after host resolution.
     /// </summary>
-    public int Reached => Volatile.Read(ref reached);
+    public int Reached => Volatile.Read(ref terminal.Reached);
 
     /// <summary>The feature the terminal last saw, read when it saw it.</summary>
-    public (string AppId, string AppHost, long Revision)? LastSeen { get; private set; }
+    public (string AppId, string AppHost, long Revision)? LastSeen => terminal.LastSeen;
 
     /// <summary>Runs in the terminal before it reads the feature: a swap mid-request goes here.</summary>
-    public Action? DuringRequest { get; set; }
+    public Action? DuringRequest
+    {
+        get => terminal.DuringRequest;
+        set => terminal.DuringRequest = value;
+    }
 
     /// <summary>
     /// The <see cref="IRequestTelemetryFeature"/> the last request carried, for a host started with
@@ -68,97 +71,76 @@ public sealed class HostingHost : IAsyncDisposable
     /// it (contracts/telemetry.md -> "How <c>rule</c> and <c>session_ref</c> reach the request
     /// line").
     /// </summary>
-    public SettableRequestTelemetryFeature? LastTelemetry => telemetry?.Last;
+    public SettableRequestTelemetryFeature? LastTelemetry => stage.LastTelemetry;
 
     /// <param name="telemetry">
-    /// <c>true</c> installs a fresh <see cref="SettableRequestTelemetryFeature"/> on every request,
-    /// before <c>UsePlatformHealth</c>, standing in for <c>UsePlatformTelemetry</c>, which this
-    /// project's pipeline does not have. Left <c>false</c> by default to exercise component
-    /// pipelines without the feature, as required by
+    /// <c>true</c> asks <see cref="StageHost"/> for its telemetry stand-in, outermost as
+    /// <c>UsePlatformTelemetry</c> is, which this project's pipeline does not have. Left
+    /// <c>false</c> by default to exercise component pipelines without the feature, as required by
     /// contracts/changes/6.4-request-telemetry-feature.md.
+    /// </param>
+    /// <param name="instance">
+    /// The instance <c>/readyz</c> names, registered before <c>AddPlatformHosting</c>; null leaves the
+    /// entry point's own, which off ECS is an id generated for this host.
     /// </param>
     public static async Task<HostingHost> StartAsync(
         RegistrySnapshot initial,
         CancellationToken ct,
         IObjectStore? store = null,
-        ILoggerProvider? logs = null,
-        bool telemetry = false)
+        bool telemetry = false,
+        GatewayInstance? instance = null)
     {
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Logging.ClearProviders();
-        if (logs is not null)
-        {
-            builder.Logging.AddProvider(logs);
-        }
-
         InMemoryRegistry registry = new(initial);
-        builder.Services.AddSingleton<IRegistry>(registry);
-        if (store is not null)
-        {
-            builder.Services.AddSingleton(store);
-        }
+        Terminal terminal = new();
 
-        builder.AddPlatformHosting();
-
-        WebApplication web = builder.Build();
-        HostingHost? self = null;
-        TelemetryStand? stand = telemetry ? new TelemetryStand() : null;
-
-        if (stand is not null)
-        {
-            web.Use(async (context, next) =>
+        StageHost stage = await StageHost.StartAsync(
+            new StageHostOptions
             {
-                SettableRequestTelemetryFeature feature = new();
-                context.Features.Set<IRequestTelemetryFeature>(feature);
-                stand.Last = feature;
-                await next(context);
-            });
-        }
+                TelemetryStandIn = telemetry,
+                Services = builder =>
+                {
+                    builder.Services.AddSingleton<IRegistry>(registry);
+                    if (store is not null)
+                    {
+                        builder.Services.AddSingleton(store);
+                    }
 
-        web.UsePlatformHealth();
-        web.UsePlatformHostResolution();
+                    // Before AddPlatformHosting, as the harness gives one (change request P2-5, decision
+                    // 2): the entry point registers its own only when none is there.
+                    if (instance is not null)
+                    {
+                        builder.Services.AddSingleton(instance);
+                    }
 
-        if (store is not null)
-        {
-            // Explicit, and after UsePlatformHostResolution as in src/Gateway/Program.cs: a
-            // WebApplication with endpoints and no UseRouting call puts routing at the front of the
-            // pipeline, before health and host resolution.
-            web.UseRouting();
-            web.MapPlatformAssets();
-            return await StartedAsync(web, registry, stand, ct);
-        }
+                    builder.AddPlatformHosting();
+                },
+                Pipeline = web =>
+                {
+                    web.UsePlatformHealth();
+                    web.UsePlatformHostResolution();
 
-        web.Run(context =>
-        {
-            Interlocked.Increment(ref self!.reached);
-            self.DuringRequest?.Invoke();
-            IAppFeature? feature = context.Features.Get<IAppFeature>();
-            self.LastSeen = feature is null ? null : (feature.App.AppId, feature.App.Host, feature.Snapshot.Revision);
-            return context.Response.WriteAsync(Passed, ct);
-        });
+                    if (store is not null)
+                    {
+                        // Explicit, and after UsePlatformHostResolution as in src/Gateway/Program.cs:
+                        // a WebApplication with endpoints and no UseRouting call puts routing at the
+                        // front of the pipeline, before health and host resolution.
+                        web.UseRouting();
+                        web.MapPlatformAssets();
+                        return;
+                    }
 
-        self = await StartedAsync(web, registry, stand, ct);
-        return self;
-    }
+                    web.Run(context => terminal.RunAsync(context, ct));
+                },
+            },
+            ct);
 
-    private static async Task<HostingHost> StartedAsync(
-        WebApplication web, InMemoryRegistry registry, TelemetryStand? stand, CancellationToken ct)
-    {
-        await web.StartAsync(ct);
-
-        Uri address = new(web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the host started without an address."));
-
-        return new HostingHost(web, address, registry, stand);
+        return new HostingHost(stage, registry, terminal);
     }
 
     /// <summary>
     /// Sends <c>GET path</c> with the <c>Host</c> header given and any extra header lines, over a raw
-    /// socket, and returns the response as text. Raw because the <c>Host</c> header is the subject
-    /// (AGENTS.md: reach the gateway over a raw socket when the Host header matters), and
-    /// <see cref="HttpClient"/> writes it from the URI.
+    /// socket. Raw because the <c>Host</c> header is the subject (AGENTS.md: reach the gateway over a
+    /// raw socket when the Host header matters), and <see cref="HttpClient"/> writes it from the URI.
     /// </summary>
     public Task<RawResponse> GetAsync(string host, string path, CancellationToken ct, string extraHeaders = "") =>
         SendAsync("GET", host, path, ct, extraHeaders);
@@ -166,87 +148,32 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>
     /// <see cref="GetAsync"/> with any method. The request line is sent byte for byte as given, so a
     /// test can put a dot segment, a backslash or a NUL in it that no HTTP client would send.
+    /// <paramref name="extraHeaders"/> is whole header lines, each ending in CRLF.
     /// </summary>
-    public async Task<RawResponse> SendAsync(string method, string host, string path, CancellationToken ct, string extraHeaders = "")
-    {
-        using TcpClient tcp = new();
-        await tcp.ConnectAsync(BaseAddress.Host, BaseAddress.Port, ct);
-        NetworkStream stream = tcp.GetStream();
+    public Task<RawResponse> SendAsync(string method, string host, string path, CancellationToken ct, string extraHeaders = "") =>
+        stage.RawAsync($"{method} {path} HTTP/1.1\r\nHost: {host}\r\n{extraHeaders}Connection: close\r\n\r\n", ct);
 
-        string head = $"{method} {path} HTTP/1.1\r\nHost: {host}\r\n{extraHeaders}Connection: close\r\n\r\n";
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(head), ct);
-
-        using MemoryStream received = new();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = await stream.ReadAsync(buffer, ct)) > 0)
-        {
-            received.Write(buffer, 0, read);
-        }
-
-        return RawResponse.Parse(Encoding.UTF8.GetString(received.ToArray()));
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await web.StopAsync();
-        await web.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() => stage.DisposeAsync();
 
     /// <summary>
-    /// Where the stand-in for <c>UsePlatformTelemetry</c> leaves the feature it put on the last
-    /// request.
+    /// The terminal's state. Built before the host, because the <see cref="StageHostOptions.Pipeline"/>
+    /// delegate that installs the terminal runs inside <see cref="StageHost.StartAsync"/>.
     /// </summary>
-    private sealed class TelemetryStand
+    private sealed class Terminal
     {
-        public SettableRequestTelemetryFeature? Last { get; set; }
-    }
-}
+        public int Reached;
 
-/// <summary>A response read off the socket: the status, the headers by lowercase name, the body.</summary>
-public sealed record RawResponse(int Status, IReadOnlyDictionary<string, string> Headers, string Body)
-{
-    public static RawResponse Parse(string text)
-    {
-        int split = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
-        string head = split < 0 ? text : text[..split];
-        string body = split < 0 ? "" : text[(split + 4)..];
+        public (string AppId, string AppHost, long Revision)? LastSeen { get; private set; }
 
-        string[] lines = head.Split("\r\n");
-        int status = int.Parse(lines[0].Split(' ')[1], System.Globalization.CultureInfo.InvariantCulture);
+        public Action? DuringRequest { get; set; }
 
-        Dictionary<string, string> headers = new(StringComparer.Ordinal);
-        foreach (string line in lines.Skip(1))
+        public Task RunAsync(HttpContext context, CancellationToken ct)
         {
-            int colon = line.IndexOf(':', StringComparison.Ordinal);
-            headers[line[..colon].Trim().ToLowerInvariant()] = line[(colon + 1)..].Trim();
-        }
-
-        // Kestrel chunks an HTTP/1.1 body it was not given a length for (RFC 9112, section 6.1); one
-        // chunk is all these bodies need.
-        if (headers.TryGetValue("transfer-encoding", out string? encoding) && encoding == "chunked")
-        {
-            body = Unchunk(body);
-        }
-
-        return new RawResponse(status, headers, body);
-    }
-
-    private static string Unchunk(string chunked)
-    {
-        StringBuilder body = new();
-        int at = 0;
-        while (true)
-        {
-            int end = chunked.IndexOf("\r\n", at, StringComparison.Ordinal);
-            int size = Convert.ToInt32(chunked[at..end], 16);
-            if (size == 0)
-            {
-                return body.ToString();
-            }
-
-            body.Append(chunked, end + 2, size);
-            at = end + 2 + size + 2;
+            Interlocked.Increment(ref Reached);
+            DuringRequest?.Invoke();
+            IAppFeature? feature = context.Features.Get<IAppFeature>();
+            LastSeen = feature is null ? null : (feature.App.AppId, feature.App.Host, feature.Snapshot.Revision);
+            return context.Response.WriteAsync(Passed, ct);
         }
     }
 }

@@ -285,10 +285,14 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     /// Reads <c>/readyz</c> until it reports <c>--revision</c> or a later one (contracts/pipeline.md:
     /// "The ALB health check and spactl wait both read /readyz"). A later revision counts, because
     /// another apply may land between this one and its wait, and the gateway then went past it.
+    ///
+    /// With <c>--instances</c>, every instance listed must have answered at that revision or later,
+    /// each read going through the one URL to whichever instance the ALB picks (change request P2-5,
+    /// decision 5). Without it, nothing here differs from before that option.
     /// </summary>
     public async Task<int> WaitAsync(CancellationToken ct)
     {
-        arguments.Operands(1, 0, "wait --url <gateway origin> --revision <N> [--timeout <seconds>]");
+        arguments.Operands(1, 0, "wait --url <gateway origin> --revision <N> [--instances <id,id,...>] [--timeout <seconds>]");
         string url = arguments.Required("--url");
         long revision = ParseRevision("--revision", arguments.Required("--revision"));
         TimeSpan timeout = arguments.Option("--timeout") is { } seconds
@@ -299,20 +303,22 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
             throw new UsageException("--url must be an absolute http or https URL.");
         }
 
+        InstanceWait? instances = arguments.Option("--instances") is { } listed ? InstanceWait.Parse(listed) : null;
+
         Uri readyz = new(origin, ReadyzPath);
         using HttpClient http = new(environment.Http, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(10) };
         DateTimeOffset deadline = environment.Time.GetUtcNow() + timeout;
         string last = "no answer";
         while (true)
         {
-            long? reported = null;
+            ReadyAnswer? answer = null;
             try
             {
                 using HttpResponseMessage response = await http.GetAsync(readyz, ct);
                 if (response.StatusCode == HttpStatusCode.OK)
                 {
-                    reported = ReadyRevision(await response.Content.ReadAsStringAsync(ct));
-                    last = reported is null ? "200 with no readable revision" : $"revision {reported}";
+                    answer = ReadyAnswer.Parse(await response.Content.ReadAsStringAsync(ct));
+                    last = answer.Revision is null ? "200 with no readable revision" : $"revision {answer.Revision}";
                 }
                 else
                 {
@@ -328,16 +334,40 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
                 last = "no answer within 10 seconds";
             }
 
-            if (reported >= revision)
+            if (instances is null)
             {
-                await Out.WriteLineAsync($"Ready: {readyz} reports revision {reported}.");
-                return 0;
-            }
+                if (answer?.Revision >= revision)
+                {
+                    await Out.WriteLineAsync($"Ready: {readyz} reports revision {answer.Revision}.");
+                    return 0;
+                }
 
-            if (environment.Time.GetUtcNow() >= deadline)
+                if (environment.Time.GetUtcNow() >= deadline)
+                {
+                    throw new RefusedException(
+                        $"{readyz} did not report revision {revision} or later within {timeout.TotalSeconds} seconds; the last answer was {last}.");
+                }
+            }
+            else
             {
-                throw new RefusedException(
-                    $"{readyz} did not report revision {revision} or later within {timeout.TotalSeconds} seconds; the last answer was {last}.");
+                if (instances.Record(answer, last, revision) is { } unlisted)
+                {
+                    await Out.WriteLineAsync(
+                        $"Instance {unlisted} answered at {readyz} but is not listed; it is not waited for.");
+                }
+
+                if (instances.AllAt(revision))
+                {
+                    await Out.WriteLineAsync($"Ready: {readyz} reports revision {revision} or later from {instances.Summary()}.");
+                    return 0;
+                }
+
+                if (environment.Time.GetUtcNow() >= deadline)
+                {
+                    throw new RefusedException(
+                        $"{readyz} did not report revision {revision} or later from every listed instance within " +
+                        $"{timeout.TotalSeconds} seconds: {instances.Behind(revision)}{instances.Unattributed()}.");
+                }
             }
 
             await Task.Delay(environment.PollInterval, environment.Time, ct);
@@ -572,16 +602,89 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         // Task 2.6: live and history documents use the same integer spellings as the shared validator.
         document["revision"] is { } value && JsonInteger.TryRead(value, out long revision) ? revision : null;
 
-    private static long? ReadyRevision(string body)
+    /// <summary>
+    /// A <c>/readyz</c> 200 body, read by member name: a reader takes the members it names and ignores
+    /// the rest (contracts/pipeline.md, Health endpoints).
+    /// </summary>
+    private sealed record ReadyAnswer(long? Revision, string? Instance)
     {
-        try
+        public static ReadyAnswer Parse(string body)
         {
-            return JsonNode.Parse(body) is JsonObject document ? RevisionOf(document) : null;
+            try
+            {
+                return JsonNode.Parse(body) is JsonObject document
+                    ? new ReadyAnswer(
+                        RevisionOf(document),
+                        document["instance"] is JsonValue value && value.TryGetValue(out string? instance) && instance.Length > 0 ? instance : null)
+                    : new ReadyAnswer(null, null);
+            }
+            catch (JsonException)
+            {
+                return new ReadyAnswer(null, null);
+            }
         }
-        catch (JsonException)
+    }
+
+    /// <summary>
+    /// The bookkeeping of <c>wait --instances</c> (change request P2-5, decision 5). An answer counts for
+    /// the instance it names; one that names none (a non-200, which carries no body, or a 200 with no
+    /// readable revision or instance) counts for none and is kept as the last unattributed answer. An
+    /// instance once seen at the revision stays counted.
+    /// </summary>
+    private sealed class InstanceWait
+    {
+        private readonly Dictionary<string, long?> lastRevision;
+        private readonly HashSet<string> unlistedSeen = new(StringComparer.Ordinal);
+        private string? unattributed;
+
+        private InstanceWait(IEnumerable<string> ids) =>
+            lastRevision = ids.Distinct(StringComparer.Ordinal).ToDictionary(id => id, _ => (long?)null, StringComparer.Ordinal);
+
+        /// <summary>
+        /// One comma-separated option, not a repeated one: today's parser keeps a repeated option's last
+        /// value silently. An empty element is the only usage error (P2-5, decision 5).
+        /// </summary>
+        public static InstanceWait Parse(string listed)
         {
-            return null;
+            string[] ids = listed.Split(',');
+            return ids.Any(string.IsNullOrWhiteSpace)
+                ? throw new UsageException("--instances must be a comma-separated list of instance ids with no empty element.")
+                : new InstanceWait(ids);
         }
+
+        /// <summary>Records an answer; returns the id of an unlisted instance the first time it is heard.</summary>
+        public string? Record(ReadyAnswer? answer, string description, long revision)
+        {
+            if (answer is not { Instance: { } id, Revision: { } reported })
+            {
+                unattributed = description;
+                return null;
+            }
+
+            if (lastRevision.TryGetValue(id, out long? before))
+            {
+                // Stays counted once at the revision: a later read cannot unsee it.
+                lastRevision[id] = before >= revision ? before : reported;
+                return null;
+            }
+
+            return unlistedSeen.Add(id) ? id : null;
+        }
+
+        public bool AllAt(long revision) => lastRevision.Values.All(reported => reported >= revision);
+
+        public string Summary() =>
+            string.Join(", ", lastRevision.Select(entry => $"instance {entry.Key} at revision {entry.Value}"));
+
+        public string Behind(long revision) =>
+            string.Join("; ", lastRevision
+                .Where(entry => !(entry.Value >= revision))
+                .Select(entry => entry.Value is { } reported
+                    ? $"instance {entry.Key} last answered revision {reported}"
+                    : $"instance {entry.Key} never answered"));
+
+        public string Unattributed() =>
+            unattributed is null ? "" : $"; the last answer that named no instance was {unattributed}";
     }
 
     private static long ParseRevision(string option, string value, long minimum = 1) =>

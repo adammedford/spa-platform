@@ -9,8 +9,15 @@
 // sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed) or when
 // the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent
 // returns the fixture's tickets; implement, review and integrate succeed after a delay that depends on the
-// owner, so the integrator lane is the slow one, as it is on a real night. No agent, gh or git call is
-// made.
+// owner, so the integrator lane is the slow one, as it is on a real night, except that two tickets meet a
+// merge conflict at integrate (#136, #279): one that others wait on, which goes back to its lane, resolves,
+// passes a second review and integrates on the retry, and one nobody waits on, whose retry conflicts again.
+// Each mocked review reports the files its branch changed, and every integrated ticket but the second shares
+// one, so the run must integrate those one after the other (#279). One more ticket nobody waits on stops at its
+// implement on a question for Adam, and the run's return value must give every failed, skipped and needs-human
+// ticket its stage and a one-line reason (#280). It also checks that each ticket has its own worktree, that a
+// lane implements while its last ticket is in review or integrating, and that no two merges run at once. No
+// agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +28,29 @@ const fixturePath = process.argv[3] || path.join(here, 'fixtures', '2026-10-20-t
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
 const tickets = fixture.tickets
 const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
+// Two tickets meet a content conflict at integrate (#136), chosen from those the fixture expects to integrate:
+// CONFLICT_ONCE conflicts on its first merge only, so it goes back to its lane and integrates after the
+// back-merge and a second review; it is the first that another integrating ticket waits on, so its dependants
+// must wait for it rather than be skipped (#279). CONFLICT_ALWAYS, which nobody waits on, conflicts on its retry
+// too, so it is reported, not merged, and fails.
+const blocking = new Set(tickets.flatMap((t) => t.blockedBy))
+const free = fixture.expect.integrated.filter((id) => !blocking.has(id))
+const dependantsOf = (id) => fixture.expect.integrated.filter((d) => byId[d].blockedBy.includes(id))
+const CONFLICT_ONCE = fixture.expect.integrated.find((id) => dependantsOf(id).length)
+const CONFLICT_ALWAYS = free[free.length - 1]
+const CONFLICT_FILES = ['.github/workflows/ci.yml', 'docs/dependencies.md']
+// One ticket nobody waits on, other than CONFLICT_ALWAYS, stops at its implement on a question for Adam (#280), so the
+// run's reasons carry a needs-human ticket from a lane, whose reason is its question.
+const NEEDS_HUMAN = free.find((id) => id !== CONFLICT_ALWAYS)
+const QUESTION = 'Which store holds the rotated keys: the parameter store or the secrets manager?'
+// The files each mocked review says its branch changed (#279): a file of its own, and SHARED_FILE for every ticket
+// the fixture integrates except CONFLICT_ALWAYS, so those tickets share a file with no planned group in common,
+// and CONFLICT_ALWAYS shares none, so other tickets may integrate while it is back in its lane.
+const SHARED_FILE = '.gitignore'
+const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
+const merges = {}          // id -> integrate calls so far
+const greens = []          // {at, head}, each green mocked integrate, in order: the verified tips (#279)
+const RESOLVE_TIP = 't'.repeat(40)   // the run branch's tip the mocked resolve back-merged
 const cost = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
 
 let tick = 0
@@ -33,18 +63,29 @@ globalThis.args = fixture.args
 globalThis.phase = () => {}
 globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
+const allPrompts = []      // {label, prompt}, every agent's
+let calls = 0              // each mocked agent call's ordinal, so an agent's start and end pair up
 globalThis.agent = async (prompt, opts) => {
+  allPrompts.push({ label: opts.label, prompt })
   const [kind, id] = opts.label.split(':')
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets, landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
   if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'companion' }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
-  events.push({ at: tick, kind, id, edge: 'start' })
+  const n = ++calls
+  events.push({ at: tick, kind, id, edge: 'start', n })
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
-  events.push({ at: tick, kind, id, edge: 'end' })
+  events.push({ at: tick, kind, id, edge: 'end', n })
+  if (kind === 'implement' && id === NEEDS_HUMAN) return { outcome: 'needs-human', branch: 'b', forkSha: 'f', headSha: 'h', complete: false, outstanding: '', summary: 'stopped on a storage question', question: QUESTION, delegatedDecisions: [], proposedSteering: [] }
   if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], proposedSteering: [] }
-  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [] }
-  if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '' }
+  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [], changedFiles: changedFiles(id) }
+  if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
+  if (kind === 'integrate') {
+    const k = merges[id] = (merges[id] || 0) + 1
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '' }
+    greens.push({ at: tick, head: `verified-${id}` })
+    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}` }
+  }
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
@@ -87,10 +128,10 @@ if (result === STALLED) {
 const failures = []
 const fail = (msg) => failures.push(msg)
 const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id && e.edge === 'start')
-const integratedAt = (id) => (events.find((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end') || {}).at
+const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set(fixture.expect.integrated)
+const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN))
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -121,6 +162,311 @@ for (const l of logs) {
   for (const id of m[2].split(', ')) {
     const at = integratedAt(id)
     if (at !== undefined && at < l.at) fail(`${m[1]} logged waiting on ${id} at ${l.at}, after ${id} integrated at ${at}`)
+  }
+}
+
+// The run's log directory, as overnight.js derives it from the launch's repo: every file an agent writes outside
+// its worktree goes there (#202).
+const LOG = `${fixture.args.repo}/.scratch/overnight/log`
+
+// 5. The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+//    line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced. #202
+//    moved its script from the session scratchpad to the run's log directory.
+{
+  const EDIT_RULE = `- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under ${LOG}/ and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).`
+  const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+  if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+  for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+}
+
+// 6. One worktree per ticket (#136): every implement prompt names its own worktree, so no two tickets share one.
+{
+  const wtOf = {}
+  for (const c of allPrompts.filter((x) => x.label.startsWith('implement:'))) {
+    const m = /^Worktree: (\S+?)\.? Branch:/m.exec(c.prompt)
+    if (!m) { fail(`the ${c.label} prompt names no worktree`); continue }
+    wtOf[c.label.split(':')[1]] = m[1]
+  }
+  const owners = {}
+  for (const [id, wt] of Object.entries(wtOf)) (owners[wt] = owners[wt] || []).push(id)
+  for (const [wt, ids] of Object.entries(owners)) if (ids.length > 1) fail(`tickets ${ids.join(', ')} share the worktree ${wt}`)
+  for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
+    const id = c.label.split(':')[1]
+    if (wtOf[id] && !c.prompt.includes(`Worktree ${wtOf[id]},`)) fail(`the review of ${id} does not run in its ticket's worktree ${wtOf[id]}`)
+  }
+}
+
+// 7. A lane implements while its last ticket is in review or integrating (#136): in every lane with two or more
+//    implements, the second starts before the first's integrate ends, unless the second waits on the first.
+{
+  const lanes = {}
+  for (const e of events.filter((x) => x.kind === 'implement' && x.edge === 'start')) (lanes[byId[e.id].owner] = lanes[byId[e.id].owner] || []).push(e)
+  let pairs = 0
+  for (const [owner, starts] of Object.entries(lanes)) {
+    if (starts.length < 2) continue
+    const [a, b] = starts
+    if (byId[b.id].blockedBy.includes(a.id)) continue
+    const end = integratedAt(a.id)
+    if (end === undefined) continue
+    pairs++
+    if (b.at >= end) fail(`${owner}: ${b.id} started its implement at ${b.at}, only after ${a.id} integrated at ${end}; the lane waited on review and integrate`)
+  }
+  if (!pairs) fail('no lane had two implements to compare, so the overlap check read nothing')
+}
+
+// 8. Integrate merges one ticket at a time (#136): no two integrate agents run at once. A resolve runs outside the
+//    lock since #279, in the ticket's own lane, so it is not counted here; check 13 holds what it may overlap.
+{
+  const spans = []
+  for (const s of events.filter((x) => x.kind === 'integrate' && x.edge === 'start')) {
+    const e = events.find((x) => x.kind === s.kind && x.id === s.id && x.edge === 'end' && x.at >= s.at && x.n === s.n)
+    spans.push({ label: `${s.kind}:${s.id}#${s.n}`, from: s.at, to: e ? e.at : Infinity })
+  }
+  spans.sort((p, q) => p.from - q.from)
+  for (let i = 1; i < spans.length; i++) if (spans[i].from < spans[i - 1].to) fail(`${spans[i].label} started at ${spans[i].from} while ${spans[i - 1].label} ran until ${spans[i - 1].to}`)
+}
+
+// 9. A conflict at integrate (#136, #279): the ticket goes back to its lane, where its branch back-merges the run
+//    branch in its own worktree, resolves and re-runs the check (the resolve agent), passes a second review against
+//    the tip it merged in, and integrate retries once; a ticket still in conflict is reported with its files, not
+//    merged.
+{
+  if (!CONFLICT_ONCE || !CONFLICT_ALWAYS || CONFLICT_ONCE === CONFLICT_ALWAYS) fail('the fixture lacks a waited-on ticket and a separate ticket nobody waits on, so the conflict checks read nothing')
+  const resolves = (id) => allPrompts.filter((c) => c.label === `resolve:${id}`)
+  const reviews = (id) => allPrompts.filter((c) => c.label === `review:${id}`)
+  const spansOf = (kind, id) => events.filter((e) => e.kind === kind && e.id === id && e.edge === 'start')
+    .map((s) => ({ from: s.at, to: (events.find((e) => e.edge === 'end' && e.n === s.n) || { at: Infinity }).at }))
+  for (const id of [CONFLICT_ONCE, CONFLICT_ALWAYS]) {
+    if (resolves(id).length !== 1) fail(`${id} met a conflict and ran ${resolves(id).length} resolve agents, not 1`)
+    else {
+      const r = resolves(id)[0].prompt
+      // It back-merges the last verified tip, not the branch, which may hold a merge still under its gate (#279).
+      const at = events.find((e) => e.kind === 'resolve' && e.id === id && e.edge === 'start').at
+      const tip = (greens.filter((g) => g.at <= at).pop() || {}).head
+      if (!tip) fail(`no integrate was green before the resolve of ${id}, so its verified tip is unknown`)
+      else if (!r.includes(`merge --no-ff ${tip}\``)) fail(`the resolve of ${id} does not back-merge ${tip}, the last tip whose integration gate passed`)
+      for (const f of CONFLICT_FILES) if (!r.includes(f)) fail(`the resolve of ${id} does not name the conflicting file ${f}`)
+      if (!/THE CHECK/.test(r)) fail(`the resolve of ${id} does not re-run the check`)
+    }
+    if (merges[id] !== 2) fail(`${id} was merged ${merges[id] || 0} times; a conflict retries once, so 2`)
+    // The second review (#279): one more review prompt, judged against the tip the resolve merged in, naming the
+    // conflicting files, and run after the resolve and before the retry.
+    if (reviews(id).length !== 2) fail(`${id} went back to its lane and passed ${reviews(id).length} reviews, not 2`)
+    else {
+      const again = reviews(id)[1].prompt
+      if (!again.includes(`fixed point ${RESOLVE_TIP}.`)) fail(`the second review of ${id} is not judged against the tip its resolve merged in`)
+      for (const f of CONFLICT_FILES) if (!again.includes(f)) fail(`the second review of ${id} does not name the conflicting file ${f}`)
+      const [res] = spansOf('resolve', id), rv = spansOf('review', id), ig = spansOf('integrate', id)
+      if (res && rv[1] && ig[1] && ig[0] && !(ig[0].to <= res.from && res.to <= rv[1].from && rv[1].to <= ig[1].from)) {
+        fail(`${id}: the first merge, the resolve, the second review and the retry did not run in that order (${JSON.stringify({ ig, res, rv })})`)
+      }
+    }
+  }
+  for (const id of Object.keys(merges)) if (![CONFLICT_ONCE, CONFLICT_ALWAYS].includes(id) && resolves(id).length) fail(`${id} ran a resolve agent without a conflict`)
+  for (const id of Object.keys(merges)) if (![CONFLICT_ONCE, CONFLICT_ALWAYS].includes(id) && reviews(id).length !== 1) fail(`${id} met no conflict and passed ${reviews(id).length} reviews, not 1`)
+  // The tickets waiting on a sent-back ticket wait for it rather than being skipped (#279).
+  const deps = dependantsOf(CONFLICT_ONCE)
+  if (!deps.length) fail(`no integrating ticket waits on ${CONFLICT_ONCE}, so the waiting check read nothing`)
+  for (const d of deps) {
+    if ((result.skipped || []).includes(d)) fail(`${d} was skipped while its blocker ${CONFLICT_ONCE} was back in its lane`)
+    if (!(result.integrated || []).includes(d)) fail(`${d} did not integrate after its blocker ${CONFLICT_ONCE} went back to its lane and integrated`)
+    const s = started(d), end = integratedAt(CONFLICT_ONCE)
+    if (s && end !== undefined && s.at < end) fail(`${d} started at ${s.at}, before its blocker ${CONFLICT_ONCE} integrated on its retry at ${end}`)
+  }
+  if (!(result.integrated || []).includes(CONFLICT_ONCE)) fail(`${CONFLICT_ONCE} did not integrate after its conflict was resolved`)
+  if ((result.integrated || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} integrated although its retry still conflicted`)
+  if (!(result.failed || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} is not reported failed after its retry still conflicted`)
+  const c = Object.fromEntries((result.conflicts || []).map((x) => [x.id, x]))
+  for (const [id, resolved] of [[CONFLICT_ONCE, true], [CONFLICT_ALWAYS, false]]) {
+    if (!c[id]) { fail(`the run's result names no conflict for ${id}`); continue }
+    if (c[id].resolved !== resolved) fail(`the run's result says ${id}'s conflict resolved=${c[id].resolved}, not ${resolved}`)
+    if (CONFLICT_FILES.some((f) => !(c[id].files || []).includes(f))) fail(`the run's result does not name ${id}'s conflicting files`)
+  }
+  if ((result.conflicts || []).length !== 2) fail(`the run's result names ${(result.conflicts || []).length} conflicts, not 2`)
+  const logged = logs.filter((l) => /^conflict: /.test(l.text)).map((l) => l.text)
+  if (!logged.some((l) => l.includes(CONFLICT_ONCE) && l.endsWith('-> resolved'))) fail(`no "conflict: ... -> resolved" log line for ${CONFLICT_ONCE}`)
+  if (!logged.some((l) => l.includes(CONFLICT_ALWAYS) && l.endsWith('-> unresolved'))) fail(`no "conflict: ... -> unresolved" log line for ${CONFLICT_ALWAYS}`)
+}
+
+// 10. Every file an agent writes goes to the run's log directory (#202): every prompt that carries the house rules
+//     carries the log rule verbatim, which names the session scratchpad off limits, and no prompt still sends a file
+//     to the scratchpad. On 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot there.
+{
+  const LOG_RULE = `- Every file you write outside your worktree goes under ${LOG}/ (${LOG}/research/ for research): a listing, a snapshot, a script, a body file, a draft. A file these instructions do not name by path begins with your task id (collect's with \`collect-\`, the report's with \`report-\`), so no two agents write the same file. The session scratchpad your system prompt names is off limits: every agent of the run is handed the launching session's, and on 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot of the same name there (#202).`
+  const housed = allPrompts.filter((c) => /House rules \(/.test(c.prompt))
+  if (!housed.length) fail('no prompt carries the house rules, so the log-rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(LOG_RULE)) fail(`the ${c.label} prompt's house rules lack the log rule of #202`)
+  for (const c of allPrompts) if (/under your scratchpad|in your scratchpad|to your scratchpad/.test(c.prompt)) fail(`the ${c.label} prompt still sends a file to the session scratchpad (#202)`)
+  // The report prompt carries no house rules, yet it may write a body or a measurement: it carries its own log rule.
+  const REPORT_RULE = `Any file you write (a body, a measurement, a script) goes under ${LOG}/ and begins with \`report-\`; the session scratchpad your system prompt names is off limits, as it is to every agent of the run (#202).`
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('no report prompt was rendered, so the report log-rule search read nothing')
+  for (const c of reports) if (!c.prompt.includes(REPORT_RULE)) fail('the report prompt lacks its log rule of #202')
+}
+
+// 11. The review re-runs what a branch claims (#202): every review prompt tells the reviewer to re-run each mutation a
+//     commit message or merge body claims, and to hold a "never prints X" promise unproven until a test plants a canary
+//     of X. On 2026-10-20 five guards a merge body called broken on purpose could be removed with every companion green.
+{
+  const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviews.length) fail('no review prompt was rendered, so the claim checks read nothing')
+  for (const c of reviews) {
+    const wt = (/^Worktree (\S+?),/m.exec(c.prompt) || [])[1]
+    const fork = (/fixed point (\S+?)\./.exec(c.prompt) || [])[1]
+    if (!wt || !fork) { fail(`the ${c.label} prompt names no worktree or fixed point`); continue }
+    const wants = [
+      `Claims are re-run, not read (#202): read every commit message and merge body on the branch, \`git -C ${wt} log --format='%h%n%B' ${fork}..HEAD\`, and the implementer's "## Answer" comment, and re-run every mutation they claim`,
+      `run only the test project or companion the claim names, see it fail, and restore the file with \`git -C ${wt} checkout -- <path>\` before the next. A claimed failure you cannot reproduce is a finding on the Spec axis`,
+      'A promise that something "never prints X" (a token, a secret, a cookie, a path) is unproven until a test plants a canary value of X and asserts that the output lacks it',
+      `\`git -C ${wt} status --porcelain\` must print nothing before STEP 3`,
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`the ${c.label} prompt lacks: ${w.slice(0, 80)}...`)
+  }
+}
+
+// 12. The merge message goes through a file (#231): git merge reads no message from standard input (`-F -` fails
+//     with "could not read file '-'"), and on 2026-10-21 the integrate agents of #155 and #194 each spent a retry on
+//     that. Every integrate prompt, first merge and retry, names the message file under the run's log directory,
+//     the ticket's own, and the merge command that reads it. The retry writes the same file the first merge left,
+//     so the prompt asks for a heredoc, which overwrites it, where the Write tool refuses an unread file (#109).
+{
+  const integrates = allPrompts.filter((c) => c.label.startsWith('integrate:'))
+  if (!integrates.length) fail('no integrate prompt was rendered, so the merge-message check read nothing')
+  for (const c of integrates) {
+    const id = c.label.split(':')[1]
+    const file = `${LOG}/${id}-merge-message.txt`
+    const wants = [
+      `Write the message to ${file} first`,
+      `merge --no-ff --no-edit -F ${file} `,
+      'never on standard input',
+      "with a quoted heredoc (`cat > <that file> <<'EOF'`)",
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`the ${c.label} prompt lacks: ${w}`)
+    const branch = (/Task branch (\S+?)\. /.exec(c.prompt) || [])[1]
+    if (!branch) fail(`the ${c.label} prompt names no task branch`)
+    else if (c.prompt.includes(`merge --no-ff ${branch}`)) fail(`the ${c.label} prompt still merges ${branch} without the message file`)
+  }
+}
+
+// 13. Tickets that changed the same file integrate one after the other (#279): the scheduler locks the files each
+//     ticket's branch changed, as its review read them from its diff against its fork point, from its first merge
+//     to its last, its time back in its lane included; so no ticket sharing a file with a sent-back ticket merges
+//     while that one is out, though a ticket sharing none does: the run does not wait on a ticket back in its lane.
+{
+  const window = (id) => {
+    const ig = events.filter((e) => e.kind === 'integrate' && e.id === id)
+    if (!ig.length) return null
+    return { from: Math.min(...ig.filter((e) => e.edge === 'start').map((e) => e.at)), to: Math.max(...ig.filter((e) => e.edge === 'end').map((e) => e.at)) }
+  }
+  const sharing = Object.keys(merges).filter((id) => changedFiles(id).includes(SHARED_FILE))
+  let pairs = 0
+  for (let i = 0; i < sharing.length; i++) for (let j = i + 1; j < sharing.length; j++) {
+    const a = window(sharing[i]), b = window(sharing[j])
+    if (!a || !b) continue
+    pairs++
+    if (a.from < b.to && b.from < a.to) fail(`${sharing[i]} (${a.from}..${a.to}) and ${sharing[j]} (${b.from}..${b.to}) both changed ${SHARED_FILE} and integrated at the same time`)
+  }
+  if (pairs < 2) fail(`fewer than two pairs of tickets shared ${SHARED_FILE}, so the file-lock check read nothing`)
+  const waited = logs.filter((l) => new RegExp(`^\\S+: waiting to integrate behind .*${SHARED_FILE.replace('.', '\\.')}`).test(l.text))
+  if (!waited.length) fail(`no ticket logged waiting to integrate behind another on ${SHARED_FILE}, so the file locks were never exercised`)
+  const out = window(CONFLICT_ALWAYS), back = events.filter((e) => e.kind === 'integrate' && e.id === CONFLICT_ALWAYS)
+  if (out && back.length === 4) {
+    const from = back[1].at, to = back[2].at   // the first merge's end, the retry's start
+    const during = events.filter((e) => e.kind === 'integrate' && e.id !== CONFLICT_ALWAYS && e.edge === 'start' && e.at >= from && e.at < to)
+    if (!during.length) fail(`no ticket integrated while ${CONFLICT_ALWAYS}, which shares no file, was back in its lane (${from}..${to}): the run waited on it`)
+  } else fail(`${CONFLICT_ALWAYS} did not run two integrates, so the send-back window check read nothing`)
+  // git diff --name-only lists only a rename's new path, so a ticket that renamed a shared file would not lock the
+  // old one: every review asks for its changed files with --no-renames, which lists both sides.
+  const reviewPrompts = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviewPrompts.length) fail('no review prompt was captured, so the changed-files listing check read nothing')
+  const blind = reviewPrompts.filter((c) => !c.prompt.includes('diff --no-renames --name-only '))
+  if (blind.length) fail(`${blind.length} review prompt(s) ask for the changed files without --no-renames, so a renamed file locks only its new path`)
+}
+
+// 14. The run's return value says why (#280): every failed, skipped and needs-human ticket has one entry in its
+//     "reasons", with the stage it stopped at and a one-line reason, so a launching session reads why without
+//     rebuilding it from the run's journal. The failed ticket's reason names its conflicting files.
+{
+  const reasons = result.reasons || []
+  const of = (id) => reasons.filter((r) => r.id === id)
+  for (const [outcome, list] of [['failed', result.failed], ['skipped', result.skipped], ['needs-human', result.needsHuman]]) {
+    for (const id of list || []) {
+      const rs = of(id)
+      if (rs.length !== 1) { fail(`${id} (${outcome}) has ${rs.length} entries in the run's reasons, not 1`); continue }
+      const [r] = rs
+      if (r.outcome !== outcome) fail(`${id}'s reason says outcome ${r.outcome}, not ${outcome}`)
+      if (!r.stage) fail(`${id}'s reason names no stage`)
+      if (typeof r.reason !== 'string' || !r.reason.trim() || /\n/.test(r.reason)) fail(`${id}'s reason is not one non-empty line: ${JSON.stringify(r.reason)}`)
+    }
+  }
+  const failed = of(CONFLICT_ALWAYS)[0]
+  if (!failed) fail(`the run's reasons hold no entry for ${CONFLICT_ALWAYS}, which failed`)
+  else {
+    if (failed.stage !== 'integrate') fail(`${CONFLICT_ALWAYS} failed at integrate; its reason says stage ${failed.stage}`)
+    for (const f of CONFLICT_FILES) if (!failed.reason.includes(f)) fail(`${CONFLICT_ALWAYS}'s reason does not name its conflicting file ${f}: ${failed.reason}`)
+  }
+  // A ticket skipped because a need did not integrate names that need, and not a need that did integrate: the
+  // skipped ticket the fixture blocks on two tickets, one integrated tonight and one that did not.
+  const twoNeeds = fixture.expect.skippedForBlocker.map((id) => byId[id])
+    .find((t) => t.blockedBy.some((b) => got.has(b)) && t.blockedBy.some((b) => !got.has(b)))
+  if (!twoNeeds) fail('no ticket skipped for a blocker also waits on one that integrated, so the need-naming check read nothing')
+  else {
+    const r = of(twoNeeds.id)[0]
+    const unmet = twoNeeds.blockedBy.filter((b) => !got.has(b)), met = twoNeeds.blockedBy.filter((b) => got.has(b))
+    if (!r) fail(`the run's reasons hold no entry for ${twoNeeds.id}, which was skipped`)
+    else {
+      if (r.stage !== 'implement') fail(`${twoNeeds.id} was skipped before its implement; its reason says stage ${r.stage}`)
+      for (const b of unmet) if (!r.reason.includes(b)) fail(`${twoNeeds.id}'s reason does not name ${b}, the need that did not integrate: ${r.reason}`)
+      for (const b of met) if (r.reason.includes(b)) fail(`${twoNeeds.id}'s reason names ${b}, a need that integrated: ${r.reason}`)
+    }
+  }
+  // A needs-human ticket from a lane gives its stage and its question; one grilled from collect says it went to a human.
+  if (!NEEDS_HUMAN) fail('the fixture has no free ticket to stop on a question, so the needs-human check read nothing')
+  else {
+    if (!(result.needsHuman || []).includes(NEEDS_HUMAN)) fail(`${NEEDS_HUMAN} stopped on a question and is not reported needs-human`)
+    const r = of(NEEDS_HUMAN)[0]
+    if (!r) fail(`the run's reasons hold no entry for ${NEEDS_HUMAN}, which needs a human`)
+    else {
+      if (r.stage !== 'implement') fail(`${NEEDS_HUMAN} stopped at its implement; its reason says stage ${r.stage}`)
+      if (!r.reason.includes(QUESTION)) fail(`${NEEDS_HUMAN}'s reason is not its question: ${r.reason}`)
+    }
+  }
+  const grilled = tickets.filter((t) => t.status === 'ready-for-human' && (result.needsHuman || []).includes(t.id))
+  if (!grilled.length) fail('no ready-for-human ticket was reported needs-human, so the grilled-ticket check read nothing')
+  for (const t of grilled) {
+    const r = of(t.id)[0]
+    if (r && (r.stage !== 'collect' || !r.reason.includes(t.why))) fail(`${t.id}, ready-for-human from collect, has reason ${JSON.stringify(r)}, not stage collect with its collect why`)
+  }
+}
+
+// 15. A Confirm names the questions it covers, and each question carries both its numbers (#301). The morning reads
+//     only a Confirm comment's first sentence for the questions it covers (ADR-0021 decision 2), so a bare "Confirm"
+//     covers none: on 2026-10-22 a draft opening with one would have confirmed 21 of 263 answers, the ones its
+//     override lines named. The report's first line says so, with a range example. And each questions comment numbers
+//     a question night-wide, then by the number its ticket's own comment gave it, so an answer citing "#244 Q9" turns
+//     into the number a Confirm names without counting down a comment.
+{
+  const FIRST_LINE = 'Adam confirms pre-accepted answers with one comment on this issue beginning "Confirm", whose first sentence names the questions it covers, as in "Confirm Q1 to Q<last>, with the overrides below." where Q<last> is the last question\'s night-wide number; a bare "Confirm" covers no question, because the morning reads only that first sentence for them (ADR-0021 decision 2)'
+  const BOTH_NUMBERS = 'Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket\'s own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note\'s question, a proposed steering change) opens with the night-wide number alone, as in "**Q95.**"'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('no report prompt was rendered, so the Confirm and numbering checks read nothing')
+  for (const c of reports) {
+    if (!c.prompt.includes(FIRST_LINE)) fail('the report prompt\'s first line does not say that a Confirm\'s first sentence names the questions it covers and that a bare "Confirm" covers none (#301)')
+    if (!c.prompt.includes(BOTH_NUMBERS)) fail('the report prompt does not number each question night-wide and then by its ticket-local number (#301)')
+  }
+}
+
+// 16. The status the collect tool gives is the ticket's (#316): only tools/overnight_collect.py reads who applied
+//     ready-for-agent, so the collect prompt copies its status and why, and a tool that did not run starts no lane.
+{
+  const COPIED = 'The status the tool gives is the ticket\'s (#316): give each ticket in "tickets" the "status" and "why" of the tool\'s ticket with the same issue number, copied as printed, in place of yours'
+  const UNREAD = 'give every ticket whose status would be "ready-for-agent" the status "blocked"'
+  const collects = allPrompts.filter((c) => c.label === 'collect')
+  if (!collects.length) fail('no collect prompt was rendered, so the status check reads nothing')
+  for (const c of collects) {
+    if (!c.prompt.includes(COPIED)) fail('the collect prompt does not take each ticket\'s status from tools/overnight_collect.py (#316)')
+    if (!c.prompt.includes(UNREAD)) fail('the collect prompt lets a ticket stay ready-for-agent when tools/overnight_collect.py did not run (#316)')
   }
 }
 

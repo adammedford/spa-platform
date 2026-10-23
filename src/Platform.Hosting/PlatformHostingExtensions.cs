@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
@@ -19,11 +20,23 @@ namespace Platform.Hosting;
 public static class PlatformHostingExtensions
 {
     /// <summary>
-    /// Registers nothing yet. Health and host resolution need only <see cref="IRegistry"/>, which
+    /// Registers the <see cref="GatewayInstance"/> <c>/readyz</c> names, unless one is registered
+    /// already, which is how a harness gives a host a deterministic id (change request P2-5, decision
+    /// 2). Health and host resolution otherwise need only <see cref="IRegistry"/>, which
     /// <c>AddPlatformRegistry</c> registers before this runs (contracts/pipeline.md, Service
     /// registration).
     /// </summary>
-    public static IHostApplicationBuilder AddPlatformHosting(this IHostApplicationBuilder builder) => builder;
+    public static IHostApplicationBuilder AddPlatformHosting(this IHostApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // Read from the process environment, not configuration: the ECS agent sets the variable, and
+        // P2-5 (decision 2) rules out a configuration key for the instance.
+        builder.Services.TryAddSingleton(services => GatewayInstance.Start(
+            Environment.GetEnvironmentVariable(GatewayInstance.MetadataVariable),
+            services.GetRequiredService<ILoggerFactory>().CreateLogger("Platform.Hosting.Instance")));
+        return builder;
+    }
 
     /// <summary>
     /// Answers <c>/healthz</c> and <c>/readyz</c> on any host, before host resolution, so the
@@ -36,7 +49,11 @@ public static class PlatformHostingExtensions
         // Resolved once, when the pipeline is built: the gateway has one registry for its lifetime, and
         // a composition that forgot AddPlatformRegistry fails at start-up rather than on the first probe.
         IRegistry registry = app.ApplicationServices.GetRequiredService<IRegistry>();
-        return app.Use((context, next) => Health.TryAnswerAsync(context, registry) ?? next(context));
+
+        // Resolved here too, so the instance's one metadata read starts with the pipeline, not on the
+        // first probe (change request P2-5, decision 2: read once at start-up).
+        GatewayInstance instance = app.ApplicationServices.GetRequiredService<GatewayInstance>();
+        return app.Use((context, next) => Health.TryAnswerAsync(context, registry, instance) ?? next(context));
     }
 
     /// <summary>

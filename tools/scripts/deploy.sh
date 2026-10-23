@@ -8,14 +8,20 @@
 # digest and checks that the running task has it".
 #
 #   tools/scripts/deploy.sh
+#   tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443    # the wait's origin, another port
 #
 # In order, and it stops at the first that fails:
 #   1. It reads the live registry from the bucket the gateway reads, and refuses when there is none
 #      or it holds no app: a gateway started against an empty registry never becomes ready, so the
 #      deployment would fail its health checks and roll back (contracts/README.md). Run seed.sh
-#      first. Nothing is built before this.
+#      first. Nothing is built before this. It keeps the registry's revision for step 5.
 #   2. It builds both images for ARM64 and pushes each under a tag of this run's own, since the
-#      repositories' tags are immutable, then takes each digest from ECR.
+#      repositories' tags are immutable, then takes each digest from ECR. Each build pulls its base
+#      image (--pull), so every deployment resolves the floating tag, mcr.microsoft.com/dotnet/
+#      aspnet:10.0-noble among them, afresh: without it a workstation whose cache holds an older
+#      image builds on that one, and could ship a .NET runtime that predates the security fixes
+#      the tag's current image carries (#273, #288). --pull is Docker's "Always attempt to pull all
+#      referenced images": https://docs.docker.com/reference/cli/docker/buildx/build/
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
@@ -27,13 +33,22 @@
 #      service still lists the previous task's target as draining for the target group's
 #      deregistration delay, and on the first deployment that task, the sample image, fails the new
 #      /readyz check meanwhile (#207). Any other state, unhealthy.draining among them, fails.
+#      Then it waits, through the gateway origin, until each running task has answered /readyz at
+#      the revision step 1 read or later (cell-common.sh's wait_for_revision; change request P2-5,
+#      decision 6, #309): one answer through the load balancer speaks for one task only, and a task
+#      the load balancer never picks fails the wait. The load balancer is internal, so the origin is
+#      the tunnel's, https://app1.$SPA_CERT_DOMAIN:$SPA_TUNNEL_PORT, by default
+#      https://app1.spa-poc.test:8443, unless --url names another. tools/scripts/tunnel.sh has to be
+#      running in another terminal by then, through a task of this deployment: the tunnel's hop is a
+#      gateway task, and a deployment replaces it.
 #
 # The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
 # Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
-# Terraform, python3, and Docker with buildx (decision D-2 in docs/dependencies.md).
+# Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), and the .NET SDK for
+# spactl, or SPACTL naming a spactl to run instead (cell-common.sh).
 #
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
@@ -63,12 +78,23 @@ usage() {
   cat <<EOF
 
 Options
-  -h, --help   This text.
+  --url ORIGIN   The gateway origin step 5's wait reads /readyz through. Default: the tunnel's,
+                 https://app1.\$SPA_CERT_DOMAIN:\$SPA_TUNNEL_PORT, else https://app1.spa-poc.test:8443.
+  -h, --help     This text.
 EOF
 }
 
+value_of() {
+  [ "$2" -ge 2 ] || refuse "$1 needs a value. Try --help."
+}
+
+# tools/scripts/verify-tunnel.sh's names for the tunnel: the first app's host under the certificate's
+# domain, on the tunnel's local port.
+ORIGIN="https://app1.${SPA_CERT_DOMAIN:-spa-poc.test}:${SPA_TUNNEL_PORT:-8443}"
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --url) value_of "$1" "$#"; ORIGIN="$2"; shift ;;
     -h | --help)
       usage
       exit 0
@@ -81,7 +107,13 @@ done
 trap cell_cleanup EXIT
 trap 'exit 130' INT TERM
 
+case "$ORIGIN" in
+  https://?* | http://?*) ;;
+  *) refuse "--url must be an http or https origin: got '${ORIGIN}'" ;;
+esac
+
 need_terraform
+need_spactl
 need_tool docker "brew install --cask docker-desktop (decision D-2, docs/dependencies.md)"
 docker buildx version > /dev/null 2>&1 || refuse "docker buildx does not answer. Start Docker Desktop."
 cell_start
@@ -116,6 +148,8 @@ APPS="$(documents apps "${WORK}/registry.json")" || fail "the live registry at $
 [ "$APPS" -gt 0 ] ||
   fail "the live registry at ${REGISTRY_KEY} holds no app, and a gateway started against an empty registry never becomes ready. Run tools/scripts/seed.sh first."
 note "the live registry holds ${APPS} apps"
+REVISION="$(documents revision "${WORK}/registry.json")" || fail "the live registry at ${REGISTRY_KEY} has no revision."
+note "the live registry is at revision ${REVISION}"
 
 # --- 2. build and push -----------------------------------------------------------------------------
 #
@@ -155,7 +189,7 @@ build_and_push() {
 # Docker's own output, through the redaction: it names the repository, which carries the account.
 docker_build() {
   local status=0
-  docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+  docker buildx build --pull --platform linux/arm64 --provenance=false --sbom=false \
     --file "${REPO_ROOT}/$1" --tag "$2" --push "$REPO_ROOT" 2>&1 | redact_stream || status=$?
   return "$status"
 }
@@ -170,4 +204,5 @@ note "pushed the gateway as ${GATEWAY_IMAGE##*@} and the mock API as ${MOCK_API_
 
 apply_images "$GATEWAY_IMAGE" "$MOCK_API_IMAGE"
 wait_and_assert "$GATEWAY_IMAGE"
-note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER} and answers ${READY_PATH}"
+wait_for_revision "$ORIGIN" "$REVISION"
+note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER}, and every running task reports revision ${REVISION} or later on ${READY_PATH}"

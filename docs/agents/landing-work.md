@@ -132,6 +132,34 @@ In a run-branch landing, each ticket's task merge on the run branch is that tick
 box that asks for something in the merge body is met there, and the landing body cites those merges
 by sha rather than copying them.
 
+**A task merge's message is changed by rebuilding the run branch.** A fix to what a ticket built
+goes on top as a commit of its own, but git changes a message only by rewriting its commit and every
+one after it. Rewrite every commit after the run's base with `git commit-tree`, parents first: each
+keeps its tree and its author and committer, dates included; each parent inside the range becomes
+its rewritten form, the second parents included; and only the messages being edited change.
+Rewriting the first-parent line alone leaves the old graph, and every subject `tools/roadmap.py`
+reads in it, reachable through the second parents (#287). Before committing anything on top,
+confirm that the rebuilt tip's tree equals the old tip's, so every build and test result of the old
+head holds for the rebuilt one, and that `git merge-base --is-ancestor` fails for each commit the
+rebuild replaced. A reworded subject leaves the generated blocks of every commit from it to the tip
+derived from the old subject: reset the branch to the rebuilt tip, run `tools/roadmap.py`, commit
+what it writes, and leave the commits between with their old blocks. A rebuild is
+foreground-session work, because the push rewrites a branch that a pull request and its review
+records name. Push with `git push --force-with-lease=<branch>:<origin's old tip>` and the pre-push
+hook running, then update the pull request's description to the new shas.
+
+**A rebuilt overnight branch carries its run's record with it.** The Overnight issue cites the old
+merge shas, and every lane worktree's tip falls out of the branch's ancestry, which stops the
+morning's Verify step 3; on 2026-10-22 neither was followed up and the map was rebuilt by hand
+(#318). So the rebuilding session runs, from the repository, `python3 -I tools/remap_rebuild.py
+--old <old tip> --new <new tip> --issue <Overnight issue> --worktree-root <the run's worktree root>
+--session "<this session, and why it rebuilt>"`. It maps every replaced commit to the rebuilt one
+with its tree, the commits reached through second parents included, and refuses when one has no
+such partner; it prints the map, the issue body rewritten to the new shas with a line naming the
+rebuild, and the lane worktrees it would move, and writes nothing. Read that, then run it again with
+`--apply`: it moves each clean lane worktree under the root to its rebuilt tip, names each dirty one
+and leaves it to its owner, writes the body, and comments the map on the issue.
+
 **`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
 --delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
 commands that recreate each deleted branch at its old tip:

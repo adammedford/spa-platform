@@ -195,19 +195,44 @@ public sealed class Password
     public override string ToString() => "[password]";
 }
 
-/// <summary>Runs a program and returns its standard output; the deployed stack's one way out to a tool.</summary>
+/// <summary>Runs a program and returns its exit and standard output; the deployed stack's one way out to a tool.</summary>
 public interface ICommandRunner
 {
-    Task<string> RunAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct);
+    /// <summary>Runs the command, and throws <see cref="CommandFailedException"/> for an exit it does not accept.</summary>
+    Task<CommandResult> RunAsync(Command command, CancellationToken ct);
 }
 
-/// <summary>A program that exited non-zero, with its error output and every account id in it masked.</summary>
+/// <summary>The common call: exit 0 only, the caller's environment, and the standard output.</summary>
+public static class CommandRunning
+{
+    public static async Task<string> RunAsync(this ICommandRunner runner, string program, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        (await runner.RunAsync(new Command(program, arguments), ct)).Output;
+}
+
+/// <summary>
+/// A program, its arguments, what it adds to the caller's environment, and the exits that are not a
+/// failure: 0 alone unless a tool gives another a meaning, as <c>terraform plan -detailed-exitcode</c>
+/// gives 2 "changes present" (https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode).
+/// </summary>
+public sealed record Command(string Program, IReadOnlyList<string> Arguments)
+{
+    /// <summary>Variables set over the caller's own, such as the project's profile (tools/aws-project.env).</summary>
+    public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>();
+
+    public IReadOnlyList<int> AcceptedExits { get; init; } = [0];
+}
+
+/// <summary>An accepted exit and what the program printed on standard output.</summary>
+public sealed record CommandResult(int ExitCode, string Output);
+
+/// <summary>A program that exited with an exit its command does not accept, with its error output and every account id in it masked.</summary>
 public sealed class CommandFailedException(string program, IReadOnlyList<string> arguments, int exitCode, string error)
     : Exception($"{program} {string.Join(' ', arguments.Take(2))} exited {exitCode}: {CellAws.AccountId().Replace(error.Trim(), "************")}");
 
 /// <summary>
 /// The real runner: a child process with the caller's environment, so it signs in as the operator's
-/// own session (the <c>spa-platform</c> profile, with <c>tools/aws-project.env</c> sourced), and with
+/// own session (the <c>spa-platform</c> profile, with <c>tools/aws-project.env</c> sourced), the
+/// command's own variables set over it, and with
 /// the AWS CLI's pager off, as the scripts set it
 /// (https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-pagination.html#cli-usage-pagination-clientside).
 /// Nothing it reads is written anywhere but the returned string. A cancelled run gives its program
@@ -227,8 +252,9 @@ public sealed class ProcessCommandRunner : ICommandRunner
     /// </summary>
     public TimeSpan StopGrace { get; init; } = TimeSpan.FromSeconds(30);
 
-    public async Task<string> RunAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct)
+    public async Task<CommandResult> RunAsync(Command command, CancellationToken ct)
     {
+        (string program, IReadOnlyList<string> arguments) = (command.Program, command.Arguments);
         ProcessStartInfo start = new(program)
         {
             RedirectStandardOutput = true,
@@ -241,6 +267,10 @@ public sealed class ProcessCommandRunner : ICommandRunner
         }
 
         start.Environment["AWS_PAGER"] = "";
+        foreach ((string name, string value) in command.Environment)
+        {
+            start.Environment[name] = value;
+        }
 
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"{program} did not start.");
         Task<string> output = process.StandardOutput.ReadToEndAsync(ct);
@@ -255,8 +285,8 @@ public sealed class ProcessCommandRunner : ICommandRunner
             throw;
         }
 
-        return process.ExitCode == 0
-            ? await output
+        return command.AcceptedExits.Contains(process.ExitCode)
+            ? new CommandResult(process.ExitCode, await output)
             : throw new CommandFailedException(program, arguments, process.ExitCode, await error);
     }
 

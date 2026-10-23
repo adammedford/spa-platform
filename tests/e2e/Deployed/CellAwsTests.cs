@@ -222,6 +222,33 @@ public sealed class CellAwsTests
         }
     }
 
+    [Fact]
+    public async Task An_exit_the_command_accepts_comes_back_with_its_output_and_any_other_fails()
+    {
+        // terraform plan -detailed-exitcode exits 2 when the plan has changes, the answer F-07's onboarding plan wants.
+        ProcessCommandRunner runner = new();
+        Command changes = new("/bin/sh", ["-c", "echo planned; exit 2"]) { AcceptedExits = [0, 2] };
+
+        CommandResult result = await runner.RunAsync(changes, TestContext.Current.CancellationToken);
+        Assert.Equal(new CommandResult(2, "planned\n"), result);
+
+        CommandFailedException failed = await Assert.ThrowsAsync<CommandFailedException>(
+            () => runner.RunAsync(changes with { Arguments = ["-c", "echo broken >&2; exit 1"] }, TestContext.Current.CancellationToken));
+        Assert.Contains("exited 1: broken", failed.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<CommandFailedException>(() => runner.RunAsync("/bin/sh", ["-c", "exit 2"], TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_commands_environment_is_set_over_the_callers()
+    {
+        // The onboarding runs spactl and Terraform as the project's profile whatever the shell exported (#212).
+        Command printed = new("/bin/sh", ["-c", "printf %s \"$AWS_PROFILE\""]) { Environment = new Dictionary<string, string> { ["AWS_PROFILE"] = "the-project" } };
+
+        CommandResult result = await new ProcessCommandRunner().RunAsync(printed, TestContext.Current.CancellationToken);
+
+        Assert.Equal("the-project", result.Output);
+    }
+
     /// <summary>A directory of the test's own, removed with everything in it.</summary>
     private sealed class TempDir : IDisposable
     {

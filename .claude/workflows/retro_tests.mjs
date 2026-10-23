@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -61,7 +61,8 @@ const indexFor = (lanes, logs = []) => ({
   worktrees: [], returnJson: '', pending: '', untracked: '',
   overnightScript: OVERNIGHT_READ,
   history: [{ date: '2026-10-16', report: '/x/REPORT.md', questions: '/x/questions.md' }],
-  missing: ['return JSON: none saved', 'transcripts and tool-call counts: the record holds none'],
+  refusals: { lines: [], missing: '' },
+  missing: ['return JSON: none saved', 'transcripts: the record holds none beyond the refusal lines'],
 })
 const finding = (noun, extra = {}) => ({
   type: 'misleading-instruction', title: `about ${noun}`, noun,
@@ -87,6 +88,7 @@ const newRepo = () => {
 }
 
 // served: { index, rankedCount, openRetro, laneFindings: {key: [...]}, stateDate }
+const allPrompts = []   // {label, prompt}, every agent's, across every run
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -102,6 +104,7 @@ function stub(env, scriptArgs, served) {
       await new Promise((r) => setTimeout(r, 5))
       const label = opts.label
       calls.push({ label, prompt, schema: opts.schema })
+      allPrompts.push({ label, prompt })
       let out
       if (label === 'state') {
         const scratch = path.join(env.repo, SCRATCH_REL)
@@ -118,6 +121,30 @@ function stub(env, scriptArgs, served) {
         })) : served.index.worktrees
         const files = JSON.parse(execFileSync('python3', ['-I', READER, 'fingerprint', path.join(env.repo, '.scratch/overnight/log')], { encoding: 'utf8' })).digest
         out = { ...served.index, worktrees, versions: { files, issues: served.issues || [] } }
+        // The refusal count (#315): when the case serves a transcripts root, the command the prompt
+        // names is run for real against it, and its lines become the index's refusals as a live
+        // Gather is told to make them.
+        if (served.refusalsRoot) {
+          const m = /`python3 -I (\S+\/tools\/retro_refusals\.py) --date (\S+)`/.exec(prompt)
+          if (!m) {
+            env.refusalsRun = { status: null, script: '(the Gather prompt names no tools/retro_refusals.py --date command)', lines: [] }
+            out.refusals = { lines: [], missing: '' }
+          } else {
+            // The prompt names the main checkout's copy, which the throwaway repository lacks; the
+            // same file from this checkout runs in its place, and the case checks the path it named.
+            const ran = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_refusals.py'), '--date', m[2], '--root', served.refusalsRoot], { encoding: 'utf8' })
+            const lines = ran.stdout.split('\n').filter(Boolean)
+            // Sorted as step 9 says, and no further: a line that counted a run, or one carrying a word
+            // it quotes for the missing bucket, read off the prompt. A line that is neither is dropped,
+            // as a literal reading of the two buckets would drop it.
+            const said = /missing is every line that says ((?:"[a-z]+:"(?:,? or |, )?)+)/.exec(prompt)
+            const markers = said ? [...said[1].matchAll(/"([a-z]+):"/g)].map((w) => `: ${w[1]}: `) : []
+            const isMissing = (l) => markers.some((w) => l.includes(w))
+            const counted = (l) => !isMissing(l) && / Edit and Write calls \(/.test(l)
+            out.refusals = { lines: lines.filter(counted), missing: lines.filter(isMissing).join('\n') }
+            env.refusalsRun = { status: ran.status, script: m[1], lines }
+          }
+        }
       }
       else if (label.startsWith('lane:')) {
         const k = label.slice(5)
@@ -133,8 +160,9 @@ function stub(env, scriptArgs, served) {
           parent: { number: 0, url: '', title: `Retro ${DATE}`, file: files[0] || '' }, tickets: [], dryRun: false, refused: '', unreachable: true,
         } : {
           parent: { number: dry ? 0 : 900, url: dry ? '' : 'https://github.com/o/r/issues/900', title: `Retro ${DATE}`, file: files[0] || '' },
-          tickets: list.map((f, i) => ({ number: dry ? 0 : 901 + i, url: dry ? '' : `https://github.com/o/r/issues/${901 + i}`, title: `${f.type}: ${f.title}`, label: 'ready-for-agent', noun: f.noun, file: files[i + 1] || '', blockedBy: [] })),
-          dryRun: dry, refused: '', unreachable: false,
+          tickets: list.map((f, i) => ({ number: dry ? 0 : 901 + i, url: dry ? '' : `https://github.com/o/r/issues/${901 + i}`, title: `${f.type}: ${f.title}`, label: 'ready-for-agent', noun: f.noun, file: files[i + 1] || '', blockedBy: [] }))
+            .filter((t, i) => !(served.fileRefused && i === 1)),
+          dryRun: dry, refused: served.fileRefused || '', unreachable: false,
         }
       } else throw new Error(`unexpected agent label ${label}`)
       const bad = validate(opts.schema, out)
@@ -376,7 +404,133 @@ try {
   if (!/versions/.test(gp) || !/updatedAt/.test(gp) || !/retro_record\.py fingerprint/.test(gp)) fail('the Gather prompt does not ask for versions: the files\' digest and each lane ticket\'s updatedAt')
   if (!/git -C <path> status --short/.test(gp)) fail('the Gather prompt does not read each lane worktree\'s status')
 
+  // 19. The ticket-shape check (#314, #248's third place): the File prompt, real and dry, checks each
+  //     ticket body with tools/ticket_shape.py by the collect step's recipe before any ticket's
+  //     `gh issue create`, and files nothing for a body that fails. The recipe is taken from the
+  //     prompt and run for real, so a prompt without it, or with one that cannot judge, fails here.
+  checks++
+  {
+    const RECIPE = /`cd (\S+) && (python3 -I -c '[^']*' (\S+\/ticket-<NN>\.md) <label> <each blocked-by number> \| python3 -I tools\/ticket_shape\.py -)`/
+    const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-shape-'))
+    made.push(bodyDir)
+    const body = (extra) => `**Owner:** integrator\n**Plan row:** none\n${extra}\n**What to build:** the evidence \`/x/log/a.txt:3\`, quoted.\n## Acceptance\n- [ ] no lane's log in a later run's record shows the repair\n`
+    fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
+    fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
+    const shapeOf = (cmd, file, blockers) => {
+      const sh = cmd.replace(/\S+\/ticket-<NN>\.md/, file).replace('<label>', 'ready-for-agent').replace(' <each blocked-by number>', blockers.map((n) => ` ${n}`).join(''))
+      return spawnSync('sh', ['-c', sh], { cwd: top, encoding: 'utf8' })
+    }
+    for (const dry of [false, true]) {
+      const what = dry ? 'a dry run' : 'a real run'
+      env = newRepo()
+      const run = await execute(env, { date: DATE, dryRun: dry }, { index: indexFor(THREE) })
+      const fp = (run.calls.find((c) => c.label === 'file') || {}).prompt || ''
+      const m = RECIPE.exec(fp)
+      if (!m) { fail(`${what}: the File prompt carries no tools/ticket_shape.py check of each ticket body by the collect step's recipe`); continue }
+      if (m[1] !== env.repo) fail(`${what}: the check runs in ${m[1]}, not the main checkout ${env.repo}`)
+      if (!m[3].startsWith(path.join(env.repo, SCRATCH_REL))) fail(`${what}: the check reads ${m[3]}, not a ticket file under the scratch directory`)
+      const create = fp.indexOf('gh issue create --title "<type>: <title>"')
+      if (!dry && (create < 0 || m.index > create)) fail(`${what}: the check does not come before the tickets' gh issue create`)
+      const good = shapeOf(m[2], path.join(bodyDir, 'good.md'), dry ? [] : [900])
+      if (good.status !== 0 || !/^ticket-shape: pass:/m.test(good.stdout)) fail(`${what}: the prompt's check did not pass a well-shaped body: exit ${good.status}, ${(good.stdout + good.stderr).trim()}`)
+      const bad = shapeOf(m[2], path.join(bodyDir, 'bad.md'), [])
+      if (bad.status !== 1 || !/^ticket-shape: foreground:/m.test(bad.stdout)) fail(`${what}: the prompt's check did not fail a foreground body on its rule: exit ${bad.status}, ${(bad.stdout + bad.stderr).trim()}`)
+      for (const [rule, re] of [['files only on exit 0', /only when that exits 0, its last line starting "ticket-shape: pass:"/], ['names each rule line in refused on exit 1', /On exit 1[^:]*file nothing for that ticket: leave it out of tickets, keep its file, and name in refused the ticket \(its file and title\) and each "ticket-shape: <rule>:" line/], ['says on any other exit the check did not judge it', /on any other exit[^.]*did not judge it/], ['never rewords a body to pass', /Never reword a body to get past the check/]]) {
+        if (!re.test(fp)) fail(`${what}: the File prompt does not say the check ${rule}`)
+      }
+    }
+    // The script returns what File refused, and a refusal leaves filed false (filed means filed in full).
+    env = newRepo()
+    const REFUSED = 'ticket-02.md "misleading-instruction: about noun-2": ticket-shape: foreground: a ready-for-agent ticket says **Session:** foreground'
+    const refusedRun = await execute(env, { date: DATE }, { index: indexFor(THREE), fileRefused: REFUSED })
+    if (refusedRun.result.refused !== REFUSED || refusedRun.result.filed !== false) fail(`a ticket the check refused: returned refused ${JSON.stringify(refusedRun.result.refused)}, filed ${refusedRun.result.filed}`)
+    if ((refusedRun.result.tickets || []).map((t) => t.noun).join() !== 'noun-1') fail(`a ticket the check refused: tickets ${JSON.stringify((refusedRun.result.tickets || []).map((t) => t.noun))}, expected noun-1 alone`)
+  }
+
+  // 20. The refusal count (#315): Gather runs tools/retro_refusals.py for the night, its line reaches
+  //     the File prompt verbatim for the parent issue and the return, the parent's "cannot see"
+  //     paragraph no longer counts tool-call counts among what it cannot see, and a transcripts root
+  //     with no match, or a transcript that does not parse, reaches the parent as missing or
+  //     unreadable, never as a zero.
+  checks++
+  {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-transcripts-'))
+    made.push(base)
+    const RUN = 'wf_3b77ab2e-214'
+    const runDir = path.join(base, 's1', 'subagents', 'workflows', RUN)
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.mkdirSync(path.join(base, 's1', 'workflows'), { recursive: true })
+    fs.writeFileSync(path.join(base, 's1', 'workflows', `${RUN}.json`), JSON.stringify({ runId: RUN, timestamp: `${DATE}T22:00:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    const block = (id, name) => ({ type: 'tool_use', id, name, input: {} })
+    const res = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text, is_error: true })
+    const lines = [
+      { type: 'assistant', message: { role: 'assistant', content: [block('toolu_1', 'Edit')] } },
+      { type: 'user', message: { role: 'user', content: [res('toolu_1', '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>')] } },
+      { type: 'api-request-blob', message: { role: 'assistant', content: [block('toolu_1', 'Edit')] } },
+      { type: 'api-request-blob', message: { role: 'user', content: [res('toolu_1', '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>')] } },
+    ]
+    fs.writeFileSync(path.join(runDir, 'agent-a1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    fs.writeFileSync(path.join(runDir, 'agent-a1.meta.json'), JSON.stringify({ description: 'implement:issue-1' }))
+    const LINE = `retro-refusals: ${RUN}: 1 Edit and Write calls (2 tool_use blocks, replays included), 1 "File has not been read yet" (1 Edit, 0 Write), 0 "modified since read"; agents: implement:issue-1`
+    const filePromptOf = (r) => (r.calls.find((c) => c.label === 'file') || {}).prompt || ''
+    const root = path.join(base, '*', 'subagents', 'workflows')
+    env = newRepo()
+    const counted = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    if (!env.refusalsRun || env.refusalsRun.script !== path.join(env.repo, 'tools', 'retro_refusals.py')) fail(`the Gather prompt's refusal command is not the main checkout's tools/retro_refusals.py: ${JSON.stringify(env.refusalsRun)}`)
+    if (!env.refusalsRun || env.refusalsRun.status !== 0 || env.refusalsRun.lines.join('\n') !== LINE) fail(`the refusal count on the fixture run printed ${JSON.stringify(env.refusalsRun)}, expected ${LINE}`)
+    const fp = filePromptOf(counted)
+    if (!fp.includes(`\n${LINE}\n`)) fail('the File prompt does not carry the run\'s refusal line verbatim for the parent issue')
+    if (!/the REFUSAL LINES above verbatim, under the heading "Edit and Write refusals", a missing line as missing and never as a zero/.test(fp)) fail('the File prompt does not have the parent carry the refusal lines')
+    if (/cannot see \([^)]*tool-call counts/.test(fp)) fail('the parent\'s "cannot see" paragraph still counts tool-call counts among what it cannot see')
+    if ((counted.result.refusals || []).join('\n') !== LINE) fail(`the return carries refusals ${JSON.stringify(counted.result.refusals)}, expected the run's line`)
+    const gp = (counted.calls.find((c) => c.label === 'gather') || {}).prompt || ''
+    if (/no transcripts and no tool-call counts/.test(gp)) fail('the Gather prompt still lists tool-call counts as something the record never holds')
+    // A transcripts root with no match: the missing line reaches the parent, and no zero does.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-empty-'))
+    made.push(empty)
+    env = newRepo()
+    const none = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: path.join(empty, '*', 'subagents', 'workflows') })
+    const fpNone = filePromptOf(none)
+    if (!env.refusalsRun || env.refusalsRun.status !== 1) fail(`an empty transcripts root: the count exited ${env.refusalsRun && env.refusalsRun.status}, expected 1`)
+    if (!new RegExp(`\\nretro-refusals: ${DATE}: missing: no overnight run recorded for this date under \\S+\\n`).test(fpNone)) fail('an empty transcripts root: the File prompt does not carry the missing line')
+    if (/Edit and Write calls/.test(fpNone.split('REFUSAL LINES')[1] || '')) fail('an empty transcripts root reached the File prompt as a count')
+    // Two more launches recorded for the night with no transcripts: each one's missing line reaches
+    // the parent beside the counted run's line, none of them dropped and none read as a zero.
+    for (const [id, hour] of [['wf_3b77ab2e-215', '23'], ['wf_3b77ab2e-216', '23']]) {
+      fs.writeFileSync(path.join(base, 's1', 'workflows', `${id}.json`), JSON.stringify({ runId: id, timestamp: `${DATE}T${hour}:00:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    }
+    env = newRepo()
+    const some = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    const fpSome = filePromptOf(some)
+    for (const id of ['wf_3b77ab2e-215', 'wf_3b77ab2e-216']) {
+      if (!fpSome.includes(`\nretro-refusals: ${id}: missing: no subagent transcripts for this run under ${root}\n`)) fail(`a launch with no transcripts (${id}): its missing line does not reach the File prompt`)
+    }
+    if (!fpSome.includes(`\n${LINE}\n`)) fail('beside missing launches, the counted run\'s line does not reach the File prompt')
+    // A launch whose transcript has a line that does not parse: its unreadable line reaches the
+    // parent beside the counted run's, and no count is made of it.
+    const BROKEN = 'wf_3b77ab2e-217'
+    fs.writeFileSync(path.join(base, 's1', 'workflows', `${BROKEN}.json`), JSON.stringify({ runId: BROKEN, timestamp: `${DATE}T23:30:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    fs.mkdirSync(path.join(base, 's1', 'subagents', 'workflows', BROKEN), { recursive: true })
+    fs.writeFileSync(path.join(base, 's1', 'subagents', 'workflows', BROKEN, 'agent-b1.jsonl'), JSON.stringify(lines[0]) + '\n{"type": "user", "message": {"role": "us\n')
+    env = newRepo()
+    const broken = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    const fpBroken = filePromptOf(broken)
+    if (!fpBroken.includes(`\nretro-refusals: ${BROKEN}: unreadable: lines that do not parse in agent-b1.jsonl (1); no count is given\n`)) fail('a launch with a transcript line that does not parse: its unreadable line does not reach the File prompt')
+    if (!fpBroken.includes(`\n${LINE}\n`)) fail('beside an unreadable launch, the counted run\'s line does not reach the File prompt')
+    if ((broken.result.refusals || []).filter((l) => l.includes(`${BROKEN}: unreadable:`)).length !== 1) fail(`the return does not carry the unreadable line once: ${JSON.stringify(broken.result.refusals)}`)
+  }
+
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
 } catch (e) {
   console.error(`retro tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)

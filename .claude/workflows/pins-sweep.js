@@ -138,6 +138,7 @@ const HOUSE = `House rules (a pins sweep; it changes nothing in the main checkou
 - Never install an SDK or a tool, never clear a cache (the NuGet package cache and Playwright's browser cache are only ever added to), never run a Terraform backend, apply or AWS credential step, and never push.
 - The tracker is GitHub Issues. Run every gh command with cd ${REPO} && in front. A multi-line body goes through a file under ${LOG}/ and --body-file <that file>.
 - Never write a comment that begins "Confirm" or "Approved". Never log a secret, token, cookie, authorization code or state value (AGENTS.md).
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Write each PHASE FILE and OUTPUT FILE line's path exactly as given.`
 
 // ---------------------------------------------------------------- schemas
@@ -556,7 +557,7 @@ END REPORT COMMENT`
 const filed = await run(filePrompt(), { label: 'file', phase: 'File', schema: FILED })
 
 phase('Report')
-const done = new Map(((filed && filed.writes) || []).map((w) => [w.key, w]))
+const done = new Map(((filed && filed.writes) || []).map((w) => [w.key, w])) // empty-ok: a null File is named in reason below, and each real write then reads not-written
 const records = decisions.map((d) => {
   const w = writes.find((x) => x.key === d.family)
   const r = w ? done.get(w.key) : null

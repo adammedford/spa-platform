@@ -97,9 +97,9 @@ public sealed class AccessTokenSourceTests
         // telemetry feature, as SessionRef.Of(key). N-16: across a session's life (sign-in, a refresh,
         // a request, logout) the key itself is written to no log line; its reference is what a line
         // that names the session carries.
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+            [App1], services => services.AddSingleton(logs.Provider));
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
 
@@ -112,7 +112,7 @@ public sealed class AccessTokenSourceTests
         Assert.Equal(SessionRef.Of(key), shell.SessionRef);
         string refresh = Assert.Single(logs.Lines, l => l.Category == typeof(AccessTokenSource).FullName).Message;
         Assert.Contains(SessionRef.Of(key), refresh, StringComparison.Ordinal);
-        Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Message, StringComparison.Ordinal));
+        Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -309,10 +309,10 @@ public sealed class AccessTokenSourceTests
         // winner stays as it was written, and the source's warning names the session by reference.
         // Mutation: treat a winner with no token as ended (end the lease and answer SessionEnded); the
         // session is removed, and this fails.
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         HeldClock hold = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs), idpClock: hold);
+            [App1], services => services.AddSingleton(logs.Provider), idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, _) = await gateway.Sessions.SingleAsync();
         SessionRecord? winner = null;
@@ -379,11 +379,11 @@ public sealed class AccessTokenSourceTests
         // ProviderUnavailable and keeps the session, and its warning names the deadline. The provider
         // carried the refresh out but answered late, so the retry presents the rotated-out token, which
         // the 10-second grace window honours.
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], services: services =>
         {
             Deadline(TimeSpan.FromMilliseconds(300))(services);
-            services.AddSingleton<ILoggerProvider>(logs);
+            services.AddSingleton(logs.Provider);
         });
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, SessionRecord atLogin) = await gateway.Sessions.SingleAsync();
@@ -449,9 +449,9 @@ public sealed class AccessTokenSourceTests
         // N-16: an OAuth error field is provider-controlled, even when it contains a credential. The
         // answer is the bare outcome, and the source's warning carries a fixed category in its place:
         // refresh_failed, for text it does not know.
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+            [App1], services => services.AddSingleton(logs.Provider));
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         string canary = await StoredTokenAsync(gateway, "refresh_token");
         using HttpClient backchannel = new(new ErrorAnswer(canary));
@@ -479,9 +479,9 @@ public sealed class AccessTokenSourceTests
         // The other half of the test above: an error RFC 6749 names, other than invalid_grant, is a
         // fixed category the warning may carry as it is (sections 4.1.2.1 and 5.2), and the session is
         // kept, as for any refresh that did not end in invalid_grant (ADR-0005).
-        CapturingLoggerProvider logs = new();
+        CapturedLog logs = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
-            [App1], services => services.AddSingleton<ILoggerProvider>(logs));
+            [App1], services => services.AddSingleton(logs.Provider));
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         using HttpClient backchannel = new(new ErrorAnswer(error));
         gateway.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
@@ -507,8 +507,8 @@ public sealed class AccessTokenSourceTests
         services => services.AddSingleton(new AccessTokenSourceOptions { ProviderDeadline = deadline });
 
     /// <summary>The lines the token source itself wrote, oldest first.</summary>
-    private static string[] SourceLines(CapturingLoggerProvider logs) =>
-        [.. logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName).Select(line => line.Message)];
+    private static string[] SourceLines(CapturedLog logs) =>
+        [.. logs.Lines.Where(line => line.Category == typeof(AccessTokenSource).FullName).Select(line => line.Text)];
 
     /// <summary>
     /// Asks for app 1's token on a due session while the provider holds the refresh, and runs

@@ -22,8 +22,12 @@ on:
   issues:
     types: [opened, edited, labeled]
 
+# pull-requests: read because the check asks GitHub what each `#N` its prose waits for is, and a
+# `#N` can be a pull request (#284); a permission left out of this block is set to none
+# (https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token).
 permissions:
   issues: write
+  pull-requests: read
   contents: read
 
 # One run per issue at a time, queued rather than cancelled: a cancel between the relabel and the

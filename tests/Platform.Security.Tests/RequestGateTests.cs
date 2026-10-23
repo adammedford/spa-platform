@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Platform.Testing;
 
 namespace Platform.Security.Tests;
 
@@ -29,7 +30,7 @@ public sealed class RequestGateTests
         // request got past the gate.
         Assert.DoesNotContain(response.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(0, host.Reached);
-        Assert.Single(host.LinesFor(rule));
+        Assert.Single(host.Log.LinesFor(rule));
     }
 
     // ---- N-07: /api and /bff take same-origin requests only ----
@@ -272,10 +273,7 @@ public sealed class RequestGateTests
         using HttpResponseMessage response = await host.SendAsync("GET", "/", Ct, ("Cookie", cookie));
 
         await AssertRefusedAsync(host, response, HttpStatusCode.BadRequest, "invalid_request", "gate.cookie-name");
-        lock (host.Log)
-        {
-            Assert.DoesNotContain(host.Log, line => line.Contains("planted", StringComparison.Ordinal));
-        }
+        Assert.False(host.Log.Contains("planted"), "a cookie value was logged");
     }
 
     [Fact]
@@ -283,11 +281,11 @@ public sealed class RequestGateTests
     {
         // HTTP/2 lets a client split Cookie across header fields; the check reads every one.
         await using GateHost host = await GateHost.StartAsync(Ct);
-        string response = await host.RawAsync("GET / HTTP/1.1", Ct,
-            "Cookie: __Host-spa-session=live\r\nCookie: __HOST-spa-session=planted\r\n");
+        RawResponse response = await host.RawAsync("GET", "/", Ct,
+            ("Cookie", "__Host-spa-session=live"), ("Cookie", "__HOST-spa-session=planted"));
 
-        Assert.StartsWith("HTTP/1.1 400 ", response);
-        Assert.Single(host.LinesFor("gate.cookie-name"));
+        Assert.Equal(400, response.StatusCode);
+        Assert.Single(host.Log.LinesFor("gate.cookie-name"));
     }
 
     [Theory]
@@ -327,14 +325,14 @@ public sealed class RequestGateTests
         // sends an origin server.
         await using GateHost host = await GateHost.StartAsync(Ct);
 
-        string response = await host.RawAsync(
-            $"GET {target.Replace("{authority}", host.BaseAddress.Authority, StringComparison.Ordinal)} HTTP/1.1", Ct,
-            "Sec-Fetch-Site: same-origin\r\n");
+        RawResponse response = await host.RawAsync(
+            "GET", target.Replace("{authority}", host.BaseAddress.Authority, StringComparison.Ordinal), Ct,
+            ("Sec-Fetch-Site", "same-origin"));
 
-        Assert.StartsWith("HTTP/1.1 400 ", response);
-        Assert.Contains("\"code\":\"invalid_request\"", response);
+        Assert.Equal(400, response.StatusCode);
+        Assert.Contains("\"code\":\"invalid_request\"", response.BodyText);
         Assert.Equal(0, host.Reached);
-        Assert.Single(host.LinesFor("path.invalid"));
+        Assert.Single(host.Log.LinesFor("path.invalid"));
     }
 
     [Theory]
@@ -349,9 +347,9 @@ public sealed class RequestGateTests
         // segment is not a dot segment.
         await using GateHost host = await GateHost.StartAsync(Ct);
 
-        string response = await host.RawAsync($"GET {target} HTTP/1.1", Ct, "Sec-Fetch-Site: same-origin\r\n");
+        RawResponse response = await host.RawAsync("GET", target, Ct, ("Sec-Fetch-Site", "same-origin"));
 
-        Assert.StartsWith("HTTP/1.1 200 ", response);
+        Assert.Equal(200, response.StatusCode);
         Assert.Equal(1, host.Reached);
     }
 

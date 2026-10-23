@@ -74,6 +74,111 @@ const LISTING_ONE = [{ number: ISSUE, title: `Overnight ${DATE}`, state: 'OPEN' 
 const prComment = (id, body, at) => ({ body, created_at: at, html_url: `https://github.com/adammedford/spa-platform/pull/400#issuecomment-${id}`, author_association: 'OWNER', user: { login: 'adammedford' } })
 const RECORD_MERGE = [prComment(11, `Findings: none.\n\nReviewed ${HEAD} against ${BASE}: merge`, '2026-10-21T07:00:00Z')]
 
+// Follow-ups (#292): pull request #287's three review records, as GitHub serves them, the latest
+// ending its findings with the follow-ups table review-queue.js writes. Of #287's three carried
+// findings, deploy.sh building without --pull is owned by #288 by the third record, so the table
+// lists the other two: logs_tests.py and cell_doubles_tests.py running in no CI job, and the
+// provisional #244 Q9 answer disagreeing with end-app-sessions.md. #288 is served as filed, in its
+// real shape, whose Raised-by line names #287 too.
+const PR287 = 'https://github.com/adammedford/spa-platform/pull/287'
+const R287 = [`${PR287}#issuecomment-6340588449`, `${PR287}#issuecomment-6342205384`, `${PR287}#issuecomment-6343000001`]
+const H287 = ['ed8d0633e9c1360fb7c2e425f63237676f4db648', '701ba9465d3d90575cecf19c09afee80346ada39', '76704c53c36ea51a9a4a81a206b76de7cf46e98c']
+const F287 = 'ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5'
+const FINDING_CI = 'logs_tests.py and cell_doubles_tests.py run in no CI job'
+const FINDING_Q9 = 'The provisional #244 Q9 answer disagrees with end-app-sessions.md'
+const FOLLOW_UPS_287 = `## Follow-ups\n\nCarried findings that name no open ticket; the morning run files each one.\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${FINDING_CI} | Spec | 76704c5:.github/workflows/ci.yml lines 321-326 \\| tools/scripts | ${R287[0]} |\n| ${FINDING_Q9} | Spec | #244 Q9; docs/runbooks/end-app-sessions.md | this record |\n`
+const rec287 = (i, verdict, extra = '') => ({ body: `## Review\n\nHead ${H287[i]}.\n\n## Spec\n\n- a finding\n\n${extra}\n## Mutations\n\n- none\n\nReviewed ${H287[i]} against ${F287}: ${verdict}`, author_association: 'OWNER', html_url: R287[i], created_at: `2026-10-22T0${i + 1}:00:00Z` })
+const ISSUE_288 = { number: 288, title: 'deploy.sh pulls the base image when it builds the gateway', body: `**Raised by:** #273, from the reviews of #287 (${R287[1]})\n**Owner:** ws1-infra\n`, url: 'https://github.com/adammedford/spa-platform/issues/288' }
+const FU287 = { prs: [{ number: 287, comments: [rec287(0, 'hold'), rec287(1, 'hold'), rec287(2, 'merge', FOLLOW_UPS_287)], reviews: [] }], filed: [ISSUE_288] }
+
+// #300: #287's description as the morning wrote it at the first head, served verbatim from its edit
+// history, and the first-parent merges of the branch it was rebuilt to (76704c5), oldest first.
+const BODY_287_FIRST = [
+  "Land the overnight run of 2026-10-22",
+  "",
+  "Overnight issue: #286. Base `ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5`, head `ed8d0633e9c1360fb7c2e425f63237676f4db648`. 15 integrated, 1 partial, 1 failed, 7 skipped (blocked by the failed one).",
+  "",
+  "## Integrated",
+  "",
+  "| Task | Issue | Task merge |",
+  "| --- | --- | --- |",
+  "| issue-233 | #233 | `6964163` |",
+  "| issue-235 | #235 | `58f0285` |",
+  "| issue-239 | #239 | `192f2a6` |",
+  "| 6.7 | #62 | `032eb43` (+ `eab8420`, roadmap refresh) |",
+  "| issue-158 | #158 | `9b46ca8` |",
+  "| issue-193 | #193 | `246c1a0` |",
+  "| issue-234 | #234 | `a30b942` |",
+  "| issue-251 | #251 | `9916904` |",
+  "| issue-253 | #253 | `53f5d7a` |",
+  "| issue-198 | #198 | `fff1181` |",
+  "| issue-254 | #254 | `c32e8f3` |",
+  "| issue-237 | #237 | `2946115` |",
+  "| issue-240 | #240 | `9765c54` |",
+  "| issue-243 | #243 | `10828ec` |",
+  "| issue-273 | #273 | `ed8d063` |",
+  "",
+  "## Partial",
+  "",
+  "| Task | Issue | Task merge |",
+  "| --- | --- | --- |",
+  "| issue-241 | #241 | `2eebae1` (\"Merge part of task issue-241\") |",
+  "",
+  "## Failed",
+  "",
+  "| Task | Issue | Merge |",
+  "| --- | --- | --- |",
+  "| issue-145 | #145 | none; branch `task/issue-145-stage-host-2-10-stagehost-capturedlog-and-rawhtt` at `2e14356` is kept for #146 to fork from (CS0104 collision only #146's commit removes) |",
+  "| skipped: #146, #147, #148, #149, #150, #151, #152 | | none; \"blocker not integrated: issue-145\" |",
+  "",
+  "#239 and #62 carry `Ticket:` rather than `Closes`: #239's lane reported box 2 as Outstanding (its task merge `192f2a6` names the count, so tick box 2 and change the line to `Closes #239` if you agree), and #62 still holds boxes 2 and 3, moved to #244 under #232 Q9, whose removal from #62's body is a morning act (#244's Q6).",
+  "",
+  "Closes #233",
+  "Closes #235",
+  "Closes #158",
+  "Closes #193",
+  "Closes #234",
+  "Closes #251",
+  "Closes #253",
+  "Closes #198",
+  "Closes #254",
+  "Closes #237",
+  "Closes #240",
+  "Closes #243",
+  "Closes #273",
+  "Ticket: #239",
+  "Ticket: #62",
+  "Ticket: #241",
+  "",
+  "Outstanding: #241: CI does not run tools/scripts/certs_tests.py yet; that waits on change request contracts/changes/issue-241-ci-runs-the-certs-companion.md (two ci.yml steps and a D-3 sentence). Until then only tools/check.sh --full runs it. #239: box 2 is met by task merge 192f2a6 but not ticked. #62: boxes 2 and 3 moved to #244 and are still in #62's body.",
+  "Outstanding test ids: none",
+  "",
+  "Evidence: 16 integration gate logs in .scratch/overnight/log (one per merged lane); the last, issue-273-integrate.txt, ran tools/check.sh --full at HEAD=ed8d0633e9c1360fb7c2e425f63237676f4db648 and ended \"check: pass:\", with 1715 .NET tests passed, 0 failed. The morning re-ran tools/check.sh --base ae6e2e1 at that head (pass) and pushed with the pre-push hook running.",
+  "",
+  "Merge subject: Land the overnight run of 2026-10-22",
+  "",
+  "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+  "",
+].join('\n')
+const MERGES_287 = [
+  { sha: "993b0801081fbddf0c7ad9afbfba7a702399e6a4", subject: "Merge task issue-233: the mock API image makes /app readable by the runtime user" },
+  { sha: "d93ed8acae9df4deb71c3817fc3d1af59846bcd4", subject: "Merge task issue-235: spactl references AWSSDK.Signin, and a test loads a login_session profile" },
+  { sha: "2ece748e3a476f64e2e92b9980b95247545f92a5", subject: "Merge task issue-239: the trust and execution documents merge no other policy document" },
+  { sha: "340fd0758f9dcda06328b4a8c605fcde524264c3", subject: "Merge part of task 6.7: operating notes for deploy, rollbacks, secret rotation, ending an app's sessions and teardown" },
+  { sha: "118293a4bab2f07d4fd4daa51e9319a160267e1b", subject: "Merge part of task issue-241: certs.sh resolves its Region the way preflight.sh does and refuses without one" },
+  { sha: "4bd8ea7e319642564bdc176beab3e19a11f70d0e", subject: "Merge task issue-158: the rule-id-literal rule takes the eleven problem codes" },
+  { sha: "4564c13d30896939a56ff0d5e74010ab58192564", subject: "Merge task issue-193: change requests 1.6b, 1.7 and issue-122 decided, and the decision rule holds disagreeing Status lines" },
+  { sha: "4028026334330e80a3ac8df841dd95d4c08a040e", subject: "Merge task issue-234: image_build_tests.py holds the mock API's Dockerfile to the runtime-read case" },
+  { sha: "8cf855383ab8f522a70e5c0a838ed57764225a79", subject: "Merge task issue-251: deploy.sh and rollback.sh redact the apps' client ids in the platform root's plan" },
+  { sha: "b3122dab203cca3f4e52feb9e46f05a0d2aa23a3", subject: "Merge task issue-253: Playwright failures in the deployed e2e rows print no URL query, and F-06's switch-back runs under its own bound" },
+  { sha: "559b8911b46ade3242418a580f60422df2aad3b5", subject: "Merge task issue-198: tunnel.sh reads the cluster, service and ALB from the outputs document" },
+  { sha: "9e32b7532af8cb8c66ce0ec06322ad14c069d975", subject: "Merge task issue-254: F-05's web storage check names nothing on failure" },
+  { sha: "cefbd4a08ed7eb10975d167f0e34988dc7dc71c3", subject: "Merge task issue-237: the full check runs the companions of a library a change touches" },
+  { sha: "5f63d6ac61f9859bee7eb4bd9f05523198a4b3a0", subject: "Merge task issue-240: GLOSSARY.md carries Problem code and OAuth error value" },
+  { sha: "dec982d9923aca156731cf3bfa0a8c64542cc071", subject: "Merge task issue-243: CI runs the cell scripts' six companions in both jobs, and D-3 names them" },
+  { sha: "27ad35d7264e45029ced64b58fc63b3f610f1be7", subject: "Merge task issue-273: the gateway image runs .NET runtime 10.0.13, and the three runtimes are read one way" },
+]
+
 const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 
@@ -122,7 +227,11 @@ const jsonAfter = (prompt, marker) => {
 }
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
-//           rewrite: [issue], after: {...} }
+//           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
+//           filerDrops: [title],
+//           replay: {pending, renamed, stoppedAt, reason}, the Replay agent's own fields as it returned them,
+//           rewrite: [issue], after: {...}, refresh: the description writer's return (#300), nothingFrom: [label], the agents that return nothing,
+//           as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
   const inFlight = {}
@@ -140,6 +249,7 @@ function stub(env, scriptArgs, served) {
     try {
       await new Promise((r) => setTimeout(r, 5))
       calls.push({ label, prompt, schema: opts.schema })
+      if ((served.nothingFrom || []).includes(label)) return null
       let out
       if (label === 'replay') {
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
@@ -149,6 +259,7 @@ function stub(env, scriptArgs, served) {
           phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)),
           counts: served.replayCounts || { comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 } },
           pending: '', renamed: '', stoppedAt: 0, reason: '',
+          ...(served.replay || {}),
         }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -160,9 +271,11 @@ function stub(env, scriptArgs, served) {
           pr: { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400' },
           prBodyFile: `${env.repo}/${MORNING_REL}/pr-body.md`, mergeBodyFile: `${env.repo}/${MORNING_REL}/merge-body.md`,
           mergeSubject: jsonAfter(prompt, 'MERGE SUBJECT') || '',
+          prReused: !!v.prReused, prBody: v.prBody || '', merges: v.merges || [],
           ci: v.ci || 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/1', failingJobs: v.failingJobs || [],
           pushed: true, mainMoved: false, findings: [],
-          worktrees: [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true }],
+          worktrees: v.worktrees || [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true, lane: 'issue-300', partner: '' }],
+          oldTip: v.oldTip || '',
           lanes: [
             { issue: 300, task: 'issue-300', outcome: 'integrated', complete: true, mergeSha: sha('1'), outstanding: '' },
             { issue: 301, task: 'issue-301', outcome: 'partial', complete: false, mergeSha: sha('2'), outstanding: 'box 3' },
@@ -174,23 +287,69 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'classify') {
         const qs = jsonAfter(prompt, 'QUESTIONS') || []
         const kinds = served.kinds || {}
+        // served.classes: {q: {kind, summary, target, removeBoxes, addBlockedBy, unstated, followUp}},
+        // a classifier's whole return for a question, over the empty fields every other one carries.
+        const classes = served.classes || {}
+        const EMPTY = { target: 0, removeBoxes: [], addBlockedBy: [], unstated: '', followUp: { title: '', touches: [], blockedBy: [], what: '' } }
         out = {
-          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}` })),
+          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}`, ...EMPTY, ...(classes[q.q] || {}) })),
           rewrites: (served.rewrite || []).map((n) => ({ issue: n, questions: qs.filter((q) => q.issue === n).map((q) => q.q), why: 'the grill said so' })),
         }
       } else if (label.startsWith('apply:')) {
         const unit = jsonAfter(prompt, 'UNIT') || { tickets: [] }
         const qs = unit.tickets.flatMap((t) => t.questions)
+        // An applier that edits a ticket's body is counted while it runs, so two that edit the same
+        // body at once show as a peak above one.
+        const edits = unit.edits || []
+        const editing = edits.length > 0
+        if (editing) { inFlight.edit = (inFlight.edit || 0) + 1; env.peaks.edit = Math.max(env.peaks.edit || 0, inFlight.edit) }
+        await new Promise((r) => setTimeout(r, 5))
+        if (editing) inFlight.edit--
+        env.units = [...(env.units || []), unit]
         out = {
           unit: unit.key || '',
           commits: qs.filter((q) => q.kind === 'integrator-edit').map((q) => ({ sha: sha('f'), subject: q.summary, questions: [q.q] })),
-          issues: qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+          issues: [
+            ...qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+            ...(unit.followUps || []).map((f, i) => ({ number: 600 + i, url: URL(600 + i), title: f.title, questions: [f.q] })),
+          ],
+          edits: edits.map((e) => ({ issue: e.target, preserved: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
+          edges: (unit.edges || []).map((e) => ({ issue: e.target, blockedBy: e.addBlockedBy, questions: [e.q] })),
           candidates: qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ url: `${URL(q.issue)}#issuecomment-7`, questions: [q.q] })),
           rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
         }
+      } else if (label === 'pr-refresh') {
+        out = served.refresh || { edited: true, reason: '' }
       } else if (label === 'handover') {
         out = { url: `${URL(ISSUE)}#issuecomment-99`, posted: true, reason: '' }
+      } else if (label === 'followups') {
+        // The open pull requests into main with their comments and reviews as gh serves them, and the
+        // issues already filed: those the fixture serves, then those an earlier run's filer filed.
+        const f = served.followUps || { prs: [], filed: [] }
+        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], error: f.error || '' }
+      } else if (label === 'followups-file') {
+        // The filer files each follow-up it is given, as gh issue create would, and remembers it in
+        // env, so a rerun on the same checkout reads it back as filed.
+        // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
+        // lost one would.
+        const items = (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
+        env.filed = env.filed || []
+        const filed = items.map((it) => {
+          const number = 900 + env.filed.length
+          const issue = { number, title: it.title, body: it.body, url: URL(number) }
+          env.filed.push(issue)
+          return { pr: it.pr, title: it.title, number, url: issue.url }
+        })
+        out = { filed, skipped: [], unreachable: false, reason: '' }
+      } else if (label === 'draft-read') {
+        // The draft check's one agent (#302) reads the issue and the draft file and returns them verbatim.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        out = {
+          listing: served.listing || LISTING_ONE,
+          issue: issue ? { number: issue.number, title: issue.title, url: issue.url, state: issue.state, comments: issue.comments } : { number: 0, title: '', url: '', state: '', comments: [] },
+          draft: served.draft === undefined ? '' : served.draft, error: served.draftError || '',
+        }
       } else if (label === 'after') {
         const a = served.after || {}
         const contained = a.contained !== false
@@ -220,9 +379,9 @@ function stub(env, scriptArgs, served) {
 
 const allPrompts = []
 const driftAll = []
-async function execute(env, scriptArgs, served = {}) {
+async function execute(env, scriptArgs, served = {}, source = null) {
   const calls = stub(env, scriptArgs, served)
-  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const src = (source === null ? fs.readFileSync(scriptPath, 'utf8') : source).replace(/^export const meta/m, 'const meta')
   const result = await new Function('return (async () => {' + src + '\n})()')()
   for (const c of calls) allPrompts.push(c)
   for (const f of env.schemaFailures.splice(0)) driftAll.push(f)
@@ -246,7 +405,7 @@ try {
   const meta = loadMeta()
   if (!meta || meta.name !== 'morning') fail(`meta.name is ${meta && meta.name}, expected morning`)
   const titles = ((meta && meta.phases) || []).map((p) => p.title)
-  if (titles.slice(0, 4).join() !== 'Replay,Verify,Apply,Hand-over') fail(`meta phases ${titles.join(', ')}; expected Replay, Verify, Apply, Hand-over first`)
+  if (titles.slice(0, 5).join() !== 'Replay,Verify,Apply,Follow-ups,Hand-over') fail(`meta phases ${titles.join(', ')}; expected Replay, Verify, Apply, Follow-ups, Hand-over first`)
   if (!titles.includes('After')) fail('meta declares no After phase for the after mode')
   for (const [label, a] of [
     ['neither date nor issue', {}],
@@ -374,6 +533,22 @@ try {
     if (!flipped || flipped.answer !== 'yes, on reflection' || flipped.authority !== `${URL(ISSUE)}#issuecomment-10`) fail(`a later Confirm comment's Q2 line did not win: ${JSON.stringify(flipped)}`)
   }
 
+  // 6a. A Classify agent that returns nothing is named as failed in the refusals and the hand-over
+  //     (#277), dry or confirmed, and nothing is applied; never read as a classifier that returned
+  //     no questions. Paired with the same runs with every agent answering, which name no failure.
+  checks++
+  {
+    const NAMED = /the Classify agent returned nothing: Q\d+(, Q\d+)* (was|were) not classified, so none is applied/
+    for (const [label, served] of [['confirmed', {}], ['dry', { issue: issueWith(QUESTIONS) }]]) {
+      const all = await execute(newRepo(), { date: DATE }, served)
+      if (all.result.refusals.some((r) => NAMED.test(r))) fail(`${label}, every agent answering: the Classify agent is named as failed: ${JSON.stringify(all.result.refusals)}`)
+      const none = await execute(newRepo(), { date: DATE }, { ...served, nothingFrom: ['classify'] })
+      if (!none.labels.includes('classify')) fail(`${label}: no classifier ran, so the null proves nothing`)
+      if (!none.result.refusals.some((r) => NAMED.test(r)) || !NAMED.test(none.result.handover.text)) fail(`${label}: a null Classify agent is not named in the refusals and the hand-over: ${JSON.stringify(none.result.refusals)}`)
+      if (APPLIERS(none.labels).length || none.result.apply.done.length || none.result.apply.wouldDo.length) fail(`${label}: after a null Classify agent, applied ${JSON.stringify(none.result.apply.done)} and would do ${JSON.stringify(none.result.apply.wouldDo)}`)
+    }
+  }
+
   // 7. Questions come from the comments, numbered across them and across a split comment's parts in
   //    either order; the body's decoy is never read; a missing part is refused, not half-read.
   checks++
@@ -415,13 +590,14 @@ try {
     if ((tight.peaks.tracker || 0) > 2 || tight.peaks.all > 2) fail(`maxParallel 2: ${tight.peaks.tracker} tracker appliers and ${tight.peaks.all} agents in flight at once`)
   }
 
-  // 9. Budget: at the default maxParallel a night of eight tickets of every kind dispatches at most
-  //    seven agents, and the return counts what ran.
+  // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
+  //    file, dispatches at most nine agents, and the return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
-    const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303] })
-    if (labels.length > 7 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
+    if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
+    if (labels.length > 9 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -454,6 +630,98 @@ try {
     if (second.labels.includes('classify') || APPLIERS(second.labels).length) fail(`resumption: the rerun dispatched ${second.labels.join(', ')}`)
     if (!second.result.reused.includes('classify') || !second.result.reused.some((r) => r.startsWith('apply/'))) fail(`resumption: reused ${second.result.reused}`)
     if (second.result.apply.done.join() !== first.result.apply.done.join()) fail('resumption: the rerun\'s hand-over lost what the first run applied')
+  }
+
+  // 11b. Follow-ups and edits to other tickets (#320). On 2026-10-22 Apply skipped Q71 and Q174 as
+  //      needing no repository change though each asked for an integrator follow-up, and Q91 and Q92
+  //      because their edit landed on a ticket outside the rewrite list. The cases below are those
+  //      four shapes, as the classifier returns them, plus an edit it cannot state and an answer
+  //      that needs nothing. The companion proves what Apply does with each kind and that the
+  //      classifier is told the kinds; which kind a live answer gets stays the classifier's call.
+  checks++
+  {
+    const BOX2 = '- [ ] The deployed cell\'s runbooks are walked end to end'
+    const BOX3 = '- [ ] Each runbook\'s evidence is posted on the sitting ticket'
+    const q = (n, issue, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+    const answers = [
+      comment(30, `## Questions: ${cite(278)}, issue-278, Coding standards\n\n${q(1, 278, 'File an integrator follow-up to bring the wiz skill\'s sitting C in line?')}\n${q(4, 278, 'Does this ticket stay text-only?')}`, '2026-10-21T06:10:00Z'),
+      comment(31, `## Questions: ${cite(244)}, issue-244, Walk the runbooks\n\n${q(2, 244, 'Have the morning remove boxes 2 and 3 from #62?')}\n${q(3, 244, 'Add #235 and the Q5 follow-up as direct blockers of #244?')}\n${q(5, 244, 'Bring #62\'s acceptance in line with the move?')}`, '2026-10-21T06:10:01Z'),
+    ]
+    const classes = {
+      1: { kind: 'follow-up', summary: 'file the wiz follow-up', followUp: { title: 'The wiz skill\'s sitting C starts from a standing cell and posts on the sitting ticket', touches: ['.claude/skills/wiz/SKILL.md'], blockedBy: [], what: 'Bring sitting C in line: start from a standing or absent cell, add rollback.sh, post the runs on the sitting ticket.' } },
+      2: { kind: 'ticket-edit', summary: 'remove boxes 2 and 3 from #62', target: 62, removeBoxes: [BOX2, BOX3] },
+      3: { kind: 'ticket-edit', summary: 'block #244 on #235', target: 244, addBlockedBy: [235], unstated: 'the Q5 follow-up is not filed yet, so its number cannot be stated' },
+      4: { kind: 'no-repo-change', summary: 'the grilling record already holds it and no ticket, follow-up or edit is asked for' },
+      5: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 },
+    }
+    const night320 = issueWith([...answers, comment(91, 'Confirm Q1 to Q5 as pre-accepted.', '2026-10-21T08:00:00Z')])
+    const env = newRepo()
+    const { result, labels, prompt, calls } = await execute(env, { date: DATE }, { issue: night320, kinds: {}, classes })
+    const done = result.apply.done.join('\n')
+    const units = env.units || []
+    const followUps = units.flatMap((u) => u.followUps || [])
+    const cls = prompt('classify')
+    // The classifier is told both kinds, and that an answer asking for a ticket is not one needing nothing.
+    if (!/^- follow-up: /m.test(cls) || !/^- ticket-edit: /m.test(cls)) fail('#320: the classifier prompt does not define the follow-up and ticket-edit kinds')
+    if (!/^- no-repo-change: [^\n]*(asks for|asking for)[^\n]*follow-up/m.test(cls)) fail('#320: the classifier prompt does not keep an answer asking for a follow-up out of no-repo-change')
+    // Q71's shape: one ticket, raised by its own ticket, shape-checked, neither sub-issue nor blocker.
+    const f1 = followUps.filter((f) => f.q === 1)
+    if (f1.length !== 1) fail(`#320 Q71 shape: ${f1.length} follow-ups for Q1, expected one`)
+    else {
+      if (!f1[0].body.startsWith(`**Raised by:** ${cite(278)}, Q1 of `) || !f1[0].body.includes(cite(ISSUE))) fail(`#320 Q71 shape: the follow-up's Raised-by line does not name its ticket, the question and the Overnight issue: ${f1[0].body.split('\n')[0]}`)
+      if (!/^\*\*Touches:\*\* `\.claude\/skills\/wiz\/SKILL\.md`$/m.test(f1[0].body) || !/^\*\*Owner:\*\* <role>$/m.test(f1[0].body)) fail('#320 Q71 shape: the follow-up body lacks its Touches line or the Owner line the applier derives')
+    }
+    if ((done.match(/^filed #\d+ [^\n]*\(Q1\)/gm) || []).length !== 1) fail(`#320 Q71 shape: the hand-over does not name one filed ticket for Q1:\n${done}`)
+    const fp = calls.filter((c) => c.label.startsWith('apply:') && /FOLLOW-UP TICKETS/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
+    const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
+    if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
+    // Q91's shape: #62's boxes removed, its old body saved first.
+    const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
+    if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
+    if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the old body is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its saved body:\n${done}`)
+    const ep = calls.filter((c) => c.label.startsWith('apply:') && /"edits":\[\{/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!ep.includes(`## Body before ${DATE}`)) fail('#320 Q91 shape: the applier is not told to save the old body as rewrites do')
+    // Q92's shape: the stated edge added, the unstated rest filed as a follow-up naming #244.
+    const e3 = units.flatMap((u) => u.edges || []).filter((e) => e.q === 3)
+    if (e3.length !== 1 || e3[0].target !== 244 || e3[0].addBlockedBy.join() !== '235') fail(`#320 Q92 shape: the edges sent are ${JSON.stringify(e3)}`)
+    if (!/^blocked #244 by #235 \(Q3\)$/m.test(done)) fail(`#320 Q92 shape: the hand-over does not name the edge:\n${done}`)
+    if (!/`[^`]*gh issue edit <target> --add-blocked-by <n>[^`]*`/.test(calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt).join('\n'))) fail('#320 Q92 shape: no applier is told to add an edge with gh issue edit --add-blocked-by')
+    const f3 = followUps.filter((f) => f.q === 3)
+    if (f3.length !== 1 || !/#244\b/.test(f3[0].title) || !f3[0].body.includes('the Q5 follow-up is not filed yet')) fail(`#320 Q92 shape: the part of the answer no edge states was not filed as a follow-up naming #244: ${JSON.stringify(f3)}`)
+    // An edit the answer cannot state is a follow-up naming the ticket, owned by the integrator and writing nothing.
+    const f5 = followUps.filter((f) => f.q === 5)
+    if (f5.length !== 1 || !/#62\b/.test(f5[0].title) || !/^\*\*Owner:\*\* integrator$/m.test(f5[0].body) || !/^\*\*Touches:\*\* none/m.test(f5[0].body)) fail(`#320: an edit stated nowhere was not filed as an integrator follow-up naming #62: ${JSON.stringify(f5)}`)
+    if (units.some((u) => (u.edits || []).some((e) => e.q === 5))) fail('#320: an edit with nothing stated was sent to an applier as an edit')
+    // An answer needing nothing is still skipped with its reason, and no applier is sent it.
+    if (!/^skipped Q4 \(#278\): needs nothing: the grilling record already holds it/m.test(done.replace(cite(278), '#278'))) fail(`#320: Q4, needing nothing, is not skipped with its reason:\n${done}`)
+    if (units.some((u) => u.tickets.some((t) => t.questions.some((x) => x.q === 4 && x.kind !== 'no-repo-change')))) fail('#320: Q4 reached an applier as work')
+    if (!labels.length || result.refusals.some((r) => /Q[1-5]\b/.test(r))) fail(`#320: refusals name the questions: ${JSON.stringify(result.refusals)}`)
+    // Without a Confirm comment, each is on the would-do list and nothing is filed or edited.
+    const dry = await execute(newRepo(), { date: DATE }, { issue: issueWith(answers), kinds: {}, classes })
+    const would = dry.result.apply.wouldDo.join('\n')
+    for (const n of [1, 2, 3, 5]) if (!new RegExp(`^Q${n} \\(`, 'm').test(would)) fail(`#320 dry: Q${n} is not on the would-do list:\n${would}`)
+    if (APPLIERS(dry.labels).length) fail(`#320 dry: appliers ran: ${dry.labels.join(', ')}`)
+    // Two answers on different tickets that both edit #62's body never run at once.
+    const two = issueWith([
+      comment(40, `## Questions: ${cite(310)}, issue-310, One\n\n${q(1, 310, 'Remove box 2 from #62?')}`, '2026-10-21T06:20:00Z'),
+      comment(41, `## Questions: ${cite(311)}, issue-311, Two\n\n${q(2, 311, 'Remove box 3 from #62?')}`, '2026-10-21T06:20:01Z'),
+      comment(42, `## Questions: ${cite(312)}, issue-312, Three\n\n${q(3, 312, 'File a follow-up?')}`, '2026-10-21T06:20:02Z'),
+      comment(92, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const raceEnv = newRepo()
+    const race = await execute(raceEnv, { date: DATE }, { issue: two, kinds: {}, classes: { 1: { ...classes[2], removeBoxes: [BOX2] }, 2: { ...classes[2], removeBoxes: [BOX3] }, 3: classes[1] } })
+    if (raceEnv.peaks.edit !== 1) fail(`#320: two appliers edited #62's body at once (${raceEnv.peaks.edit} in flight)`)
+    if (!/^edited #62: removed 1 box\(es\)[^\n]*\(Q1\)$/m.test(race.result.apply.done.join('\n')) || !/^edited #62: removed 1 box\(es\)[^\n]*\(Q2\)$/m.test(race.result.apply.done.join('\n'))) fail(`#320: the two edits of #62 were not both applied:\n${race.result.apply.done.join('\n')}`)
+    // A follow-up planOf refuses (it names no path, so no owner) is a refusal, and its ticket, with
+    // nothing else to do, is sent no applier.
+    const bare = issueWith([
+      comment(43, `## Questions: ${cite(313)}, issue-313, Bare\n\n${q(1, 313, 'File a follow-up?')}`, '2026-10-21T06:30:00Z'),
+      comment(93, 'Confirm Q1 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const refusedRun = await execute(newRepo(), { date: DATE }, { issue: bare, kinds: {}, classes: { 1: { ...classes[1], followUp: { ...classes[1].followUp, touches: [] } } } })
+    if (!refusedRun.result.refusals.some((r) => /^Q1 asks for a follow-up that names no path/.test(r))) fail(`#320: a follow-up naming no path is not refused: ${JSON.stringify(refusedRun.result.refusals)}`)
+    if (APPLIERS(refusedRun.labels).length) fail(`#320: a ticket whose only follow-up was refused was sent an applier: ${refusedRun.labels.join(', ')}`)
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
@@ -539,10 +807,374 @@ try {
     if (own.result.apply.dry || !o[1].confirmed || o[2].confirmed || !own.labels.some((l) => l.startsWith('apply:commit'))) fail(`Adam's Confirm Q1 beside an outsider's Confirm Q2: dry ${own.result.apply.dry}, answers ${JSON.stringify(o)}, dispatched ${own.labels.join(', ')}`)
   }
 
+  // 17. Follow-ups (#292). The morning reads the follow-ups table of the latest review record on each
+  //     open pull request into main and files each row no issue already holds, with a Raised-by line
+  //     naming the pull request and a link to the record, as neither a sub-issue nor a blocker. #287's
+  //     latest record lists two; #288, filed by hand for the third finding, names #287 on its
+  //     Raised-by line and holds neither of them. A rerun files nothing; Verify's verdict gates none of it.
+  checks++
+  {
+    const env = newRepo()
+    const first = await execute(env, { date: DATE }, { followUps: FU287 })
+    const sent = jsonAfter(first.prompt('followups-file'), 'FOLLOW-UPS') || []
+    if (JSON.stringify(sent.map((f) => [f.pr, f.title])) !== JSON.stringify([[287, FINDING_CI], [287, FINDING_Q9]])) fail(`follow-ups: the filer was given ${JSON.stringify(sent.map((f) => [f.pr, f.title]))}, expected #287's two rows`)
+    for (const f of sent) {
+      if (!f.body.startsWith('**Raised by:** #287')) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not open with the Raised-by line: ${JSON.stringify(f.body.split('\n')[0])}`)
+      if (!f.body.includes(R287[2])) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not link the record ${R287[2]}`)
+    }
+    if (sent[0] && !sent[0].body.includes(R287[0])) fail('follow-ups: the first row\'s body does not name the earliest record that carried it')
+    if (sent[0] && !sent[0].body.includes('76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts')) fail('follow-ups: the escaped bar in the Where cell was not read back')
+    if (sent[1] && !sent[1].body.includes(`first carried by ${R287[2]}`)) fail('follow-ups: "this record" was not read as the record the table is in')
+    const fp = first.prompt('followups-file')
+    const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    if (!spans.some((x) => /gh issue create\b/.test(x) && /--label needs-triage\b/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with the needs-triage label')
+    if (spans.some((x) => /--parent\b|blocked-by/.test(x))) fail(`follow-ups: the filer prompt files a sub-issue or a blocker: ${spans.filter((x) => /--parent\b|blocked-by/.test(x)).join(' | ')}`)
+    const ho = first.result.handover.text
+    if (!/### Follow-ups filed/.test(ho) || !ho.includes(FINDING_CI) || !ho.includes(FINDING_Q9)) fail(`follow-ups: the hand-over does not list what was filed:\n${ho}`)
+    if (JSON.stringify((first.result.followUps || {}).filed || []) === '[]') fail('follow-ups: the return lists nothing filed')
+    const again = await execute(env, { date: DATE }, { followUps: FU287 })
+    if (again.labels.includes('followups-file')) fail('follow-ups: a rerun filed again what the first run filed')
+    if (((again.result.followUps || {}).already || []).length !== 2) fail(`follow-ups: a rerun reports ${JSON.stringify((again.result.followUps || {}).already)} as already filed, expected both rows`)
+    // Filed by hand under the finding's title, with a Raised-by line naming the pull request, counts.
+    const byHand = await execute(newRepo(), { date: DATE }, { followUps: { ...FU287, filed: [ISSUE_288, { number: 777, title: FINDING_Q9, body: '**Raised by:** #287\n', url: URL(777) }] } })
+    const sent2 = (jsonAfter(byHand.prompt('followups-file'), 'FOLLOW-UPS') || []).map((f) => f.title)
+    if (JSON.stringify(sent2) !== JSON.stringify([FINDING_CI])) fail(`follow-ups: with ${FINDING_Q9} filed by hand, the filer was given ${JSON.stringify(sent2)}`)
+    // Only the latest record decides: an earlier record's table, a newer record without one, files nothing.
+    const older = await execute(newRepo(), { date: DATE }, { followUps: { prs: [{ number: 287, comments: [rec287(1, 'hold', FOLLOW_UPS_287), rec287(2, 'merge')], reviews: [] }], filed: [] } })
+    if (older.labels.includes('followups-file')) fail('follow-ups: an earlier record\'s table was filed though the latest record lists none')
+    // A table under a line that is no record, or posted from outside the repository, files nothing.
+    const outsider = { ...rec287(2, 'merge', FOLLOW_UPS_287), author_association: 'NONE' }
+    const out = await execute(newRepo(), { date: DATE }, { followUps: { prs: [{ number: 287, comments: [outsider], reviews: [] }], filed: [] } })
+    if (out.labels.includes('followups-file')) fail('follow-ups: a table in a comment from outside the repository was filed')
+    // Verify's stop does not hold the follow-ups back: they are decided by the review, not the night.
+    const stopped = await execute(newRepo(), { date: DATE }, { followUps: FU287, verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
+    if (!stopped.labels.includes('followups-file')) fail('follow-ups: a Verify stop kept the follow-ups from being filed')
+    // A read agent that returns nothing is named, never read as a queue with nothing to file.
+    const dead = await execute(newRepo(), { date: DATE }, { followUps: FU287, nothingFrom: ['followups'] })
+    if (!dead.result.refusals.some((r) => /follow-ups agent returned nothing/.test(r))) fail(`follow-ups: a dead read agent is not named: ${JSON.stringify(dead.result.refusals)}`)
+    // A filer that returns a follow-up neither filed nor skipped has not accounted for it: the run
+    // names it, never reads the silence as done (CODING_STANDARDS.md -> "A check fails closed").
+    const lost = await execute(newRepo(), { date: DATE }, { followUps: FU287, filerDrops: [FINDING_Q9] })
+    if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
+  }
+
+  // 18. The follow-ups table has one grammar: morning.js's copy of its header, its "this record" cell,
+  //     the record line and its parser are review-queue.js's, character for character.
+  checks++
+  {
+    const mine = fs.readFileSync(scriptPath, 'utf8')
+    const theirs = fs.readFileSync(path.join(here, 'review-queue.js'), 'utf8')
+    for (const name of ['FOLLOW_UP_HEAD', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
+      const line = (src) => (new RegExp(`^const ${name} = .*$`, 'm').exec(src) || [''])[0]
+      if (!line(mine) || line(mine) !== line(theirs)) fail(`the grammar: morning.js's ${name} is ${JSON.stringify(line(mine))}, review-queue.js's ${JSON.stringify(line(theirs))}`)
+    }
+    const fn = (src) => (/^const followUpsOf = [\s\S]*?\n}\n/m.exec(src) || [''])[0]
+    if (!fn(mine) || fn(mine) !== fn(theirs)) fail('the grammar: morning.js\'s followUpsOf is not review-queue.js\'s')
+  }
+
+  // 19. A Replay field holding only a pair of quotes, or only whitespace, is empty (#299). On
+  //     2026-10-22 no pending-writes file existed, and the Replay agent returned pending, renamed and
+  //     reason as the two-character string "" (its result in that morning's workflow record, the
+  //     counts all zero), which the run read as a stop: "Replay stopped at line 0 of \"\": \"\"".
+  //     The first case is that result; the second, a real stop, must still be refused by its line.
+  checks++
+  {
+    const ZERO = { applied: 0, skipped: 0, failed: 0 }
+    const OCT22 = { counts: { comment: ZERO, edit: ZERO, close: ZERO }, pending: '""', renamed: '""', stoppedAt: 0, reason: '""' }
+    const replayLine = (t) => (/### Replay\n\n- (.*)\n/.exec(t) || [])[1] || ''
+    const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; nothing was replayed'
+    for (const [label, replay] of [
+      ['2026-10-22\'s Replay result', OCT22],
+      ['a reason of whitespace', { ...OCT22, pending: '', renamed: ' ', reason: ' \n ' }],
+      ['a quoted empty reason padded with whitespace', { ...OCT22, reason: ' "" ' }],
+    ]) {
+      const { result } = await execute(newRepo(), { date: DATE }, { replay })
+      if (result.refusals.length) fail(`${label}: refused ${JSON.stringify(result.refusals)}, expected none`)
+      if (result.replay.reason !== '' || result.replay.renamed !== '') fail(`${label}: the run returns reason ${JSON.stringify(result.replay.reason)} and renamed ${JSON.stringify(result.replay.renamed)}, expected both empty`)
+      if (replayLine(result.handover.text) !== NOTHING) fail(`${label}: the hand-over's Replay line is ${JSON.stringify(replayLine(result.handover.text))}, expected ${JSON.stringify(NOTHING)}`)
+    }
+    const PENDING = `/tmp/morning-tests-repo/.scratch/overnight/log/pending-${DATE}.jsonl`
+    const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
+    const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
+    if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
+    if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
+  }
+
+  // 20. A re-run refreshes the description of the pull request an earlier morning opened (#300). The
+  //     fixture is 2026-10-22's: #287's first description, as the morning wrote it at ed8d063, and the
+  //     first-parent merges of the branch rebuilt to 76704c5, where "Merge task 6.7" became "Merge part
+  //     of task 6.7". The refresh rewrites the head, the task-merge shas and the counts, moves 6.7 to
+  //     Partial, keeps every other line byte for byte, and the hand-over names each line it rewrote.
+  checks++
+  {
+    const NOW = '76704c53c36ea51a9a4a81a206b76de7cf46e98c'
+    const reran = { verify: { head: NOW, prReused: true, prBody: BODY_287_FIRST, merges: MERGES_287 }, agentRecord: { verdict: 'hold', head: NOW, url: R287[1], reader: 'exit 1: hold' } }
+    const r = await execute(newRepo(), { date: DATE }, reran)
+    const wrote = (/BEGIN DESCRIPTION\n([\s\S]*)\nEND DESCRIPTION/.exec(r.prompt('pr-refresh')) || [])[1]
+    if (r.labels.filter((l) => l === 'pr-refresh').length !== 1 || wrote === undefined) fail(`2026-10-22's re-run: dispatched ${r.labels.join(', ')}, expected one description writer`)
+    const body = wrote || ''
+    if (body !== (r.result.refresh || {}).body) fail('2026-10-22\'s re-run: the writer was given a description other than the one the run returns')
+    const before = BODY_287_FIRST.split('\n')
+    const after = body.split('\n')
+    const headLine = (ls) => ls.find((l) => l.startsWith('Overnight issue: '))
+    if (headLine(after) !== `Overnight issue: ${cite(286)}. Base \`${F287}\`, head \`${NOW}\`. 14 integrated, 2 partial, 1 failed, 7 skipped (blocked by the failed one).`) fail(`2026-10-22's re-run: the head line reads ${JSON.stringify(headLine(after))}`)
+    // The task-merge shas, each read from the merge the branch reports for its task.
+    const section = (ls, name) => { const at = ls.indexOf(`## ${name}`); const rows = []; for (let i = at + 4; i < ls.length && ls[i].startsWith('|'); i++) rows.push(ls[i]); return rows }
+    const rowsOf = (ls, name) => section(ls, name).map((l) => l.split('|').map((c) => c.trim())).map((c) => [c[1], (/`([0-9a-f]+)`/.exec(c[3]) || [])[1]])
+    const lastMerge = new Map(MERGES_287.map((m) => [/^Merge (?:part of )?task ([^\s:]+):/.exec(m.subject)[1], m]))
+    for (const [name, partial] of [['Integrated', false], ['Partial', true]]) {
+      for (const [task, short] of rowsOf(after, name)) {
+        const m = lastMerge.get(task)
+        if (!m || !m.sha.startsWith(short) || /^Merge part of/.test(m.subject) !== partial) fail(`2026-10-22's re-run: the ${name} row ${task} names ${short}, but its merge on the branch is ${m && m.sha} "${m && m.subject}"`)
+      }
+    }
+    if (rowsOf(after, 'Integrated').length !== 14 || rowsOf(after, 'Partial').length !== 2) fail(`2026-10-22's re-run: ${rowsOf(after, 'Integrated').length} Integrated and ${rowsOf(after, 'Partial').length} Partial rows, expected 14 and 2`)
+    if (rowsOf(after, 'Integrated').some(([t]) => t === '6.7') || !section(after, 'Partial').includes('| 6.7 | #62 | `340fd07` (+ `eab8420`, roadmap refresh) |')) fail(`2026-10-22's re-run: 6.7 did not move to Partial with its new merge: ${JSON.stringify(section(after, 'Partial'))}`)
+    // Every line the rewrite does not own is kept, byte for byte and in order: the Outstanding and
+    // Evidence lines, the Closes and Ticket lines, the Failed table, the prose.
+    const owned = (ls) => { const skip = new Set([...section(ls, 'Integrated'), ...section(ls, 'Partial'), headLine(ls)]); return ls.filter((l) => !skip.has(l)) }
+    if (JSON.stringify(owned(after)) !== JSON.stringify(owned(before))) fail('2026-10-22\'s re-run: a line the rewrite does not own changed')
+    for (const kept of before.filter((l) => /^(Outstanding( test ids)?|Evidence):/.test(l))) if (!after.includes(kept)) fail(`2026-10-22's re-run: the line ${JSON.stringify(kept.slice(0, 60))} was not kept verbatim`)
+    if (before.filter((l) => /^(Outstanding( test ids)?|Evidence):/.test(l)).length !== 3) fail('2026-10-22\'s fixture lost its Outstanding and Evidence lines, so the check above read nothing')
+    // The hand-over names every line that changed, as it read before and after.
+    const ho = r.result.handover.text
+    const changed = before.filter((l) => !after.includes(l))
+    if (changed.length < 15) fail(`2026-10-22's re-run: only ${changed.length} lines changed, so the hand-over check reads too little`)
+    for (const l of [...changed, ...after.filter((x) => !before.includes(x))]) if (!ho.includes(l.replace(/`/g, "'"))) fail(`2026-10-22's re-run: the hand-over does not name the rewritten line ${JSON.stringify(l)}`)
+    if (!ho.includes(`### Pull request description\n\n- ${cite(400)}'s description named ed8d0633e9c1360fb7c2e425f63237676f4db648, not ${NOW}; rewritten`)) fail(`2026-10-22's re-run: the hand-over's description section reads ${JSON.stringify((/### Pull request description\n\n[^\n]*/.exec(ho) || [''])[0])}`)
+    if (r.result.refusals.some((x) => /description/.test(x))) fail(`2026-10-22's re-run: refused ${JSON.stringify(r.result.refusals)}`)
+
+    // Heads that match leave the description untouched: the description as it was rewritten by hand,
+    // naming 76704c5 short, dispatches no writer.
+    const BODY_287_NOW = BODY_287_FIRST.replace(/head `ed8d0633e9c1360fb7c2e425f63237676f4db648`\. 15 integrated, 1 partial/, 'head `76704c5`. 14 integrated, 2 partial')
+    if (BODY_287_NOW === BODY_287_FIRST) fail('the matching-head fixture is the stale one')
+    const same = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: BODY_287_NOW } })
+    if (same.labels.includes('pr-refresh') || (same.result.refresh || {}).state !== 'untouched' || !/description names this head \(76704c5\); untouched/.test(same.result.handover.text)) fail(`heads that match: dispatched ${same.labels.join(', ')}, refresh ${JSON.stringify((same.result.refresh || {}).state)}`)
+    // A pull request this run opened has no description to compare.
+    const fresh = await execute(newRepo(), { date: DATE }, { verify: { merges: MERGES_287 } })
+    if (fresh.labels.includes('pr-refresh') || (fresh.result.refresh || {}).state !== 'none') fail(`a pull request opened this run: dispatched ${fresh.labels.join(', ')}, refresh ${(fresh.result.refresh || {}).state}`)
+    // Even when Verify hands back a description, one this run opened is never compared or rewritten.
+    const opened = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prReused: false } })
+    if (opened.labels.includes('pr-refresh') || (opened.result.refresh || {}).state !== 'none') fail(`a pull request opened this run, returned with a description: dispatched ${opened.labels.join(', ')}, refresh ${(opened.result.refresh || {}).state}`)
+
+    // A Closes line the rewrite keeps for a row now partial is named, never rewritten and never silent.
+    const closing = BODY_287_FIRST.replace('Ticket: #62', 'Closes #62')
+    const cl = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: closing } })
+    if (!String((cl.result.refresh || {}).body).split('\n').includes('Closes #62')) fail('a Closes line for a row now partial was not kept verbatim')
+    if (!cl.result.refusals.some((x) => /still carries "Closes #62" for 6\.7/.test(x))) fail(`a Closes line for a row now partial is not named: ${JSON.stringify(cl.result.refusals)}`)
+
+    // Fails closed: a description with no head in the drafted form, or a row whose task has no merge on
+    // the branch, is refused whole and nothing is written; a writer that did not edit is named.
+    const headless = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: BODY_287_FIRST.replace(/, head `[0-9a-f]+`/, '') } })
+    if (headless.labels.includes('pr-refresh') || !headless.result.refusals.some((x) => /names no head/.test(x))) fail(`a description naming no head: dispatched ${headless.labels.join(', ')}, refusals ${JSON.stringify(headless.result.refusals)}`)
+    const stray = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, merges: MERGES_287.filter((m) => !/issue-198:/.test(m.subject)) } })
+    if (stray.labels.includes('pr-refresh') || !stray.result.refusals.some((x) => /row for issue-198 names no task merge on the branch/.test(x))) fail(`a row with no merge on the branch: dispatched ${stray.labels.join(', ')}, refusals ${JSON.stringify(stray.result.refusals)}`)
+    const blankRead = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: '' } })
+    if (blankRead.labels.includes('pr-refresh') || !blankRead.result.refusals.some((x) => x.includes(`reused ${cite(400)} but returned no description`))) fail(`a reused pull request read with no description: dispatched ${blankRead.labels.join(', ')}, refusals ${JSON.stringify(blankRead.result.refusals)}`)
+    const unwritten = await execute(newRepo(), { date: DATE }, { ...reran, refresh: { edited: false, reason: 'headRefOid is 1111111' } })
+    if (!unwritten.result.refusals.some((x) => /was not rewritten: headRefOid is 1111111/.test(x)) || !/not rewritten \(headRefOid is 1111111\)/.test(unwritten.result.handover.text)) fail(`a writer that did not edit: refusals ${JSON.stringify(unwritten.result.refusals)}`)
+    // The Verify prompt reads the open description and the first-parent merges, and edits neither.
+    const vp = r.prompt('verify')
+    if (!vp.includes('log --first-parent --merges --reverse') || !vp.includes('gh pr view <number> --json body --jq .body')) fail('the Verify prompt does not read the open description and the first-parent merges')
+  }
+
+  // 21. Both numbers on a question (#301). The overnight report now opens each question with its night-wide number
+  //     and then its ticket-local one, "**Q2.** (#310 Q2)", and one its source does not number (a proposed steering
+  //     change) with the night-wide number alone. The same comments in the old form and the new yield the same
+  //     question numbers, recommendations and answers, and a ticket-local "#310 Q1" cited in a question or a
+  //     recommendation opens no question of its own. The new form's marks are built from the two examples
+  //     overnight.js's report prompt gives, read from that file, so a change to the markup the report is told to
+  //     write is read here too (CODING_STANDARDS.md, "A guard reads the thing it guards").
+  checks++
+  {
+    const overnightSrc = fs.readFileSync(path.join(here, 'overnight.js'), 'utf8')
+    const both = /, as in "(\*\*Q\d+\.\*\*[^"]+)"/.exec(overnightSrc)
+    const alone = /opens with the night-wide number alone, as in "([^"]+)"/.exec(overnightSrc)
+    if (!both || !alone) fail(`both numbers: overnight.js's report prompt gives no ${!both ? 'two-number' : 'night-wide-only'} example to build the new form from`)
+    // Each example's digits, in order, become this fixture's night-wide number, issue and ticket-local number.
+    const mark = (ex, ...nums) => { let k = 0; return ex.replace(/\d+/g, () => String(nums[k++])) }
+    const BOTH = (q, local) => (both ? mark(both[1], q, 310, local) : `**Q${q}.**`)
+    const ALONE = (q) => (alone ? mark(alone[1], q) : `**Q${q}.**`)
+    const ticket = (n, qs) => comment(n, `## Questions: ${cite(310)}, issue-310, Both numbers\n\n${qs}`, '2026-10-21T06:00:00Z')
+    const OLD = ticket(50, `**Q1.** Add the term Morning branch?\nRecommended: Yes.\n${PRE}\n\n**Q2.** Rewrite the landing sentence, as #310 Q1 assumes?\nRecommended: Yes, after ${cite(310)} Q1.\n${PRE}\n\n**Q3.** Commit this guide sentence?\nRecommended: Yes.\nAnswer: open\n`)
+    const NEW = ticket(50, `${BOTH(1, 1)} Add the term Morning branch?\nRecommended: Yes.\n${PRE}\n\n${BOTH(2, 2)} Rewrite the landing sentence, as #310 Q1 assumes?\nRecommended: Yes, after ${cite(310)} Q1.\n${PRE}\n\n${ALONE(3)} Commit this guide sentence?\nRecommended: Yes.\nAnswer: open\n`)
+    if (both && !BOTH(2, 2).includes('310')) fail(`both numbers: the example ${both[1]} yielded ${BOTH(2, 2)}, which carries no ticket number`)
+    const confirm = comment(51, 'Confirm Q1 to Q3, with the overrides below.\n\nQ2: no, keep the sentence\n', '2026-10-21T08:00:00Z')
+    const old = await execute(newRepo(), { date: DATE }, { issue: issueWith([OLD, confirm]) })
+    const now = await execute(newRepo(), { date: DATE }, { issue: issueWith([NEW, confirm]) })
+    const sent = (r) => (jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).map((q) => ({ q: q.q, recommendation: q.recommendation, answer: q.answer }))
+    if (old.result.refusals.length || now.result.refusals.length) fail(`both numbers: refusals old ${JSON.stringify(old.result.refusals)}, new ${JSON.stringify(now.result.refusals)}`)
+    if (Object.keys(now.result.apply.answers).join() !== '1,2,3') fail(`both numbers: the new form yielded questions ${Object.keys(now.result.apply.answers)}, expected 1,2,3`)
+    if (JSON.stringify(now.result.apply.answers) !== JSON.stringify(old.result.apply.answers)) fail(`both numbers: answers differ, old ${JSON.stringify(old.result.apply.answers)}, new ${JSON.stringify(now.result.apply.answers)}`)
+    if (!sent(old).length) fail('both numbers: the old form sent the classifier nothing, so the comparison read nothing')
+    if (JSON.stringify(sent(now)) !== JSON.stringify(sent(old))) fail(`both numbers: the classifier was sent ${JSON.stringify(sent(now))} from the new form, ${JSON.stringify(sent(old))} from the old`)
+  }
+
+  // 22. A draft Confirm is sorted the way the apply step would sort it, before it is posted (#302).
+  //     Launched with confirmFile on an issue with no Confirm comment, the morning takes the file's
+  //     text as the Confirm, sorts the issue's questions through the apply step's own code, prints the
+  //     result and stops: one read agent, no classifier, applier or verify agent, nothing written. The
+  //     fixture is 2026-10-22's shape: 263 questions, a draft of 21 override lines, two opening "No".
+  checks++
+  {
+    const TOTAL = 263
+    const perTicket = 53
+    const big = []
+    for (let t = 0; t * perTicket < TOTAL; t++) {
+      const qs = []
+      for (let q = t * perTicket + 1; q <= Math.min(TOTAL, (t + 1) * perTicket); q++) qs.push(`**Q${q}.** Do thing ${q}?\nRecommended: Yes.\n${PRE}\n`)
+      big.push(comment(60 + t, `## Questions: #${320 + t}, issue-${320 + t}, Ticket ${t}\n\n${qs.join('\n')}`, `2026-10-22T06:0${t}:00Z`))
+    }
+    const NO19 = 'No, the follow-through this line states is a separate ticket and it is filed by hand later'
+    const NO20 = 'no'
+    const LINES = [...Array.from({ length: 18 }, (_, i) => `Q${i + 1}: yes, as recommended`), `Q19: ${NO19}`, `Q20: ${NO20}`, 'Q94: open']
+    const BARE = `Confirm\n\n${LINES.join('\n')}\n`
+    const HEADED = `Confirm Q1 to Q263, with the overrides below.\n\n${LINES.join('\n')}\n`
+    const FILE = '/tmp/morning-tests-draft/confirm-286.md'
+    const draftRun = (draft, extra = {}, source = null) => execute(newRepo(), { date: DATE, confirmFile: FILE }, { issue: issueWith(big), draft, ...extra }, source)
+
+    // The bare Confirm: its first sentence covers none, its own lines confirm 21.
+    const bare = await draftRun(BARE)
+    const b = bare.result
+    if (bare.labels.join() !== 'draft-read') fail(`draft check: dispatched ${bare.labels.join(', ')}, expected the one read agent`)
+    if (b.mode !== 'check' || b.total !== TOTAL || b.covered !== 0 || b.overrides !== 21 || b.confirmed !== 21 || b.byOwnLines !== 21) fail(`draft check, bare Confirm: ${JSON.stringify({ mode: b.mode, total: b.total, covered: b.covered, overrides: b.overrides, confirmed: b.confirmed, byOwnLines: b.byOwnLines })}`)
+    if (!/first sentence covers 0 of 263/.test(b.text || '') || !/21 confirmed by their own Q<n>: lines/.test(b.text || '')) fail(`draft check, bare Confirm: the printed result does not say 0 of 263 and 21 by their own lines:\n${b.text}`)
+    if (b.applied !== 18 || (b.no || []).length !== 2 || (b.open || []).length !== TOTAL - 20) fail(`draft check, bare Confirm: applied ${b.applied}, no ${b.no && b.no.length}, open ${b.open && b.open.length}; expected 18, 2, ${TOTAL - 20}`)
+    if (!b.ok) fail(`draft check, bare Confirm: failed though every number is found: ${JSON.stringify(b.unknown)}`)
+
+    // The headed Confirm: all 263 confirmed; the two No lines and Q94 sorted with their first sixty characters.
+    const headed = await draftRun(HEADED)
+    const h = headed.result
+    if (h.covered !== TOTAL || h.confirmed !== TOTAL || h.overrides !== 21 || !/263 confirmed/.test(h.text || '')) fail(`draft check, headed Confirm: covered ${h.covered}, confirmed ${h.confirmed}, overrides ${h.overrides}`)
+    if (h.applied !== TOTAL - 3) fail(`draft check, headed Confirm: applied ${h.applied}, expected ${TOTAL - 3}`)
+    if (JSON.stringify(h.no) !== JSON.stringify([{ q: 19, answer: NO19.slice(0, 60) }, { q: 20, answer: NO20 }])) fail(`draft check: answered no lists ${JSON.stringify(h.no)}`)
+    if (JSON.stringify((h.open || []).map((o) => [o.q, o.answer])) !== JSON.stringify([[94, 'open']])) fail(`draft check: left open lists ${JSON.stringify(h.open)}`)
+    if (!String(h.text).includes(`- Q19: ${NO19.slice(0, 60)}`) || !h.text.includes('- Q94: open') || NO19.length <= 60) fail(`draft check: the printed result does not list Q19's first sixty characters and Q94:\n${h.text}`)
+    if (!h.ok || (h.unknown || []).length) fail(`draft check: a leading No failed the check: ${JSON.stringify(h.unknown)}`)
+
+    // A number no questions comment yields fails the check, by name.
+    const lost = await draftRun(HEADED.replace('Q94: open', 'Q94: open\nQ300: yes'))
+    if (lost.result.ok || JSON.stringify(lost.result.unknown) !== '[300]' || !/Q300/.test(lost.result.text || '') || !/^check: fail/m.test(lost.result.text || '')) fail(`draft check: Q300 did not fail the check by name: ok ${lost.result.ok}, unknown ${JSON.stringify(lost.result.unknown)}`)
+    const ranged = await draftRun('Confirm Q1 to Q264.\n')
+    if (ranged.result.ok || JSON.stringify(ranged.result.unknown) !== '[264]') fail(`draft check: a first sentence naming Q264 did not fail by name: ${JSON.stringify(ranged.result.unknown)}`)
+
+    // It runs one read agent and writes nothing: no command it is given posts, edits, files, closes,
+    // commits or pushes, and it names no OUTPUT or PHASE FILE.
+    const rp = bare.prompt('draft-read')
+    const spans = [...rp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    if (!spans.some((x) => /gh issue view\b/.test(x))) fail('draft check: the read prompt runs no gh issue view, so the search below read nothing')
+    const WRITES = /gh (issue|pr) (comment|edit|create|close|reopen)\b|gh api\b[^`]*-X|\bgit\b[^`]*\b(commit|push|worktree add)\b|\bmv\b|\brm\b/
+    for (const x of spans) if (WRITES.test(x)) fail(`draft check: the read prompt asks for a write: ${x}`)
+    if (/^(OUTPUT|PHASE) FILE:/m.test(rp)) fail('draft check: the read prompt names a file to write')
+    if (!rp.includes(FILE)) fail('draft check: the read prompt does not name the draft file')
+
+    // An issue that already has a Confirm comment, a draft the agent could not read, and a bad launch are refused.
+    const has = await execute(newRepo(), { date: DATE, confirmFile: FILE }, { draft: BARE })
+    if (!has.result.halted || !/already has a Confirm comment/.test(has.result.halted) || has.labels.join() !== 'draft-read') fail(`draft check over a confirmed issue: ${JSON.stringify(has.result.halted)}`)
+    const unreadable = await draftRun('', { draftError: 'no such file' })
+    if (!unreadable.result.halted || !/no such file/.test(unreadable.result.halted)) fail(`draft check, unreadable draft: ${JSON.stringify(unreadable.result.halted)}`)
+    for (const [label, a] of [['a relative confirmFile', { date: DATE, confirmFile: 'draft.md' }], ['confirmFile with after', { date: DATE, confirmFile: FILE, after: true }]]) {
+      const r = await execute(newRepo(), a)
+      if (!r.result || !r.result.halted || r.calls.length) fail(`draft check, ${label}: ${r.calls.length} agent(s) ran; returned ${JSON.stringify(r.result)}`)
+    }
+    // wt is optional beside confirmFile, since the draft check makes and reads no worktree; without
+    // confirmFile a missing wt is still refused. stub supplies wt, so each case sets it undefined.
+    const noWt = await execute(newRepo(), { date: DATE, confirmFile: FILE, wt: undefined }, { issue: issueWith(big), draft: HEADED })
+    if (noWt.result.halted || noWt.result.mode !== 'check' || !noWt.result.ok || noWt.labels.join() !== 'draft-read') fail(`draft check without wt: ${JSON.stringify(noWt.result.halted || { mode: noWt.result.mode, ok: noWt.result.ok, labels: noWt.labels })}`)
+    const noWtMorning = await execute(newRepo(), { date: DATE, wt: undefined })
+    if (!noWtMorning.result || !/wt: /.test(noWtMorning.result.halted || '') || noWtMorning.calls.length) fail(`a morning without wt or confirmFile was not refused: ${JSON.stringify(noWtMorning.result)}`)
+
+    // The sort is the apply step's own code (#302): the first-word rule mutated in the script turns
+    // both the apply case (Q2 overridden "no, ...") and the check case (Q19 opening "No") red.
+    const applyCase = (r) => (r.result.apply && r.result.apply.no.includes(2) && !(jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).some((q) => q.q === 2) ? [] : ['apply: Q2 answered no was not held back'])
+    const checkCase = (r) => (r.result.no && r.result.no.some((n) => n.q === 19) ? [] : ['check: Q19 opening No is not listed under answered no'])
+    const real = fs.readFileSync(scriptPath, 'utf8')
+    const rule = (/^const verdictOf = .*$/m.exec(real) || [''])[0]
+    const mutant = real.replace(rule, rule.replace('/^no\\b/i', '/^nope\\b/i'))
+    if (!rule || mutant === real) fail('draft check: the first-word rule (const verdictOf, /^no\\b/i) was not found, so the mutation changed nothing')
+    const realRed = [...applyCase(await execute(newRepo(), { date: DATE })), ...checkCase(await draftRun(HEADED))]
+    if (realRed.length) fail(`draft check: the cases fail on the real script: ${realRed.join('; ')}`)
+    const applyRed = applyCase(await execute(newRepo(), { date: DATE }, {}, mutant))
+    const checkRed = checkCase(await draftRun(HEADED, {}, mutant))
+    if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
+  }
+
+  // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
+  //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
+  //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
+  //     says the gate is those tips and not the body, and, when every such tip has a partner, gives
+  //     tools/remap_rebuild.py's command (#318) with the old and new tips. A failed lane's tip is off
+  //     the branch by design and neither stops the run nor withholds the command.
+  checks++
+  {
+    const OLD_TIP = sha('a')
+    const lane = (name, task, tip, partner) => ({ path: `${WT}/${name}`, branch: `task/${task}-x`, tip, clean: true, ancestor: false, lane: task, partner })
+    const REBUILT = [
+      lane('ws1-infra', 'issue-300', sha('3'), sha('5')),
+      lane('ws2-hosting', 'issue-301', sha('4'), sha('6')),
+      lane('ws3-identity', 'issue-302', sha('7'), ''),
+    ]
+    const stop3 = (worktrees, oldTip = OLD_TIP, outcome = 'stop') => ({ verify: { outcome, step: outcome === 'stop' ? 3 : 0, reason: 'two lane tips are not ancestors of the integration tip', worktrees, oldTip } })
+    // The command's flags, read from tools/remap_rebuild.py's own usage line, so the copy in the
+    // stop cannot drift from the tool it names.
+    const usage = (/^ {4}python3 -I tools\/remap_rebuild\.py ([\s\S]*?)\n\n/m.exec(fs.readFileSync(path.join(top, 'tools', 'remap_rebuild.py'), 'utf8')) || [])[1] || ''
+    const flags = [...usage.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]).filter((f) => f !== '--apply')
+    if (!['--old', '--new', '--issue', '--worktree-root', '--session'].every((f) => flags.includes(f))) fail(`step 3: tools/remap_rebuild.py's usage line was not read (flags ${JSON.stringify(flags)})`)
+    const GATE = /the gate is the lane worktree tips, not the issue body/i
+
+    const rebuilt = await execute(newRepo(), { date: DATE }, stop3(REBUILT))
+    const rs = rebuilt.result.stop || ''
+    const command = (/`(cd \S+ && python3 -I tools\/remap_rebuild\.py [^`]*)`/.exec(rs) || [])[1] || ''
+    if (!command) fail(`step 3, rebuilt: the stop gives no remap command:\n${rs}`)
+    if (!command.includes(`--old ${OLD_TIP}`) || !command.includes(`--new ${HEAD}`)) fail(`step 3, rebuilt: the remap command lacks the old and new tips: ${command}`)
+    if (!command.includes(`--issue ${ISSUE}`) || !command.includes(`--worktree-root ${WT}`)) fail(`step 3, rebuilt: the remap command lacks the issue or the worktree root: ${command}`)
+    for (const f of flags) if (!command.includes(f)) fail(`step 3, rebuilt: the remap command lacks ${f}, which tools/remap_rebuild.py's usage gives`)
+    for (const w of REBUILT.slice(0, 2)) if (!rs.includes(w.path) || !rs.includes(w.tip) || !rs.includes(w.partner)) fail(`step 3, rebuilt: the stop does not name ${w.path}, its tip and its partner:\n${rs}`)
+    if (/not merged/.test(rs)) fail(`step 3, rebuilt: a lane is named as not merged:\n${rs}`)
+    if (rs.includes(`${WT}/ws3-identity`)) fail(`step 3, rebuilt: the failed lane's worktree is named in the stop:\n${rs}`)
+    if (!GATE.test(rs)) fail(`step 3, rebuilt: the stop does not say the gate is the lane worktree tips:\n${rs}`)
+    if (!rebuilt.result.handover.text.includes(command)) fail('step 3, rebuilt: the hand-over does not carry the remap command')
+    if (rebuilt.labels.some((l) => l === 'classify' || l.startsWith('apply:'))) fail(`step 3, rebuilt: Apply ran: ${rebuilt.labels.join(', ')}`)
+
+    const ONE_UNMERGED = [REBUILT[0], { ...REBUILT[1], partner: '' }, REBUILT[2]]
+    const unmerged = await execute(newRepo(), { date: DATE }, stop3(ONE_UNMERGED))
+    const us = unmerged.result.stop || ''
+    if (/remap_rebuild/.test(us)) fail(`step 3, one lane unmerged: the stop still gives the remap command:\n${us}`)
+    if (!new RegExp(`${REBUILT[1].path.replace(/[/.]/g, '\\$&')}[^\\n]*${REBUILT[1].tip}[^\\n]*not merged`).test(us)) fail(`step 3, one lane unmerged: the stop does not name ${REBUILT[1].path} at its tip as not merged:\n${us}`)
+    if (!us.includes(REBUILT[0].partner)) fail(`step 3, one lane unmerged: the rebuilt lane's partner is not named:\n${us}`)
+    if (!GATE.test(us)) fail(`step 3, one lane unmerged: the stop does not say the gate is the lane worktree tips:\n${us}`)
+
+    // Every tip has a partner but the old tip was not found: no half-filled command, and the stop says what is missing.
+    const noOld = (await execute(newRepo(), { date: DATE }, stop3(REBUILT, ''))).result.stop || ''
+    if (/remap_rebuild\.py --old/.test(noOld) || !/old tip/.test(noOld)) fail(`step 3, no old tip: ${noOld}`)
+
+    // A Verify that reports ok over an integrated lane's off-branch tip is held to its own worktrees: the script stops.
+    const lax = await execute(newRepo(), { date: DATE }, stop3(REBUILT, OLD_TIP, 'ok'))
+    if (lax.result.ok || !/step 3/.test(lax.result.stop || '') || !GATE.test(lax.result.stop || '')) fail(`step 3, reported ok over off-branch lane tips: ${JSON.stringify(lax.result.stop)}`)
+
+    // The dirty-worktree stop keeps the agent's own reason, with no remedy added.
+    const dirty = (await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'the worktree ws1-infra is dirty: stray.txt' } })).result.stop || ''
+    if (!/dirty: stray\.txt/.test(dirty) || GATE.test(dirty)) fail(`step 3, dirty: ${dirty}`)
+
+    // The prompt asks for what the stop is built from.
+    const vp = rebuilt.prompt('verify')
+    if (!/\^\{tree\}/.test(vp) || !/oldTip/.test(vp) || !/partner/.test(vp)) fail('step 3: the Verify prompt does not ask for each tip\'s tree-equal partner and the old tip')
+  }
+
   // 16. Every agent call passes a schema and every stub's return satisfies it.
   checks++
   for (const c of allPrompts) if (!c.schema || c.schema.type !== 'object') fail(`${c.label}: called without a schema`)
   if (driftAll.length) fail(`returns not matching the script's schemas: ${driftAll.slice(0, 5).join(' | ')}`)
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
 } catch (e) {
   console.error(`morning tests: the script did not run: ${e && e.stack ? e.stack : e}`)
   process.exit(2)

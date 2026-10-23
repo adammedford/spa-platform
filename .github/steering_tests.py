@@ -36,8 +36,10 @@ time the case names, either side of the rule's starting point, and never at the 
 which side a commit falls on is what the rule reads. They name the range as the hook and CI do,
 with `--base`, and the cases against the live repository name an empty one, `--base HEAD`, so a
 case about the tree does not also judge the repository's history. The comment lookup is a second
-GitHub seam, stubbed in setUp as the number lookup is; both lookups' own parsing is held by cases
-that point their commands at a stand-in for gh rather than at GitHub.
+GitHub seam, stubbed in setUp as the number lookup is, and the lookup of one number the listing
+lacks is a third (#297); each lookup's own parsing is held by cases that point its command at a
+stand-in for gh rather than at GitHub, and one case runs the whole rule through those stand-ins
+with a listing that stops a page short.
 """
 
 from __future__ import annotations
@@ -67,10 +69,11 @@ LIVE_UNFILED = dict(steering.UNFILED)
 LIVE_TRANSCRIPTS = dict(steering.TRANSCRIPTS)
 LIVE_UNCOMPARED = dict(steering.UNCOMPARED)
 
-# The two GitHub lookups as the module defines them, kept because setUp replaces both with stubs
+# The GitHub lookups as the module defines them, kept because setUp replaces each with a stub
 # that fail the case, and the cases holding their own parsing need the real functions back.
 REAL_ISSUED_NUMBERS = steering.issued_numbers
 REAL_COMMENT_URL = steering.comment_url
+REAL_ISSUE_KIND = steering.issue_kind
 
 # Either side of the authority rule's starting point, read from the module rather than typed, so
 # moving the starting point moves these with it: a day before it, and an hour after.
@@ -326,10 +329,15 @@ class SteeringTests(unittest.TestCase):
         steering.issued_numbers = self.no_lookup
         self.addCleanup(setattr, steering, "comment_url", steering.comment_url)
         steering.comment_url = self.no_comment_lookup
+        # The authority rule's lookup of one number the listing lacks, likewise: a trailer citing
+        # a number outside github()'s listing says what GitHub would answer with looked_up().
+        self.addCleanup(setattr, steering, "issue_kind", steering.issue_kind)
+        steering.issue_kind = self.no_issue_lookup
         # The commands the real lookups run, which the cases holding their parsing point at a
         # stand-in for gh.
         self.addCleanup(setattr, steering, "GH_ISSUES", steering.GH_ISSUES)
         self.addCleanup(setattr, steering, "GH_COMMENT", steering.GH_COMMENT)
+        self.addCleanup(setattr, steering, "GH_ISSUE", steering.GH_ISSUE)
 
         # The citation rule reads the files git tracks, so the tree has to be a repository for it
         # to see anything at all. No commit is needed: `git ls-files` reads the index, and
@@ -361,6 +369,16 @@ class SteeringTests(unittest.TestCase):
         self.fail("the check asked GitHub for a comment; a case whose trailer names one says what "
                   "GitHub would answer with comments()")
 
+    def no_issue_lookup(self, root: pathlib.Path, number: int) -> tuple[str | None, str]:
+        self.fail("the check asked GitHub for one number; a case whose trailer cites a number the "
+                  "listing lacks says what GitHub would answer with looked_up()")
+
+    def looked_up(self, kinds: dict[int, str], why: str = "") -> None:
+        """What GitHub would answer when asked for one number the listing lacks: "issue" or
+        "pull" for a number in `kinds`, None (its 404) for any other; or, given `why`, that it
+        could not say."""
+        steering.issue_kind = lambda root, number: (None, why) if why else (kinds.get(number), "")
+
     def github(self, *numbers: int, pulls: tuple[int, ...] = ()) -> None:
         """What GitHub would answer: these numbers are issues, and `pulls` are pull requests."""
         steering.issued_numbers = lambda root: (set(numbers), set(pulls), "")
@@ -369,10 +387,16 @@ class SteeringTests(unittest.TestCase):
         """What the lookup says when GitHub cannot be asked: no numbers, and the reason."""
         steering.issued_numbers = lambda root: (set(), set(), why)
 
-    def comments(self, kept: dict[str, str], why: str = "") -> None:
-        """What GitHub would answer for a comment id: the URL it keeps that comment at, or None for
-        an id it has no comment under here; or, given `why`, that it could not be asked."""
-        steering.comment_url = lambda root, comment: (None, why) if why else (kept.get(comment), "")
+    def comments(self, kept: dict[str, str], why: str = "", author: str = "adammedford") -> None:
+        """What GitHub would answer for a comment id: the URL it keeps that comment at and who
+        wrote it, by default the repository's owner, or None for an id it has no comment under
+        here; or, given `why`, that it could not be asked."""
+        def answer(root, comment):
+            if why:
+                return None, why
+            url = kept.get(comment)
+            return (steering.Comment(url, author) if url else None), ""
+        steering.comment_url = answer
 
     def commit(self, subject_or_message: str, *, made: datetime.datetime = AFTER,
                authored: datetime.datetime | None = None) -> str:
@@ -1437,8 +1461,9 @@ class SteeringTests(unittest.TestCase):
 
     def test_an_authority_naming_no_issue_fails(self):
         """A `#<n>` past the end of GitHub's sequence: a pointer at nothing, like a dangling
-        `#NNN`."""
+        `#NNN`. The listing lacks it, so it is asked about alone, and GitHub's 404 refuses it."""
         self.github(43)
+        self.looked_up({})
         base = self.baseline()
         self.write("GLOSSARY.md", "# Glossary\n")
         subject = "The glossary, on a number nobody issued"
@@ -1466,6 +1491,57 @@ class SteeringTests(unittest.TestCase):
         self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), issue(120),
                               "names a pull request, not an issue"), out)
 
+    def test_an_authority_the_listing_lacks_but_github_finds_alone_passes(self):
+        """The listing can exit 0 short of its last page (#297: #185, #135 and #159, each real,
+        refused on one run and vouched on the next). A number it lacks is asked about alone, and
+        GitHub's answer that it is an issue vouches for it."""
+        self.github(43)
+        self.looked_up({185: "issue"})
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, on an issue past the listing's last page", issue(185)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_an_authority_the_listing_lacks_and_github_finds_a_pull_request_fails(self):
+        """The single lookup tells the two apart as the listing does."""
+        self.github(43)
+        self.looked_up({120: "pull"})
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on a pull request past the listing's last page"
+        sha = self.commit(message(subject, issue(120)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), issue(120),
+                              "names a pull request, not an issue"), out)
+
+    def test_an_authority_github_cannot_look_up_alone_is_unchecked_and_passes(self):
+        """Any answer to the single lookup but a 404 is GitHub not saying, so the trailer is
+        reported unchecked with GitHub's reason and fails nothing (#297)."""
+        self.github(43)
+        self.looked_up({}, why="gh: Server Error (HTTP 502)")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, while GitHub stumbles", issue(185)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn("steering: 1 Authority: citation not checked: gh: Server Error (HTTP 502).",
+                      out)
+        self.assertNotIn("authority.", out)
+
+    def test_an_authority_the_listing_holds_is_not_looked_up_alone(self):
+        """One number at a time only for what the listing lacks: the stub in setUp fails the case
+        if this one is asked about."""
+        self.github(102, pulls=(120,))
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary", issue(102)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
     def test_an_authority_naming_a_comment_github_keeps_there_passes(self):
         """The second form: a confirmed answer's comment, as ADR-0023 cites R4's on #98."""
         self.comments({COMMENT_ID: COMMENT})
@@ -1475,6 +1551,76 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_a_comment_another_account_wrote_fails_naming_its_author(self):
+        """#316: a `Confirm` is the human's act, so a comment by any other account that can
+        comment on the repository authorises nothing, and the line says who wrote it. With no
+        guide in the tree, the account is the repository's owner, read off GitHub's URL."""
+        for author, who in (("mallory", "@mallory"), ("", "an account GitHub no longer names")):
+            with self.subTest(author=author):
+                self.comments({COMMENT_ID: COMMENT}, author=author)
+                base = self.baseline()
+                self.write("GLOSSARY.md", f"# Glossary {author}\n")
+                subject = "The glossary, on someone else's Confirm"
+                sha = self.commit(message(subject, COMMENT))
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                                      f"is a comment by {who}, not by @adammedford, the "
+                                      "repository's owner, since docs/agents/issue-tracker.md "
+                                      "names no account"), out)
+                self.assertIn("STEERING FAILED: an Authority: comment was written by an account "
+                              "that does not confirm.", out)
+                self.assertNotIn("cites its authority", out)
+
+    def test_the_owners_login_is_compared_without_case(self):
+        self.comments({COMMENT_ID: COMMENT}, author="AdamMedford")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, as Adam confirmed", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
+    def test_the_account_the_guide_names_confirms_and_the_owner_then_does_not(self):
+        """The account is read from the guide, not assumed: once docs/agents/issue-tracker.md
+        names one, its comment vouches and the owner's no longer does."""
+        guide = ("# Issue tracker\n\n## This repository's additions\n\n"
+                 "- **The human's account is `@adam-m`.** A `Confirm` comment counts only when\n"
+                 "  this account wrote it.\n")
+        self.write(steering.GUIDE, guide)
+        for author, code_wanted in (("adam-m", 0), ("adammedford", 1)):
+            with self.subTest(author=author):
+                self.comments({COMMENT_ID: COMMENT}, author=author)
+                base = self.baseline()
+                self.write("GLOSSARY.md", f"# Glossary {author}\n")
+                subject = "The glossary, on a Confirm"
+                sha = self.commit(message(subject, COMMENT))
+                code, out = self.check("--base", base)
+                self.assertEqual(code_wanted, code, out)
+                if code_wanted:
+                    self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                                          "is a comment by @adammedford, not by @adam-m, the "
+                                          "account docs/agents/issue-tracker.md names for a "
+                                          "Confirm"), out)
+
+    def test_a_range_that_renames_the_account_cannot_vouch_itself(self):
+        """#316 review: the account is read from the guide at the base. A range that writes the
+        guide naming @mallory, citing @mallory's comment for that change and for another, is
+        judged against the owner the base's guide leaves, so both commits fail."""
+        self.comments({COMMENT_ID: COMMENT}, author="mallory")
+        base = self.baseline()
+        self.write(steering.GUIDE, "# Issue tracker\n\n## This repository's additions\n\n"
+                                   "- **The human's account is `@mallory`.** It confirms.\n")
+        guide_sha = self.commit(message("Name the account", COMMENT))
+        self.write("GLOSSARY.md", "# Glossary\n")
+        glossary_sha = self.commit(message("The glossary, on mallory's Confirm", COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        why = ("is a comment by @mallory, not by @adammedford, the repository's owner, since "
+               "docs/agents/issue-tracker.md names no account")
+        self.assertIn(refuses(guide_sha, "Name the account", (steering.GUIDE,), COMMENT, why), out)
+        self.assertIn(refuses(glossary_sha, "The glossary, on mallory's Confirm",
+                              ("GLOSSARY.md",), COMMENT, why), out)
 
     def test_a_url_that_is_not_a_comment_fails_without_asking_github(self):
         """A page that is not a comment, an issue's own URL, a review comment, and prose citing a
@@ -1536,6 +1682,7 @@ class SteeringTests(unittest.TestCase):
         """A second trailer citing nothing fails beside one that resolves, and the commit is not
         counted: a pointer at nothing is the defect whatever else sits next to it."""
         self.github(102)
+        self.looked_up({})
         base = self.baseline()
         self.write("GLOSSARY.md", "# Glossary\n")
         subject = "The glossary, on two citations"
@@ -1969,7 +2116,7 @@ class SteeringTests(unittest.TestCase):
         glossary = (ROOT / "GLOSSARY.md").read_text()
         self.assertIn(f"`{steering.CHANGE_REQUESTS}<task-id>-<slug>.md`", glossary)
 
-    # --- the two GitHub lookups, against a stand-in for gh ------------------------------------
+    # --- the GitHub lookups, against a stand-in for gh ----------------------------------------
 
     def stand_in(self, script: str, *arguments: str) -> tuple[str, ...]:
         """A command that runs `script` in this interpreter, in place of gh."""
@@ -1995,12 +2142,22 @@ class SteeringTests(unittest.TestCase):
         self.assertTrue(why.startswith("gh answered with something other than numbers"), why)
 
     def test_the_comment_lookup_returns_the_url_github_keeps_the_comment_at(self):
-        """The id goes where the command names {comment}, and the answer is the URL gh prints."""
-        steering.GH_COMMENT = self.stand_in(
-            "import sys; print('https://github.com/o/r/issues/1#issuecomment-' + sys.argv[1])",
-            "{comment}")
-        self.assertEqual(("https://github.com/o/r/issues/1#issuecomment-5", ""),
-                         REAL_COMMENT_URL(self.root, "5"))
+        """The id goes where the command names {comment}, and the answer is the URL gh prints
+        and the login after it; a deleted author, which the --jq writes as no login, is ""."""
+        for printed, author in ((" mallory", "mallory"), (" ", ""), ("", "")):
+            with self.subTest(author=author, printed=printed):
+                steering.GH_COMMENT = self.stand_in(
+                    "import sys; print('https://github.com/o/r/issues/1#issuecomment-' + "
+                    f"sys.argv[1] + {printed!r})", "{comment}")
+                self.assertEqual(
+                    (steering.Comment("https://github.com/o/r/issues/1#issuecomment-5", author),
+                     ""),
+                    REAL_COMMENT_URL(self.root, "5"))
+
+    def test_the_comment_lookup_asks_for_the_author(self):
+        """The --jq writes the login after the URL, so the rule reads who wrote the comment."""
+        self.assertIn(".user.login", steering.GH_COMMENT[-1])
+        self.assertTrue(steering.GH_COMMENT[-1].startswith('"\\(.html_url) '))
 
     def test_the_comment_lookup_reads_a_404_as_no_comment(self):
         """GitHub's answer for an id this repository has no comment under: an answer, not a
@@ -2020,6 +2177,89 @@ class SteeringTests(unittest.TestCase):
                 self.assertEqual((None, why), REAL_COMMENT_URL(self.root, "5"))
         steering.GH_COMMENT = ("no-such-command-for-steering-tests", "{comment}")
         self.assertEqual((None, "gh is not on PATH"), REAL_COMMENT_URL(self.root, "5"))
+
+    def test_the_single_lookup_says_what_github_calls_the_number(self):
+        """The number goes where the command names {number}, and the answer is the listing's line
+        for it, read back into issue or pull request."""
+        for kind in ("issue", "pull"):
+            with self.subTest(kind=kind):
+                steering.GH_ISSUE = self.stand_in(
+                    f"import sys; print(sys.argv[1] + ' {kind}')", "{number}")
+                self.assertEqual((kind, ""), REAL_ISSUE_KIND(self.root, 185))
+
+    def test_the_single_lookup_reads_a_404_or_a_410_as_no_such_number(self):
+        """GitHub's answers for a number it holds no issue under here: a 404, or a 410 for an
+        issue deleted from it, which a reader without read access sees as the 404. Each is the
+        answer the rule refuses on."""
+        for said in ("gh: Not Found (HTTP 404)", "gh: This issue was deleted (HTTP 410)"):
+            with self.subTest(said=said):
+                steering.GH_ISSUE = self.stand_in(
+                    f"import sys; sys.stderr.write('{said}\\n'); sys.exit(1)")
+                self.assertEqual((None, ""), REAL_ISSUE_KIND(self.root, 999))
+
+    def test_the_single_lookup_reports_any_other_answer_as_unchecked(self):
+        """A failure that is neither a 404 nor a 410, and an answer about another number -- a
+        transferred issue redirected to its new home -- each say why the number went unchecked."""
+        for script, why in (
+            ("import sys; sys.stderr.write('error connecting to api.github.com\\n'); sys.exit(1)",
+             "error connecting to api.github.com"),
+            ("import sys; sys.stderr.write('gh: Server Error (HTTP 502)\\n'); sys.exit(1)",
+             "gh: Server Error (HTTP 502)"),
+            ("import sys; sys.exit(3)", "gh exited 3 and said nothing"),
+            ("print('7 issue')",
+             "gh answered #185 with something other than its line: '7 issue\\n'"),
+            ("print('185 discussion')",
+             "gh answered #185 with something other than its line: '185 discussion\\n'"),
+        ):
+            with self.subTest(why=why):
+                steering.GH_ISSUE = self.stand_in(script)
+                self.assertEqual((None, why), REAL_ISSUE_KIND(self.root, 185))
+        steering.GH_ISSUE = ("no-such-command-for-steering-tests", "{number}")
+        self.assertEqual((None, "gh is not on PATH"), REAL_ISSUE_KIND(self.root, 185))
+
+    def test_a_truncated_listing_holds_all_three_answers_of_the_single_lookup(self):
+        """#297 end to end, through the real lookups and a stand-in for gh: the listing exits 0
+        one page short, holding 43 and the pull request 120 and none of the numbers the trailers
+        cite. Asked alone, GitHub finds 185, never issued 999, and cannot be reached for 159; the
+        first is vouched, the second refused as before, the third unchecked with the reason."""
+        steering.issued_numbers = REAL_ISSUED_NUMBERS
+        steering.issue_kind = REAL_ISSUE_KIND
+        steering.GH_ISSUES = self.stand_in("print('43 issue'); print('120 pull')")
+        steering.GH_ISSUE = self.stand_in(
+            "import sys\n"
+            "number = sys.argv[1]\n"
+            "if number == '185': print('185 issue')\n"
+            "elif number == '159':\n"
+            "    sys.stderr.write('error connecting to api.github.com\\n'); sys.exit(1)\n"
+            "else:\n"
+            "    sys.stderr.write('gh: Not Found (HTTP 404)\\n'); sys.exit(1)\n",
+            "{number}")
+        self.baseline()
+
+        base = self.git("rev-parse", "HEAD")
+        self.append("AGENTS.md", "A line.")
+        self.commit(message("Change AGENTS.md on an issue past the last page", issue(185)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+        base = self.git("rev-parse", "HEAD")
+        self.append("AGENTS.md", "A line.")
+        subject = "Change AGENTS.md on a number nobody issued"
+        sha = self.commit(message(subject, issue(999)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("AGENTS.md",), issue(999),
+                              "names no issue of this repository"), out)
+
+        base = self.git("rev-parse", "HEAD")
+        self.append("AGENTS.md", "A line.")
+        self.commit(message("Change AGENTS.md while GitHub is unreachable", issue(159)))
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn("steering: 1 Authority: citation not checked: error connecting to "
+                      "api.github.com.", out)
 
 
 if __name__ == "__main__":

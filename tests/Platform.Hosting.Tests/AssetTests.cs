@@ -25,7 +25,7 @@ public sealed class AssetTests
     private static string Prefix(AppDefinition app) => $"apps/{app.AppId}/releases/{app.Release}/";
 
     private static async Task<(HostingHost Gateway, RecordingObjectStore Store)> StartAsync(
-        RecordingLoggerProvider? logs = null, bool telemetry = false)
+        bool telemetry = false)
     {
         RecordingObjectStore store = new();
         await store.SeedAsync(Prefix(App1) + "index.html", "<p>shell one</p>");
@@ -43,7 +43,7 @@ public sealed class AssetTests
         await store.SeedAsync("apps/app1/secret.txt", Leak + "app1 root");
         await store.SeedAsync(Prefix(App2) + "assets/app-3f2a.js", Leak + "app2 asset");
 
-        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store, logs, telemetry);
+        HostingHost gateway = await HostingHost.StartAsync(Snapshots.With(1, App1, App2), Ct, store, telemetry);
         return (gateway, store);
     }
 
@@ -57,10 +57,10 @@ public sealed class AssetTests
         RawResponse one = await gateway.GetAsync(App1.Host, "/", Ct);
         RawResponse two = await gateway.GetAsync(App2.Host, "/", Ct);
 
-        Assert.Equal(200, one.Status);
-        Assert.Equal("<p>shell one</p>", one.Body);
-        Assert.Equal(200, two.Status);
-        Assert.Equal("<p>shell two</p>", two.Body);
+        Assert.Equal(200, one.StatusCode);
+        Assert.Equal("<p>shell one</p>", one.BodyText);
+        Assert.Equal(200, two.StatusCode);
+        Assert.Equal("<p>shell two</p>", two.BodyText);
         Assert.Equal([Prefix(App1) + "index.html", Prefix(App2) + "index.html"], store.KeysRead);
     }
 
@@ -76,13 +76,13 @@ public sealed class AssetTests
         AppDefinition next = App1 with { Release = "2026-10-14-0a0a0a0" };
         await store.SeedAsync(Prefix(next) + "index.html", "<p>shell one, next release</p>");
 
-        Assert.Equal("<p>shell one</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).Body);
+        Assert.Equal("<p>shell one</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).BodyText);
 
         gateway.Registry.Swap(Snapshots.With(2, next, App2));
-        Assert.Equal("<p>shell one, next release</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).Body);
+        Assert.Equal("<p>shell one, next release</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).BodyText);
 
         gateway.Registry.Swap(Snapshots.With(3, App1, App2));
-        Assert.Equal("<p>shell one</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).Body);
+        Assert.Equal("<p>shell one</p>", (await gateway.GetAsync(App1.Host, "/", Ct)).BodyText);
     }
 
     /// <summary>
@@ -122,14 +122,14 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, accept);
 
-        Assert.Equal(status, response.Status);
+        Assert.Equal(status, response.StatusCode);
         if (body is null)
         {
             AssertProblem(response, "not_found");
         }
         else
         {
-            Assert.Equal(body, response.Body);
+            Assert.Equal(body, response.BodyText);
         }
     }
 
@@ -153,9 +153,9 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(200, response.Status);
-        Assert.Equal(type, response.Headers["content-type"]);
-        Assert.Equal("nosniff", response.Headers["x-content-type-options"]);
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal(type, response.Header("content-type"));
+        Assert.Equal("nosniff", response.Header("x-content-type-options"));
     }
 
     /// <summary>
@@ -176,9 +176,9 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(200, response.Status);
-        Assert.Equal(cacheControl, response.Headers["cache-control"]);
-        Assert.Equal(await store.ETagOfAsync(store.KeysRead[^1]), response.Headers["etag"]);
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal(cacheControl, response.Header("cache-control"));
+        Assert.Equal(await store.ETagOfAsync(store.KeysRead[^1]), response.Header("etag"));
     }
 
     /// <summary>
@@ -194,16 +194,16 @@ public sealed class AssetTests
 
         RawResponse matched = await gateway.GetAsync(App1.Host, "/orders", Ct, Navigation + $"If-None-Match: {etag}\r\n");
 
-        Assert.Equal(304, matched.Status);
-        Assert.Equal("", matched.Body);
-        Assert.Equal(etag, matched.Headers["etag"]);
-        Assert.Equal("private, no-cache", matched.Headers["cache-control"]);
+        Assert.Equal(304, matched.StatusCode);
+        Assert.Equal("", matched.BodyText);
+        Assert.Equal(etag, matched.Header("etag"));
+        Assert.Equal("private, no-cache", matched.Header("cache-control"));
         Assert.Equal(etag, store.IfNoneMatchSent[^1]);
 
         RawResponse stale = await gateway.GetAsync(App1.Host, "/orders", Ct, Navigation + "If-None-Match: \"stale\"\r\n");
 
-        Assert.Equal(200, stale.Status);
-        Assert.Equal("<p>shell one</p>", stale.Body);
+        Assert.Equal(200, stale.StatusCode);
+        Assert.Equal("<p>shell one</p>", stale.BodyText);
         Assert.Equal("\"stale\"", store.IfNoneMatchSent[^1]);
 
         await gateway.GetAsync(App1.Host, "/orders", Ct, Navigation);
@@ -219,10 +219,10 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.SendAsync("HEAD", App1.Host, "/assets/app-3f2a.js", Ct);
 
-        Assert.Equal(200, response.Status);
-        Assert.Equal("15", response.Headers["content-length"]);
-        Assert.Equal("text/javascript", response.Headers["content-type"]);
-        Assert.Equal("", response.Body);
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal("15", response.Header("content-length"));
+        Assert.Equal("text/javascript", response.Header("content-type"));
+        Assert.Equal("", response.BodyText);
     }
 
     /// <summary>
@@ -241,8 +241,8 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.SendAsync(method, App1.Host, "/index.html", Ct, "Content-Length: 0\r\n");
 
-        Assert.Equal(405, response.Status);
-        Assert.Equal("GET, HEAD", response.Headers["allow"]);
+        Assert.Equal(405, response.StatusCode);
+        Assert.Equal("GET, HEAD", response.Header("allow"));
         AssertProblem(response, "method_not_allowed");
         Assert.Empty(store.KeysRead);
     }
@@ -270,8 +270,8 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.SendAsync(method, App1.Host, "/index.html", Ct, "Content-Length: 0\r\n");
 
-        Assert.Equal(405, response.Status);
-        Assert.Equal("GET, HEAD", response.Headers["allow"]);
+        Assert.Equal(405, response.StatusCode);
+        Assert.Equal("GET, HEAD", response.Header("allow"));
         AssertProblem(response, "method_not_allowed");
         Assert.Equal("gate.method", gateway.LastTelemetry?.Rule);
         Assert.Empty(store.KeysRead);
@@ -302,7 +302,7 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(404, response.Status);
+        Assert.Equal(404, response.StatusCode);
         AssertProblem(response, "not_found");
         Assert.Empty(store.KeysRead);
     }
@@ -321,8 +321,8 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(200, response.Status);
-        Assert.Equal("mine", response.Body);
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal("mine", response.BodyText);
     }
 
     /// <summary>
@@ -338,20 +338,19 @@ public sealed class AssetTests
     [InlineData("/bff/canary-7f3e.js", 404, "not_found", "path.reserved")]
     public async Task A_refusal_logs_its_rule_id_and_not_the_path(string path, int status, string code, string rule)
     {
-        RecordingLoggerProvider logs = new();
-        (HostingHost gateway, RecordingObjectStore store) = await StartAsync(logs);
+        (HostingHost gateway, RecordingObjectStore store) = await StartAsync();
         await using HostingHost _ = gateway;
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(status, response.Status);
+        Assert.Equal(status, response.StatusCode);
         AssertProblem(response, code);
         Assert.Empty(store.KeysRead);
-        Assert.Contains(logs.Lines, line =>
+        Assert.Contains(gateway.Log.Lines, line =>
             line.Category == "Platform.Hosting.Assets"
             && line.Level == Microsoft.Extensions.Logging.LogLevel.Warning
             && line.Message == $"Asset request refused under {rule}");
-        Assert.DoesNotContain(logs.Lines, line =>
+        Assert.DoesNotContain(gateway.Log.Lines, line =>
             line.Category.StartsWith("Platform.", StringComparison.Ordinal)
             && line.Message.Contains("canary-7f3e", StringComparison.OrdinalIgnoreCase));
     }
@@ -378,13 +377,13 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.Equal(status, response.Status);
+        Assert.Equal(status, response.StatusCode);
         Assert.Equal(rule, gateway.LastTelemetry?.Rule);
         Assert.Empty(store.KeysRead);
 
         // The control: a path this endpoint serves is not a rejection and leaves the field null, so a
         // stage that wrote a rule id on every request would not pass.
-        Assert.Equal(200, (await gateway.GetAsync(App1.Host, "/index.html", Ct)).Status);
+        Assert.Equal(200, (await gateway.GetAsync(App1.Host, "/index.html", Ct)).StatusCode);
         Assert.NotNull(gateway.LastTelemetry);
         Assert.Null(gateway.LastTelemetry.Rule);
     }
@@ -424,8 +423,8 @@ public sealed class AssetTests
 
         RawResponse response = await gateway.GetAsync(App1.Host, path, Ct, Navigation);
 
-        Assert.True(response.Status is 400 or 404, $"{path} answered {response.Status}.");
-        Assert.DoesNotContain(Leak, response.Body, StringComparison.Ordinal);
+        Assert.True(response.StatusCode is 400 or 404, $"{path} answered {response.StatusCode}.");
+        Assert.DoesNotContain(Leak, response.BodyText, StringComparison.Ordinal);
         Assert.All(store.KeysRead, key => AssertInsideReleasePrefix(key, App1));
     }
 
@@ -513,7 +512,7 @@ public sealed class AssetTests
 
     private static void AssertProblem(RawResponse response, string code)
     {
-        Assert.Equal("application/problem+json", response.Headers["content-type"]);
-        Assert.Contains($"\"code\":\"{code}\"", response.Body, StringComparison.Ordinal);
+        Assert.Equal("application/problem+json", response.Header("content-type"));
+        Assert.Contains($"\"code\":\"{code}\"", response.BodyText, StringComparison.Ordinal);
     }
 }

@@ -110,7 +110,8 @@ const testsFor = (served, id) => {
 
 // served: { ladder, tagsReachable, tagsAll, originMain, baseResolved, gates, rowStates, changeRequests,
 //           openIssues, ci, merges, tests: {id: [test]}, outcome: {test: 'proved'|'did-not-fail'|
-//           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds }
+//           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds,
+//           nothingFrom: [label], the agents that return nothing, as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -128,6 +129,7 @@ function stub(env, scriptArgs, served) {
     try {
       await new Promise((r) => setTimeout(r, 3))
       calls.push({ label, prompt, schema: opts.schema })
+      if ((served.nothingFrom || []).includes(label)) return null
       let out
       if (label === 'scope') {
         const want = dataLine(prompt, 'GATE')
@@ -532,7 +534,34 @@ try {
     if (gi.some((l) => /^!\.claude\/workflows\/\*?_?tests|^!\.claude\/workflows\/\*\.mjs/.test(l))) fail('.gitignore opens the workflows folder wider than the named companion')
   }
 
+  // 12. A Locate or Row-audit agent that returns nothing is named as failed in the reasons and the
+  //     report (#277), never read as ids no test cites or rows nobody audited. Paired with the same
+  //     run with every agent answering, which names no agent.
+  checks++
+  {
+    const served = { gates: { G3: READY } }
+    const named = (r, re) => r.result.reasons.some((x) => re.test(x)) && re.test(r.result.report.text)
+    const LOCATE = /locate-1 returned nothing: N-01 was not located/
+    const AUDIT = /audit-1 returned nothing: rows? 4\.1, 4\.2 (was|were) not audited/
+    const all = await execute(newRepo(), { gate: 'G3' }, served)
+    if (named(all, LOCATE) || named(all, AUDIT)) fail(`with every agent answering, a Locate or Row-audit agent is named as failed: ${JSON.stringify(all.result.reasons)}`)
+    const locate = await execute(newRepo(), { gate: 'G3' }, { ...served, nothingFrom: ['locate-1'] })
+    if (locate.result.verdict !== 'tag withheld' || !named(locate, LOCATE)) fail(`a null locate-1 is not named in the reasons and the report: ${JSON.stringify(locate.result.reasons)}`)
+    const audit = await execute(newRepo(), { gate: 'G3' }, { ...served, nothingFrom: ['audit-1'] })
+    if (audit.result.verdict !== 'tag withheld' || !named(audit, AUDIT)) fail(`a null audit-1 is not named in the reasons and the report: ${JSON.stringify(audit.result.reasons)}`)
+  }
+
   if (driftAll.length) fail(`schema drift or thrown thunks:\n  ${driftAll.join('\n  ')}`)
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allCalls.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allCalls) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
   console.log('gate-evidence_tests: ERROR')

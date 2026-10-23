@@ -36,7 +36,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ownership: { owners: ['integrator'], ok: true, output: 'path-ownership: one owner' },
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
-  candidates: [], statedMutations: [],
+  candidates: [], statedMutations: [], reviewCommits: [], statedHeads: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -81,9 +81,11 @@ const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({
 
 // behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold',
 //           range: { [n]: what the range agent reports }, earlier: { [n]: the verdict's earlierFindings },
+//           followUps: { [n]: the verdict's followUps, each carried finding with the ticket it names },
 //           gh: a stubbed GitHub (ghStub below) }
 // Without behave.gh the post agent posts and reports the head unchanged; with it, the stubbed gh
 // decides, and its store of posted comments outlives the run, so a rerun reads what a run posted.
+const allPrompts = []   // {label, prompt}, every agent's, across every run
 function run(scriptArgs, served, behave = {}) {
   const calls = []
   const posted = []
@@ -123,6 +125,7 @@ function run(scriptArgs, served, behave = {}) {
     const [kind, n] = opts.label.split(':')
     calls.push(opts.label)
     prompts[opts.label] = prompt
+    allPrompts.push({ label: opts.label, prompt })
     // behave.delay: how many milliseconds an agent takes, by label, so agents overlap in time.
     const ms = behave.delay ? behave.delay(opts.label) : 0
     if (ms) await new Promise((resolve) => setTimeout(resolve, ms))
@@ -165,7 +168,7 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], followUps: (behave.followUps || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
@@ -641,6 +644,214 @@ try {
     if (!full.includes(OLD_RECORD('merge').html_url)) fail(`PR 207 with ${what}: no "Full review:" line naming the earlier record`)
   }
 
+  // 17a. A rebuilt head (#293). The latest record names a head that is no ancestor of this one, as on
+  //      #287 where each rebuild of the run branch cost a full review. The range agent maps the old
+  //      commits onto the new with git range-diff and reports, per new commit, the old one whose tree
+  //      it equals. Two of the three new commits map with equal trees: the review is a delta over the
+  //      one that does not, the comment says it was a rebuild and names the mapping, and only the
+  //      candidates the content diff from the recorded head touches are mutated. A rebuild that maps
+  //      no commit, or whose range nobody could read, is a full review, as before.
+  checks++
+  {
+    const OLD_FIRST = sha('4')
+    const NEW_FIRST = sha('5'); const NEW_MID = sha('6'); const NEW_HEAD = sha('8')
+    // The recorded head forked from an older main than the rebuild did, so range-diff is asked for
+    // the record's own fork point, not the head's.
+    const OLD_BASE = sha('9')
+    const REBUILT = (verdict) => ({ 207: { ...DELTA(verdict)[207], head: NEW_HEAD, commits: [NEW_HEAD, NEW_MID, NEW_FIRST],
+      comments: [{ ...OLD_RECORD(verdict), body: `## Review\n\nReviewed ${H_OLD} against ${OLD_BASE}: ${verdict}` }] } })
+    const mapping = [{ commit: NEW_HEAD, equals: '' }, { commit: NEW_MID, equals: H_OLD }, { commit: NEW_FIRST, equals: OLD_FIRST }]
+    // Two of the head's commits are merges: the unmapped one is audited on its own, the mapped one not.
+    const REB = { 207: { from: H_OLD, ancestor: false, commits: [], merges: [NEW_HEAD, NEW_MID], since: [], error: '',
+      changedFiles: ['tests/Platform.Registry.Tests/Touched.cs', 'src/Fixed.cs'], mapping } }
+    env = run({ prs: [207] }, REBUILT('merge'), { range: REB })
+    result = await execute(env)
+    const r = resultOf(207, result)
+    const rp = env.prompts['range:207'] || ''
+    // range-diff prints abbreviated shas and rebuildOf takes only full ones, so the prompt must ask for them.
+    if (!/full 40-hex sha[^.]*rev-parse <old>/.test(rp)) fail('a rebuild: the range agent is not asked for the full sha of each old commit, so range-diff\'s abbreviated ones fail every mapping')
+    if (!rp.includes(`range-diff ${OLD_BASE}..${H_OLD} ${FORK}..${NEW_HEAD}`)) fail('a rebuild: the range agent is not asked to map the old commits onto the new with git range-diff from the record\'s fork point')
+    if (!/\^\{tree\}/.test(rp)) fail('a rebuild: the range agent is not asked to compare trees, only patches')
+    if (r.outcome !== 'recorded') fail(`a rebuild: outcome ${r.outcome}`)
+    const ran = env.mutations.map((m) => m.test).sort()
+    if (JSON.stringify(ran) !== '["Touched","ViaSource"]') fail(`a rebuild: mutated ${JSON.stringify(ran)}, expected the delta's ["Touched","ViaSource"]`)
+    if (JSON.stringify(r.outsideRange) !== '["Untouched"]') fail(`a rebuild: outsideRange ${JSON.stringify(r.outsideRange)}`)
+    if (!r.range || !r.range.rebuilt || JSON.stringify(r.range.commits) !== JSON.stringify([NEW_HEAD])) fail(`a rebuild: range ${JSON.stringify(r.range)}, expected a rebuilt range over ${NEW_HEAD} alone`)
+    if (!r.earlierRecord || r.earlierRecord.head !== H_OLD) fail(`a rebuild: earlierRecord ${JSON.stringify(r.earlierRecord)}`)
+    if (!r.range || JSON.stringify(r.range.merges) !== JSON.stringify([NEW_HEAD])) fail(`a rebuild: merges ${JSON.stringify(r.range && r.range.merges)}, expected the unmapped merge ${NEW_HEAD} alone`)
+    const lines = commentOf(env, 207).split('\n')
+    const headAt = lines.findIndex((l) => l.startsWith(`Head ${NEW_HEAD}`))
+    const deltaAt = lines.findIndex((l) => l.startsWith('Delta review:'))
+    if (deltaAt < 0 || deltaAt !== headAt + 1) fail(`a rebuild: no "Delta review:" line straight after the head line (head at ${headAt}, delta at ${deltaAt})`)
+    const scope = lines.slice(deltaAt, deltaAt + 2).join('\n')
+    for (const want of ['rebuil', OLD_RECORD('merge').html_url, `${NEW_MID} = ${H_OLD}`, `${NEW_FIRST} = ${OLD_FIRST}`, NEW_HEAD]) if (!scope.includes(want)) fail(`a rebuild: the scope lines ${JSON.stringify(scope)} do not name ${want}`)
+    if (lines.some((l) => l.startsWith('Full review:'))) fail('a rebuild that maps two of three commits: the comment still says full review')
+    for (const axis of ['standards', 'spec']) {
+      const p = env.prompts[`${axis}:207`] || ''
+      if (!p.includes(NEW_HEAD) || !p.includes(`diff ${H_OLD} ${NEW_HEAD}`)) fail(`a rebuild: the ${axis} prompt does not name the unmapped commit and the content diff from the recorded head`)
+      // from..to over a head that is no descendant lists the whole branch, so the rebuild never says it.
+      if (p.includes(`${H_OLD}..${NEW_HEAD}`)) fail(`a rebuild: the ${axis} prompt reviews the range ${H_OLD}..${NEW_HEAD}, which is the whole branch when the recorded head is no ancestor`)
+      if (p.includes(NEW_MID + ' ') && !p.includes(`${NEW_MID} = ${H_OLD}`)) fail(`a rebuild: the ${axis} prompt asks for review of the mapped ${NEW_MID}`)
+    }
+    // A held record's findings are still checked in a rebuild; one left unanswered holds.
+    env = run({ prs: [207] }, REBUILT('hold'), { range: REB, earlier: { 207: [{ finding: 'the cap is off by one', answered: false, how: 'the unmapped commit leaves it' }] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`a rebuild after a hold left unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
+    // Every commit maps: a delta over nothing new, which still names the mapping.
+    const all = { 207: { ...REB[207], changedFiles: [], mapping: mapping.map((m) => ({ ...m, equals: m.equals || H_OLD })) } }
+    env = run({ prs: [207] }, REBUILT('merge'), { range: all })
+    result = await execute(env)
+    if (!resultOf(207, result).range || resultOf(207, result).range.commits.length !== 0 || env.mutations.length) fail(`a rebuild whose every commit maps: range ${JSON.stringify(resultOf(207, result).range)}, ${env.mutations.length} mutation(s); expected a delta over no commit and none`)
+    // Full reviews: no commit maps; the range could not be read; the mapping misses a commit of the head.
+    for (const [what, rg] of [
+      ['maps no commit', { ...REB[207], mapping: mapping.map((m) => ({ ...m, equals: '' })) }],
+      ['an unreadable range', { ...REB[207], error: 'range-diff: bad revision' }],
+      ['a mapping that misses a commit of the head', { ...REB[207], mapping: mapping.slice(1) }],
+      ['a mapping that names no sha', { ...REB[207], mapping: [{ commit: NEW_HEAD, equals: '' }, { commit: NEW_MID, equals: 'yes' }, { commit: NEW_FIRST, equals: '' }] }],
+    ]) {
+      env = run({ prs: [207] }, REBUILT('merge'), { range: { 207: rg } })
+      result = await execute(env)
+      const f = resultOf(207, result)
+      if (env.mutations.length !== 3) fail(`a rebuild with ${what}: ${env.mutations.length} mutations, expected the full review's 3`)
+      if (f.range !== null) fail(`a rebuild with ${what}: range ${JSON.stringify(f.range)}, expected null`)
+      const full = commentOf(env, 207).split('\n').find((l) => l.startsWith('Full review:')) || ''
+      if (!full.includes(OLD_RECORD('merge').html_url)) fail(`a rebuild with ${what}: no "Full review:" line naming the earlier record`)
+    }
+  }
+
+  // 17b. A full review after a hold (#289), in #287's shape: the latest record held on a head that is
+  //      no ancestor of this one, its Mutations table naming two LibraryTests cases in one did-not-fail
+  //      cell; two `Review:` commits since the fork point; a Dockerfile candidate that record reproduced
+  //      and nothing since touches, and a WebStorage candidate an older record reproduced, likewise
+  //      untouched. The held tests are mutated first, under the stated rule, by the break the record
+  //      named; the candidate a `Review:` commit touches comes next, ahead of one listed before it; the
+  //      two reproduced candidates are skipped and named as cleared by their records; the cap's cut is
+  //      still named.
+  checks++
+  {
+    const H1 = sha('1'); const H2 = sha('2'); const H3 = sha('3')
+    const LIB1 = 'LibraryTests.test_a_name_inside_a_longer_name_is_not_a_use'
+    const LIB2 = 'LibraryTests.test_a_name_that_ends_a_sentence_is_a_use'
+    const DOCKER = 'MockApiDockerfileTests.The_build_stage_opens_the_published_tree_after_publish_and_before_the_final_stage'
+    const STORAGE = 'WebStorageTests.Empty_storage_passes_the_check'
+    const LIB_BREAK = 'tools/check.sh users_of(): added `[ "$name" = lib.sh ] \\| return 2`, so the run ends early'
+    const table = (rows) => ['## Mutations', '', TABLE_HEAD, '| --- | --- | --- | --- | --- |',
+      ...rows.map(([t, broken, counts, result]) => `| ${t} | ${broken} | ${counts} | ${result} | /log/mutation.txt |`)].join('\n')
+    const record = (url, at, head, verdict, rows) => ({ author_association: 'OWNER', created_at: at, html_url: url,
+      body: `## Review\n\nHead ${head}.\n\n${table(rows)}\n\nNot mutated, cut by the cap of 3: Other.\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${head} against ${FORK}: ${verdict}` })
+    const OLDER = record('https://github.com/o/r/pull/287#issuecomment-1', '2026-10-22T08:00:00Z', H1, 'hold', [
+      [STORAGE, 'replaced the early return in AssertEmpty', '2 of 111', 'reproduced: it went red'],
+    ])
+    const HELD = record('https://github.com/o/r/pull/287#issuecomment-2', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [`tools/check_tests.py: ${LIB1} (first half) and ${LIB2} (second half)`, LIB_BREAK, '3 of 71', 'did-not-fail: both named tests stayed green'],
+      [DOCKER, 'deleted the chmod line from fixtures/MockApi/Dockerfile', '2 of 199', 'reproduced: it failed at line 31'],
+    ])
+    const lib = (test) => ({ test, project: 'tools/check_tests.py', file: 'tools/check_tests.py', guards: 'a library use', breaks: 'tools/check.sh' })
+    const SHAPE = { 287: pr(287, ['tools/check_tests.py', 'tools/check.sh', 'fixtures/MockApi/Dockerfile', 'tests/Platform.Registry.Tests/ReviewFixed.cs'], {
+      head: H3, commits: [H3, sha('e'), sha('f')], comments: [OLDER, HELD],
+      reviewCommits: [
+        { sha: sha('e'), subject: 'Review: assert the status in the lib.sh halves', files: ['tools/check_tests.py'] },
+        { sha: sha('f'), subject: 'Review: tighten ReviewFixed', files: ['tests/Platform.Registry.Tests/ReviewFixed.cs'] },
+      ],
+      candidates: [
+        { test: DOCKER, project: 'fixtures/Fixtures.Tests', file: 'fixtures/Fixtures.Tests/MockApiDockerfileTests.cs', guards: 'the chmod step', breaks: 'fixtures/MockApi/Dockerfile' },
+        { test: STORAGE, project: 'tests/e2e', file: 'tests/e2e/WebStorageTests.cs', guards: 'empty storage passes', breaks: 'tests/e2e/Stack/WebStorage.cs' },
+        cand('Filler'), lib(LIB1), lib(LIB2), cand('ReviewFixed'),
+      ],
+    }) }
+    // The range since the held head: not an ancestor (the run branch was rebuilt); what changed since
+    // each recorded head is read all the same, and neither reproduced candidate's files are in it.
+    const range = { 287: { from: H2, ancestor: false, commits: [], merges: [], error: '',
+      changedFiles: ['tools/check_tests.py', 'tools/check.sh', 'tests/Platform.Registry.Tests/ReviewFixed.cs'],
+      since: [{ head: H1, changedFiles: ['tools/check_tests.py', 'fixtures/MockApi/Dockerfile'], error: '' }] } }
+    env = run({ prs: [287] }, SHAPE, { range })
+    result = await execute(env)
+    const r = resultOf(287, result)
+    const ran = env.mutations.map((m) => m.test)
+    if (JSON.stringify(ran) !== JSON.stringify([LIB1, LIB2, 'ReviewFixed'])) fail(`PR 287's shape: mutated ${JSON.stringify(ran)}, expected the held tests first, then the candidate a Review: commit touches: ${JSON.stringify([LIB1, LIB2, 'ReviewFixed'])}`)
+    for (const m of env.mutations.filter((x) => x.test === LIB1 || x.test === LIB2)) {
+      if (!m.prompt.includes(LIB_BREAK.replace('\\|', '|'))) fail(`PR 287's shape: the held mutation of ${m.test} is not told the break the held record named`)
+      if (!m.prompt.includes(HELD.html_url)) fail(`PR 287's shape: the held mutation of ${m.test} does not name the held record`)
+    }
+    if (!(env.prompts['range:287'] || '').includes(H1)) fail('PR 287\'s shape: the range agent is not asked what changed since the older record\'s head')
+    const body = commentOf(env, 287)
+    const lines = body.split('\n')
+    const cleared = lines.find((l) => /^Not mutated, cleared by/.test(l)) || ''
+    if (!cleared.includes(DOCKER) || !cleared.includes(HELD.html_url)) fail(`PR 287's shape: the cleared line ${JSON.stringify(cleared)} does not name the Dockerfile candidate and the record that reproduced it`)
+    if (!cleared.includes(STORAGE) || !cleared.includes(OLDER.html_url)) fail(`PR 287's shape: the cleared line ${JSON.stringify(cleared)} does not name the WebStorage candidate and the older record that reproduced it`)
+    if (JSON.stringify((r.clearedByEarlier || []).map((c) => c.test).sort()) !== JSON.stringify([DOCKER, STORAGE].sort())) fail(`PR 287's shape: clearedByEarlier ${JSON.stringify(r.clearedByEarlier)}`)
+    const cutLine = lines.find((l) => /^Not mutated, cut by the cap/.test(l)) || ''
+    if (!cutLine.includes('Filler') || cutLine.includes(DOCKER)) fail(`PR 287's shape: the cap's line ${JSON.stringify(cutLine)} does not name Filler alone`)
+    if (JSON.stringify(r.notMutated) !== '["Filler"]') fail(`PR 287's shape: notMutated ${JSON.stringify(r.notMutated)}, expected ["Filler"]`)
+    if (r.verdict !== 'merge') fail(`PR 287's shape with every held test reproduced: verdict ${r.verdict}, expected merge`)
+    // A held test that does not reproduce holds, under the stated rule: did-not-fail and could-not-run both.
+    for (const res of ['did-not-fail', 'could-not-run']) {
+      env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: row(res) } })
+      result = await execute(env)
+      if (resultOf(287, result).verdict !== 'hold') fail(`PR 287's shape with the held ${LIB2} ${res}: verdict ${resultOf(287, result).verdict}, expected hold`)
+    }
+    // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
+    // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.
+    env = run({ prs: [287], maxMutationsPerPr: 1 }, SHAPE, { range })
+    result = await execute(env)
+    {
+      const c = resultOf(287, result)
+      if (JSON.stringify(env.mutations.map((m) => m.test)) !== JSON.stringify([LIB1])) fail(`PR 287's shape with a cap of 1: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected ${LIB1} alone`)
+      if (!(c.notMutated || []).includes(LIB2)) fail(`PR 287's shape with a cap of 1: notMutated ${JSON.stringify(c.notMutated)} does not name the cut held test`)
+      if (c.verdict !== 'hold') fail(`PR 287's shape with a cap of 1: verdict ${c.verdict} with the held ${LIB2} cut by the cap, expected hold`)
+    }
+    // A reproduced candidate whose source changed since the record is mutated again, not cleared.
+    const moved = { 287: { ...range[287], changedFiles: [...range[287].changedFiles, 'fixtures/MockApi/Dockerfile'] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: moved })
+    result = await execute(env)
+    if (!env.mutations.some((m) => m.test === DOCKER)) fail('PR 287\'s shape with the Dockerfile changed since the held record: the Dockerfile candidate was not mutated')
+    if ((resultOf(287, result).clearedByEarlier || []).some((c) => c.test === DOCKER)) fail('PR 287\'s shape with the Dockerfile changed since the held record: it is still listed as cleared')
+    // No range read: nothing is cleared, since what changed is unknown.
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: 'null' } })
+    result = await execute(env)
+    if ((resultOf(287, result).clearedByEarlier || []).length) fail(`PR 287's shape with no range read: cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}, expected nothing`)
+    if (JSON.stringify(env.mutations.slice(0, 2).map((m) => m.test)) !== JSON.stringify([LIB1, LIB2])) fail('PR 287\'s shape with no range read: the held tests are not first')
+    // A held cell that names no candidate is still mutated first, by its own name.
+    const LONE = { 287: { ...SHAPE[287], candidates: SHAPE[287].candidates.filter((c) => !c.test.startsWith('LibraryTests')) } }
+    env = run({ prs: [287] }, LONE, { range })
+    await execute(env)
+    if (!(env.mutations[0] || { test: '' }).test.includes(LIB1)) fail(`PR 287's shape with no LibraryTests candidate: the first mutation is ${JSON.stringify((env.mutations[0] || {}).test)}, expected the held cell itself`)
+    // A delta review after the same hold: the held tests are not "outside the range" when the range
+    // leaves their files alone; they are mutated first all the same.
+    const delta = { 287: { ...range[287], ancestor: true, commits: [H3], changedFiles: ['tests/Platform.Registry.Tests/ReviewFixed.cs'] } }
+    env = run({ prs: [287] }, SHAPE, { range: delta, earlier: { 287: [{ finding: 'the lib.sh halves cannot fail', answered: true, how: 'asserted' }] } })
+    result = await execute(env)
+    if (JSON.stringify(env.mutations.slice(0, 2).map((m) => m.test)) !== JSON.stringify([LIB1, LIB2])) fail(`PR 287's shape as a delta: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected the held tests first`)
+    if ((resultOf(287, result).outsideRange || []).some((t) => t === LIB1 || t === LIB2)) fail('PR 287\'s shape as a delta: a held test is listed as outside the range, cleared by the record that held on it')
+    // #287 as it happened: the first record held on the LibraryTests cases, the second held on
+    // something else and mutated neither, and the third review is the one that must reach them. The
+    // did-not-fail rows of the older held record are carried forward, since no later record reproduced them.
+    const FIRST = record('https://github.com/o/r/pull/287#issuecomment-6340588449', '2026-10-22T08:00:00Z', H1, 'hold', [
+      [`tools/check_tests.py: ${LIB1} (first half) and ${LIB2} (second half)`, LIB_BREAK, '3 of 71', 'did-not-fail: both named tests stayed green'],
+      [STORAGE, 'replaced the early return in AssertEmpty', '2 of 111', 'reproduced: it went red'],
+    ])
+    const SECOND = record('https://github.com/o/r/pull/287#issuecomment-6342205384', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [DOCKER, 'deleted the chmod line from fixtures/MockApi/Dockerfile', '2 of 199', 'reproduced: it failed at line 31'],
+    ])
+    const CHAIN = { 287: { ...SHAPE[287], comments: [FIRST, SECOND] } }
+    env = run({ prs: [287] }, CHAIN, { range })
+    result = await execute(env)
+    if (JSON.stringify(env.mutations.map((m) => m.test)) !== JSON.stringify([LIB1, LIB2, 'ReviewFixed'])) fail(`#287 as it happened: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected the first record's held tests first`)
+    if (!(env.mutations[0] || { prompt: '' }).prompt.includes(FIRST.html_url)) fail('#287 as it happened: the held mutation does not name the record that held on it')
+    // A later record that reproduced a held test answers it: it is not carried forward.
+    const ANSWERED = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-3', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [LIB1, 'the same break', '1 of 71', 'reproduced: it went red'],
+    ])] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, ANSWERED, { range })
+    await execute(env)
+    const kinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    if (kinds[LIB1] !== 'other' || kinds[LIB2] !== 'held') fail(`a held test a later record reproduced: kinds ${JSON.stringify(kinds)}, expected ${LIB2} held and ${LIB1} not`)
+    // A range that read no changed file at all clears nothing: an empty list is no evidence.
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: { ...range[287], changedFiles: [], since: [{ head: H1, changedFiles: [], error: '' }] } } })
+    result = await execute(env)
+    if ((resultOf(287, result).clearedByEarlier || []).length) fail(`PR 287's shape with an empty diff read: cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}, expected nothing`)
+  }
+
   // 18. The open queue (#86), empty: launched with no list, the queue agent runs, the stubbed gh lists
   //     no open pull request into main, and the run returns an empty list, posts nothing and starts
   //     no other agent. The return still says what the run saw: date, base tip, agents, log directory.
@@ -769,6 +980,168 @@ try {
       if ((result.prs || []).some((r) => r.outcome !== 'recorded')) fail(`the hand-off, k ${k}: outcomes ${(result.prs || []).map((r) => r.outcome).join(', ')}`)
     }
     if (over.length) fail(`the hand-off: more agents in flight than the 2 slots, at ${over.length} of 25 offsets: ${over.join('; ')}`)
+  }
+  // 23. Follow-ups (#292). The verdict returns each finding it carries with the open ticket that owns
+  //     it, or none. #287's third record carried three findings: deploy.sh builds without --pull
+  //     (owned by #288 by then), logs_tests.py and cell_doubles_tests.py run in no CI job, and the
+  //     provisional #244 Q9 answer disagrees with end-app-sessions.md (#244 names it but owns no fix).
+  //     The run returns the two that name no open ticket as followUps, each with its axis, where, and
+  //     the earliest record on the pull request that carried it; the comment ends its findings with
+  //     them as a table under "## Follow-ups", before "## Mutations", and the record stays last.
+  checks++
+  {
+    const H287 = '76704c53c36ea51a9a4a81a206b76de7cf46e98c'
+    const F287 = 'ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5'
+    const R1 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6340588449'
+    const R2 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6342205384'
+    const rec = (url, head, at, extra = '') => ({ author_association: 'OWNER', created_at: at, html_url: url, body: `## Review\n\n${extra}Reviewed ${head} against ${F287}: hold` })
+    const CARRIED = [
+      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', ticket: '#288', firstCarried: R1 },
+      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', ticket: '', firstCarried: R1 },
+      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', ticket: '', firstCarried: R2 },
+    ]
+    const served = (comments) => ({ 287: pr(287, ['.github/workflows/ci.yml'], { head: H287, forkPoint: F287, commits: [H287], comments }) })
+    const tableOf = (body) => {
+      const lines = body.split('\n')
+      const at = lines.indexOf('| Finding | Axis | Where | First carried by |')
+      if (at < 0) return null
+      const rows = []
+      for (const l of lines.slice(at + 2)) {
+        if (!l.startsWith('|')) break
+        rows.push(l.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|')))
+      }
+      return { at, rows }
+    }
+    const EARLIER = [rec(R1, 'ed8d0633e9c1360fb7c2e425f63237676f4db648', '2026-10-22T01:00:00Z'), rec(R2, '701ba9465d3d90575cecf19c09afee80346ada39', '2026-10-22T02:00:00Z')]
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: CARRIED } })
+    result = await execute(env)
+    const r = resultOf(287, result)
+    const want = [
+      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1 },
+      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2 },
+    ]
+    if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`PR 287: followUps ${JSON.stringify(r.followUps)}, expected the two carried findings that name no open ticket, ${JSON.stringify(want)}`)
+    const body = commentOf(env, 287)
+    const lines = body.split('\n')
+    const t = tableOf(body)
+    if (!t) fail('PR 287: the comment carries no follow-ups table')
+    else {
+      const head = lines.indexOf('## Follow-ups')
+      if (!(lines.indexOf('## Spec') < head && head < t.at && t.at < lines.indexOf('## Mutations'))) fail('PR 287: the follow-ups table does not end the findings: it must sit under "## Follow-ups", after "## Spec" and before "## Mutations"')
+      const rows = JSON.stringify(t.rows)
+      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried]))
+      if (rows !== wantRows) fail(`PR 287: the follow-ups table reads back as ${rows}, expected ${wantRows}`)
+    }
+    if (lines[lines.length - 1] !== `Reviewed ${H287} against ${F287}: merge`) fail(`PR 287: the comment's last line is ${JSON.stringify(lines[lines.length - 1])}, not the record`)
+
+    // An earlier record whose own table carried the finding decides the earliest record, whatever the
+    // verdict says; "this record" in that table is that record. A first-carried URL that is no record
+    // on this pull request is read as this record, the first to carry it.
+    const R2_TABLE = rec(R2, '701ba9465d3d90575cecf19c09afee80346ada39', '2026-10-22T02:00:00Z', `## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${CARRIED[2].title} | Spec | there | this record |\n\n`)
+    const later = [{ ...CARRIED[1], firstCarried: 'https://example.invalid/not-a-record' }, { ...CARRIED[2], firstCarried: '' }]
+    env = run({ prs: [287] }, served([EARLIER[0], R2_TABLE]), { followUps: { 287: later } })
+    result = await execute(env)
+    const got = (resultOf(287, result).followUps || []).map((f) => f.firstCarried)
+    if (JSON.stringify(got) !== JSON.stringify(['', R2])) fail(`PR 287: first carried by ${JSON.stringify(got)}, expected ["", "${R2}"]: an unknown URL is this record, and the earlier record's own table names it`)
+    const rows = (tableOf(commentOf(env, 287)) || { rows: [] }).rows
+    if (!rows[0] || rows[0][3] !== 'this record') fail(`PR 287: a finding this record carries first is written ${JSON.stringify(rows[0] && rows[0][3])}, expected "this record"`)
+
+    // No carried finding without a ticket: the section says so, and nothing is returned.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[0]] } })
+    result = await execute(env)
+    const none = commentOf(env, 287).split('\n')
+    const h = none.indexOf('## Follow-ups')
+    if (h < 0 || !/^- None/.test(none[h + 2] || '') || (resultOf(287, result).followUps || [1]).length) fail(`PR 287 with every carried finding owned: followUps ${JSON.stringify(resultOf(287, result).followUps)}, section line ${JSON.stringify(none[h + 2])}`)
+    // A ticket that is not "#<n>" names no ticket: a verdict writing "none" or "-" for one loses no finding.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [{ ...CARRIED[1], ticket: 'none' }, { ...CARRIED[2], ticket: '-' }, CARRIED[0]] } })
+    result = await execute(env)
+    const kept = (resultOf(287, result).followUps || []).map((f) => f.title)
+    if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
+    if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
+  }
+  // A description whose stated head is not the head (#294): #287's description still named ed8d063
+  // after a rebuild. The inventory reports each sha the description states as the head; the script
+  // compares it with the head it read, and each one that differs is a verified Spec finding naming
+  // both shas. A full sha or an abbreviation of the head is current, and so is a description that
+  // states none; a prefix under seven digits names no commit, so it is stale.
+  checks++
+  {
+    const HEAD = '76704c5e1d2c3b4a5968778695a4b3c2d1e0f9a8'
+    const quote = (s) => `Base \`ae6e2e1\`, head \`${s}\`.`
+    const described = (n, stated) => pr(n, ['docs/z.md'], { head: HEAD, commits: [HEAD], statedHeads: stated.map((s) => ({ sha: s, quote: quote(s) })) })
+    const SERVED = {
+      301: described(301, ['ed8d063']),                 // stale: #287's second review
+      302: described(302, [HEAD]),                      // current, full
+      303: described(303, ['76704c5']),                 // current, abbreviated as #287's body does
+      304: described(304, []),                          // states no head
+      305: described(305, ['76704C5', 'ed8d0633e9c1360fb7c2e425f63237676f4db648']), // one current, one stale
+      307: described(307, ['76704c']),                  // a prefix of six digits, under the seven a stated head needs
+    }
+    const env = run({ prs: [301, 302, 303, 304, 305, 307] }, SERVED)
+    const result = await execute(env)
+    const specOf = (n) => {
+      const lines = commentOf(env, n).split('\n')
+      return lines.slice(lines.indexOf('## Spec') + 1, lines.indexOf("The author's claims:")).filter((l) => l.startsWith('- '))
+    }
+    const stale = { 301: ['ed8d063'], 302: [], 303: [], 304: [], 305: ['ed8d0633e9c1360fb7c2e425f63237676f4db648'], 307: ['76704c'] }
+    for (const [n, want] of Object.entries(stale).map(([k, v]) => [Number(k), v])) {
+      const verified = (resultOf(n, result).findings || { verified: [] }).verified
+      if (verified.length !== want.length) fail(`PR ${n}: ${verified.length} verified finding(s), expected ${want.length} from the description's stated head(s)`)
+      for (const [i, s] of want.entries()) {
+        const f = verified[i] || {}
+        if (f.axis !== 'Spec' || f.status !== 'verified') fail(`PR ${n}: the stale-head finding is ${f.axis} ${f.status}, expected a verified Spec finding`)
+        if (!String(f.title).includes(s) || !String(f.title).includes(HEAD)) fail(`PR ${n}: the stale-head finding ${JSON.stringify(f.title)} does not name both ${s} and ${HEAD}`)
+        if (!String(f.checked).includes(quote(s))) fail(`PR ${n}: the stale-head finding does not quote the description's sentence`)
+      }
+      const spec = specOf(n)
+      if (want.length ? !(spec.length === want.length && want.every((s, i) => spec[i].includes(s) && spec[i].includes(HEAD) && spec[i].includes('(verified,'))) : !(spec.length === 1 && spec[0] === '- None.')) fail(`PR ${n}: the comment's Spec section reads ${JSON.stringify(spec)}`)
+    }
+    if (!/statedHeads/.test(env.prompts['inventory:301'] || '')) fail('the inventory prompt does not ask for statedHeads')
+    if (!(env.prompts['verdict:301'] || '').includes('ed8d063')) fail('PR 301: the verdict prompt does not carry the stale-head finding it is to weigh')
+  }
+
+  // The return leads with one line per request (#294): the completion notice cuts the return short,
+  // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
+  // field, one line per pull request with its number, head, verdict, record URL, verified finding and
+  // mutation counts, and the did-not-fail rows named; a halted run's summary is empty.
+  checks++
+  {
+    const HEAD = '76704c5e1d2c3b4a5968778695a4b3c2d1e0f9a8'
+    const SERVED = {
+      301: pr(301, ['docs/z.md'], { head: HEAD, commits: [HEAD], statedHeads: [{ sha: 'ed8d063', quote: 'head `ed8d063`.' }] }),
+      306: pr(306, ['tests/Platform.Registry.Tests/GuardsX.cs'], { candidates: [cand('GuardsX'), cand('GuardsY')] }),
+      76: PRS[76],
+    }
+    const env = run({ prs: [301, 306, 76] }, SERVED, { mutate: { GuardsX: row('did-not-fail') } })
+    const result = await execute(env)
+    if (Object.keys(result)[0] !== 'summary') fail(`the return's first field is ${JSON.stringify(Object.keys(result)[0])}, expected summary`)
+    const want = [
+      `#301 ${HEAD} merge (recorded) https://github.com/o/r/pull/301#issuecomment-1: 1 verified finding(s), 0 mutation(s), did-not-fail: none`,
+      `#306 ${sha('6')} hold (recorded) https://github.com/o/r/pull/306#issuecomment-1: 0 verified finding(s), 2 mutation(s), did-not-fail: GuardsX`,
+      `#76 ${H76} merge (skipped) ${CLEARED_76.html_url}: 0 verified finding(s), 0 mutation(s), did-not-fail: none`,
+    ]
+    if (JSON.stringify(result.summary) !== JSON.stringify(want)) fail(`summary is ${JSON.stringify(result.summary, null, 1)}, expected ${JSON.stringify(want, null, 1)}`)
+    // A pull request that fails names its stage where the verdict would be, and the head it read.
+    const dead = run({ prs: [306] }, SERVED, { kill: { 'verdict:306': 'null' } })
+    const r = await execute(dead)
+    const line = (r.summary || [])[0] || ''
+    if (!/^#306 6{40} - \(failed: verdict: the verdict agent returned nothing\) \(no record\): 0 verified finding\(s\), 2 mutation\(s\), did-not-fail: none$/.test(line)) fail(`a failed pull request's summary line is ${JSON.stringify(line)}`)
+    // A halted run, a bad launch or a queue nobody could read, leads with an empty summary.
+    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }]]) {
+      const h = await execute(run(a, SERVED, b))
+      if (Object.keys(h || {})[0] !== 'summary' || !Array.isArray(h.summary) || h.summary.length) fail(`${why} returns ${JSON.stringify(h)}, expected summary [] first`)
+    }
+  }
+
+  // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
+  // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
+  checks++
+  {
+    const EDIT_RULE = '- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with `cat`, `head` or `sed -n`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, `git`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).'
+    const housed = allPrompts.filter((c) => /(House|Read-only) rules \(/.test(c.prompt))
+    if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
+    for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
+    for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)

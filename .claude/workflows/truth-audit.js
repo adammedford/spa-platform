@@ -104,6 +104,7 @@ const HOUSE = `House rules (a truth audit; it modifies nothing in the checkout a
 - The tracker is GitHub Issues. Run every \`gh\` command with \`cd ${REPO} &&\` in front. A multi-line body goes through a file you write under the run log and \`--body-file <that file>\`.
 - Never write a comment that begins "Confirm" or "Approved": a confirmation is Adam's act. Never change a label, a body or a state on an existing issue, except the edit of this day's report issue when your prompt names it.
 - Never log a secret, token, cookie, authorization code or state value (AGENTS.md).
+- To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Write each PHASE FILE and OUTPUT FILE line's path exactly as given.`
 
 // The rules the verifier carries by name (#81 -> "Phase Verify: verdicts"), and the glossary's words.
@@ -529,7 +530,7 @@ const clustered = given.length ? await run(clusterPrompt(ctx, given, `${RUN}/clu
 if (!clustered || !Array.isArray(clustered.findings)) failed.push(`the Cluster agent returned nothing: ${given.length} false or stale verdicts were not grouped, and no finding was filed from them`)
 const owner = ownersOf(setup.ownership)
 const unlanded = new Set(setup.rows.unlanded)
-const findings = ((clustered && Array.isArray(clustered.findings) && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({
+const findings = ((clustered && Array.isArray(clustered.findings) && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({ // empty-ok: a null Cluster is named in failed on the line above
   ...f,
   sites: f.sites.map((s) => {
     const o = s.file.startsWith('/') ? 'integrator' : owner(s.file)
@@ -575,9 +576,9 @@ if (DRY) {
 } else if (writes.length) {
   const done = await serial(() => run(filePrompt(ctx, writes, pendingFile), { label: 'file', phase: 'File', schema: FILED }))
   const byKey = new Map(writes.map((w) => [w.key, w]))
-  for (const c of (done && done.created) || []) { const w = byKey.get(c.key); if (w && w.action === 'create') filed.push({ number: c.number, url: c.url, title: w.title, noun: w.noun, sites: w.sites }) }
-  for (const c of (done && done.commented) || []) { const w = byKey.get(c.key); if (w && w.rule) w.rule.state = `posted on #${RULE_ISSUE}: ${c.url}` }
-  for (const p of (done && done.pending) || []) {
+  for (const c of (done && done.created) || []) { const w = byKey.get(c.key); if (w && w.action === 'create') filed.push({ number: c.number, url: c.url, title: w.title, noun: w.noun, sites: w.sites }) } // empty-ok: a null File is named in failed below, and each write it held under Skipped
+  for (const c of (done && done.commented) || []) { const w = byKey.get(c.key); if (w && w.rule) w.rule.state = `posted on #${RULE_ISSUE}: ${c.url}` } // empty-ok: a null File is named in failed below, and each write it held under Skipped
+  for (const p of (done && done.pending) || []) { // empty-ok: a null File is named in failed below, and each write it held under Skipped
     const w = byKey.get(p.key)
     if (!w) continue
     pending.push({ key: p.key, what: w.action === 'create' ? `the issue ${w.title}` : `the candidate rule ${w.rule.key} on #${RULE_ISSUE}` })
