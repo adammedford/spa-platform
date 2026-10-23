@@ -68,10 +68,11 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
 - **The ticket-shape check holds them where a ticket is written.** `tools/ticket_shape.py` reads one
   issue and fails it, naming the rule, on: `**Touches:**` paths of more than one owner; an
   `**Owner:**` line naming other than exactly the role those paths derive, or other than exactly one
-  role where there is no Touches line; under `ready-for-agent`, an open box in the words of a
-  sitting or a landing, an open box that requires another ticket's commit on this ticket's branch,
-  a `**Session:** foreground` line or a sub-issue; and a "Blocked by #N", "after #N" or "once #N
-  lands" with no blocked-by edge to an open #N.
+  role where there is no Touches line or it says `none`; under `ready-for-agent`, an open box in
+  the words of a sitting or a landing, an open box that requires another ticket's commit on this
+  ticket's branch, a `**Session:** foreground` line or a sub-issue; and a "Blocked by #N", "after
+  #N" or "once #N lands" where #N is an open issue with no blocked-by edge. A #N that is a closed
+  issue or a pull request is stale prose: the check prints it as a note and fails nothing.
   `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is opened,
   edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
   rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
