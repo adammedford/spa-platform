@@ -14,7 +14,9 @@ partial instead of never starting. This reads one issue and fails it, naming the
   is or begins a path OWNERSHIP.md names (`infra`, `fixtures`, `tests`), or the name of an entry at
   the repository's root (`docs`), so the prose the build tickets mix in ("and, if a ... is added,")
   is not taken for one. A token left that is neither a path nor a lower-case word (`Gateway`,
-  `#213`) fails too, since the line cannot then be fully judged;
+  `#213`) fails too, since the line cannot then be fully judged. A line whose value starts with the
+  word `none` says the ticket writes nothing, as a run ticket does (#87, #255): it passes, and the
+  owner is then the Owner line's one role, as for a body with no Touches line (#284);
 - owner-line: its `**Owner:**` line names other than exactly the role those paths derive, by
   tools/overnight_collect.py's ROLES. A body with no Touches line derives no role, so its Owner line
   must name exactly one; the tickets filed before #227 have none, and they are judged by what they
@@ -22,8 +24,11 @@ partial instead of never starting. This reads one issue and fails it, naming the
 - sitting-or-landing: under `ready-for-agent`, an open `- [ ]` box using a word of SITTING_OR_LANDING
   (rules 2 and 3). A word list misfires; the escape is to reword the box, or to move it to a
   ready-for-human ticket blocked by the one that builds what it runs;
-- blocker-edge: a "Blocked by #N", "after #N" or "once #N lands" with no native blocked-by edge to
-  an open #N, so the scheduler cannot see the wait the prose states (ADR-0020);
+- blocker-edge: a "Blocked by #N", "after #N" or "once #N lands" where #N is an open issue with no
+  native blocked-by edge, so the scheduler cannot see the wait the prose states (ADR-0020). A #N
+  that is a closed issue, a pull request or no issue at all states no wait any more (#284): each is
+  printed as a note, `ticket-shape: note: stale-prose: <what>`, and fails nothing. The state of a
+  #N with no edge is asked of GitHub in one GraphQL query; a #N with an edge has its state in it;
 - foreground: under `ready-for-agent`, a `**Session:** foreground` line, which no lane can honour;
 - spec: under `ready-for-agent`, any sub-issue, since an issue with sub-issues is a spec and never a
   ticket.
@@ -32,11 +37,12 @@ partial instead of never starting. This reads one issue and fails it, naming the
     python3 -I tools/ticket_shape.py -            read `gh issue view --json` output on stdin
 
 The JSON is `gh issue view <n> --json number,body,labels,subIssuesSummary,blockedBy`, the fields
-FIELDS names. Each failure is a line `ticket-shape: <rule>: <what>`, and the last line is the
-verdict: `ticket-shape: pass: ...` with exit 0, or `ticket-shape: fail: ...` with exit 1 when a rule
-failed and exit 2 when nothing was judged: the issue could not be read, or the check itself broke
-(a script it reuses or OWNERSHIP.md missing, or any other error). Python's own exit for an uncaught
-error is 1, the code of a failed rule, so main() lets no error escape, and
+FIELDS names. Each note is a line `ticket-shape: note: <what>`, each failure a line
+`ticket-shape: <rule>: <what>`, and the last line is the verdict: `ticket-shape: pass: ...` with
+exit 0, or `ticket-shape: fail: ...` with exit 1 when a rule failed and exit 2 when nothing was
+judged: the issue, or the state of a #N its prose names, could not be read, or the check itself
+broke (a script it reuses or OWNERSHIP.md missing, or any other error). Python's own exit for an
+uncaught error is 1, the code of a failed rule, so main() lets no error escape, and
 .github/workflows/ticket-shape.yml relabels only a ticket that was judged.
 """
 from __future__ import annotations
@@ -78,10 +84,13 @@ def collect():
 READY = "ready-for-agent"
 
 # The words of a box that needs a sitting or a landing, as #247 lists them, each matched as a word
-# and in any case. One differs from the list: #247 names "AWS" bare, and #198 says "looking the
+# and in any case. Two differ from the list: #247 names "AWS" bare, and #198 says "looking the
 # names up in AWS" of a companion that fails, a box a lane finishes against a double; #247 also
 # asks that #198 pass. So "AWS" counts only as "against AWS", the reach a sitting has and a lane
-# does not, as "against the applied" does for the applied stack.
+# does not, as "against the applied" does for the applied stack. And #247's "merge body" is gone
+# (#284): each task merge is its ticket's merge body, written by the lane's own integrate step
+# (#226), so a box asking for a count in it is a lane's; "landing" and "pushed" still catch a box
+# that needs the landing.
 SITTING_OR_LANDING = tuple((word, re.compile(pattern, flags)) for word, pattern, flags in (
     ("deployed", r"\bdeployed\b", re.IGNORECASE),
     ("the cell", r"\bthe cell\b", re.IGNORECASE),
@@ -93,7 +102,6 @@ SITTING_OR_LANDING = tuple((word, re.compile(pattern, flags)) for word, pattern,
     ("pushed", r"\bpushed\b", re.IGNORECASE),
     ("landed", r"\blanded\b", re.IGNORECASE),
     ("landing", r"\blanding\b", re.IGNORECASE),
-    ("merge body", r"\bmerge bod(?:y|ies)\b", re.IGNORECASE),
     ("pull request", r"\bpull requests?\b", re.IGNORECASE),
     ("on main", r"\bon `?main\b", re.IGNORECASE),
     ("posted on #", r"\bposted on #", re.IGNORECASE),
@@ -109,9 +117,14 @@ BLOCKER_PHRASES = (
     re.compile(r"\bonce (?P<numbers>#\d+) lands\b", re.IGNORECASE),
 )
 NUMBER = re.compile(r"#(\d+)")
+# What a #N the prose names can be. Only an open issue is a wait; the others are stale prose.
+KINDS = ("OPEN", "CLOSED", "PULL_REQUEST", "MISSING")
+STALE = {"CLOSED": "a closed issue", "PULL_REQUEST": "a pull request", "MISSING": "no issue"}
 FOREGROUND = re.compile(r"(?m)^\*\*Session:\*\*[ \t]*foreground\b", re.IGNORECASE)
 
 TOUCHES = re.compile(r"(?m)^\*\*Touches:\*\*[ \t]*(?P<value>[^\n]*)$")
+# A Touches value saying the ticket writes nothing: the word "none", then anything.
+WRITES_NOTHING = re.compile(r"^none\b", re.IGNORECASE)
 # A code span, or the text between two.
 SPAN_OR_TEXT = re.compile(r"`([^`\n]+)`|([^`]+)")
 # A bare token that names a path: a directory separator, or a dot inside or leading a name. "e.g."
@@ -132,6 +145,7 @@ class Issue(typing.NamedTuple):
     labels: tuple[str, ...]
     sub_issues: int
     blockers: tuple[int, ...]   # the open ones
+    closed_blockers: tuple[int, ...] = ()   # the edges to a closed issue
 
 
 class Failure(typing.NamedTuple):
@@ -150,6 +164,8 @@ def issue_of(raw: object) -> Issue:
             sub_issues=int(raw["subIssuesSummary"]["total"]),
             blockers=tuple(int(node["number"]) for node in raw["blockedBy"]["nodes"]
                            if node["state"] == "OPEN"),
+            closed_blockers=tuple(int(node["number"]) for node in raw["blockedBy"]["nodes"]
+                                  if node["state"] != "OPEN"),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise Unreadable(f"the issue's JSON has no readable {error}") from error
@@ -176,7 +192,8 @@ def bare_path(token: str, parsed: list[tuple[str, str]]) -> bool:
 
 def touches(body: str, parsed: list[tuple[str, str]] | None = None) -> list[str] | None:
     """The paths of the Touches line, in its order: its code spans and its bare tokens that name
-    paths, by bare_path(). None when there is no line, and [] when there is one with no path."""
+    paths, by bare_path(). None when there is no line, and [] when there is one with no path or one
+    saying `none`."""
     read = read_touches(body, parsed)
     return None if read is None else read[0]
 
@@ -184,10 +201,13 @@ def touches(body: str, parsed: list[tuple[str, str]] | None = None) -> list[str]
 def read_touches(body: str, parsed: list[tuple[str, str]] | None = None
                  ) -> tuple[list[str], list[str]] | None:
     """The Touches line's paths and its unread tokens: those neither a path nor a lower-case
-    word of prose. None when there is no line."""
+    word of prose. None when there is no line, and ([], []) for a line saying `none`: its prose is
+    not read, so "(runs the script against throwaway PRs)" leaves no token unread."""
     line = TOUCHES.search(body)
     if not line:
         return None
+    if WRITES_NOTHING.match(line.group("value")):
+        return [], []
     parsed = ownership().rules() if parsed is None else parsed
     paths: list[str] = []
     unread: list[str] = []
@@ -214,14 +234,93 @@ def owner_of(path: str, parsed: list[tuple[str, str]]) -> str | None:
     return ownership().owner_of(bare, parsed)
 
 
-def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Failure]:
-    """Every rule the issue breaks, in the order the docstring lists them."""
+def writes_nothing(body: str) -> bool:
+    line = TOUCHES.search(body)
+    return bool(line and WRITES_NOTHING.match(line.group("value")))
+
+
+def stated(body: str) -> list[int]:
+    """The numbers the body's prose waits for, by BLOCKER_PHRASES, ascending."""
+    return sorted({int(number) for phrase in BLOCKER_PHRASES
+                   for found in phrase.finditer(body)
+                   for number in NUMBER.findall(found.group("numbers"))})
+
+
+def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> dict[int, str]:
+    """What each number the prose waits for, other than an open edge, is: one of KINDS. A closed
+    edge says it is a closed issue; known gives others; the rest are asked of GitHub at once."""
+    states = {number: "CLOSED" for number in issue.closed_blockers}
+    states.update(known or {})
+    missing = [n for n in stated(issue.body) if n not in issue.blockers and n not in states]
+    if missing:
+        states.update(look_up(missing))
+    return states
+
+
+def look_up(numbers: list[int]) -> dict[int, str]:
+    """Each number's kind, from one GraphQL query of the repository gh resolves (GH_REPO in the
+    Action, the checkout's remote elsewhere). gh exits 1 when a number is no issue or pull request
+    and still prints the data with a NOT_FOUND error for it, so the answer is read whatever the
+    exit; any other error, or an answer that does not parse, is Unreadable. gh fills the
+    `{owner}` and `{repo}` field values from that repository (https://cli.github.com/manual/gh_api),
+    and `issueOrPullRequest` is the repository field that answers for either kind
+    (https://docs.github.com/en/graphql/reference/objects#repository)."""
+    fields = " ".join(f"n{n}: issueOrPullRequest(number: {n}) "
+                      "{ __typename ... on Issue { state } ... on PullRequest { state } }"
+                      for n in numbers)
+    query = ("query($owner: String!, $name: String!) "
+             f"{{ repository(owner: $owner, name: $name) {{ {fields} }} }}")
+    try:
+        done = subprocess.run(["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
+                               "-f", f"query={query}"],
+                              capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise Unreadable(f"gh could not run: {error}") from error
+    why = f"gh api graphql exited {done.returncode}: {done.stderr.strip()}"
+    try:
+        answer = json.loads(done.stdout)
+        repository = answer["data"]["repository"]
+        not_found = set()
+        for error in answer.get("errors") or []:
+            path = error.get("path") or []
+            if error.get("type") != "NOT_FOUND" or len(path) != 2:
+                raise Unreadable(f"{why}: {error.get('message', error)}")
+            not_found.add(path[1])
+        kinds = {}
+        for n in numbers:
+            node = repository[f"n{n}"]
+            if node is None:
+                if f"n{n}" not in not_found:
+                    raise Unreadable(f"{why}: no answer for #{n}")
+                kinds[n] = "MISSING"
+            elif node["__typename"] == "PullRequest":
+                kinds[n] = "PULL_REQUEST"
+            else:
+                kinds[n] = "OPEN" if node["state"] == "OPEN" else "CLOSED"
+        return kinds
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
+        raise Unreadable(f"{why}: the answer has no readable {error}") from error
+
+
+def stale_prose(issue: Issue, states: typing.Mapping[int, str] | None = None) -> list[str]:
+    """A note for each number the prose waits for that is no wait: a closed issue, a pull request
+    or no issue. The scheduler has nothing to see; the prose is to be reworded, not edged."""
+    states = states_of(issue, states)
+    return [f"the body waits for #{n}, which is {STALE[states[n]]}, so no wait is left to edge; "
+            "the line is stale prose" for n in stated(issue.body)
+            if n not in issue.blockers and states[n] in STALE]
+
+
+def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
+          states: typing.Mapping[int, str] | None = None) -> list[Failure]:
+    """Every rule the issue breaks, in the order the docstring lists them. states gives the kind
+    of a number the prose names (states_of()); one it lacks is asked of GitHub."""
     parsed = ownership().rules() if parsed is None else parsed
     failures: list[Failure] = []
 
     read = read_touches(issue.body, parsed)
     paths, unread = read if read is not None else (None, [])
-    if paths == []:
+    if paths == [] and not writes_nothing(issue.body):
         failures.append(Failure("touches", "the Touches line names no path, so no owner is "
                                 "derived from it"))
     elif unread:
@@ -251,10 +350,8 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[Fai
                 failures.append(Failure("sitting-or-landing", f"an open box says {said(words)}: "
                                         f"{text[:120]}"))
 
-    stated = sorted({int(number) for phrase in BLOCKER_PHRASES
-                     for found in phrase.finditer(issue.body)
-                     for number in NUMBER.findall(found.group("numbers"))})
-    unedged = [number for number in stated if number not in issue.blockers]
+    states = states_of(issue, states)
+    unedged = [n for n in stated(issue.body) if n not in issue.blockers and states[n] == "OPEN"]
     if unedged:
         failures.append(Failure("blocker-edge", "the body waits for " + ", ".join(
             f"#{number}" for number in unedged) + " with no blocked-by edge to it open"))
@@ -318,7 +415,9 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         issue = read(argv[0])
-        failures = judge(issue)
+        states = states_of(issue)
+        failures = judge(issue, states=states)
+        notes = stale_prose(issue, states)
     except (Exception, SystemExit) as error:
         # Unreadable is a read that failed; SystemExit is path-ownership.py's refusal of an
         # OWNERSHIP.md with no rules; anything else is the check broken. None of them judged the
@@ -326,6 +425,8 @@ def main(argv: list[str]) -> int:
         # fails closed").
         print(f"ticket-shape: fail: nothing judged: {type(error).__name__}: {error}")
         return 2
+    for note in notes:
+        print(f"ticket-shape: note: stale-prose: {note}")
     for failure in failures:
         print(f"ticket-shape: {failure.rule}: {failure.detail}")
     if failures:

@@ -37,6 +37,9 @@ The rules, as the collect step states them:
   `ready-for-agent` alone (sitting-or-landing, foreground) flag only a lane's ticket. A spec is a
   parent and never judged. One grammar, then, at creation and at launch: a ticket the check fails
   is a ticket the launch plan forecasts as partial. The launch plan forecasts from it.
+  A number the prose waits for is a wait only while it is an open issue (#284): a listed issue is
+  one, and the state of each other number is asked of GitHub in one query; a closed issue or a
+  pull request named in prose is stale prose, which the check notes and the forecast leaves out.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
 Two tickets with one id stop it: exit 1, stdout empty, both issues named on stderr. A read that fails
@@ -107,6 +110,7 @@ class Issue(typing.NamedTuple):
     url: str
     blockers: tuple[int, ...]   # the open ones
     sub_issues: int
+    closed_blockers: tuple[int, ...] = ()   # the edges to a closed issue
 
 
 # --- reading: the one place this script touches the world --------------------------------------
@@ -171,6 +175,8 @@ def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
                 blockers=tuple(int(node["number"]) for node in raw["blockedBy"]["nodes"]
                                if node["state"] == "OPEN"),
                 sub_issues=int(summary.get("total", 0) or 0),
+                closed_blockers=tuple(int(node["number"]) for node in raw["blockedBy"]["nodes"]
+                                      if node["state"] != "OPEN"),
             )
     return list(found.values())
 
@@ -230,13 +236,38 @@ def ownership_rules() -> list[tuple[str, str]]:
                       f"{error}") from error
 
 
-def will_end_partial(issue: Issue, rules: list[tuple[str, str]]) -> list[dict]:
-    """Why a lane cannot finish the ticket: ticket_shape's failures, judged under its label."""
+def judged_issue(issue: Issue):
+    """The ticket as ticket_shape reads one, under the label it is listed by."""
+    return ticket_shape().Issue(number=issue.number, body=issue.body, labels=(issue.label,),
+                                sub_issues=issue.sub_issues, blockers=issue.blockers,
+                                closed_blockers=issue.closed_blockers)
+
+
+def prose_states(listed: list[Issue], tickets: list[Issue],
+                 known: dict[int, str] | None = None) -> dict[int, str]:
+    """What each number the tickets' prose waits for is (ticket_shape.KINDS), so that a closed
+    issue or a pull request named in prose is stale prose and not a forecast partial (#284). A
+    listed issue is open; known gives others; the rest are asked of GitHub in one query."""
     try:
         shape = ticket_shape()
-        judged = shape.Issue(number=issue.number, body=issue.body, labels=(issue.label,),
-                             sub_issues=issue.sub_issues, blockers=issue.blockers)
-        failures = shape.judge(judged, rules)
+        states = {issue.number: "OPEN" for issue in listed}
+        states.update(known or {})
+        missing = sorted({n for issue in tickets for n in shape.stated(issue.body)
+                          if n not in issue.blockers and n not in issue.closed_blockers
+                          and n not in states})
+        if missing:
+            states.update(shape.look_up(missing))
+        return states
+    except (Exception, SystemExit) as error:
+        raise Refused(f"the ticket-shape check could not read the issues the prose names: "
+                      f"{type(error).__name__}: {error}") from error
+
+
+def will_end_partial(issue: Issue, rules: list[tuple[str, str]],
+                     states: dict[int, str] | None = None) -> list[dict]:
+    """Why a lane cannot finish the ticket: ticket_shape's failures, judged under its label."""
+    try:
+        failures = ticket_shape().judge(judged_issue(issue), rules, states)
     except (Exception, SystemExit) as error:
         raise Refused(f"the ticket-shape check could not judge #{issue.number}: "
                       f"{type(error).__name__}: {error}") from error
@@ -264,10 +295,12 @@ def landed_ids(road: dict) -> set[str]:
 
 
 def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict,
-            rules: list[tuple[str, str]] | None = None) -> dict:
+            rules: list[tuple[str, str]] | None = None,
+            states: dict[int, str] | None = None) -> dict:
     """The answer, from what was read. Raises Refused when two tickets share an id, or when the
     ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
-    with the rest of the input; None reads it here."""
+    with the rest of the input; None reads it here. states gives what a number the prose names is,
+    beyond the listed issues; prose_states() asks GitHub for the rest."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
     parents, tickets = [], []
@@ -290,6 +323,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "own **Plan row:** (none, for an issue that is not a plan row) and run again.")
 
     rules = ownership_rules() if rules is None else rules
+    states = prose_states(issues_of(listings), tickets, states)
     by_number = {issue.number: issue for issue in tickets}
     id_of = {issue.number: ticket_id(issue) for issue in tickets}
 
@@ -350,7 +384,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "owner": owner, "blockedBy": [blocker_id(b) for b in issue.blockers],
             "why": why[issue.number] + others_land_apart(others),
             "openBoxes": open_boxes(issue.body),
-            "willEndPartial": will_end_partial(issue, rules),
+            "willEndPartial": will_end_partial(issue, rules, states),
         })
     return {
         "tickets": resolved,

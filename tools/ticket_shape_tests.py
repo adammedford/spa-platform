@@ -47,8 +47,12 @@ shape = load("ticket_shape", SCRIPT)
 class Filed(typing.NamedTuple):
     labels: tuple[str, ...]
     sub_issues: int
-    blockers: tuple[int, ...]
+    blockers: tuple[int, ...]   # the open edges
     body: str
+    closed: tuple[int, ...] = ()   # the edges to a closed issue
+    # What each number the prose waits for, with no edge, was then: an open or closed issue, a pull
+    # request, or no issue (ticket_shape.KINDS).
+    states: tuple[tuple[int, str], ...] = ()
 
 
 FILED = {
@@ -361,6 +365,172 @@ The tunnel finds the cluster, the service and the load balancer by asking AWS fo
 }
 
 
+# The bodies #284 names, each at the revision #232's second pass (2026-10-22) read, with the labels,
+# the edges and the state of each number its prose names as it stood then. #213 is the one the Action
+# run of 2026-10-22T01:14:41Z failed; the others were open in the audit's set.
+AUDITED = {
+    # #213: the revision of 2026-10-22T01:14:37Z, which the Action run of 01:14:41Z failed for
+    # "#214", a merged pull request; ready-for-agent then, its one edge to #135, closed at
+    # 2026-10-21T18:33:41Z.
+    213: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(), closed=(135,),
+        states=((214, 'PULL_REQUEST'),),
+        body="""\
+**Raised by:** #135 (Q11, confirmed on #185 on 2026-10-21)
+**Owner:** integrator
+
+## What to build
+
+#135 left two things outside review on purpose, so that the script could land sooner (ADR-0026). The Q numbers below are #226's, confirmed in https://github.com/adammedford/spa-platform/issues/226#issuecomment-6319841927. The reasoning is in this ticket's "## Grilling record" comment.
+
+1. **The test companion.** `.claude/workflows/overnight_harness.mjs` runs the overnight script end to end with every agent mocked, on a fixed ticket set under `.claude/workflows/fixtures/`, and checks how the lanes schedule. It is the script's only behavioural proof, and it is git-ignored.
+   - It is tracked beside the script as `.claude/workflows/overnight_tests.mjs`. It stays `.mjs`, and it is called the overnight script's test companion, not "the harness" (Q27).
+   - Its fixture `fixtures/2026-10-20-tickets.json` is tracked as it is, home paths included. The fixture argument is kept so that later fixtures can sit beside it (Q28).
+   - The Documents job runs `node .claude/workflows/overnight_tests.mjs` on every push, with no path condition, right after "Every workflow script parses" (Q29). It lands wall-clock timed as it is, and a virtual clock comes only if it ever flakes (Q30).
+   - `tools/check.sh` stays unchanged. CI on the landing PR is what proves a scheduler edit before its launch, under ADR-0026 decision 3 (Q32).
+2. **The project skills.** `.claude/skills/` holds `wiz` (the sitting skill) and is ignored, so its three known defects (#135's comment of 2026-10-21) have no reviewable home.
+   - Project skills are tracked under the workflow scripts' rule: every change is a branch, a review and a landing (Q26).
+   - A project skill stays off the steering-document list. Like a workflow script under ADR-0026 decision 2, it is integrator code whose authority is its ticket and the landing review (Q37).
+   - No sitting runs a skill edit that has not landed. A defect found mid-sitting stops the sitting at that stage until its fix lands (Q38).
+   - The user-level skills under `~/.agents/skills` stay outside the repository and its review, and nothing is vendored (Q33).
+   - The skill stays `wiz` (Q39).
+   - The note on cached ticket expectations (A3, A4, B2) and W-4's tested redaction script are follow-up tickets. They are not part of this landing (Q40, Q41).
+
+`.gitignore` adds `!.claude/workflows/overnight_tests.mjs`, `!.claude/workflows/fixtures/` and `!.claude/skills/` after #214's lines. It keeps the re-ignore of the workflows folder's other contents, and the comment above the lines is reworded (Q36).
+
+## How the work splits
+
+1. **Adam runs `.scratch/sequence/unblock.sh` on his Mac.** The script is on branch `claude/eager-carson-hoy367`. It creates `task/issue-213-track-companion-and-skills` from origin/main and pushes it with one commit (Q42). That commit holds:
+   - the live bytes of `overnight_harness.mjs`, renamed `overnight_tests.mjs`;
+   - the live bytes of `fixtures/2026-10-20-tickets.json`;
+   - the live bytes of `.claude/skills/wiz/SKILL.md`;
+   - Q36's three `.gitignore` lines.
+2. **Agent work on that branch** builds the rest, each part as its own commit after the live-bytes commit: the header rename, the comment above the ignore lines, the three `wiz` corrections, the CI step, the ADR, the glossary entry, and the draft's removal and the repointed citations.
+
+**Adam's landing step, before the fast-forward.** Before `git merge --ff-only origin/main` in the main checkout, Adam compares three live files against the live-bytes commit's blobs with `cmp`, and refuses the fast-forward on any difference (Q42):
+- `overnight_harness.mjs` against `overnight_tests.mjs`;
+- the fixture;
+- `skills/wiz/SKILL.md`.
+
+After the fast-forward, he removes `.claude/workflows/overnight_harness.mjs`. `unblock.sh` prints these commands with the commit's sha.
+
+## Acceptance criteria
+
+- [x] The live-bytes commit is pushed on `task/issue-213-track-companion-and-skills` by `unblock.sh`
+- [x] The companion's header names it the overnight script's test companion, tracked. It no longer calls it the harness or says it is git-ignored (Q27).
+- [x] The comment above Q36's `.gitignore` lines names the companion, its fixtures and the skills (Q36).
+- [x] The Documents job runs `node .claude/workflows/overnight_tests.mjs` on every push, with no path condition, right after "Every workflow script parses" (Q29). The landing PR body records two runs:
+  - one push running it 20 times in a loop (Q30);
+  - the companion exiting 1 on a throwaway copy of the script with the ready-first pick reverted, with no test of the companion added (Q31).
+- [x] The `wiz` skill lands with the three corrections noted on #135, each as its own commit after the live-bytes commit (Q40).
+- [x] A decision on `.claude/skills/` is recorded, and `.gitignore` says it. The ADR comes from the draft in https://github.com/adammedford/spa-platform/issues/213#issuecomment-6308043619 (Q33, Q37, Q43):
+  - it is a new ADR amending ADR-0026 decision 1;
+  - ADR-0026's status line records the amendment;
+  - the session that commits it numbers it.
+- [x] GLOSSARY.md gains *Project skill* as proposed in that comment, with no change to *Harness* or *Test companion* (Q44).
+- [x] The landing removes the draft `.scratch/sitting/wizard-SKILL.md` with `git rm`, and `.scratch/sitting/spec.md`'s two citations of it point to `.claude/skills/wiz/SKILL.md` (Q39).
+"""),
+    # #255: as filed, 2026-10-21T18:34:22Z, and unedited since: ready-for-human, "Blocked by: #83"
+    # with no edge, and #83 closed.
+    255: Filed(
+        labels=('ready-for-human',), sub_issues=0, blockers=(), states=((83, 'CLOSED'),),
+        body="""\
+**Owner:** integrator, run by the human
+**Touches:** none (runs the script against throwaway PRs)
+Blocked by: #83
+
+## Parent
+
+Part of #79, the `review-queue` spec. The proof half of #83 (ticket 1 of 5, the walking skeleton), split out by #232 Q15: these boxes need a pushed throwaway pull request and a real GitHub round-trip, which a lane cannot make.
+
+## Acceptance criteria
+
+- [ ] The spec's proof 2 without mutations: a throwaway pull request carrying a test that can fail, with a single-owner diff, gets `merge`, one comment, the record line last, and every verified finding says how it was checked.
+- [ ] The spec's proof 3: a second run on the same head posts nothing, the return carries skipped-because-recorded with the first record's URL, and the comment count is unchanged.
+- [ ] The proof pull request is closed and its branch deleted afterwards; its URL is in this ticket's Answer comment.
+"""),
+    # #239: the revision of 2026-10-22T03:24:28Z, box 2 open, ready-for-agent until 03:24:38Z.
+    239: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(),
+        body="""\
+**Raised by:** #59
+**Owner:** workstream 1 (AWS and IaC)
+**Touches:** `infra/modules/cell/tests/module.tftest.hcl`
+
+## What to build
+
+#59's review, "Found, not fixed: outside row 1.9": an `override_policy_documents` entry on `ecs_tasks_trust` letting any principal assume both roles passed 43 of 43 at `cc42e2d`, and the execution role's document has the same shape. P-03's task-role run has the null check; 1.4a's trust and execution runs (`module.tftest.hcl` lines 55 and 63) do not.
+
+## Acceptance criteria
+
+- [x] The runs over `data.aws_iam_policy_document.ecs_tasks_trust` and `data.aws_iam_policy_document.task_execution` assert `override_policy_documents` and `source_policy_documents` are null, as P-03's task-role run does
+- [ ] Planting an `override_policy_documents` entry that lets any principal assume the role fails that run, and the merge body names the count
+
+## Disclosed impediments
+
+- None known. `terraform test` with mock providers runs in the full check and CI.
+"""),
+    # #122: the revision of 2026-10-19T08:16:32Z, box 3 open, which #232's second pass read under
+    # ready-for-agent.
+    122: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(),
+        body="""\
+**Owner:** ws1-infra
+**Plan row:** none
+**Raised by:** #92, from its grilling of 2026-10-18 (Q20, Q21, Q25–Q30 and Q32 on #98, confirmed on 2026-10-19: https://github.com/adammedford/spa-platform/issues/98#issuecomment-6257481813). It blocks #92: the row's two refusals are proven by this script's run in the sitting, and the merge that lands it, `Merge task 1.5: …`, carries the run's output (Q30).
+
+## What to build
+
+`tools/scripts/verify-release-immutability.sh`, beside `verify-tunnel.sh` (Q21). It reads `bucket` from the platform root's output, runs as the operator's own session (the `spa-platform` profile, the principal spactl writes as) and refuses to start as the teardown role (Q20, Q25). It writes one probe key under an appId no registry entry names, `apps/p04-probe/releases/<UTC timestamp>/index.html`, fresh on every run (Q28), and asserts, one output line per case, exiting non-zero when any case is not refused as expected (Q32):
+
+- a first PUT with `If-None-Match: *` succeeds; a second PUT with that header gets 412;
+- a PUT without the header gets 403; a PUT with only `If-Match` gets 403;
+- a DELETE with no version id gets 403; a DELETE of the version gets 403;
+- the key still has exactly one version and no delete marker;
+- after the delete attempts, a PUT with `If-None-Match: *` still gets 412 (Q25);
+- a CopyObject onto the key gets 403; a multipart upload completed without `If-None-Match` gets 403, and the upload is aborted (Q26);
+- read-backs: versioning enabled, all four public-access-block settings on, a policy status that is not public, no lifecycle or replication configuration, one plain-HTTP request refused, and both image repositories `IMMUTABLE` (Q27).
+
+Behind a flag that is off by default: assume the teardown role in a separate session, assert that the role cannot write, then delete the probe key's versions (Q29, Q32). The policy: `contracts/s3-layout.md` → Rules; ADR-0014; test id P-04 in `docs/plan/04-tests.md`. #63 runs this script as P-04 at G3 (Q32).
+
+The script deletes objects through a break-glass role, so its pull request is reviewed and then held open: Adam runs it in the sitting against the applied bucket and lands it with `tools/land.sh` as `Merge task 1.5: …` with the run's output in the body (Q30). The lane proves what it can without AWS: `bash -n`, the case list and exit codes against a stub, and that the role check refuses.
+
+## Acceptance
+
+- [x] The script exists with the cases above, one line per case, a non-zero exit on any unexpected result, and refuses to start as the teardown role
+- [x] The teardown-role cleanup is behind a flag that is off by default
+- [ ] Run in the sitting against the applied bucket: every case as expected, with the output in the landing merge's body
+"""),
+    # #204: the revision of 2026-10-21T17:44:57Z, which #232's second pass read: the Owner line
+    # still names workstream 5 beside the integrator.
+    204: Filed(
+        labels=('ready-for-agent',), sub_issues=0, blockers=(),
+        body="""\
+**Raised by:** #58 (sitting C, stage C1, 2026-10-21)
+**Owner:** integrator (root files, `src/Gateway/Dockerfile`), with workstream 5 for `fixtures/MockApi/Dockerfile`
+
+## What to build
+
+A workstation builds and runs the gateway and mock API images the way CI does, and the files the scripts write never reach a commit or a builder.
+
+Tonight's first deployment hit two defects that a clean CI checkout can't show. The image build copied the workstation's own build output over the image's `linux-arm64` restore, so `dotnet publish --no-restore` failed with `NETSDK1047`; and because no `.dockerignore` exists, every build also sent the local certificate authority's private key, the scratch directory and the git-ignored Terraform variables to the builder. Then, once the images built, the gateway died on its first line: `UnauthorizedAccessException` on `appsettings.json`, because the files were owner-only on the workstation, `COPY` and `publish` keep that mode, and the final stage runs as `$APP_UID`.
+
+The scripts also write the infrastructure outputs document into the tree, and git doesn't ignore it. It carries the account id and both apps' client ids, so one `git add .` would commit it.
+
+## Acceptance criteria
+
+- [x] A root `.dockerignore` keeps build output, the local certificate authority, the scratch directory, `.git/`, Terraform's working directories, state and variable files out of the build context
+- [x] The infrastructure outputs document the scripts write is git-ignored
+- [ ] Both Dockerfiles make the published output readable by the runtime user whatever the build context's file modes were
+- [x] From a tree that has host build output and an owner-only `appsettings.json`, the gateway image builds, and a container started as its own user gets past `WebApplication.CreateBuilder`
+
+## Blocked by
+
+None (can start immediately).
+"""),
+}
+
+
 def raw(number: int, filed: Filed, body: str | None = None) -> dict:
     """The issue as `gh issue view --json number,body,labels,subIssuesSummary,blockedBy` gives it."""
     return {
@@ -368,14 +538,36 @@ def raw(number: int, filed: Filed, body: str | None = None) -> dict:
         "body": filed.body if body is None else body,
         "labels": [{"name": name} for name in filed.labels],
         "subIssuesSummary": {"total": filed.sub_issues, "completed": 0, "percentCompleted": 0},
-        "blockedBy": {"nodes": [{"number": n, "state": "OPEN"} for n in filed.blockers],
-                      "totalCount": len(filed.blockers)},
+        "blockedBy": {"nodes": [{"number": n, "state": "OPEN"} for n in filed.blockers]
+                      + [{"number": n, "state": "CLOSED"} for n in filed.closed],
+                      "totalCount": len(filed.blockers) + len(filed.closed)},
     }
 
 
+def judged(number: int, body: str | None = None, table: dict | None = None, **changes):
+    """The failures and the stale-prose notes of an issue in FILED or AUDITED, the numbers its prose
+    names looked up in its own states, never through gh."""
+    filed = (table or FILED)[number]._replace(**changes)
+    issue = shape.issue_of(raw(number, filed, body))
+    states = dict(filed.states)
+    return shape.judge(issue, states=states), shape.stale_prose(issue, states)
+
+
 def rules_broken(number: int, body: str | None = None, **changes) -> list[str]:
-    filed = FILED[number]._replace(**changes)
-    return [failure.rule for failure in shape.judge(shape.issue_of(raw(number, filed, body)))]
+    return [failure.rule for failure in judged(number, body, **changes)[0]]
+
+
+def refuse_gh(numbers):
+    raise AssertionError(f"a test asked GitHub for {sorted(numbers)}; give the case its states")
+
+
+def setUpModule():
+    # Every in-process case states the numbers its prose names; a lookup left to gh is a test bug.
+    setUpModule.kept, shape.look_up = shape.look_up, refuse_gh
+
+
+def tearDownModule():
+    shape.look_up = setUpModule.kept
 
 
 def with_line(body: str, after: str, line: str) -> str:
@@ -560,10 +752,12 @@ class BlockerEdge(unittest.TestCase):
     def body(self, phrase: str) -> str:
         return FILED[209].body.replace("None (can start immediately).", phrase)
 
-    def test_a_stated_blocker_with_no_edge_fails(self):
+    OPEN = ((12, "OPEN"), (235, "OPEN"))
+
+    def test_a_stated_open_issue_with_no_edge_fails(self):
         for phrase in self.PHRASES:
             with self.subTest(phrase):
-                self.assertIn("blocker-edge", rules_broken(209, self.body(phrase)))
+                self.assertIn("blocker-edge", rules_broken(209, self.body(phrase), states=self.OPEN))
 
     def test_a_stated_blocker_with_its_open_edge_passes(self):
         for phrase in self.PHRASES:
@@ -571,14 +765,155 @@ class BlockerEdge(unittest.TestCase):
                 self.assertNotIn("blocker-edge",
                                  rules_broken(209, self.body(phrase), blockers=(12, 235)))
 
-    def test_an_edge_to_a_closed_issue_is_no_edge(self):
-        issue = raw(209, FILED[209], self.body("Blocked by #235."))
-        issue["blockedBy"]["nodes"] = [{"number": 235, "state": "CLOSED"}]
-        self.assertIn("blocker-edge", [f.rule for f in shape.judge(shape.issue_of(issue))])
+    def test_only_the_open_issue_of_a_list_fails(self):
+        # "Blocked by: #12, #235" with #12 closed and #235 open: the failure names #235 alone.
+        failures, notes = judged(209, self.body("Blocked by: #12, #235"),
+                                 states=((12, "CLOSED"), (235, "OPEN")))
+        details = [f.detail for f in failures if f.rule == "blocker-edge"]
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("#235", details[0])
+        self.assertNotIn("#12", details[0])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("#12", notes[0])
+
+    def test_a_closed_issue_or_a_pull_request_is_stale_prose(self):
+        # #284 item 1: "Blocked by #N" fails forever once #N closes, and a `#N` that is a pull
+        # request can never pass. Neither is a wait any more; each is a note, not a failure.
+        for kind in ("CLOSED", "PULL_REQUEST", "MISSING"):
+            with self.subTest(kind):
+                failures, notes = judged(209, self.body("Blocked by #235."),
+                                         states=((235, kind),))
+                self.assertNotIn("blocker-edge", [f.rule for f in failures])
+                self.assertEqual(len(notes), 1, notes)
+                self.assertIn("#235", notes[0])
+
+    def test_an_edge_to_a_closed_issue_is_stale_prose_with_no_lookup(self):
+        # The edge's own state says the wait is over; refuse_gh proves nothing is asked.
+        failures, notes = judged(209, self.body("Blocked by #235."), closed=(235,))
+        self.assertNotIn("blocker-edge", [f.rule for f in failures])
+        self.assertEqual(len(notes), 1, notes)
+
+    def test_an_open_edge_is_no_note(self):
+        self.assertEqual(judged(209, self.body("Blocked by #235."), blockers=(235,))[1], [])
 
     def test_prose_about_a_closed_issue_is_not_a_blocker(self):
         # #100 as filed: "Once #66 closed, #67, #96 and #97 read as unblocked".
         self.assertNotIn("blocker-edge", rules_broken(100))
+
+
+class LookUp(unittest.TestCase):
+    """The numbers the prose names with no edge are asked of GitHub in one GraphQL query."""
+
+    def run_with(self, stdout: str, returncode: int = 0, stderr: str = ""):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+        kept = shape.subprocess.run
+        shape.subprocess.run = fake
+        try:
+            return setUpModule.kept([214, 83, 99999, 284]), calls
+        finally:
+            shape.subprocess.run = kept
+
+    ANSWER = {"data": {"repository": {
+        "n214": {"__typename": "PullRequest", "state": "MERGED"},
+        "n83": {"__typename": "Issue", "state": "CLOSED"},
+        "n284": {"__typename": "Issue", "state": "OPEN"},
+        "n99999": None}},
+        "errors": [{"type": "NOT_FOUND", "path": ["repository", "n99999"],
+                    "message": "Could not resolve to an issue or pull request with the number "
+                               "of 99999."}]}
+
+    def test_each_number_is_read_as_its_kind(self):
+        # gh exits 1 on the NOT_FOUND of #99999 and still prints the data, as it did on 2026-10-22.
+        kinds, calls = self.run_with(json.dumps(self.ANSWER), returncode=1)
+        self.assertEqual(kinds, {214: "PULL_REQUEST", 83: "CLOSED", 99999: "MISSING", 284: "OPEN"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:3], ["gh", "api", "graphql"])
+
+    def test_any_other_error_is_unreadable(self):
+        broken = dict(self.ANSWER, errors=[{"type": "RATE_LIMITED", "message": "slow down"}])
+        for stdout, code in ((json.dumps(broken), 1), ("", 1), ("not json", 0),
+                             (json.dumps({"data": None}), 0)):
+            with self.subTest(stdout=stdout[:30]):
+                with self.assertRaises(shape.Unreadable):
+                    self.run_with(stdout, returncode=code, stderr="gh: boom")
+
+
+class Audited(unittest.TestCase):
+    """#284's acceptance, each against a body #232's second pass read on 2026-10-22."""
+
+    def broken(self, number: int, **changes) -> list[str]:
+        return [f.rule for f in judged(number, table=AUDITED, **changes)[0]]
+
+    def test_213_passes_with_214_reported_as_stale_prose(self):
+        # The Action run of 2026-10-22T01:14:41Z failed it: "the body waits for #214 with no
+        # blocked-by edge to it open". "after #214's lines" names a merged pull request.
+        failures, notes = judged(213, table=AUDITED)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("#214", notes[0])
+
+    def test_213_still_fails_when_214_is_an_open_issue(self):
+        self.assertEqual(self.broken(213, states=((214, "OPEN"),)), ["blocker-edge"])
+
+    def test_255_passes_with_touches_none_and_a_closed_blocker(self):
+        failures, notes = judged(255, table=AUDITED)
+        self.assertEqual(failures, [])
+        self.assertIn("#83", notes[0])
+        self.assertEqual(shape.touches(AUDITED[255].body), [])
+
+    def test_239_passes_with_a_box_asking_for_a_count_in_the_task_merge(self):
+        self.assertEqual(self.broken(239), [])
+
+    def test_122_fails_on_the_landing_its_box_still_names(self):
+        failures = judged(122, table=AUDITED)[0]
+        self.assertEqual([f.rule for f in failures], ["sitting-or-landing"])
+        self.assertIn("landing", failures[0].detail)
+
+    def test_204_fails_for_its_second_owner(self):
+        failures = judged(204, table=AUDITED)[0]
+        self.assertEqual([f.rule for f in failures], ["owner-line"])
+        self.assertIn("integrator and ws5-fixtures", failures[0].detail)
+
+
+class TaskMerge(unittest.TestCase):
+    """#284 item 2: a box asking the lane to state something in its task merge is no landing. Each
+    task merge is its ticket's merge body, written by the lane's own integrate step (#226)."""
+
+    def test_merge_body_is_not_on_the_list(self):
+        self.assertNotIn("merge body", [word for word, _ in shape.SITTING_OR_LANDING])
+
+    def test_landing_and_pushed_stay_on_the_list(self):
+        words = [word for word, _ in shape.SITTING_OR_LANDING]
+        self.assertIn("landing", words)
+        self.assertIn("pushed", words)
+
+
+class TouchesNone(unittest.TestCase):
+    """#284 item 3: a ticket that writes nothing says so, and its owner is the Owner line's."""
+
+    LINE = "**Touches:** none (runs the script against throwaway PRs)"
+
+    def broken(self, body: str) -> list[str]:
+        return rules_broken(204, body, labels=("ready-for-human",))
+
+    def test_none_passes_under_one_owner(self):
+        for line in (self.LINE, "**Touches:** none", "**Touches:** None."):
+            with self.subTest(line=line):
+                self.assertEqual(self.broken(build_ticket(line)), [])
+
+    def test_none_then_needs_exactly_one_role(self):
+        body = build_ticket(self.LINE, owner="integrator, with workstream 5")
+        self.assertEqual(self.broken(body), ["owner-line"])
+        self.assertEqual(self.broken(build_ticket(self.LINE, owner="the human")), ["owner-line"])
+
+    def test_a_word_beginning_none_is_no_none(self):
+        # "nonexistent" is not "none": the line names no path and fails as before.
+        self.assertIn("touches", self.broken(build_ticket("**Touches:** nonexistent")))
 
 
 class ReadyForAgentOnly(unittest.TestCase):
@@ -619,10 +954,12 @@ class AsFiled(unittest.TestCase):
 
 
 # The fake gh: logs its arguments to GH_LOG, fails as gh does when GH_FAIL is set, and answers
-# `issue view` with GH_ANSWER's file. Anything else it is asked exits 97.
+# `issue view` with GH_ANSWER's file and `api graphql` with GH_GRAPHQL's, when set. Anything else it
+# is asked exits 97.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "gh: could not reach GitHub" >&2; exit 1; fi
+if [ "$1 $2" = "api graphql" ] && [ -n "$GH_GRAPHQL" ]; then cat "$GH_GRAPHQL"; exit 0; fi
 [ "$1 $2" = "issue view" ] || exit 97
 cat "$GH_ANSWER"
 """
@@ -686,6 +1023,31 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(self.log.read_text(encoding="utf-8").strip(),
                          f"issue view 204 --json {shape.FIELDS}")
 
+    def test_stale_prose_is_a_note_line_before_a_pass(self):
+        # #213 as the Action read it at 2026-10-22T01:14:41Z, the state of #214 asked of gh.
+        self.answer.write_text(json.dumps(raw(213, AUDITED[213])), encoding="utf-8")
+        graphql = self.directory / "graphql.json"
+        graphql.write_text(json.dumps({"data": {"repository": {
+            "n214": {"__typename": "PullRequest", "state": "MERGED"}}}}), encoding="utf-8")
+        done = self.run_script("213", GH_GRAPHQL=str(graphql))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = done.stdout.strip().splitlines()
+        self.assertEqual(len(lines), 2, done.stdout)
+        self.assertTrue(lines[0].startswith("ticket-shape: note: stale-prose: "), lines[0])
+        self.assertIn("#214", lines[0])
+        self.assertTrue(lines[-1].startswith("ticket-shape: pass: #213"), done.stdout)
+        asked = self.log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(asked), 2, asked)
+        self.assertTrue(asked[1].startswith("api graphql "), asked)
+
+    def test_a_failed_state_lookup_exits_2(self):
+        # The issue reads, the lookup does not: nothing is judged, so the label is left alone.
+        self.answer.write_text(json.dumps(raw(213, AUDITED[213])), encoding="utf-8")
+        done = self.run_script("213")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: nothing judged: "),
+                        done.stdout)
+
     def test_a_failed_gh_read_exits_2(self):
         done = self.run_script("204", GH_FAIL="1")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
@@ -736,8 +1098,10 @@ class Workflow(unittest.TestCase):
         self.assertEqual(sorted(t.strip() for t in found.group("types").split(",")),
                          ["edited", "labeled", "opened"])
 
-    def test_it_may_write_issues(self):
-        self.assertRegex(self.code, r"(?m)^permissions:\n  issues: write\n  contents: read$")
+    def test_it_may_write_issues_and_read_pull_requests(self):
+        # pull-requests: read lets look_up() answer for a #N that is a pull request (#284).
+        self.assertRegex(self.code, r"(?m)^permissions:\n  issues: write\n  pull-requests: read\n"
+                                    r"  contents: read$")
 
     def test_it_runs_the_check_on_the_event_issue(self):
         self.assertRegex(self.code, r"python3 -I tools/ticket_shape\.py \"\$NUMBER\"")
