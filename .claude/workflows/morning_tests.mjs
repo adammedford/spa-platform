@@ -860,6 +860,38 @@ try {
     if (!vp.includes('log --first-parent --merges --reverse') || !vp.includes('gh pr view <number> --json body --jq .body')) fail('the Verify prompt does not read the open description and the first-parent merges')
   }
 
+  // 21. Both numbers on a question (#301). The overnight report now opens each question with its night-wide number
+  //     and then its ticket-local one, "**Q2.** (#310 Q2)", and one its source does not number (a proposed steering
+  //     change) with the night-wide number alone. The same comments in the old form and the new yield the same
+  //     question numbers, recommendations and answers, and a ticket-local "#310 Q1" cited in a question or a
+  //     recommendation opens no question of its own. The new form's marks are built from the two examples
+  //     overnight.js's report prompt gives, read from that file, so a change to the markup the report is told to
+  //     write is read here too (CODING_STANDARDS.md, "A guard reads the thing it guards").
+  checks++
+  {
+    const overnightSrc = fs.readFileSync(path.join(here, 'overnight.js'), 'utf8')
+    const both = /, as in "(\*\*Q\d+\.\*\*[^"]+)"/.exec(overnightSrc)
+    const alone = /opens with the night-wide number alone, as in "([^"]+)"/.exec(overnightSrc)
+    if (!both || !alone) fail(`both numbers: overnight.js's report prompt gives no ${!both ? 'two-number' : 'night-wide-only'} example to build the new form from`)
+    // Each example's digits, in order, become this fixture's night-wide number, issue and ticket-local number.
+    const mark = (ex, ...nums) => { let k = 0; return ex.replace(/\d+/g, () => String(nums[k++])) }
+    const BOTH = (q, local) => (both ? mark(both[1], q, 310, local) : `**Q${q}.**`)
+    const ALONE = (q) => (alone ? mark(alone[1], q) : `**Q${q}.**`)
+    const ticket = (n, qs) => comment(n, `## Questions: ${cite(310)}, issue-310, Both numbers\n\n${qs}`, '2026-10-21T06:00:00Z')
+    const OLD = ticket(50, `**Q1.** Add the term Morning branch?\nRecommended: Yes.\n${PRE}\n\n**Q2.** Rewrite the landing sentence, as #310 Q1 assumes?\nRecommended: Yes, after ${cite(310)} Q1.\n${PRE}\n\n**Q3.** Commit this guide sentence?\nRecommended: Yes.\nAnswer: open\n`)
+    const NEW = ticket(50, `${BOTH(1, 1)} Add the term Morning branch?\nRecommended: Yes.\n${PRE}\n\n${BOTH(2, 2)} Rewrite the landing sentence, as #310 Q1 assumes?\nRecommended: Yes, after ${cite(310)} Q1.\n${PRE}\n\n${ALONE(3)} Commit this guide sentence?\nRecommended: Yes.\nAnswer: open\n`)
+    if (both && !BOTH(2, 2).includes('310')) fail(`both numbers: the example ${both[1]} yielded ${BOTH(2, 2)}, which carries no ticket number`)
+    const confirm = comment(51, 'Confirm Q1 to Q3, with the overrides below.\n\nQ2: no, keep the sentence\n', '2026-10-21T08:00:00Z')
+    const old = await execute(newRepo(), { date: DATE }, { issue: issueWith([OLD, confirm]) })
+    const now = await execute(newRepo(), { date: DATE }, { issue: issueWith([NEW, confirm]) })
+    const sent = (r) => (jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).map((q) => ({ q: q.q, recommendation: q.recommendation, answer: q.answer }))
+    if (old.result.refusals.length || now.result.refusals.length) fail(`both numbers: refusals old ${JSON.stringify(old.result.refusals)}, new ${JSON.stringify(now.result.refusals)}`)
+    if (Object.keys(now.result.apply.answers).join() !== '1,2,3') fail(`both numbers: the new form yielded questions ${Object.keys(now.result.apply.answers)}, expected 1,2,3`)
+    if (JSON.stringify(now.result.apply.answers) !== JSON.stringify(old.result.apply.answers)) fail(`both numbers: answers differ, old ${JSON.stringify(old.result.apply.answers)}, new ${JSON.stringify(now.result.apply.answers)}`)
+    if (!sent(old).length) fail('both numbers: the old form sent the classifier nothing, so the comparison read nothing')
+    if (JSON.stringify(sent(now)) !== JSON.stringify(sent(old))) fail(`both numbers: the classifier was sent ${JSON.stringify(sent(now))} from the new form, ${JSON.stringify(sent(old))} from the old`)
+  }
+
   // 16. Every agent call passes a schema and every stub's return satisfies it.
   checks++
   for (const c of allPrompts) if (!c.schema || c.schema.type !== 'object') fail(`${c.label}: called without a schema`)
