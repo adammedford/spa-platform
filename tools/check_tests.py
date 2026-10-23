@@ -144,9 +144,10 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
-# the file modes, and so a name to the list of what ran; #291 added the part-row merges.
+# the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
+# the full-landing merges.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the roadmap, the artifacts, the file modes")
+            "the full-landing merges, the roadmap, the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -154,9 +155,13 @@ HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
 # The steering check is handed the base A-05 judges against, for its authority rule's range
 # (#102), and is run without one when there is no base, so that it reads every commit instead.
 STEERING = ["python3", "-I", ".github/steering.py"]
+# The full-landing merges (#296) are judged over the same range, after the part-row merges, which
+# run in the script itself, and before the roadmap.
+LANDING_SUBJECTS = ["python3", "-I", "tools/landing_subjects.py", "--base", "origin/main"]
 PYTHON_CHECKS = [
     ["python3", "-I", ".github/path-ownership.py", "origin/main", "HEAD"],
     STEERING + ["--base", "origin/main"],
+    LANDING_SUBJECTS,
     ["python3", "-I", "tools/roadmap.py", "--check"],
 ]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
@@ -424,6 +429,7 @@ class HookTests(CheckTestCase):
         self.assertLines([
             "pre-push: A-05 not checked: python3 is not on PATH.",
             "pre-push: steering not checked: python3 is not on PATH.",
+            "pre-push: the full-landing merges not checked: python3 is not on PATH.",
             "pre-push: the roadmap not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
@@ -436,11 +442,13 @@ class HookTests(CheckTestCase):
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
         self.assertLines(["pre-push: A-05 not checked: no main to diff against.",
-                          "pre-push: part-row merges not checked: no main to diff against."], result.stderr)
+                          "pre-push: part-row merges not checked: no main to diff against.",
+                          "pre-push: full-landing merges not checked: no main to diff against."], result.stderr)
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
-        # No base, so the steering check is handed none and reads every commit HEAD reaches.
-        self.assertEqual([STEERING] + PYTHON_CHECKS[2:] + BUILD + terraform_checks(), case.calls())
+        # No base, so the steering check is handed none and reads every commit HEAD reaches, and the
+        # full-landing merges, like the part-row merges, are not judged.
+        self.assertEqual([STEERING] + PYTHON_CHECKS[3:] + BUILD + terraform_checks(), case.calls())
 
     def test_duplicated_build_artifacts(self):
         case = Case(self, change="docs/notes.md")
@@ -913,6 +921,45 @@ class PartRowMergeTests(CheckTestCase):
         self.assertEqual(1, result.status, result.stdout)
         self.assertLines([part_row_missing("pre-push", sha, subject, "Outstanding:"),
                           f"pre-push: {PART_ROW_FAIL}", HOOK_FIX], result.stderr)
+
+
+LANDING_FAIL = "a full-landing merge names a ticket with an open box, or the full-landing merges were not judged."
+
+
+class FullLandingMergeTests(CheckTestCase):
+    """#296: tools/landing_subjects.py is run over the range the part-row merges are judged on, in
+    both modes, and its failure fails the check. What it judges is its own companion's to prove,
+    tools/landing_subjects_tests.py; here python3 is a double, as for every Python check."""
+
+    def test_the_full_check_runs_it_over_the_base_the_caller_names(self):
+        case = Case(self, change="docs/notes.md")
+        fork = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=case.work, env=case.env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+        result = case.run("--full", "--port", PORT, "--base", fork)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertIn(["python3", "-I", "tools/landing_subjects.py", "--base", fork], case.calls())
+
+    def test_a_held_merge_fails_the_full_check_before_the_roadmap(self):
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main",
+                          f"check: fail: {LANDING_FAIL}"], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:3], case.calls())
+
+    def test_the_hook_holds_it_too(self):
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main",
+                          f"pre-push: {LANDING_FAIL}", HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:3], case.calls())
+
+    def test_the_header_says_what_it_catches(self):
+        header = "\n".join(line for line in SCRIPT.read_text().splitlines() if line.startswith("#"))
+        self.assertIn("tools/landing_subjects.py", header)
+        self.assertIn('"Merge task"', header)
+        self.assertIn("open `- [ ]` box", header)
 
 
 class FloorTests(CheckTestCase):
