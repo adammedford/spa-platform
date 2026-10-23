@@ -286,17 +286,34 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'classify') {
         const qs = jsonAfter(prompt, 'QUESTIONS') || []
         const kinds = served.kinds || {}
+        // served.classes: {q: {kind, summary, target, removeBoxes, addBlockedBy, unstated, followUp}},
+        // a classifier's whole return for a question, over the empty fields every other one carries.
+        const classes = served.classes || {}
+        const EMPTY = { target: 0, removeBoxes: [], addBlockedBy: [], unstated: '', followUp: { title: '', touches: [], blockedBy: [], what: '' } }
         out = {
-          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}` })),
+          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}`, ...EMPTY, ...(classes[q.q] || {}) })),
           rewrites: (served.rewrite || []).map((n) => ({ issue: n, questions: qs.filter((q) => q.issue === n).map((q) => q.q), why: 'the grill said so' })),
         }
       } else if (label.startsWith('apply:')) {
         const unit = jsonAfter(prompt, 'UNIT') || { tickets: [] }
         const qs = unit.tickets.flatMap((t) => t.questions)
+        // An applier that edits a ticket's body is counted while it runs, so two that edit the same
+        // body at once show as a peak above one.
+        const edits = unit.edits || []
+        const editing = edits.length > 0
+        if (editing) { inFlight.edit = (inFlight.edit || 0) + 1; env.peaks.edit = Math.max(env.peaks.edit || 0, inFlight.edit) }
+        await new Promise((r) => setTimeout(r, 5))
+        if (editing) inFlight.edit--
+        env.units = [...(env.units || []), unit]
         out = {
           unit: unit.key || '',
           commits: qs.filter((q) => q.kind === 'integrator-edit').map((q) => ({ sha: sha('f'), subject: q.summary, questions: [q.q] })),
-          issues: qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+          issues: [
+            ...qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+            ...(unit.followUps || []).map((f, i) => ({ number: 600 + i, url: URL(600 + i), title: f.title, questions: [f.q] })),
+          ],
+          edits: edits.map((e) => ({ issue: e.target, preserved: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
+          edges: (unit.edges || []).map((e) => ({ issue: e.target, blockedBy: e.addBlockedBy, questions: [e.q] })),
           candidates: qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ url: `${URL(q.issue)}#issuecomment-7`, questions: [q.q] })),
           rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
@@ -612,6 +629,89 @@ try {
     if (second.labels.includes('classify') || APPLIERS(second.labels).length) fail(`resumption: the rerun dispatched ${second.labels.join(', ')}`)
     if (!second.result.reused.includes('classify') || !second.result.reused.some((r) => r.startsWith('apply/'))) fail(`resumption: reused ${second.result.reused}`)
     if (second.result.apply.done.join() !== first.result.apply.done.join()) fail('resumption: the rerun\'s hand-over lost what the first run applied')
+  }
+
+  // 11b. Follow-ups and edits to other tickets (#320). On 2026-10-22 Apply skipped Q71 and Q174 as
+  //      needing no repository change though each asked for an integrator follow-up, and Q91 and Q92
+  //      because their edit landed on a ticket outside the rewrite list. The cases below are those
+  //      four shapes, as the classifier returns them, plus an edit it cannot state and an answer
+  //      that needs nothing. The companion proves what Apply does with each kind and that the
+  //      classifier is told the kinds; which kind a live answer gets stays the classifier's call.
+  checks++
+  {
+    const BOX2 = '- [ ] The deployed cell\'s runbooks are walked end to end'
+    const BOX3 = '- [ ] Each runbook\'s evidence is posted on the sitting ticket'
+    const q = (n, issue, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+    const answers = [
+      comment(30, `## Questions: ${cite(278)}, issue-278, Coding standards\n\n${q(1, 278, 'File an integrator follow-up to bring the wiz skill\'s sitting C in line?')}\n${q(4, 278, 'Does this ticket stay text-only?')}`, '2026-10-21T06:10:00Z'),
+      comment(31, `## Questions: ${cite(244)}, issue-244, Walk the runbooks\n\n${q(2, 244, 'Have the morning remove boxes 2 and 3 from #62?')}\n${q(3, 244, 'Add #235 and the Q5 follow-up as direct blockers of #244?')}\n${q(5, 244, 'Bring #62\'s acceptance in line with the move?')}`, '2026-10-21T06:10:01Z'),
+    ]
+    const classes = {
+      1: { kind: 'follow-up', summary: 'file the wiz follow-up', followUp: { title: 'The wiz skill\'s sitting C starts from a standing cell and posts on the sitting ticket', touches: ['.claude/skills/wiz/SKILL.md'], blockedBy: [], what: 'Bring sitting C in line: start from a standing or absent cell, add rollback.sh, post the runs on the sitting ticket.' } },
+      2: { kind: 'ticket-edit', summary: 'remove boxes 2 and 3 from #62', target: 62, removeBoxes: [BOX2, BOX3] },
+      3: { kind: 'ticket-edit', summary: 'block #244 on #235', target: 244, addBlockedBy: [235], unstated: 'the Q5 follow-up is not filed yet, so its number cannot be stated' },
+      4: { kind: 'no-repo-change', summary: 'the grilling record already holds it and no ticket, follow-up or edit is asked for' },
+      5: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 },
+    }
+    const night320 = issueWith([...answers, comment(91, 'Confirm Q1 to Q5 as pre-accepted.', '2026-10-21T08:00:00Z')])
+    const env = newRepo()
+    const { result, labels, prompt, calls } = await execute(env, { date: DATE }, { issue: night320, kinds: {}, classes })
+    const done = result.apply.done.join('\n')
+    const units = env.units || []
+    const followUps = units.flatMap((u) => u.followUps || [])
+    const cls = prompt('classify')
+    // The classifier is told both kinds, and that an answer asking for a ticket is not one needing nothing.
+    if (!/^- follow-up: /m.test(cls) || !/^- ticket-edit: /m.test(cls)) fail('#320: the classifier prompt does not define the follow-up and ticket-edit kinds')
+    if (!/^- no-repo-change: [^\n]*(asks for|asking for)[^\n]*follow-up/m.test(cls)) fail('#320: the classifier prompt does not keep an answer asking for a follow-up out of no-repo-change')
+    // Q71's shape: one ticket, raised by its own ticket, shape-checked, neither sub-issue nor blocker.
+    const f1 = followUps.filter((f) => f.q === 1)
+    if (f1.length !== 1) fail(`#320 Q71 shape: ${f1.length} follow-ups for Q1, expected one`)
+    else {
+      if (!f1[0].body.startsWith(`**Raised by:** ${cite(278)}, Q1 of `) || !f1[0].body.includes(cite(ISSUE))) fail(`#320 Q71 shape: the follow-up's Raised-by line does not name its ticket, the question and the Overnight issue: ${f1[0].body.split('\n')[0]}`)
+      if (!/^\*\*Touches:\*\* `\.claude\/skills\/wiz\/SKILL\.md`$/m.test(f1[0].body) || !/^\*\*Owner:\*\* <role>$/m.test(f1[0].body)) fail('#320 Q71 shape: the follow-up body lacks its Touches line or the Owner line the applier derives')
+    }
+    if ((done.match(/^filed #\d+ [^\n]*\(Q1\)/gm) || []).length !== 1) fail(`#320 Q71 shape: the hand-over does not name one filed ticket for Q1:\n${done}`)
+    const fp = calls.filter((c) => c.label.startsWith('apply:') && /FOLLOW-UP TICKETS/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
+    const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
+    if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
+    // Q91's shape: #62's boxes removed, its old body saved first.
+    const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
+    if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
+    if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the old body is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its saved body:\n${done}`)
+    const ep = calls.filter((c) => c.label.startsWith('apply:') && /"edits":\[\{/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!ep.includes(`## Body before ${DATE}`)) fail('#320 Q91 shape: the applier is not told to save the old body as rewrites do')
+    // Q92's shape: the stated edge added, the unstated rest filed as a follow-up naming #244.
+    const e3 = units.flatMap((u) => u.edges || []).filter((e) => e.q === 3)
+    if (e3.length !== 1 || e3[0].target !== 244 || e3[0].addBlockedBy.join() !== '235') fail(`#320 Q92 shape: the edges sent are ${JSON.stringify(e3)}`)
+    if (!/^blocked #244 by #235 \(Q3\)$/m.test(done)) fail(`#320 Q92 shape: the hand-over does not name the edge:\n${done}`)
+    if (!/`[^`]*gh issue edit <target> --add-blocked-by <n>[^`]*`/.test(calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt).join('\n'))) fail('#320 Q92 shape: no applier is told to add an edge with gh issue edit --add-blocked-by')
+    const f3 = followUps.filter((f) => f.q === 3)
+    if (f3.length !== 1 || !/#244\b/.test(f3[0].title) || !f3[0].body.includes('the Q5 follow-up is not filed yet')) fail(`#320 Q92 shape: the part of the answer no edge states was not filed as a follow-up naming #244: ${JSON.stringify(f3)}`)
+    // An edit the answer cannot state is a follow-up naming the ticket, owned by the integrator and writing nothing.
+    const f5 = followUps.filter((f) => f.q === 5)
+    if (f5.length !== 1 || !/#62\b/.test(f5[0].title) || !/^\*\*Owner:\*\* integrator$/m.test(f5[0].body) || !/^\*\*Touches:\*\* none/m.test(f5[0].body)) fail(`#320: an edit stated nowhere was not filed as an integrator follow-up naming #62: ${JSON.stringify(f5)}`)
+    if (units.some((u) => (u.edits || []).some((e) => e.q === 5))) fail('#320: an edit with nothing stated was sent to an applier as an edit')
+    // An answer needing nothing is still skipped with its reason, and no applier is sent it.
+    if (!/^skipped Q4 \(#278\): needs nothing: the grilling record already holds it/m.test(done.replace(cite(278), '#278'))) fail(`#320: Q4, needing nothing, is not skipped with its reason:\n${done}`)
+    if (units.some((u) => u.tickets.some((t) => t.questions.some((x) => x.q === 4 && x.kind !== 'no-repo-change')))) fail('#320: Q4 reached an applier as work')
+    if (!labels.length || result.refusals.some((r) => /Q[1-5]\b/.test(r))) fail(`#320: refusals name the questions: ${JSON.stringify(result.refusals)}`)
+    // Without a Confirm comment, each is on the would-do list and nothing is filed or edited.
+    const dry = await execute(newRepo(), { date: DATE }, { issue: issueWith(answers), kinds: {}, classes })
+    const would = dry.result.apply.wouldDo.join('\n')
+    for (const n of [1, 2, 3, 5]) if (!new RegExp(`^Q${n} \\(`, 'm').test(would)) fail(`#320 dry: Q${n} is not on the would-do list:\n${would}`)
+    if (APPLIERS(dry.labels).length) fail(`#320 dry: appliers ran: ${dry.labels.join(', ')}`)
+    // Two answers on different tickets that both edit #62's body never run at once.
+    const two = issueWith([
+      comment(40, `## Questions: ${cite(310)}, issue-310, One\n\n${q(1, 310, 'Remove box 2 from #62?')}`, '2026-10-21T06:20:00Z'),
+      comment(41, `## Questions: ${cite(311)}, issue-311, Two\n\n${q(2, 311, 'Remove box 3 from #62?')}`, '2026-10-21T06:20:01Z'),
+      comment(42, `## Questions: ${cite(312)}, issue-312, Three\n\n${q(3, 312, 'File a follow-up?')}`, '2026-10-21T06:20:02Z'),
+      comment(92, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const raceEnv = newRepo()
+    const race = await execute(raceEnv, { date: DATE }, { issue: two, kinds: {}, classes: { 1: { ...classes[2], removeBoxes: [BOX2] }, 2: { ...classes[2], removeBoxes: [BOX3] }, 3: classes[1] } })
+    if (raceEnv.peaks.edit !== 1) fail(`#320: two appliers edited #62's body at once (${raceEnv.peaks.edit} in flight)`)
+    if (!/^edited #62: removed 1 box\(es\)[^\n]*\(Q1\)$/m.test(race.result.apply.done.join('\n')) || !/^edited #62: removed 1 box\(es\)[^\n]*\(Q2\)$/m.test(race.result.apply.done.join('\n'))) fail(`#320: the two edits of #62 were not both applied:\n${race.result.apply.done.join('\n')}`)
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across

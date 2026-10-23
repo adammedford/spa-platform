@@ -210,11 +210,14 @@ const VERIFY = {
   },
   required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'lanes', 'claimed', 'record'],
 }
-const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record']
+const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
+// Every question carries the follow-up and ticket-edit fields, empty when its kind is another (#320),
+// so a classifier that leaves one out fails the schema rather than reading as one that stated nothing.
+const FOLLOW_UP = { type: 'object', properties: { title: { type: 'string' }, touches: { type: 'array', items: { type: 'string' } }, blockedBy: { type: 'array', items: { type: 'integer' } }, what: { type: 'string' } }, required: ['title', 'touches', 'blockedBy', 'what'] }
 const CLASSIFY = {
   type: 'object',
   properties: {
-    questions: { type: 'array', items: { type: 'object', properties: { q: { type: 'integer' }, issue: { type: 'integer' }, task: { type: 'string' }, answer: { type: 'string' }, kind: { type: 'string', enum: KINDS }, summary: { type: 'string' } }, required: ['q', 'issue', 'task', 'answer', 'kind', 'summary'] } },
+    questions: { type: 'array', items: { type: 'object', properties: { q: { type: 'integer' }, issue: { type: 'integer' }, task: { type: 'string' }, answer: { type: 'string' }, kind: { type: 'string', enum: KINDS }, summary: { type: 'string' }, target: { type: 'integer' }, removeBoxes: { type: 'array', items: { type: 'string' } }, addBlockedBy: { type: 'array', items: { type: 'integer' } }, unstated: { type: 'string' }, followUp: FOLLOW_UP }, required: ['q', 'issue', 'task', 'answer', 'kind', 'summary', 'target', 'removeBoxes', 'addBlockedBy', 'unstated', 'followUp'] } },
     rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, questions: { type: 'array', items: { type: 'integer' } }, why: { type: 'string' } }, required: ['issue', 'questions', 'why'] } },
   },
   required: ['questions', 'rewrites'],
@@ -228,11 +231,13 @@ const APPLIED = {
     issues: MADE({ number: { type: 'integer' }, url: { type: 'string' }, title: { type: 'string' } }),
     candidates: MADE({ url: { type: 'string' } }),
     rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, preserved: { type: 'string' } }, required: ['issue', 'preserved'] } },
+    edits: MADE({ issue: { type: 'integer' }, preserved: { type: 'string' }, removed: { type: 'array', items: { type: 'string' } } }),
+    edges: MADE({ issue: { type: 'integer' }, blockedBy: { type: 'array', items: { type: 'integer' } } }),
     skipped: { type: 'array', items: { type: 'object', properties: { q: { type: 'integer' }, why: { type: 'string' } }, required: ['q', 'why'] } },
     pushed: { type: 'object', properties: { branch: { type: 'string' }, tip: { type: 'string' }, ok: { type: 'boolean' }, reason: { type: 'string' } }, required: ['branch', 'tip', 'ok', 'reason'] },
     refused: { type: 'string' }, unreachable: { type: 'boolean' },
   },
-  required: ['unit', 'commits', 'issues', 'candidates', 'rewrites', 'skipped', 'pushed', 'refused', 'unreachable'],
+  required: ['unit', 'commits', 'issues', 'candidates', 'rewrites', 'edits', 'edges', 'skipped', 'pushed', 'refused', 'unreachable'],
 }
 const ENTRY = {
   type: 'object',
@@ -604,28 +609,99 @@ const refreshDescription = (body, head, merges, lanes) => {
   return { state: 'rewritten', named, body: result.join('\n'), rewrote, closing }
 }
 
+// ---------------------------------------------------------------- follow-ups and ticket edits
+// #320. On 2026-10-22 Apply classed Q71 and Q174 of #286 as needing no repository change and skipped
+// them, though each answer asked for an integrator follow-up ticket, and skipped Q91 and Q92 because
+// their edit (two boxes off #62's body; blocked-by edges on #244) lands on a ticket outside the
+// rewrite list. So an answer asking for a follow-up is filed as one, under the Overnight issue's
+// rules: its body is written here, the applier derives its owner from its Touches paths, and
+// tools/ticket_shape.py checks its shape before it is filed (overnight.js -> NEW TICKETS). An answer
+// whose change is an edit to a ticket's body boxes or blocked-by edges is applied to that ticket; the
+// part of it the answer alone cannot state (a ticket not yet filed, a condition) is filed as a
+// follow-up naming the ticket, and so is an edit stated nowhere. A follow-up names its origin on a
+// Raised-by line and is neither a sub-issue nor a blocker of it (docs/agents/issue-tracker.md).
+const BOX_LINE = /^- \[[ x]\] \S/
+const followUpTicket = (date, issue, q, f) => ({
+  q: q.q, title: f.title, blockedBy: f.blockedBy, file: `${paths(date).mdir}/apply/followup-q${q.q}.md`,
+  body: [
+    `**Raised by:** #${q.issue}, Q${q.q} of Overnight ${date} (#${issue}), confirmed at ${q.authority || 'no Confirm comment'}`,
+    `**Owner:** ${f.owner || '<role>'}`,
+    `**Touches:** ${f.touches.length ? f.touches.map((p) => '`' + p + '`').join(', ') : 'none: a tracker edit, no repository path'}`,
+    '',
+    '## What to build',
+    '',
+    f.what,
+    '',
+    `The question, Q${q.q} on #${q.issue}: ${q.text}`,
+    '',
+    `Its confirmed answer: ${q.answer}`,
+    '',
+    '## Acceptance criteria',
+    '',
+    `- [ ] ${f.title}: done, or declined with the reason in this issue's Answer.`,
+  ].join('\n'),
+})
+// What applying one classified question asks of an applier: the edits, edges and follow-ups, and the
+// refusals for what it cannot be asked to do.
+const planOf = (date, issue, q, c) => {
+  const out = { edits: [], edges: [], followUps: [], refusals: [] }
+  if (c.kind === 'follow-up') {
+    const f = c.followUp
+    const touches = f.touches.map((p) => String(p).trim()).filter(Boolean)
+    const title = f.title.trim() || c.summary
+    if (!touches.length) out.refusals.push(`Q${q.q} asks for a follow-up that names no path it writes, so no owner can be derived from it; it is not filed`)
+    else out.followUps.push(followUpTicket(date, issue, q, { title, touches, blockedBy: f.blockedBy, what: f.what || c.summary }))
+  }
+  if (c.kind === 'ticket-edit') {
+    const t = c.target
+    if (!Number.isInteger(t) || t <= 0) { out.refusals.push(`Q${q.q} is an edit to a ticket the classifier did not name; it is not applied`); return out }
+    const boxes = c.removeBoxes.filter((b) => BOX_LINE.test(b))
+    const notBoxes = c.removeBoxes.filter((b) => !BOX_LINE.test(b))
+    const edges = [...new Set(c.addBlockedBy.filter((n) => Number.isInteger(n) && n > 0 && n !== t))]
+    if (boxes.length) out.edits.push({ q: q.q, target: t, removeBoxes: boxes })
+    if (edges.length) out.edges.push({ q: q.q, target: t, addBlockedBy: edges })
+    const rest = [c.unstated.trim(), notBoxes.length ? `remove ${notBoxes.map((b) => JSON.stringify(b)).join(', ')}, which ${notBoxes.length === 1 ? 'is' : 'are'} not a box line` : ''].filter(Boolean)
+    if (!boxes.length && !edges.length && !rest.length) rest.push(c.summary)
+    if (rest.length) {
+      const title = boxes.length || edges.length ? `The rest of Q${q.q} of Overnight ${date} on #${t}` : `Apply Q${q.q} of Overnight ${date} to #${t}`
+      out.followUps.push(followUpTicket(date, issue, q, { title, touches: [], blockedBy: [], owner: 'integrator', what: `On #${t}: ${rest.join('; ')}. The morning could not state this as an edit from the answer alone, so it is filed here for the integrator to apply to #${t}.` }))
+    }
+  }
+  return out
+}
+
 // ---------------------------------------------------------------- applier units
 // One applier per grilled ticket with work to do (#78 -> "Apply"), at most maxParallel in all
-// (#78 -> "Agent budget"). Past that, every committing ticket shares one applier, since they run on
-// one branch one at a time anyway, and the tracker-only tickets share the rest round-robin.
+// (#78 -> "Agent budget"). Past that, every chained ticket shares one applier, since they run one at
+// a time anyway, and the tracker-only tickets share the rest round-robin. The chain is the tickets
+// that commit, on one branch, and those that write a ticket body another applier may write too: an
+// edit of a ticket's boxes, or the rewrite of a ticket such an edit targets (#320), since two
+// appliers writing one body at once would each clobber the other's.
+const TRACKER_KINDS = ['workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
 const unitsFor = (byTicket) => {
-  const commits = byTicket.filter((t) => t.questions.some((q) => q.kind === 'integrator-edit'))
-  const trackers = byTicket.filter((t) => !commits.includes(t) && (t.rewrite || t.questions.some((q) => q.kind === 'workstream-ticket' || q.kind === 'decision-to-record')))
-  let cGroups = commits.map((t) => [t])
+  const committing = (t) => t.questions.some((q) => q.kind === 'integrator-edit')
+  const targets = new Set(byTicket.flatMap((t) => t.edits.map((e) => e.target)))
+  const chained = (t) => committing(t) || t.edits.length > 0 || (t.rewrite && targets.has(t.issue))
+  const chain = byTicket.filter(chained)
+  const trackers = byTicket.filter((t) => !chain.includes(t) && (t.rewrite || t.followUps.length || t.edges.length || t.questions.some((q) => TRACKER_KINDS.includes(q.kind))))
+  let cGroups = chain.map((t) => [t])
   let tGroups = trackers.map((t) => [t])
   if (cGroups.length + tGroups.length > MAX_PAR) {
-    cGroups = commits.length ? [commits] : []
+    cGroups = chain.length ? [chain] : []
     const room = MAX_PAR - cGroups.length
     if (room <= 0) {
-      cGroups = [[...commits, ...trackers]]
+      cGroups = [[...chain, ...trackers]]
       tGroups = []
     } else if (trackers.length > room) {
       tGroups = Array.from({ length: room }, () => [])
       trackers.forEach((t, i) => tGroups[i % room].push(t))
     }
   }
-  const unit = (kind, g) => ({ kind, key: `${kind}-${g.map((t) => t.issue).join('-')}`, tickets: g })
-  return { commit: cGroups.map((g) => unit('commit', g)), tracker: tGroups.map((g) => unit('tracker', g)) }
+  const unit = (g) => {
+    const kind = g.some(committing) ? 'commit' : 'tracker'
+    return { kind, key: `${kind}-${g.map((t) => t.issue).join('-')}`, tickets: g, followUps: g.flatMap((t) => t.followUps), edits: g.flatMap((t) => t.edits), edges: g.flatMap((t) => t.edges) }
+  }
+  return { chain: cGroups.map(unit), tracker: tGroups.map(unit) }
 }
 
 // ---------------------------------------------------------------- prompts
@@ -679,10 +755,13 @@ Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE
 QUESTIONS: ${JSON.stringify(questions)}
 
 For each question above, read its ticket's "## Questions for Adam", "## Grilling record" and "Proposed glossary / ADR" comments (\`cd ${REPO} && gh issue view <issue> --json title,body,labels,comments\`) and assign it exactly one kind:
-- no-repo-change: the decision is already recorded by the grilling, or applying it is code, a test, a script or anything that needs a build or a run. That work belongs to the ticket's implementation, never to the morning.
+- no-repo-change: the answer needs nothing from the morning: the grilling already records the decision, and applying it is the ticket's own implementation (code, a test, a script, anything that needs a build or a run). An answer that asks for a follow-up or another ticket to be filed is never this kind, even when that ticket's work is code: it is follow-up. Nor is one whose change is to a ticket's boxes or blocked-by edges: it is ticket-edit. summary says why nothing is needed.
+- follow-up: the answer asks for a ticket to be filed, an integrator or workstream follow-up, rather than for an edit the morning makes itself (#320). followUp carries title (what to build, as an issue title), touches (the repository paths its work writes, from which its owner is derived; at least one), blockedBy (the open issues it waits for, as numbers) and what (what to build, in a sentence or two, from the answer and its recommendation).
+- ticket-edit: the answer's change is to a ticket's body boxes or blocked-by edges, this ticket's or another's, short of a rewrite (#320). target is that ticket's number; removeBoxes the box lines to take off its body, each copied whole and exactly from its current body (\`cd ${REPO} && gh issue view <target> --json body\`); addBlockedBy the issue numbers to add as its blockers; unstated whatever part of the change the answer alone does not state as those (a ticket not filed yet, a condition still open, a box reworded rather than removed), "" when none. A change you cannot state at all goes whole in unstated: the morning files it as a follow-up naming the target.
 - integrator-edit: a document a session steers by, on an integrator path: a glossary term, a sentence in an agent guide, a change request's status line (#78 grill Q8). Never a contract sentence or an ADR, its status or its index row: those are decision-to-record.
 - workstream-ticket: an edit inside a workstream's paths (OWNERSHIP.md), which becomes a ticket rather than an edit.
 - decision-to-record: an ADR candidate, drafted as a comment and never as a file.
+Every question carries target, removeBoxes, addBlockedBy, unstated and followUp; give 0, [], [], "" and {"title": "", "touches": [], "blockedBy": [], "what": ""} where its kind uses none of them.
 summary says in one line what applying it changes. rewrites lists each ticket whose answers say its body is rewritten before an agent takes it (#78 grill Q3), with the questions that say so; a spec (GLOSSARY.md -> Spec) is never rewritten by the morning (Q13). Return the questions in the order given, each with q, issue, task and answer as given.`
 }
 
@@ -697,12 +776,18 @@ PHASE FILE: ${p.mdir}/apply/${unit.key}.json INPUTS: ${phaseKey}
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 UNIT: ${JSON.stringify(unit)}
 
-Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate or a preserved body already among the ticket's comments.
+Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate or a preserved body already among the ticket's comments, a box already gone from its target's body, an edge already among its target's blockers.
 ${commits ? `Integrator edits, one commit each, on ${p.morningBranch} in the morning worktree ${p.morningWt}, forked from origin/main: reuse it when it exists, else \`git -C ${REPO} fetch origin && git -C ${REPO} worktree add -b ${p.morningBranch} ${p.morningWt} origin/main\` (when the branch exists without the worktree, \`git -C ${REPO} worktree add ${p.morningWt} ${p.morningBranch}\`). Each commit's subject says what changed; its body cites the Overnight issue as #${issue}, the question as Q<n> and its answer line verbatim; its last paragraph carries the attribution line and, on a line of its own, "Authority: <the question's authority URL>", because every such edit is to a steering document (docs/agents/landing-work.md). Commit with \`git -C ${p.morningWt} commit -F <a message file under ${p.mdir}/>\`. When the branch has commits, push it with the hook running, as the house rules say: \`git -C ${p.morningWt} push -u origin ${p.morningBranch}\`. A hook failure leaves it local: pushed.ok false and reason the hook's last lines.
 ` : `You make no commit. pushed is {branch: "", tip: "", ok: true, reason: "no commits"}.
 `}Workstream tickets: file each as \`cd ${REPO} && gh issue create --title "<what to build>" --label needs-triage --parent ${PARENT_ISSUE} --body-file <a file under ${p.mdir}/>\` (#78 grill Q9: the night's Route phase writes the brief), its body opening with the owner line (**Owner:** and the OWNERSHIP.md role) and the plan row where there is one, citing #${issue} and Q<n>, and add the blocked-by edges the recommendation names with \`cd ${REPO} && gh issue edit <new> --add-blocked-by <n>\`.
 Decisions to record: draft each ADR candidate as a comment on its ticket, \`cd ${REPO} && gh issue comment <ticket> --body-file <a file under ${p.mdir}/>\`: the decision, the rejected alternatives, and any sentence that contradicts an existing ADR flagged as docs/agents/domain.md asks. Never an ADR file.
 Rewrites (a ticket with "rewrite": true): first preserve the current body verbatim in a comment headed "## Body before ${date}" (\`cd ${REPO} && gh issue comment <ticket> --body-file <file>\`), then rewrite it as current decision, what to build and acceptance, naming every confirmed question number, \`cd ${REPO} && gh issue edit <ticket> --body-file <file>\`. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
+FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
+1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
+2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
+3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/issue-tracker.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
+Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, first preserve the current body verbatim in a comment headed "## Body before ${date}" whose next line names Q<n> of #${issue} (\`cd ${REPO} && gh issue comment <target> --body-file <file>\`), then write the body with exactly those lines removed and no other byte changed, \`cd ${REPO} && gh issue edit <target> --body-file <file>\`. List each in edits {issue: the target, preserved: that comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
+Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
 A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
 }
 
@@ -1009,12 +1094,18 @@ if (!verdict.ok) {
     const c = kinds.get(q.q)
     if (!c || !KINDS.includes(c.kind)) { refusals.push(`the classifier returned no kind for Q${q.q}; it is not applied`); continue }
     let t = byTicket.find((x) => x.issue === q.issue)
-    if (!t) { t = { issue: q.issue, task: q.task, title: q.title, rewrite: rewrite.has(q.issue), questions: [] }; byTicket.push(t) }
+    if (!t) { t = { issue: q.issue, task: q.task, title: q.title, rewrite: rewrite.has(q.issue), questions: [], followUps: [], edits: [], edges: [] }; byTicket.push(t) }
+    const plan = planOf(DATE, ISSUE, q, c)
+    refusals.push(...plan.refusals)
+    t.followUps.push(...plan.followUps)
+    t.edits.push(...plan.edits)
+    t.edges.push(...plan.edges)
     t.questions.push({ ...q, kind: c.kind, summary: c.summary })
   }
   if (dry) {
     for (const t of byTicket) {
       for (const q of t.questions) if (q.kind !== 'no-repo-change') apply.wouldDo.push(`Q${q.q} (#${t.issue}): ${q.kind}: ${q.summary}`)
+      for (const f of t.followUps) apply.wouldDo.push(`Q${f.q} (#${t.issue}): file the follow-up "${f.title}"`)
       if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the old one preserved in a dated comment`)
     }
   } else {
@@ -1025,9 +1116,11 @@ if (!verdict.ok) {
     }
     // Commit appliers share one branch and run one at a time; tracker-only appliers run beside
     // them, bounded by the slots (#78 -> "Apply").
+    // Chained appliers, those that commit or write a ticket body another may write, run one at a
+    // time; tracker-only appliers run beside them, bounded by the slots (#78 -> "Apply"; #320).
     const commitChain = async () => {
       const out = []
-      for (const u of units.commit) out.push(await runUnit(u))
+      for (const u of units.chain) out.push(await runUnit(u))
       return out
     }
     const results = await parallel([commitChain, ...units.tracker.map((u) => () => runUnit(u))])
@@ -1036,11 +1129,15 @@ if (!verdict.ok) {
       for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
       for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
       for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the old body is at ${w.preserved}`)
+      for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the old body is at ${e.preserved} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
+      for (const e of r.edges) apply.done.push(`blocked #${e.issue} by ${e.blockedBy.map((n) => '#' + n).join(', ')} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
       for (const s of r.skipped) apply.done.push(`skipped Q${s.q}: ${s.why}`)
       if (r.refused) refusals.push(`applier ${r.unit} refused: ${r.refused}`)
       if (r.unreachable) refusals.push(`applier ${r.unit}: GitHub could not be reached; relaunch to finish it`)
       if (r.commits.length) { apply.morning.commits += r.commits.length; apply.morning.pushed = r.pushed.ok; apply.morning.reason = r.pushed.reason }
     }
+    // An answer needing nothing is named with its reason, never dropped from the hand-over (#320).
+    for (const t of byTicket) for (const q of t.questions) if (q.kind === 'no-repo-change') apply.done.push(`skipped Q${q.q} (#${t.issue}): needs nothing: ${q.summary}`)
   }
 }
 
