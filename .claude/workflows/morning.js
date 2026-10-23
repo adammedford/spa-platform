@@ -503,7 +503,7 @@ const laneTipsRemedy = (v, off, issue, intBranch) => {
   for (const w of off) {
     lines.push(FULL.test(w.partner || '')
       ? `- ${w.path} (${w.branch}) at ${w.tip}: rebuilt as ${w.partner}, the commit on ${intBranch} with the same tree`
-      : `- ${w.path} (${w.branch}) at ${w.tip}: not merged; no commit on ${intBranch} has its tree, so its lane's work is not on the branch in any form`)
+      : `- ${w.path} (${w.branch}) at ${w.tip}: not merged; no commit on ${intBranch} has its tree, so this tip is not on the branch, as merged or as rebuilt (part of its lane's work may be: compare the tip with the lane's merge)`)
   }
   if (off.some((w) => !FULL.test(w.partner || ''))) lines.push('Not every tip has a tree-equal partner, so this is not only a rebuild and no remap clears it: the report and git disagree on each lane named not merged.')
   else if (!FULL.test(v.oldTip || '') || !FULL.test(v.head || '')) lines.push(`Every tip has a tree-equal partner, so ${intBranch} was rebuilt, but ${!FULL.test(v.oldTip || '') ? 'the old tip, the one the lanes merged into, was not found' : 'the new tip was not read'}; find it and run tools/remap_rebuild.py (#318) with both.`)
