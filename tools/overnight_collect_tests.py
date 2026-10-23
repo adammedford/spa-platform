@@ -205,10 +205,24 @@ def body(row: str = "none", owner: str = "integrator", boxes: str = "- [ ] one")
     return f"**Owner:** {owner}\n**Plan row:** {row}\n\n## Acceptance\n{boxes}\n"
 
 
-def resolved(agent=(), human=(), triage=(), branches=(), road=None) -> dict:
+def resolved(agent=(), human=(), triage=(), branches=(), road=None, states=None) -> dict:
     listings = {"ready-for-agent": list(agent), "ready-for-human": list(human),
                 "needs-triage": list(triage)}
-    return collect.resolve(listings, list(branches), road or ROAD)
+    return collect.resolve(listings, list(branches), road or ROAD, states=states)
+
+
+def refuse_gh(numbers):
+    raise AssertionError(f"a test asked GitHub for {sorted(numbers)}; give the case its states")
+
+
+def setUpModule():
+    # Every in-process case states what the numbers its prose names are; none is asked of gh.
+    shape = collect.ticket_shape()
+    setUpModule.kept, shape.look_up = shape.look_up, refuse_gh
+
+
+def tearDownModule():
+    collect.ticket_shape().look_up = setUpModule.kept
 
 
 def by_issue(answer: dict) -> dict:
@@ -392,10 +406,11 @@ class WillEndPartial(unittest.TestCase):
     line ticket_shape prints for it. A case per rule, each red while collect keeps a table of its own."""
 
     def flags(self, number: int, text: str | None = None, *, label: str = "agent",
-              blockers: tuple[tuple[int, str], ...] = ()) -> list[dict]:
+              blockers: tuple[tuple[int, str], ...] = (), states=None,
+              also: tuple[dict, ...] = ()) -> list[dict]:
         listed = {label: [issue(number, FILED[number] if text is None else text,
-                                blockers=blockers)]}
-        return by_issue(resolved(**listed))[number]["willEndPartial"]
+                                blockers=blockers), *also]}
+        return by_issue(resolved(**listed, states=states))[number]["willEndPartial"]
 
     def rules(self, flags: list[dict]) -> list[str]:
         return [flag["rule"] for flag in flags]
@@ -438,8 +453,54 @@ class WillEndPartial(unittest.TestCase):
 
     def test_blocker_edge_flags_a_stated_wait_with_no_edge(self):
         text = body() + "\nBlocked by #100.\n"
-        self.assertEqual(["blocker-edge"], self.rules(self.flags(7, text)))
+        self.assertEqual(["blocker-edge"], self.rules(self.flags(7, text, states={100: "OPEN"})))
         self.assertEqual([], self.flags(7, text, blockers=((100, "OPEN"),)))
+
+    def test_a_listed_ticket_is_an_open_issue_with_no_lookup(self):
+        # #100 is in tonight's listings, so it is open; refuse_gh proves nothing is asked.
+        text = body() + "\nBlocked by #100.\n"
+        flags = self.flags(7, text, also=(issue(100, body()),))
+        self.assertEqual(["blocker-edge"], self.rules(flags))
+
+    def test_stale_prose_is_not_forecast(self):
+        # #284: a closed issue, a pull request or no issue is no wait, so no partial; a closed edge
+        # says so with no lookup.
+        text = body() + "\nBlocked by #100.\n"
+        for kind in ("CLOSED", "PULL_REQUEST", "MISSING"):
+            with self.subTest(kind):
+                self.assertEqual([], self.flags(7, text, states={100: kind}))
+        self.assertEqual([], self.flags(7, text, blockers=((100, "CLOSED"),)))
+
+    def test_the_numbers_left_are_asked_of_gh_once(self):
+        asked = []
+        shape = collect.ticket_shape()
+
+        def look_up(numbers):
+            asked.append(sorted(numbers))
+            return {n: "CLOSED" for n in numbers}
+
+        shape.look_up = look_up
+        try:
+            listed = [issue(7, body() + "\nBlocked by #100.\n"),
+                      issue(8, body() + "\nStarts after #101 and once #100 lands.\n")]
+            answer = by_issue(resolved(agent=listed))
+        finally:
+            shape.look_up = refuse_gh
+        self.assertEqual([[100, 101]], asked)
+        self.assertEqual(([], []), (answer[7]["willEndPartial"], answer[8]["willEndPartial"]))
+
+    def test_a_failed_lookup_refuses_the_answer(self):
+        shape = collect.ticket_shape()
+
+        def look_up(numbers):
+            raise shape.Unreadable("gh could not reach GitHub")
+
+        shape.look_up = look_up
+        try:
+            with self.assertRaises(collect.Refused):
+                resolved(agent=[issue(7, body() + "\nBlocked by #100.\n")])
+        finally:
+            shape.look_up = refuse_gh
 
     def test_foreground_flags_a_ready_for_agent_ticket(self):
         text = "**Session:** foreground\n" + body()
