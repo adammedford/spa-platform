@@ -21,7 +21,9 @@ and names none that does not exist. A roadmap that quietly drops a row is worse 
 because it reads as coverage.
 
     tools/roadmap.py            rewrite the generated blocks (also --write)
-    tools/roadmap.py --check    fail if they are not what the repository says they should be
+    tools/roadmap.py --check    fail if they are not what the repository says they should be,
+                                or if the commits between origin/main and HEAD merge one id both
+                                whole and in part (#290)
     tools/roadmap.py --json     print the same derivation for a program, and write nothing
 
 An unrecognised argument exits 2 and writes nothing, because the default action writes.
@@ -243,6 +245,18 @@ def citations(root: pathlib.Path, rows: list[str]) -> list[str]:
 # --- what git says happened ----------------------------------------------------------------------
 
 
+def trunk(root: pathlib.Path) -> str | None:
+    """The trunk ref here: origin/main, else main, else None.
+
+    `subjects` reads its history beside HEAD's and `merged_both_ways` reads the range from it to
+    HEAD, so the two ask this one function and cannot settle on different trunks (#290).
+    """
+    for ref in ("origin/main", "main"):
+        if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root):
+            return ref
+    return None
+
+
 def subjects(root: pathlib.Path) -> list[str]:
     """Commit subjects from the integration lines: this branch, and origin/main where it exists.
 
@@ -250,11 +264,8 @@ def subjects(root: pathlib.Path) -> list[str]:
     a branch that main has moved past does not, and deriving from HEAD alone would then rewrite the
     block to drop work that is in the trunk.
     """
-    refs = ["HEAD"]
-    for ref in ("origin/main", "main"):
-        if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root):
-            refs.append(ref)
-            break
+    ref = trunk(root)
+    refs = ["HEAD"] if ref is None else ["HEAD", ref]
     return run(["git", "log", "--format=%s", *refs], root).splitlines()
 
 
@@ -306,36 +317,74 @@ def parent(id_: str, rows: list[str]) -> str | None:
 TICKET = re.compile(r"^issue-\d+$", re.IGNORECASE)
 
 
-def landings(root: pathlib.Path) -> list[tuple[str, str]]:
-    """Every (id, how) a merge subject lands, newest first: how is 'landed' or 'part'.
+def reading(subject: str) -> list[tuple[str, str]]:
+    """Every (id, how) one commit subject lands: how is 'landed' or 'part'.
 
-    The one reading of the subject forms. `landed` folds these into plan rows and `own_states` keeps
-    splits and tickets by their own wording, so the two cannot read one subject two ways.
+    The one reading of the subject forms. `landed` folds these into plan rows, `own_states` keeps
+    splits and tickets by their own wording, and `merged_both_ways` compares them within a range, so
+    no two of them can read one subject two ways.
     """
     found: list[tuple[str, str]] = []
-    for subject in subjects(root):
-        match = LANDED_SUBJECT.match(subject)
-        if match:
-            how = "part" if match.group(1) else "landed"
-            for token in re.split(r"[,\s]+and[,\s]+|[,\s]+", match.group(2)):
-                if ID.match(token):
-                    found.append((token, how))
-                elif TICKET.match(token):
-                    found.append((token.lower(), how))
-            continue
-        match = LANDED_BRANCH.match(subject)
-        if match:
-            # Normalize named prefixes only: 1.6a and 1.6b are distinct lowercase plan rows.
-            # Capture the complete I-/P2- id above, including its hyphen, before the branch slug.
-            id_ = match.group(1)
-            if id_.startswith(("i-", "p2-")):
-                id_ = id_.upper()
-            found.append((id_, "landed"))
-            continue
-        match = LANDED_INTEGRATOR.match(subject) or LANDED_PARENTHESISED.search(subject)
-        if match:
-            found.append((match.group(1), "landed"))
+    match = LANDED_SUBJECT.match(subject)
+    if match:
+        how = "part" if match.group(1) else "landed"
+        for token in re.split(r"[,\s]+and[,\s]+|[,\s]+", match.group(2)):
+            if ID.match(token):
+                found.append((token, how))
+            elif TICKET.match(token):
+                found.append((token.lower(), how))
+        return found
+    match = LANDED_BRANCH.match(subject)
+    if match:
+        # Normalize named prefixes only: 1.6a and 1.6b are distinct lowercase plan rows.
+        # Capture the complete I-/P2- id above, including its hyphen, before the branch slug.
+        id_ = match.group(1)
+        if id_.startswith(("i-", "p2-")):
+            id_ = id_.upper()
+        return [(id_, "landed")]
+    match = LANDED_INTEGRATOR.match(subject) or LANDED_PARENTHESISED.search(subject)
+    if match:
+        return [(match.group(1), "landed")]
     return found
+
+
+def landings(root: pathlib.Path) -> list[tuple[str, str]]:
+    """Every (id, how) a merge subject lands, newest first."""
+    return [found for subject in subjects(root) for found in reading(subject)]
+
+
+def merged_both_ways(root: pathlib.Path) -> list[str] | None:
+    """Each id the commits between the trunk and HEAD merge both whole and in part.
+
+    `landed` lets one full landing anywhere in the ancestry win for good, which is right for the
+    trunk's history and wrong for a branch that has not landed yet. #287's run branch was rebuilt so
+    row 6.7's merge said "Merge part of task 6.7", but the old "Merge task 6.7" was still reachable
+    through the second parents of the rebuilt lane merges, so --check passed on a roadmap that said
+    S7 owed nothing (#290). Within one unlanded range the two subjects contradict each other, and
+    no reading of them is safe, so the check refuses the range and names both commits.
+
+    Only the range counts. A row the trunk already lists as landed can take a later "part of"
+    follow-up (2.1, then 2.1b, #71), and a row the trunk lists as part-landed can be finished by
+    the range. Ids are compared as the subjects write them: a split such as 2.1b is its own id here,
+    and its row's whole landing beside it is no contradiction. With no trunk to compare against
+    there is no range: None, which the caller reports rather than passing in silence.
+    """
+    base = trunk(root)
+    if base is None:
+        return None
+    seen: dict[str, dict[str, list[str]]] = {}
+    for line in run(["git", "log", "--format=%h %s", f"{base}..HEAD"], root).splitlines():
+        sha, _, subject = line.partition(" ")
+        for id_, how in reading(subject):
+            seen.setdefault(id_, {}).setdefault(how, []).append(f"{sha} '{subject}'")
+    problems = []
+    for id_, by in seen.items():
+        if "landed" in by and "part" in by:
+            problems.append(
+                f"'{id_}' is merged whole by {', '.join(by['landed'])} and in part by "
+                f"{', '.join(by['part'])}, both between {base} and HEAD"
+            )
+    return problems
 
 
 def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
@@ -588,6 +637,22 @@ def main(argv: list[str]) -> int:
             "read as open."
         )
         return 1
+
+    if check:
+        contradictions = merged_both_ways(root)
+        if contradictions is None:
+            say(
+                "roadmap: no merge compared: neither origin/main nor main is here, so a row merged "
+                "both whole and in part is not looked for."
+            )
+        elif contradictions:
+            for line in contradictions:
+                say(f"  {line}")
+            say()
+            say("ROADMAP FAILED: this branch both completes a row and leaves it unfinished, and")
+            say("every subject in the ancestry counts, so the full merge would win (#290). Take the")
+            say("one that is wrong off the branch: rebuild it so that commit is not an ancestor.")
+            return 1
 
     closed = tags(root)
     counts = counted(stages, landed(root, rows))
