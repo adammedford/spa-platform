@@ -823,7 +823,7 @@ try {
     const changed = before.filter((l) => !after.includes(l))
     if (changed.length < 15) fail(`2026-10-22's re-run: only ${changed.length} lines changed, so the hand-over check reads too little`)
     for (const l of [...changed, ...after.filter((x) => !before.includes(x))]) if (!ho.includes(l.replace(/`/g, "'"))) fail(`2026-10-22's re-run: the hand-over does not name the rewritten line ${JSON.stringify(l)}`)
-    if (!/### Pull request description\n\n- #400's description named ed8d0633e9c1360fb7c2e425f63237676f4db648, not 76704c5\S*; rewritten/.test(ho)) fail(`2026-10-22's re-run: the hand-over's description section reads ${JSON.stringify((/### Pull request description\n\n[^\n]*/.exec(ho) || [''])[0])}`)
+    if (!ho.includes(`### Pull request description\n\n- ${cite(400)}'s description named ed8d0633e9c1360fb7c2e425f63237676f4db648, not ${NOW}; rewritten`)) fail(`2026-10-22's re-run: the hand-over's description section reads ${JSON.stringify((/### Pull request description\n\n[^\n]*/.exec(ho) || [''])[0])}`)
     if (r.result.refusals.some((x) => /description/.test(x))) fail(`2026-10-22's re-run: refused ${JSON.stringify(r.result.refusals)}`)
 
     // Heads that match leave the description untouched: the description as it was rewritten by hand,
