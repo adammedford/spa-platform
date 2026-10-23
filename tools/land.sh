@@ -267,7 +267,9 @@ name_main_checkout() {
     echo "land: the main checkout, $target, is not on main (it is on ${target_branch:-a detached HEAD}), so no fast-forward is given; moving it is yours."
     return 0
   fi
-  merged="$(git rev-parse "origin/$base")"
+  # Under set -e an unguarded read that fails would end the script here, before the cleanup.
+  merged="$(git rev-parse "origin/$base" 2>/dev/null)" \
+    || { echo "land: git could not read origin/main, so the main checkout, $target, is named with no command."; return 0; }
   if [ "$target_head" = "$merged" ]; then
     echo "land: the main checkout, $target, is at origin/main; there is nothing to fast-forward."
     return 0
@@ -276,7 +278,8 @@ name_main_checkout() {
     echo "land: the main checkout, $target, has commits origin/main lacks, so it cannot fast-forward and no command is given."
     return 0
   fi
-  behind="$(git rev-list --count "$target_head..origin/$base")"
+  behind="$(git rev-list --count "$target_head..origin/$base" 2>/dev/null)" \
+    || { echo "land: the main checkout, $target, is behind origin/main, and git could not count by how much, so no command is given."; return 0; }
   plural=s; [ "$behind" != 1 ] || plural=""
   if ! changes="$(git --no-optional-locks -C "$target" status --porcelain --untracked-files=no)"; then
     echo "land: the main checkout, $target, is $behind commit$plural behind origin/main, and git could not read its status, so no command is given."
