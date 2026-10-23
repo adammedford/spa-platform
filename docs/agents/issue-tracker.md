@@ -79,6 +79,12 @@ ADR-0020 records the decision and its reasons. What it adds to the page above:
 - **The body is the current spec; the comments are the record.** Grilling records, routing, status
   notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
   to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
+- **The human's account is `@adammedford`.** A `Confirm` comment, and the `ready-for-agent` label
+  on a ticket, count only when this account wrote them (`CODING_STANDARDS.md` → "An authorisation
+  is read from its author"). `.github/steering.py` refuses an `Authority: <URL>` whose comment
+  another account wrote, and `tools/overnight_collect.py` lists a ticket whose `ready-for-agent`
+  another account last applied as `needs-triage`; both read the account from this line, and the
+  repository's owner while it is absent.
 - **A body is rewritten only to carry confirmed decisions.** An answer is confirmed when the human
   wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
   answer alone rewrites nothing. A ticket's body is rewritten by the morning run or by the session
