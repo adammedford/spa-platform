@@ -46,8 +46,11 @@
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
 # see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
 # this script deletes the branches the merge finished and lists the ones it keeps (#71), and when it
-# deleted any, this script's last line names the file of the commands that restore them (#115); its
-# companion, tools/prune_branches_tests.py, runs this script through a merge to see it happen.
+# deleted any, this script's last line names the file of the commands that restore them (#115).
+# Just before the cleanup it names the repository's main checkout, says whether it is behind the
+# merge, and prints the fast-forward to run there when docs/agents/landing-work.md allows one; it
+# never moves that checkout itself (#281). Its companion, tools/prune_branches_tests.py, runs this
+# script through a merge to see both happen.
 #
 # Written for the bash 3.2 that ships with macOS.
 
@@ -221,9 +224,76 @@ python3 -I tools/roadmap.py
 # its session read this script through `tail -20`, and 14 of the restore lines went with the
 # terminal. A cleanup that cannot write the file stops deleting, prints its lines and exits 1, so
 # the last line is then the warning below, and the file, if any, is not named.
+#
+# Before the cleanup, so that line stays last, comes the main checkout (#281). The merge leaves the
+# repository's own working tree where it was, behind origin/main, and only the human moves it:
+# docs/agents/landing-work.md -> "The main checkout is shared", which allows one move there, exactly
+# `git merge --ff-only origin/main`, while HEAD is `main` and no tracked file has changes. So this
+# reports and never acts. The checkout is the worktree holding `main` in `git worktree list`, or,
+# when none holds it, the first one listed, which is the repository's own (git-worktree(1), LIST
+# OUTPUT FORMAT): https://git-scm.com/docs/git-worktree. It is named with whether it is behind, and
+# the fast-forward is printed, to run as it stands, only when that rule allows it and it would move
+# something. Its status is read with --no-optional-locks, so reading it writes nothing there, not
+# even a refreshed index: https://git-scm.com/docs/git#Documentation/git.txt---no-optional-locks.
+# Nothing here fails the landing, which has already happened: what cannot be read is said so.
+name_main_checkout() {
+  local listing line path="" branch="" tip="" first=1 target="" target_branch="" target_head=""
+  local merged behind changes plural
+  listing="$(git worktree list --porcelain)" \
+    || { echo "land: git could not list the worktrees, so the main checkout is not named."; return 0; }
+  # Each worktree is a block of lines ended by a blank one; the here-string adds the last blank.
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) path="${line#worktree }"; branch=""; tip="" ;;
+      "HEAD "*) tip="${line#HEAD }" ;;
+      "branch refs/heads/"*) branch="${line#branch refs/heads/}" ;;
+      bare) path="" ;;
+      "")
+        if [ -n "$path" ]; then
+          if [ "$branch" = main ] && [ "$target_branch" != main ]; then
+            target="$path"; target_branch="$branch"; target_head="$tip"
+          elif [ "$first" = 1 ] && [ -z "$target" ]; then
+            target="$path"; target_branch="$branch"; target_head="$tip"
+          fi
+        fi
+        first=0; path="" ;;
+    esac
+  done <<< "$listing$newline"
+  if [ -z "$target" ]; then
+    echo "land: no worktree of this repository holds main, and its own is bare, so there is no main checkout to name."
+    return 0
+  fi
+  if [ "$target_branch" != main ]; then
+    echo "land: the main checkout, $target, is not on main (it is on ${target_branch:-a detached HEAD}), so no fast-forward is given; moving it is yours."
+    return 0
+  fi
+  merged="$(git rev-parse "origin/$base")"
+  if [ "$target_head" = "$merged" ]; then
+    echo "land: the main checkout, $target, is at origin/main; there is nothing to fast-forward."
+    return 0
+  fi
+  if ! git merge-base --is-ancestor "$target_head" "origin/$base" 2>/dev/null; then
+    echo "land: the main checkout, $target, has commits origin/main lacks, so it cannot fast-forward and no command is given."
+    return 0
+  fi
+  behind="$(git rev-list --count "$target_head..origin/$base")"
+  plural=s; [ "$behind" != 1 ] || plural=""
+  if ! changes="$(git --no-optional-locks -C "$target" status --porcelain --untracked-files=no)"; then
+    echo "land: the main checkout, $target, is $behind commit$plural behind origin/main, and git could not read its status, so no command is given."
+    return 0
+  fi
+  if [ -n "$changes" ]; then
+    echo "land: the main checkout, $target, is $behind commit$plural behind origin/main and has changes to tracked files, so no command is given."
+    return 0
+  fi
+  echo "land: the main checkout, $target, is $behind commit$plural behind origin/main. To bring it up, run:"
+  printf '      git -C %q merge --ff-only origin/main\n' "$target"
+}
+
 restore_file_line="prune_branches: these commands are also in "
 prune_finished() {
   [ "$base" = main ] || return 0
+  name_main_checkout
   echo "--- deleting the branches this landing finished"
   pruned=0
   listing="$(python3 -I "$here/prune_branches.py" --delete)" || pruned=$?
