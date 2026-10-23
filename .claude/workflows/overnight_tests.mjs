@@ -9,10 +9,13 @@
 // sleeps of 30 to 180 ms. Exits 0 when every check holds, 1 when one fails (each failure printed) or when
 // the script has not finished within LIMIT_MS, 2 when the script cannot run. The mock collect agent
 // returns the fixture's tickets; implement, review and integrate succeed after a delay that depends on the
-// owner, so the integrator lane is the slow one, as it is on a real night, except that two tickets nobody
-// waits on meet a merge conflict at integrate (#136): one resolves on the retry, one does not. It also
-// checks that each ticket has its own worktree, that a lane implements while its last ticket is in review
-// or integrating, and that no two merges run at once. No agent, gh or git call is made.
+// owner, so the integrator lane is the slow one, as it is on a real night, except that two tickets meet a
+// merge conflict at integrate (#136, #279): one that others wait on, which goes back to its lane, resolves,
+// passes a second review and integrates on the retry, and one nobody waits on, whose retry conflicts again.
+// Each mocked review reports the files its branch changed, and every integrated ticket but the second shares
+// one, so the run must integrate those one after the other (#279). It also checks that each ticket has its own
+// worktree, that a lane implements while its last ticket is in review or integrating, and that no two merges
+// run at once. No agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,15 +26,24 @@ const fixturePath = process.argv[3] || path.join(here, 'fixtures', '2026-10-20-t
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
 const tickets = fixture.tickets
 const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
-// Two tickets meet a content conflict at integrate (#136), chosen from those the fixture expects to integrate and
-// no ticket waits on: CONFLICT_ONCE conflicts on its first merge only, so it integrates after the back-merge;
-// CONFLICT_ALWAYS conflicts on its retry too, so it is reported, not merged, and fails.
+// Two tickets meet a content conflict at integrate (#136), chosen from those the fixture expects to integrate:
+// CONFLICT_ONCE conflicts on its first merge only, so it goes back to its lane and integrates after the
+// back-merge and a second review; it is the first that another integrating ticket waits on, so its dependants
+// must wait for it rather than be skipped (#279). CONFLICT_ALWAYS, which nobody waits on, conflicts on its retry
+// too, so it is reported, not merged, and fails.
 const blocking = new Set(tickets.flatMap((t) => t.blockedBy))
 const free = fixture.expect.integrated.filter((id) => !blocking.has(id))
-const CONFLICT_ONCE = free[0]
+const dependantsOf = (id) => fixture.expect.integrated.filter((d) => byId[d].blockedBy.includes(id))
+const CONFLICT_ONCE = fixture.expect.integrated.find((id) => dependantsOf(id).length)
 const CONFLICT_ALWAYS = free[free.length - 1]
 const CONFLICT_FILES = ['.github/workflows/ci.yml', 'docs/dependencies.md']
+// The files each mocked review says its branch changed (#279): a file of its own, and SHARED_FILE for every ticket
+// the fixture integrates except CONFLICT_ALWAYS, so those tickets share a file with no planned group in common,
+// and CONFLICT_ALWAYS shares none, so other tickets may integrate while it is back in its lane.
+const SHARED_FILE = '.gitignore'
+const changedFiles = (id) => (id === CONFLICT_ALWAYS || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
+const RESOLVE_TIP = 't'.repeat(40)   // the run branch's tip the mocked resolve back-merged
 const cost = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
 
 let tick = 0
@@ -58,8 +70,8 @@ globalThis.agent = async (prompt, opts) => {
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
   events.push({ at: tick, kind, id, edge: 'end', n })
   if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], proposedSteering: [] }
-  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [] }
-  if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', notes: 'companion' }
+  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [], changedFiles: changedFiles(id) }
+  if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
     if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: CONFLICT_FILES }
@@ -194,10 +206,11 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   if (!pairs) fail('no lane had two implements to compare, so the overlap check read nothing')
 }
 
-// 8. Integrate merges one ticket at a time (#136): no two integrate or resolve agents run at once.
+// 8. Integrate merges one ticket at a time (#136): no two integrate agents run at once. A resolve runs outside the
+//    lock since #279, in the ticket's own lane, so it is not counted here; check 13 holds what it may overlap.
 {
   const spans = []
-  for (const s of events.filter((x) => (x.kind === 'integrate' || x.kind === 'resolve') && x.edge === 'start')) {
+  for (const s of events.filter((x) => x.kind === 'integrate' && x.edge === 'start')) {
     const e = events.find((x) => x.kind === s.kind && x.id === s.id && x.edge === 'end' && x.at >= s.at && x.n === s.n)
     spans.push({ label: `${s.kind}:${s.id}#${s.n}`, from: s.at, to: e ? e.at : Infinity })
   }
@@ -205,12 +218,16 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   for (let i = 1; i < spans.length; i++) if (spans[i].from < spans[i - 1].to) fail(`${spans[i].label} started at ${spans[i].from} while ${spans[i - 1].label} ran until ${spans[i - 1].to}`)
 }
 
-// 9. A conflict at integrate (#136): the ticket's branch back-merges the run branch in its own worktree, resolves
-//    and re-runs the check (the resolve agent), and integrate retries once; a ticket still in conflict is reported
-//    with its files, not merged.
+// 9. A conflict at integrate (#136, #279): the ticket goes back to its lane, where its branch back-merges the run
+//    branch in its own worktree, resolves and re-runs the check (the resolve agent), passes a second review against
+//    the tip it merged in, and integrate retries once; a ticket still in conflict is reported with its files, not
+//    merged.
 {
-  if (!CONFLICT_ONCE || CONFLICT_ONCE === CONFLICT_ALWAYS) fail('the fixture has fewer than two tickets nobody waits on, so the conflict checks read nothing')
+  if (!CONFLICT_ONCE || !CONFLICT_ALWAYS || CONFLICT_ONCE === CONFLICT_ALWAYS) fail('the fixture lacks a waited-on ticket and a separate ticket nobody waits on, so the conflict checks read nothing')
   const resolves = (id) => allPrompts.filter((c) => c.label === `resolve:${id}`)
+  const reviews = (id) => allPrompts.filter((c) => c.label === `review:${id}`)
+  const spansOf = (kind, id) => events.filter((e) => e.kind === kind && e.id === id && e.edge === 'start')
+    .map((s) => ({ from: s.at, to: (events.find((e) => e.edge === 'end' && e.n === s.n) || { at: Infinity }).at }))
   for (const id of [CONFLICT_ONCE, CONFLICT_ALWAYS]) {
     if (resolves(id).length !== 1) fail(`${id} met a conflict and ran ${resolves(id).length} resolve agents, not 1`)
     else {
@@ -220,8 +237,30 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
       if (!/THE CHECK/.test(r)) fail(`the resolve of ${id} does not re-run the check`)
     }
     if (merges[id] !== 2) fail(`${id} was merged ${merges[id] || 0} times; a conflict retries once, so 2`)
+    // The second review (#279): one more review prompt, judged against the tip the resolve merged in, naming the
+    // conflicting files, and run after the resolve and before the retry.
+    if (reviews(id).length !== 2) fail(`${id} went back to its lane and passed ${reviews(id).length} reviews, not 2`)
+    else {
+      const again = reviews(id)[1].prompt
+      if (!again.includes(`fixed point ${RESOLVE_TIP}.`)) fail(`the second review of ${id} is not judged against the tip its resolve merged in`)
+      for (const f of CONFLICT_FILES) if (!again.includes(f)) fail(`the second review of ${id} does not name the conflicting file ${f}`)
+      const [res] = spansOf('resolve', id), rv = spansOf('review', id), ig = spansOf('integrate', id)
+      if (res && rv[1] && ig[1] && ig[0] && !(ig[0].to <= res.from && res.to <= rv[1].from && rv[1].to <= ig[1].from)) {
+        fail(`${id}: the first merge, the resolve, the second review and the retry did not run in that order (${JSON.stringify({ ig, res, rv })})`)
+      }
+    }
   }
   for (const id of Object.keys(merges)) if (![CONFLICT_ONCE, CONFLICT_ALWAYS].includes(id) && resolves(id).length) fail(`${id} ran a resolve agent without a conflict`)
+  for (const id of Object.keys(merges)) if (![CONFLICT_ONCE, CONFLICT_ALWAYS].includes(id) && reviews(id).length !== 1) fail(`${id} met no conflict and passed ${reviews(id).length} reviews, not 1`)
+  // The tickets waiting on a sent-back ticket wait for it rather than being skipped (#279).
+  const deps = dependantsOf(CONFLICT_ONCE)
+  if (!deps.length) fail(`no integrating ticket waits on ${CONFLICT_ONCE}, so the waiting check read nothing`)
+  for (const d of deps) {
+    if ((result.skipped || []).includes(d)) fail(`${d} was skipped while its blocker ${CONFLICT_ONCE} was back in its lane`)
+    if (!(result.integrated || []).includes(d)) fail(`${d} did not integrate after its blocker ${CONFLICT_ONCE} went back to its lane and integrated`)
+    const s = started(d), end = integratedAt(CONFLICT_ONCE)
+    if (s && end !== undefined && s.at < end) fail(`${d} started at ${s.at}, before its blocker ${CONFLICT_ONCE} integrated on its retry at ${end}`)
+  }
   if (!(result.integrated || []).includes(CONFLICT_ONCE)) fail(`${CONFLICT_ONCE} did not integrate after its conflict was resolved`)
   if ((result.integrated || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} integrated although its retry still conflicted`)
   if (!(result.failed || []).includes(CONFLICT_ALWAYS)) fail(`${CONFLICT_ALWAYS} is not reported failed after its retry still conflicted`)
@@ -295,6 +334,35 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     if (!branch) fail(`the ${c.label} prompt names no task branch`)
     else if (c.prompt.includes(`merge --no-ff ${branch}`)) fail(`the ${c.label} prompt still merges ${branch} without the message file`)
   }
+}
+
+// 13. Tickets that changed the same file integrate one after the other (#279): the scheduler locks the files each
+//     ticket's branch changed, as its review read them from its diff against its fork point, from its first merge
+//     to its last, its time back in its lane included; so no ticket sharing a file with a sent-back ticket merges
+//     while that one is out, though a ticket sharing none does: the run does not wait on a ticket back in its lane.
+{
+  const window = (id) => {
+    const ig = events.filter((e) => e.kind === 'integrate' && e.id === id)
+    if (!ig.length) return null
+    return { from: Math.min(...ig.filter((e) => e.edge === 'start').map((e) => e.at)), to: Math.max(...ig.filter((e) => e.edge === 'end').map((e) => e.at)) }
+  }
+  const sharing = Object.keys(merges).filter((id) => changedFiles(id).includes(SHARED_FILE))
+  let pairs = 0
+  for (let i = 0; i < sharing.length; i++) for (let j = i + 1; j < sharing.length; j++) {
+    const a = window(sharing[i]), b = window(sharing[j])
+    if (!a || !b) continue
+    pairs++
+    if (a.from < b.to && b.from < a.to) fail(`${sharing[i]} (${a.from}..${a.to}) and ${sharing[j]} (${b.from}..${b.to}) both changed ${SHARED_FILE} and integrated at the same time`)
+  }
+  if (pairs < 2) fail(`fewer than two pairs of tickets shared ${SHARED_FILE}, so the file-lock check read nothing`)
+  const waited = logs.filter((l) => new RegExp(`^\\S+: waiting to integrate behind .*${SHARED_FILE.replace('.', '\\.')}`).test(l.text))
+  if (!waited.length) fail(`no ticket logged waiting to integrate behind another on ${SHARED_FILE}, so the file locks were never exercised`)
+  const out = window(CONFLICT_ALWAYS), back = events.filter((e) => e.kind === 'integrate' && e.id === CONFLICT_ALWAYS)
+  if (out && back.length === 4) {
+    const from = back[1].at, to = back[2].at   // the first merge's end, the retry's start
+    const during = events.filter((e) => e.kind === 'integrate' && e.id !== CONFLICT_ALWAYS && e.edge === 'start' && e.at >= from && e.at < to)
+    if (!during.length) fail(`no ticket integrated while ${CONFLICT_ALWAYS}, which shares no file, was back in its lane (${from}..${to}): the run waited on it`)
+  } else fail(`${CONFLICT_ALWAYS} did not run two integrates, so the send-back window check read nothing`)
 }
 
 if (failures.length) {
