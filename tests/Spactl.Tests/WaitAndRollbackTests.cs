@@ -98,8 +98,9 @@ public sealed class WaitAndRollbackTests : IDisposable
     }
 
     /// <summary>
-    /// An instance once seen at the revision stays counted: aaaa answers 2, then 1 on the third read
-    /// (the script goes round again), and the wait still ends on the fourth, when bbbb reaches 2.
+    /// An instance once seen at the revision stays counted: aaaa answers 2 on the first read and 1 on
+    /// the third, and the wait still ends on the fourth, when bbbb reaches 2. Without the rule the wait
+    /// would need a fifth read, where the script goes round again to aaaa at 2.
     /// </summary>
     [Fact]
     public async Task Wait_with_instances_keeps_an_instance_counted_once_it_has_answered_at_the_revision()
