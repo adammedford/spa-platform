@@ -61,7 +61,8 @@ const indexFor = (lanes, logs = []) => ({
   worktrees: [], returnJson: '', pending: '', untracked: '',
   overnightScript: OVERNIGHT_READ,
   history: [{ date: '2026-10-16', report: '/x/REPORT.md', questions: '/x/questions.md' }],
-  missing: ['return JSON: none saved', 'transcripts and tool-call counts: the record holds none'],
+  refusals: { lines: [], missing: '' },
+  missing: ['return JSON: none saved', 'transcripts: the record holds none beyond the refusal lines'],
 })
 const finding = (noun, extra = {}) => ({
   type: 'misleading-instruction', title: `about ${noun}`, noun,
@@ -120,6 +121,23 @@ function stub(env, scriptArgs, served) {
         })) : served.index.worktrees
         const files = JSON.parse(execFileSync('python3', ['-I', READER, 'fingerprint', path.join(env.repo, '.scratch/overnight/log')], { encoding: 'utf8' })).digest
         out = { ...served.index, worktrees, versions: { files, issues: served.issues || [] } }
+        // The refusal count (#315): when the case serves a transcripts root, the command the prompt
+        // names is run for real against it, and its lines become the index's refusals as a live
+        // Gather is told to make them.
+        if (served.refusalsRoot) {
+          const m = /`python3 -I (\S+\/tools\/retro_refusals\.py) --date (\S+)`/.exec(prompt)
+          if (!m) {
+            env.refusalsRun = { status: null, script: '(the Gather prompt names no tools/retro_refusals.py --date command)', lines: [] }
+            out.refusals = { lines: [], missing: '' }
+          } else {
+            // The prompt names the main checkout's copy, which the throwaway repository lacks; the
+            // same file from this checkout runs in its place, and the case checks the path it named.
+            const ran = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_refusals.py'), '--date', m[2], '--root', served.refusalsRoot], { encoding: 'utf8' })
+            const lines = ran.stdout.split('\n').filter(Boolean)
+            out.refusals = { lines: lines.filter((l) => !/: missing: /.test(l)), missing: lines.find((l) => /: missing: /.test(l)) || '' }
+            env.refusalsRun = { status: ran.status, script: m[1], lines }
+          }
+        }
       }
       else if (label.startsWith('lane:')) {
         const k = label.slice(5)
@@ -420,6 +438,54 @@ try {
     const refusedRun = await execute(env, { date: DATE }, { index: indexFor(THREE), fileRefused: REFUSED })
     if (refusedRun.result.refused !== REFUSED || refusedRun.result.filed !== false) fail(`a ticket the check refused: returned refused ${JSON.stringify(refusedRun.result.refused)}, filed ${refusedRun.result.filed}`)
     if ((refusedRun.result.tickets || []).map((t) => t.noun).join() !== 'noun-1') fail(`a ticket the check refused: tickets ${JSON.stringify((refusedRun.result.tickets || []).map((t) => t.noun))}, expected noun-1 alone`)
+  }
+
+  // 20. The refusal count (#315): Gather runs tools/retro_refusals.py for the night, its line reaches
+  //     the File prompt verbatim for the parent issue and the return, the parent's "cannot see"
+  //     paragraph no longer counts tool-call counts among what it cannot see, and a transcripts root
+  //     with no match reaches the parent as missing, never as a zero.
+  checks++
+  {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-transcripts-'))
+    made.push(base)
+    const RUN = 'wf_3b77ab2e-214'
+    const runDir = path.join(base, 's1', 'subagents', 'workflows', RUN)
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.mkdirSync(path.join(base, 's1', 'workflows'), { recursive: true })
+    fs.writeFileSync(path.join(base, 's1', 'workflows', `${RUN}.json`), JSON.stringify({ runId: RUN, timestamp: `${DATE}T22:00:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    const block = (id, name) => ({ type: 'tool_use', id, name, input: {} })
+    const res = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text, is_error: true })
+    const lines = [
+      { type: 'assistant', message: { role: 'assistant', content: [block('toolu_1', 'Edit')] } },
+      { type: 'user', message: { role: 'user', content: [res('toolu_1', '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>')] } },
+      { type: 'api-request-blob', message: { role: 'assistant', content: [block('toolu_1', 'Edit')] } },
+      { type: 'api-request-blob', message: { role: 'user', content: [res('toolu_1', '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>')] } },
+    ]
+    fs.writeFileSync(path.join(runDir, 'agent-a1.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    fs.writeFileSync(path.join(runDir, 'agent-a1.meta.json'), JSON.stringify({ description: 'implement:issue-1' }))
+    const LINE = `retro-refusals: ${RUN}: 1 Edit and Write calls (2 tool_use blocks, replays included), 1 "File has not been read yet" (1 Edit, 0 Write), 0 "modified since read"; agents: implement:issue-1`
+    const filePromptOf = (r) => (r.calls.find((c) => c.label === 'file') || {}).prompt || ''
+    const root = path.join(base, '*', 'subagents', 'workflows')
+    env = newRepo()
+    const counted = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    if (!env.refusalsRun || env.refusalsRun.script !== path.join(env.repo, 'tools', 'retro_refusals.py')) fail(`the Gather prompt's refusal command is not the main checkout's tools/retro_refusals.py: ${JSON.stringify(env.refusalsRun)}`)
+    if (!env.refusalsRun || env.refusalsRun.status !== 0 || env.refusalsRun.lines.join('\n') !== LINE) fail(`the refusal count on the fixture run printed ${JSON.stringify(env.refusalsRun)}, expected ${LINE}`)
+    const fp = filePromptOf(counted)
+    if (!fp.includes(`\n${LINE}\n`)) fail('the File prompt does not carry the run\'s refusal line verbatim for the parent issue')
+    if (!/the REFUSAL LINES above verbatim, under the heading "Edit and Write refusals", a missing line as missing and never as a zero/.test(fp)) fail('the File prompt does not have the parent carry the refusal lines')
+    if (/cannot see \([^)]*tool-call counts/.test(fp)) fail('the parent\'s "cannot see" paragraph still counts tool-call counts among what it cannot see')
+    if ((counted.result.refusals || []).join('\n') !== LINE) fail(`the return carries refusals ${JSON.stringify(counted.result.refusals)}, expected the run's line`)
+    const gp = (counted.calls.find((c) => c.label === 'gather') || {}).prompt || ''
+    if (/no transcripts and no tool-call counts/.test(gp)) fail('the Gather prompt still lists tool-call counts as something the record never holds')
+    // A transcripts root with no match: the missing line reaches the parent, and no zero does.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-empty-'))
+    made.push(empty)
+    env = newRepo()
+    const none = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: path.join(empty, '*', 'subagents', 'workflows') })
+    const fpNone = filePromptOf(none)
+    if (!env.refusalsRun || env.refusalsRun.status !== 1) fail(`an empty transcripts root: the count exited ${env.refusalsRun && env.refusalsRun.status}, expected 1`)
+    if (!new RegExp(`\\nretro-refusals: ${DATE}: missing: no overnight run recorded for this date under \\S+\\n`).test(fpNone)) fail('an empty transcripts root: the File prompt does not carry the missing line')
+    if (/Edit and Write calls/.test(fpNone.split('REFUSAL LINES')[1] || '')) fail('an empty transcripts root reached the File prompt as a count')
   }
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
