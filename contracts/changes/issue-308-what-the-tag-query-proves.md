@@ -5,7 +5,10 @@
   asked for this request as `issue-118-what-the-tag-query-cannot-see.md`; #58 (1.7, `teardown.sh`);
   #63 (6.9, P-05); #62 (6.7, the teardown note)
 - **Date:** 2026-10-23
-- **Status:** open
+- **Status:** decided, 2026-10-23, on
+  https://github.com/adammedford/spa-platform/issues/232#issuecomment-6375865081.
+  All seven items accepted as worded, with ADR-0029; they land with this Status. See the Decision
+  section below.
 
 ## What changed
 
@@ -96,3 +99,20 @@ wants them, the contract's section 3 names them and a workstream 1 ticket adds t
 
 Nothing at runtime: the script matches the value the contract already fixes. Until this lands the
 contract describes a proof `teardown.sh` no longer runs.
+
+## Decision
+
+Integrator, 2026-10-23, on Adam's confirmed answer,
+https://github.com/adammedford/spa-platform/issues/232#issuecomment-6375865081 (#232 Q3, and this request): **all seven items accepted as worded.**
+
+- Items 1 to 7 land in `contracts/resource-tags.md`: the opening paragraph and the platform tag's
+  paragraph as proposed, a new section "What the tag query proves" holding item 3 with items 5 and
+  7 at its end, item 4 in "Resources that cannot be tagged", and item 6 in "Consumed by".
+- **#232 Q3: both, tag and name.** IAM roles and customer managed policies by tag through IAM's own
+  API (#129 Q29), and the cell's roles by name (#118 step 2), as `verify-teardown.sh` already reads
+  them. #129's draft rejected names as a list kept by hand; the companion holds the list to
+  `iam.tf`, so the objection no longer applies.
+- **No us-east-1 readers** (#129 Q28), as "What this request does not ask" proposes: nothing of the
+  platform's is created there since #241.
+- **ADR-0029 amends ADR-0013**, from #129 Q39's draft reconciled to the two answers above, with a
+  status line on ADR-0013.
