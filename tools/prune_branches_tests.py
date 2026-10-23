@@ -969,7 +969,7 @@ class ADeletionLeavesItsRestoreCommandsInAFile(Case):
         self.assertEqual(before, self.tips())
 
 
-class LandingDeletesWhatItFinished(Case):
+class LandingCase(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
     The real script, under /bin/bash, as tools/land_tests.py runs it, past a merge that really
@@ -979,15 +979,19 @@ class LandingDeletesWhatItFinished(Case):
     covers.
     """
 
-    def land_pull_request(self, branch, subject):
+    def land_pull_request(self, branch, subject, cwd=None):
+        """Lands `branch` through land.sh, run from `cwd`, which is sat at origin/main detached; by
+        default the clone, and a case that puts the clone somewhere of its own passes a linked
+        worktree, as land.sh's header asks."""
         (self.fixtures / "head").write_text(self.git("rev-parse", branch) + "\n")
         (self.fixtures / "head-name").write_text(branch)
         (self.fixtures / "number").write_text("5\n")
-        self.git("checkout", "-q", "--detach", "origin/main")
+        cwd = cwd or self.work
+        self.git("checkout", "-q", "--detach", "origin/main", cwd=cwd)
         done = subprocess.run(
             [BASH, str(LAND), "5", "--subject", subject,
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
-            cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=cwd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False,
         )
         # One stream, in the order a terminal shows it, so its last line is the one a session
@@ -996,15 +1000,20 @@ class LandingDeletesWhatItFinished(Case):
         self.assertIn(subject, self.git("log", "-3", "--format=%s", "origin/main"))
         return done.stdout
 
-    def assert_the_last_line_names_the_restore_file(self, out):
+    def assert_the_last_line_names_the_restore_file(self, out, cwd=None):
         """land.sh's own last line names the file of the cleanup's restore lines (#115)."""
         files = self.restore_files()
         self.assertEqual(1, len(files), out)
-        self.assertTrue(files[0].name.endswith(f"-{self.git('rev-parse', 'HEAD')[:12]}.txt"),
+        head = self.git("rev-parse", "HEAD", cwd=cwd)
+        self.assertTrue(files[0].name.endswith(f"-{head[:12]}.txt"),
                         files[0].name)
         self.assertEqual(self.restore_lines(out), files[0].read_text().splitlines())
         self.assertTrue(out.splitlines()[-1].startswith("land: "), out)
         self.assertEqual(files[0], self.named_file(out), out)
+
+
+class LandingDeletesWhatItFinished(LandingCase):
+    """For a merge into main, land.sh deletes what the merge finished and names the restore file."""
 
     def test_landing_a_row_as_done_deletes_its_claim_and_keeps_a_part_landed_rows(self):
         self.commit("task/3.1-scheme", "scheme.txt")
@@ -1074,6 +1083,146 @@ class LandingDeletesWhatItFinished(Case):
         # The last line is the warning's, which names no file.
         self.assertTrue(out.splitlines()[-1].startswith("      tools/prune_branches.py --delete"),
                         out)
+
+
+class LandingNamesTheMainCheckout(LandingCase):
+    """After a merge into main, land.sh names the main checkout and says whether it is behind; when
+    it is on `main`, behind and has no tracked change, it prints the one fast-forward
+    docs/agents/landing-work.md allows there, before the cleanup, so the restore file's line stays
+    last (#281). It only reports: the checkout is the human's, and the script never moves it.
+
+    The clone stands in for the main checkout, and each landing runs from a linked worktree beside
+    it, as land.sh's header asks.
+    """
+
+    FAST_FORWARD = "merge --ff-only origin/main"
+
+    def land_tree(self):
+        tree = self.scratch / "spa-land"
+        self.git("worktree", "add", "-q", "--detach", str(tree), "origin/main")
+        return tree
+
+    def checkout_lines(self, out):
+        """The lines between the roadmap and the cleanup that speak of the main checkout."""
+        return [line for line in out.splitlines() if "main checkout" in line]
+
+    def command_line(self, out):
+        """The one printed line that runs the fast-forward, stripped of its indent."""
+        lines = [line.strip() for line in out.splitlines() if self.FAST_FORWARD in line
+                 and line.strip().startswith("git ")]
+        self.assertEqual(1, len(lines), out)
+        return lines[0]
+
+    def test_a_clean_main_checkout_behind_the_merge_is_given_its_fast_forward(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "main")
+        # Untracked files are allowed there (docs/agents/landing-work.md), as .scratch/ is.
+        (self.work / "notes.txt").write_text("untracked\n")
+        before = self.git("rev-parse", "main")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        named = self.checkout_lines(out)
+        self.assertTrue(named, out)
+        self.assertIn(str(self.work), named[0], out)
+        self.assertIn("behind origin/main", named[0], out)
+        command = self.command_line(out)
+        self.assertEqual(f"git -C {self.work} {self.FAST_FORWARD}", command)
+        # The script reported and moved nothing; the command, run, brings main to the merge.
+        self.assertEqual(before, self.git("rev-parse", "main"))
+        ran = subprocess.run(["/bin/sh", "-c", command], cwd=self.scratch, env=self.env,
+                             capture_output=True, text=True, check=False)
+        self.assertEqual(0, ran.returncode, ran.stderr)
+        self.assertEqual(self.git("rev-parse", "origin/main"), self.git("rev-parse", "HEAD"))
+        self.assertEqual("main", self.git("branch", "--show-current"))
+        # The cleanup still has the last line.
+        self.assertNotIn("task/2.1-registry", self.remote(), "the premise: the cleanup deleted")
+        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+
+    def assert_named_with_no_command(self, out, says):
+        named = self.checkout_lines(out)
+        self.assertEqual(1, len(named), out)
+        self.assertIn(str(self.work), named[0], out)
+        self.assertIn(says, named[0], out)
+        self.assertNotIn(self.FAST_FORWARD, out)
+        self.assertNotIn("To bring it up", out)
+
+    def test_a_main_checkout_on_another_branch_is_named_with_no_command(self):
+        self.commit("task/3.1-scheme", "scheme.txt")
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "task/3.1-scheme")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_named_with_no_command(out, "is not on main (it is on task/3.1-scheme)")
+        self.assertEqual("task/3.1-scheme", self.git("branch", "--show-current"))
+
+    def test_a_main_checkout_on_a_detached_head_is_named_with_no_command(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "--detach", "main")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_named_with_no_command(out, "is not on main (it is on a detached HEAD)")
+
+    def test_a_main_checkout_with_tracked_changes_is_named_with_no_command(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "main")
+        (self.work / "README.md").write_text("changed in the main checkout\n")
+        # A tracked file touched and not changed: a status that may refresh the index rewrites it.
+        touched = self.work / "docs" / "roadmap.md"
+        os.utime(touched, (touched.stat().st_atime + 100, touched.stat().st_mtime + 100))
+        tree = self.land_tree()
+        index = (self.work / ".git" / "index").read_bytes()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_named_with_no_command(out, "behind origin/main and has changes to tracked files")
+        self.assertEqual(index, (self.work / ".git" / "index").read_bytes(),
+                         "reading the checkout's status wrote its index")
+        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+
+    def test_a_main_checkout_already_at_the_merge_is_given_no_command(self):
+        # Landed from the main checkout itself, on main: the script's own fast-forward moves it.
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "main")
+        (self.fixtures / "head").write_text(self.git("rev-parse", "task/2.1-registry") + "\n")
+        (self.fixtures / "head-name").write_text("task/2.1-registry")
+        (self.fixtures / "number").write_text("5\n")
+        done = subprocess.run(
+            [BASH, str(LAND), "5", "--subject", "Merge task 2.1: the registry",
+             "--unreviewed", "a case of tools/prune_branches_tests.py"],
+            cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, check=False)
+        self.assertEqual(0, done.returncode, done.stdout)
+        self.assertEqual(self.git("rev-parse", "origin/main"), self.git("rev-parse", "main"),
+                         "the premise: the landing moved the checkout it ran in")
+
+        self.assert_named_with_no_command(done.stdout, "is at origin/main")
+
+    def test_a_main_with_commits_origin_lacks_is_given_no_command(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.git("checkout", "-q", "main")
+        self.git("commit", "-q", "--allow-empty", "-m", "Made only in the main checkout")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_named_with_no_command(out, "has commits origin/main lacks")
+
+    def test_a_linked_worktree_holding_main_is_the_one_named(self):
+        # The repository's own worktree sits elsewhere; the one holding main is the one to move.
+        self.commit("task/2.1-registry", "registry.txt")
+        holder = self.scratch / "spa-main"
+        self.git("worktree", "add", "-q", str(holder), "main")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertEqual(f"git -C {holder} {self.FAST_FORWARD}", self.command_line(out))
 
 
 def require_bash():
