@@ -3,7 +3,9 @@
 - **Raised by:** workstream 1, AWS and IaC, during #241
 - **Tasks:** #241; I-5, whose workflow holds every test companion's steps; #243, which adds the cell scripts' companions to CI and is the natural place for this one
 - **Date:** 2026-10-22
-- **Status:** open
+- **Status:** decided, 2026-10-22, on
+  https://github.com/adammedford/spa-platform/issues/313#issuecomment-6353128434.
+  Accepted as asked; both edits are #313's. See the Decision section below.
 
 ## What changed
 
@@ -48,3 +50,13 @@ before the script change, ten of its fourteen cases failed against the us-east-1
 Nothing at runtime. Until this lands the companion runs only in the local full check, so a later
 edit to `certs.sh` that brings the fallback back is caught there and not in CI, and #241 cannot be
 done in AGENTS.md's sense, which asks for its tests to pass in CI and no change request open.
+
+## Decision
+
+Integrator, 2026-10-22, on Adam's confirmed answer,
+https://github.com/adammedford/spa-platform/issues/313#issuecomment-6353128434:
+**accepted as asked.**
+
+1. **The two `ci.yml` steps** for `tools/scripts/certs_tests.py`, one per job, and the workflow's
+   comments naming the companion, are #313's.
+2. **The D-3 sentence** in `docs/dependencies.md` is #313's too, in the words item 2 gives.
