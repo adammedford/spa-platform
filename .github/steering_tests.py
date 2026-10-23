@@ -2101,20 +2101,24 @@ class SteeringTests(unittest.TestCase):
                     f"import sys; print(sys.argv[1] + ' {kind}')", "{number}")
                 self.assertEqual((kind, ""), REAL_ISSUE_KIND(self.root, 185))
 
-    def test_the_single_lookup_reads_a_404_as_no_such_number(self):
-        """GitHub's answer for a number it never issued here: the one answer the rule refuses on."""
-        steering.GH_ISSUE = self.stand_in(
-            "import sys; sys.stderr.write('gh: Not Found (HTTP 404)\\n'); sys.exit(1)")
-        self.assertEqual((None, ""), REAL_ISSUE_KIND(self.root, 999))
+    def test_the_single_lookup_reads_a_404_or_a_410_as_no_such_number(self):
+        """GitHub's answers for a number it holds no issue under here: a 404, or a 410 for an
+        issue deleted from it, which a reader without read access sees as the 404. Each is the
+        answer the rule refuses on."""
+        for said in ("gh: Not Found (HTTP 404)", "gh: This issue was deleted (HTTP 410)"):
+            with self.subTest(said=said):
+                steering.GH_ISSUE = self.stand_in(
+                    f"import sys; sys.stderr.write('{said}\\n'); sys.exit(1)")
+                self.assertEqual((None, ""), REAL_ISSUE_KIND(self.root, 999))
 
     def test_the_single_lookup_reports_any_other_answer_as_unchecked(self):
-        """A failure that is not a 404, and an answer about another number -- a transferred issue
-        redirected to its new home -- each say why the number went unchecked."""
+        """A failure that is neither a 404 nor a 410, and an answer about another number -- a
+        transferred issue redirected to its new home -- each say why the number went unchecked."""
         for script, why in (
             ("import sys; sys.stderr.write('error connecting to api.github.com\\n'); sys.exit(1)",
              "error connecting to api.github.com"),
-            ("import sys; sys.stderr.write('gh: Gone (HTTP 410)\\n'); sys.exit(1)",
-             "gh: Gone (HTTP 410)"),
+            ("import sys; sys.stderr.write('gh: Server Error (HTTP 502)\\n'); sys.exit(1)",
+             "gh: Server Error (HTTP 502)"),
             ("import sys; sys.exit(3)", "gh exited 3 and said nothing"),
             ("print('7 issue')",
              "gh answered #185 with something other than its line: '7 issue\\n'"),

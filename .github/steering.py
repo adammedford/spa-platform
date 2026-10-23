@@ -89,8 +89,8 @@ commits, each held on its own; a commit made before the starting point passes be
 have known the rule, and rewording one would mean rewriting a branch that has landed. The citation
 is checked the way the `#NNN` rule checks one, in the same single listing, which also says whether
 a number is an issue or a pull request, and a ticket is an issue. The listing can come back short
-with no error (#297), so a number it lacks is asked about alone before it is refused: a 404
-refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
+with no error (#297), so a number it lacks is asked about alone before it is refused: a 404 or a
+410 refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
 against the comment GitHub keeps under its id. Offline, the trailer is still required, and its
 citations are reported as not checked; the line the rule passes prints how many held commits
 GitHub vouched for.
@@ -293,9 +293,10 @@ GH_ISSUES = (
 # #159, each a real issue, and the next run over the same tree vouched for them (#297). So a number
 # the listing lacks is not taken as one GitHub never issued until GitHub says so of that number
 # alone. The endpoint serves an issue or a pull request by its number and answers 404 for a number
-# it never issued; --jq writes the listing's line for it, the number first, so an answer about
-# another number -- a transferred issue, which GitHub redirects to its new home -- is not read as
-# this one. gh fills {owner}/{repo} as it does for GH_ISSUES, and {number} is the number.
+# it never issued, and 404 or 410 for a deleted issue; --jq writes the listing's line for it, the
+# number first, so an answer about another number -- a transferred issue, which GitHub redirects to
+# its new home -- is not read as this one. gh fills {owner}/{repo} as it does for GH_ISSUES, and
+# {number} is the number.
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
 GH_ISSUE = (
     "gh", "api", "repos/{owner}/{repo}/issues/{number}",
@@ -859,10 +860,10 @@ def issue_kind(root: pathlib.Path, number: int) -> tuple[str | None, str]:
     never issued the number; or, with None, why GitHub could not say.
 
     Asked only for a number an `Authority: #<n>` trailer cites and the listing lacks, which is
-    none on a run whose listing came back whole. A 404 is an answer, the one the rule refuses on;
-    anything else gh says is a reason the trailer went unchecked, as comment_url() reports its
-    own. The cases on the check's rules replace this function; the cases on this function point
-    GH_ISSUE at a stand-in for gh.
+    none on a run whose listing came back whole. A 404 or a 410 is an answer, the one the rule
+    refuses on; anything else gh says is a reason the trailer went unchecked, as comment_url()
+    reports its own. The cases on the check's rules replace this function; the cases on this
+    function point GH_ISSUE at a stand-in for gh.
     """
     command = tuple(part.replace("{number}", str(number)) for part in GH_ISSUE)
     try:
@@ -875,8 +876,13 @@ def issue_kind(root: pathlib.Path, number: int) -> tuple[str | None, str]:
         return None, f"gh did not answer within {GH_TIMEOUT} seconds"
     if asked.returncode != 0:
         said = first_complaint(asked)
-        # gh's line for a number the repository never issued: `gh: Not Found (HTTP 404)`.
-        return (None, "") if "(HTTP 404)" in said else (None, said)
+        # gh's line for a number the repository holds no issue under ends `(HTTP 404)`, or
+        # `(HTTP 410)` for an issue deleted from it: GitHub answers a deleted issue with one or the
+        # other by the reader's access alone, and the listing never held either, so both refuse
+        # as a number missing from the listing did before #297.
+        # https://docs.github.com/en/rest/issues/issues#get-an-issue
+        gone = "(HTTP 404)" in said or "(HTTP 410)" in said
+        return (None, "") if gone else (None, said)
     answered, _, kind = asked.stdout.strip().partition(" ")
     if answered != str(number) or kind not in ("issue", "pull"):
         return None, (
