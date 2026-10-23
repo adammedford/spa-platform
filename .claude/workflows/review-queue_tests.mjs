@@ -36,7 +36,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ownership: { owners: ['integrator'], ok: true, output: 'path-ownership: one owner' },
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
-  candidates: [], statedMutations: [], reviewCommits: [],
+  candidates: [], statedMutations: [], reviewCommits: [], statedHeads: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -1059,6 +1059,79 @@ try {
     if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
     if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
   }
+  // A description whose stated head is not the head (#294): #287's description still named ed8d063
+  // after a rebuild. The inventory reports each sha the description states as the head; the script
+  // compares it with the head it read, and each one that differs is a verified Spec finding naming
+  // both shas. A full sha or an abbreviation of the head is current, and so is a description that
+  // states none.
+  checks++
+  {
+    const HEAD = '76704c5e1d2c3b4a5968778695a4b3c2d1e0f9a8'
+    const quote = (s) => `Base \`ae6e2e1\`, head \`${s}\`.`
+    const described = (n, stated) => pr(n, ['docs/z.md'], { head: HEAD, commits: [HEAD], statedHeads: stated.map((s) => ({ sha: s, quote: quote(s) })) })
+    const SERVED = {
+      301: described(301, ['ed8d063']),                 // stale: #287's second review
+      302: described(302, [HEAD]),                      // current, full
+      303: described(303, ['76704c5']),                 // current, abbreviated as #287's body does
+      304: described(304, []),                          // states no head
+      305: described(305, ['76704C5', 'ed8d0633e9c1360fb7c2e425f63237676f4db648']), // one current, one stale
+    }
+    const env = run({ prs: [301, 302, 303, 304, 305] }, SERVED)
+    const result = await execute(env)
+    const specOf = (n) => {
+      const lines = commentOf(env, n).split('\n')
+      return lines.slice(lines.indexOf('## Spec') + 1, lines.indexOf("The author's claims:")).filter((l) => l.startsWith('- '))
+    }
+    const stale = { 301: ['ed8d063'], 302: [], 303: [], 304: [], 305: ['ed8d0633e9c1360fb7c2e425f63237676f4db648'] }
+    for (const [n, want] of Object.entries(stale).map(([k, v]) => [Number(k), v])) {
+      const verified = (resultOf(n, result).findings || { verified: [] }).verified
+      if (verified.length !== want.length) fail(`PR ${n}: ${verified.length} verified finding(s), expected ${want.length} from the description's stated head(s)`)
+      for (const [i, s] of want.entries()) {
+        const f = verified[i] || {}
+        if (f.axis !== 'Spec' || f.status !== 'verified') fail(`PR ${n}: the stale-head finding is ${f.axis} ${f.status}, expected a verified Spec finding`)
+        if (!String(f.title).includes(s) || !String(f.title).includes(HEAD)) fail(`PR ${n}: the stale-head finding ${JSON.stringify(f.title)} does not name both ${s} and ${HEAD}`)
+        if (!String(f.checked).includes(quote(s))) fail(`PR ${n}: the stale-head finding does not quote the description's sentence`)
+      }
+      const spec = specOf(n)
+      if (want.length ? !(spec.length === want.length && want.every((s, i) => spec[i].includes(s) && spec[i].includes(HEAD) && spec[i].includes('(verified,'))) : !(spec.length === 1 && spec[0] === '- None.')) fail(`PR ${n}: the comment's Spec section reads ${JSON.stringify(spec)}`)
+    }
+    if (!/statedHeads/.test(env.prompts['inventory:301'] || '')) fail('the inventory prompt does not ask for statedHeads')
+    if (!(env.prompts['verdict:301'] || '').includes('ed8d063')) fail('PR 301: the verdict prompt does not carry the stale-head finding it is to weigh')
+  }
+
+  // The return leads with one line per request (#294): the completion notice cuts the return short,
+  // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
+  // field, one line per pull request with its number, head, verdict, record URL, verified finding and
+  // mutation counts, and the did-not-fail rows named; a halted run's summary is empty.
+  checks++
+  {
+    const HEAD = '76704c5e1d2c3b4a5968778695a4b3c2d1e0f9a8'
+    const SERVED = {
+      301: pr(301, ['docs/z.md'], { head: HEAD, commits: [HEAD], statedHeads: [{ sha: 'ed8d063', quote: 'head `ed8d063`.' }] }),
+      306: pr(306, ['tests/Platform.Registry.Tests/GuardsX.cs'], { candidates: [cand('GuardsX'), cand('GuardsY')] }),
+      76: PRS[76],
+    }
+    const env = run({ prs: [301, 306, 76] }, SERVED, { mutate: { GuardsX: row('did-not-fail') } })
+    const result = await execute(env)
+    if (Object.keys(result)[0] !== 'summary') fail(`the return's first field is ${JSON.stringify(Object.keys(result)[0])}, expected summary`)
+    const want = [
+      `#301 ${HEAD} merge (recorded) https://github.com/o/r/pull/301#issuecomment-1: 1 verified finding(s), 0 mutation(s), did-not-fail: none`,
+      `#306 ${sha('6')} hold (recorded) https://github.com/o/r/pull/306#issuecomment-1: 0 verified finding(s), 2 mutation(s), did-not-fail: GuardsX`,
+      `#76 ${H76} merge (skipped) ${CLEARED_76.html_url}: 0 verified finding(s), 0 mutation(s), did-not-fail: none`,
+    ]
+    if (JSON.stringify(result.summary) !== JSON.stringify(want)) fail(`summary is ${JSON.stringify(result.summary, null, 1)}, expected ${JSON.stringify(want, null, 1)}`)
+    // A pull request that fails names its stage where the verdict would be, and the head it read.
+    const dead = run({ prs: [306] }, SERVED, { kill: { 'verdict:306': 'null' } })
+    const r = await execute(dead)
+    const line = (r.summary || [])[0] || ''
+    if (!/^#306 6{40} - \(failed: verdict: the verdict agent returned nothing\) \(no record\): 0 verified finding\(s\), 2 mutation\(s\), did-not-fail: none$/.test(line)) fail(`a failed pull request's summary line is ${JSON.stringify(line)}`)
+    // A halted run, a bad launch or a queue nobody could read, leads with an empty summary.
+    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }]]) {
+      const h = await execute(run(a, SERVED, b))
+      if (Object.keys(h || {})[0] !== 'summary' || !Array.isArray(h.summary) || h.summary.length) fail(`${why} returns ${JSON.stringify(h)}, expected summary [] first`)
+    }
+  }
+
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
   // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
   checks++

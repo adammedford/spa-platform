@@ -87,6 +87,14 @@ export const meta = {
 // "## Follow-ups", which morning.js reads from the latest record and files. The review still writes
 // nothing outside its log and its one comment.
 //
+// Reading a review at a glance (#294). A description whose stated head is not the head is a verified
+// Spec finding reached by comparison, not by an axis's reading: the inventory reports each sha the
+// description gives as the head, and the script compares it with the head it read (#287's second
+// review found the description still naming ed8d063 after a rebuild). The return leads with summary,
+// one line per pull request with its number, head, verdict, record URL, verified finding and mutation
+// counts and the did-not-fail rows named, because the completion notice cuts a return short and on
+// #287's runs the verdict and the mutation rows were past the cut. A halted run's summary is [].
+//
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
 // the run-level headMoved list) so the operator runs again. GitHub unreachable at posting time is
@@ -112,7 +120,7 @@ const badArguments = (a) => {
 const BAD_LAUNCH = badArguments(A)
 if (BAD_LAUNCH.length) {
   // Stops here: no agent is started, nothing is read or written.
-  return { halted: 'bad launch; no agent started. Fix each argument and relaunch with all of them:\n- ' + BAD_LAUNCH.join('\n- ') }
+  return { summary: [], halted: 'bad launch; no agent started. Fix each argument and relaunch with all of them:\n- ' + BAD_LAUNCH.join('\n- ') }
 }
 const REPO = A.repo.replace(/\/+$/, '')
 const DATE = A.date
@@ -322,13 +330,15 @@ const INVENTORY = {
     ci: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, state: { type: 'string' } }, required: ['name', 'state'] } },
     cites: { type: 'object', properties: { planRow: { type: 'string' }, issues: { type: 'array', items: { type: 'integer' } }, mergeSubject: { type: 'string' } }, required: ['planRow', 'issues', 'mergeSubject'] },
     bodyClaims: { type: 'array', items: { type: 'string' } },
+    // Every sha the description states as this pull request's head, as written, with its sentence (#294).
+    statedHeads: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, quote: { type: 'string' } }, required: ['sha', 'quote'] } },
     statedMutations: { type: 'array', items: STATED },
     candidates: { type: 'array', items: CANDIDATE },
     comments: { type: 'array', items: ENTRY },
     reviews: { type: 'array', items: ENTRY },
     error: { type: 'string' },
   },
-  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'reviewCommits', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
+  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'reviewCommits', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedHeads', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
 }
 const FINDING = {
   type: 'object',
@@ -425,6 +435,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 4. ownership: run \`cd ${REPO} && python3 -I .github/path-ownership.py <forkPoint> <head>\`; owners = the owner sets it names, ok = whether it exited 0, output = its last lines.
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
+6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
@@ -474,7 +485,7 @@ ${axis === 'Standards'
     : 'Hold the diff to the spec sources the review guide\'s table names: the plan row, the issue\'s body and comments, the contracts and pipeline table, the test and evidence ids the row names, change requests and ADRs. The pull request body is the author\'s claim, not the spec: put every claim in claims, verified or not, and how.'}
 ${axis === 'Standards' ? 'Each nomination: test (by the name the inventory\'s candidates use, if it is one), project (what runs it alone), and why you suspect it cannot fail. ' : ''}Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
 
-const verdictPrompt = (n, inv, mut, d) => `Decide the review of pull request #${n}: ${inv.title}. You wrote none of its commits.
+const verdictPrompt = (n, inv, mut, d, stale = []) => `Decide the review of pull request #${n}: ${inv.title}. You wrote none of its commits.
 
 ${HOUSE}
 
@@ -484,7 +495,7 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
-The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
+${stale.length ? `The script compared every head the description states with the head the inventory read, and these differ; each is a verified Spec finding the comment already carries, so weigh it in verdict and outstanding and do not list it again in findings:\n${stale.map((f) => `- ${f.title}. ${f.checked}`).join('\n')}\n` : ''}The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
@@ -729,6 +740,22 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   record,
 ].join('\n')
 
+// ---------------------------------------------------------------- the description's head
+// A description whose stated head is not the head (#294). #287's second review found its description
+// still naming ed8d063 after a rebuild, and only an axis's reading caught it. The inventory reports
+// each sha the description states as the head; this compares each with the head it read, a full sha
+// or an abbreviation of at least seven hex digits matching as its prefix, case aside, and makes each
+// one that differs, or is no sha at all, a verified Spec finding naming both. A description that
+// states no head yields none. The verdict cannot re-take a finding it did not write, so the severity
+// is set here: low, because the fix is an edit to the description, not to the branch.
+const staleHeadFindings = (inv) => (inv.statedHeads || []).filter((s) => s && typeof s.sha === 'string')
+  .filter((s) => { const h = s.sha.trim().toLowerCase(); return !(/^[0-9a-f]{7,40}$/.test(h) && inv.head.startsWith(h)) })
+  .map((s) => ({
+    axis: 'Spec', status: 'verified', severity: 'low', where: 'the pull request description',
+    title: `The description names the head ${s.sha.trim()}, but the head is ${inv.head}`,
+    checked: `Compared by the script with the head gh serves; the description says: ${JSON.stringify(s.quote || '')}`,
+  }))
+
 // ---------------------------------------------------------------- a rebuilt head
 // The range agent's mapping judged against the inventory's commits (#293): null when it cannot be
 // trusted, so the review is full, as a range nobody could read is. It must name every commit of the
@@ -837,9 +864,12 @@ const reviewOne = async (n, res, at) => {
   res.clearedByEarlier = cleared
 
   at.stage = 'verdict'
-  const v = await run(verdictPrompt(n, inv, mut, d), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
+  const stale = staleHeadFindings(inv)
+  const v = await run(verdictPrompt(n, inv, mut, d, stale), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) return failed(res, 'verdict: the verdict agent returned nothing')
   v.earlierFindings = v.earlierFindings || []
+  // The comparison's findings lead the verdict's own: the verdict was told of them and not to repeat them.
+  v.findings = [...stale, ...(v.findings || [])]
   // The script holds on what it can judge itself: a mutation row under the hold rules, or a held
   // record's finding the range leaves unanswered (an axis that returned nothing failed the pull
   // request above). The verdict agent can hold on more, never on less. An empty earlierFindings after
@@ -873,6 +903,16 @@ const reviewOne = async (n, res, at) => {
   return { ...res, outcome: 'recorded', stage: '', recordUrl: post.url }
 }
 
+// ---------------------------------------------------------------- the return's summary
+// One line per pull request, the return's first field (#294): the completion notice cuts a return
+// short, and on #287's runs the verdict and the mutation rows were past the cut. The line names the
+// number, the head read, the verdict ("-" when none was reached) with the outcome and any stage, the
+// record's URL, the verified findings and mutations counted, and the tests whose rows did not fail.
+const summaryLine = (r) => {
+  const didNotFail = (r.mutations || []).filter((m) => m.result === 'did-not-fail').map((m) => m.test)
+  return `#${r.number} ${r.head || '(unread)'} ${r.verdict || '-'} (${r.outcome}${r.stage ? ': ' + r.stage : ''}) ${r.recordUrl || '(no record)'}: ${((r.findings || {}).verified || []).length} verified finding(s), ${(r.mutations || []).length} mutation(s), did-not-fail: ${didNotFail.join(', ') || 'none'}`
+}
+
 // ---------------------------------------------------------------- run
 phase('Inventory')
 // The base tip the run saw: the queue agent's reading, or with a named list the first inventory's.
@@ -883,7 +923,7 @@ if (!PRS) {
   if (!q || q.error) {
     const why = `queue: ${q ? q.error : 'the queue agent returned nothing'}; no pull request was reviewed and nothing was posted`
     log(`review-queue ${DATE}: ${why}`)
-    return { date: DATE, baseTip: '', logDir: LOG, agents: agentsRun, halted: why, headMoved: [], prs: [] }
+    return { summary: [], date: DATE, baseTip: '', logDir: LOG, agents: agentsRun, halted: why, headMoved: [], prs: [] }
   }
   baseTip = /^[0-9a-f]{40}$/.test(q.baseTip || '') ? q.baseTip : ''
   // gh was asked for base main; a row of another base, or a number that is not one, is dropped.
@@ -896,4 +936,4 @@ for (const r of prs) log(`#${r.number}: ${r.outcome}${r.verdict ? ' ' + r.verdic
 // headMoved: the pull requests whose head moved during the run, each to be run again.
 if (!baseTip) baseTip = (prs.find((r) => r.baseTip) || {}).baseTip || ''
 log(`review-queue ${DATE}: ${agentsRun} agent(s) ran; origin/main at ${baseTip || '(unread)'}; log ${LOG}`)
-return { date: DATE, baseTip, logDir: LOG, agents: agentsRun, headMoved: prs.filter((r) => r.headMoved).map((r) => r.number), prs }
+return { summary: prs.map(summaryLine), date: DATE, baseTip, logDir: LOG, agents: agentsRun, headMoved: prs.filter((r) => r.headMoved).map((r) => r.number), prs }
