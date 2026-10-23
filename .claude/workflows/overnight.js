@@ -189,10 +189,13 @@ const INT = {
   type: 'object',
   properties: {
     ok: { type: 'boolean' }, mergeSha: { type: 'string' }, notes: { type: 'string' },
+    // the integration branch's HEAD the gate passed on, "" on failure: the last verified tip, which a ticket sent back
+    // to its lane back-merges, never a merge whose gate is still running (#279)
+    headSha: { type: 'string' },
     // the files a content conflict stopped the merge on, [] when the merge did not conflict (#136)
     conflictFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['ok', 'mergeSha', 'notes', 'conflictFiles'],
+  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha'],
 }
 const RESOLVE = {
   type: 'object',
@@ -376,21 +379,21 @@ STEP 2 — the integration gate:
 ${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: BASE, port: PORT(t.n) })}
 Red: \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines. Do not fix code here.
 
-Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles.`
+Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise).`
 
 // A conflict at integrate (#136): the ticket goes back to its lane (#279), where its branch back-merges the run
 // branch in its own worktree and resolves it there, so the integration worktree never holds a half-resolved merge.
 // The integration lock is released meanwhile, so other tickets integrate; the files this ticket changed stay
 // locked, so no ticket that changed one of them merges under the resolve, and a conflict on the retry fails it.
-const resolvePrompt = (t, impl, rev, files) => `Resolve a merge conflict for ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) so it can integrate into ${INT_BRANCH}. Unattended overnight. The ticket is back in its lane (#279): ${INT_BRANCH} may move while you work, though no ticket that changed one of this branch's files merges until this one has integrated or failed; the retry merges once, after a second review, and a conflict then fails the ticket.
+const resolvePrompt = (t, impl, rev, files, verified) => `Resolve a merge conflict for ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) so it can integrate into ${INT_BRANCH}. Unattended overnight. The ticket is back in its lane (#279): ${INT_BRANCH} may move while you work, though no ticket that changed one of this branch's files merges until this one has integrated or failed; the retry merges once, after a second review, and a conflict then fails the ticket.
 ${HOUSE}
 
 Worktree ${WT(t)}, branch ${impl.branch}, fork point ${impl.forkSha}. Merging it into ${INT_BRANCH} stopped on a content conflict in: ${files.join(', ')}.
 The implementer's summary: ${impl.summary}
 The reviewer's summary: ${rev.summary}
 
-STEP 0 — durable state: tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
-STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${INT_BRANCH}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
+STEP 0 — durable state: ${verified ? `tip=${verified}, the head of ${INT_BRANCH} whose integration gate last passed. Take it, not \`git -C ${REPO} rev-parse ${INT_BRANCH}\`: outside the integration lock the branch may hold a merge whose gate is still running, and a red gate resets it away (#279).` : `tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`, read once and used below; no integration gate has passed in this run, so no verified tip was handed over.`} If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
+STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${verified || '<tip>'}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
 STEP 2 — the check, against the run branch's tip that was merged in, so the diff judged is this ticket's change and its resolution:
 ${GATE({ dir: WT(t), log: `${LOG}/${t.id}-resolve.txt`, kind: 'task', fork: '<tip>', port: PORT(t.n) })}
   Red: fix the resolution only (never the ticket's own behaviour) and re-run, at most two runs in total. Still red: \`git -C ${WT(t)} reset --hard <before>\` and return "unresolved" with the failing lines.
@@ -495,6 +498,9 @@ const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 const results = {}      // id -> {stage, outcome, ...}
 const grillQueue = []   // grill promises
 let failures = 0
+// The head of the run branch whose integration gate last passed (#279): a ticket sent back to its lane back-merges
+// this, since outside the integration lock the branch's tip may be a merge still under its gate.
+let verifiedTip = ''
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
 let halted = null
 
@@ -580,7 +586,12 @@ const finish = async (t, impl, at) => {
 
     at.stage = 'integrate'
     // One merge at a time (#136): the integration lock covers each merge and its gate, not a conflict's resolve.
-    const merge = (retry, head, r) => serial(() => withSlot(() => agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })))
+    // A green merge's head becomes the verified tip as the agent returns, before its slot is released (#279).
+    const merge = (retry, head, r) => serial(() => withSlot(async () => {
+      const out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      if (out && out.ok && out.headSha) verifiedTip = out.headSha
+      return out
+    }))
     const release = await lockFiles(t, rev.changedFiles || [])
     let integ, conflict = null, rev2 = null
     try {
@@ -591,7 +602,7 @@ const finish = async (t, impl, at) => {
         // integration lock, holding its file locks, and the retry merges once; a second conflict fails the ticket.
         at.stage = 'resolve'
         log(`${t.id}: conflict at integrate in ${files.join(', ')}; back to its lane to back-merge ${INT_BRANCH} into ${impl.branch}`)
-        const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
+        const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
         if (!res || res.outcome !== 'resolved') {
           integ = { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }
           conflict = { files, resolved: false }

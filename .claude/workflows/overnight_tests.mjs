@@ -43,6 +43,7 @@ const CONFLICT_FILES = ['.github/workflows/ci.yml', 'docs/dependencies.md']
 const SHARED_FILE = '.gitignore'
 const changedFiles = (id) => (id === CONFLICT_ALWAYS || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
+const greens = []          // {at, head}, each green mocked integrate, in order: the verified tips (#279)
 const RESOLVE_TIP = 't'.repeat(40)   // the run branch's tip the mocked resolve back-merged
 const cost = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
 
@@ -74,8 +75,9 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
-    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: CONFLICT_FILES }
-    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [] }
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: CONFLICT_FILES, headSha: '' }
+    greens.push({ at: tick, head: `verified-${id}` })
+    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}` }
   }
   throw new Error(`unexpected agent label ${opts.label}`)
 }
@@ -232,7 +234,11 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     if (resolves(id).length !== 1) fail(`${id} met a conflict and ran ${resolves(id).length} resolve agents, not 1`)
     else {
       const r = resolves(id)[0].prompt
-      if (!r.includes(`merge --no-ff overnight/${fixture.args.date}`)) fail(`the resolve of ${id} does not back-merge overnight/${fixture.args.date}`)
+      // It back-merges the last verified tip, not the branch, which may hold a merge still under its gate (#279).
+      const at = events.find((e) => e.kind === 'resolve' && e.id === id && e.edge === 'start').at
+      const tip = (greens.filter((g) => g.at <= at).pop() || {}).head
+      if (!tip) fail(`no integrate was green before the resolve of ${id}, so its verified tip is unknown`)
+      else if (!r.includes(`merge --no-ff ${tip}\``)) fail(`the resolve of ${id} does not back-merge ${tip}, the last tip whose integration gate passed`)
       for (const f of CONFLICT_FILES) if (!r.includes(f)) fail(`the resolve of ${id} does not name the conflicting file ${f}`)
       if (!/THE CHECK/.test(r)) fail(`the resolve of ${id} does not re-run the check`)
     }
