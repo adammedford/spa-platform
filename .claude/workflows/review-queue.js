@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
-    { title: 'Verdict', detail: 'one agent per pull request re-takes every severity and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
+    { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
   ],
 }
 
@@ -714,7 +714,7 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   ...scopeLines(d, full),
   `CI on the head: ${inv.ci.map((c) => `${c.name} ${c.state}`).join(', ') || 'none reported'}.`,
   `Owner set: ${inv.ownership.owners.join(', ') || 'none'} (path-ownership ${inv.ownership.ok ? 'passed' : 'refused'}).`,
-  'Axes: Standards and Spec reported; the verdict re-took every severity. Run by the review-queue workflow (#83).',
+  'Axes: Standards and Spec reported; the verdict re-took every severity but those of the script\'s head comparison (#294). Run by the review-queue workflow (#83).',
   '',
   '## Standards',
   '',

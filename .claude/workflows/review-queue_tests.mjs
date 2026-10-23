@@ -1063,7 +1063,7 @@ try {
   // after a rebuild. The inventory reports each sha the description states as the head; the script
   // compares it with the head it read, and each one that differs is a verified Spec finding naming
   // both shas. A full sha or an abbreviation of the head is current, and so is a description that
-  // states none.
+  // states none; a prefix under seven digits names no commit, so it is stale.
   checks++
   {
     const HEAD = '76704c5e1d2c3b4a5968778695a4b3c2d1e0f9a8'
@@ -1075,14 +1075,15 @@ try {
       303: described(303, ['76704c5']),                 // current, abbreviated as #287's body does
       304: described(304, []),                          // states no head
       305: described(305, ['76704C5', 'ed8d0633e9c1360fb7c2e425f63237676f4db648']), // one current, one stale
+      307: described(307, ['76704c']),                  // a prefix of six digits, under the seven a stated head needs
     }
-    const env = run({ prs: [301, 302, 303, 304, 305] }, SERVED)
+    const env = run({ prs: [301, 302, 303, 304, 305, 307] }, SERVED)
     const result = await execute(env)
     const specOf = (n) => {
       const lines = commentOf(env, n).split('\n')
       return lines.slice(lines.indexOf('## Spec') + 1, lines.indexOf("The author's claims:")).filter((l) => l.startsWith('- '))
     }
-    const stale = { 301: ['ed8d063'], 302: [], 303: [], 304: [], 305: ['ed8d0633e9c1360fb7c2e425f63237676f4db648'] }
+    const stale = { 301: ['ed8d063'], 302: [], 303: [], 304: [], 305: ['ed8d0633e9c1360fb7c2e425f63237676f4db648'], 307: ['76704c'] }
     for (const [n, want] of Object.entries(stale).map(([k, v]) => [Number(k), v])) {
       const verified = (resultOf(n, result).findings || { verified: [] }).verified
       if (verified.length !== want.length) fail(`PR ${n}: ${verified.length} verified finding(s), expected ${want.length} from the description's stated head(s)`)
