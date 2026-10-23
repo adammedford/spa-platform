@@ -10,8 +10,8 @@ namespace Platform.Proxy.Tests;
 ///
 /// <see cref="Platform.Testing.CapturedLog"/> is the host's capture, but its
 /// <see cref="Platform.Testing.CapturedLine"/> has no event id (change request issue-145, section 4),
-/// so this recorder keeps it for that one test; change request issue-148-captured-line-event-id asks
-/// for it.
+/// so this recorder keeps it for that one test, and goes when <see cref="Platform.Testing.CapturedLine"/>
+/// carries one (change request issue-148-captured-line-event-id).
 /// </summary>
 internal sealed class RecordingLoggerProvider : ILoggerProvider
 {

@@ -60,8 +60,8 @@ public sealed class ProxyHost : IAsyncDisposable
 
     /// <summary>
     /// Every line the gateway logged with its event id, which <see cref="CapturedLine"/> does not carry.
-    /// Read by the one test that holds the unknown-api line to its <c>LoggerMessage</c> template (#162);
-    /// change request issue-148-captured-line-event-id asks for the event id on <see cref="CapturedLine"/>.
+    /// Read by the one test that holds the unknown-api line to its <c>LoggerMessage</c> template (#162),
+    /// and goes when <see cref="CapturedLine"/> carries one (change request issue-148-captured-line-event-id).
     /// </summary>
     internal IReadOnlyList<LogLine> EventLines => recorded.Lines;
 
