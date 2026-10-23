@@ -267,7 +267,7 @@ function stub(env, scriptArgs, served) {
         const record = served.agentRecord || readRecord(head, served.recordComments || RECORD_MERGE)
         out = {
           outcome: v.outcome || 'ok', step: v.step || 0, reason: v.reason || '',
-          base: BASE, head, branch: `overnight/${DATE}`,
+          base: BASE, forkPoint: v.forkPoint === undefined ? BASE : v.forkPoint, head, branch: `overnight/${DATE}`,
           pr: { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400' },
           prBodyFile: `${env.repo}/${MORNING_REL}/pr-body.md`, mergeBodyFile: `${env.repo}/${MORNING_REL}/merge-body.md`,
           mergeSubject: jsonAfter(prompt, 'MERGE SUBJECT') || '',
@@ -885,6 +885,7 @@ try {
     const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; nothing was replayed'
     for (const [label, replay] of [
       ['2026-10-22\'s Replay result', OCT22],
+      ['an empty reason', { ...OCT22, pending: '', renamed: '', reason: '' }],
       ['a reason of whitespace', { ...OCT22, pending: '', renamed: ' ', reason: ' \n ' }],
       ['a quoted empty reason padded with whitespace', { ...OCT22, reason: ' "" ' }],
     ]) {
@@ -1159,6 +1160,26 @@ try {
     // The prompt asks for what the stop is built from.
     const vp = rebuilt.prompt('verify')
     if (!/\^\{tree\}/.test(vp) || !/oldTip/.test(vp) || !/partner/.test(vp)) fail('step 3: the Verify prompt does not ask for each tip\'s tree-equal partner and the old tip')
+  }
+
+  // 24. The hand-over names the fork point, the integration head's merge base with origin/main
+  //     (#326). On 2026-10-23 main was merged into the branch (6fc1e3a), so the pull request's merge
+  //     base was 65220c4, and the hand-over named the night's start, ca17e9f, as its base. The first
+  //     case is that night's shape; the second, a branch main was never merged into, names one sha.
+  checks++
+  {
+    const FORK = sha('f')
+    const firstLine = (t) => t.split('\n')[2] || ''
+    const merged = (await execute(newRepo(), { date: DATE }, { verify: { forkPoint: FORK } })).result.handover.text
+    const want = `Overnight ${cite(ISSUE)}; integration branch overnight/${DATE} at ${HEAD}, fork point ${FORK} (its merge base with origin/main); the night's base ${BASE}.`
+    if (!firstLine(merged).startsWith(want)) fail(`main merged into the branch: the hand-over's first line is ${JSON.stringify(firstLine(merged))}, expected it to start ${JSON.stringify(want)}`)
+    const same = (await execute(newRepo(), { date: DATE }, {})).result.handover.text
+    const one = `Overnight ${cite(ISSUE)}; integration branch overnight/${DATE} at ${HEAD}, fork point ${BASE} (its merge base with origin/main, the night's base). Apply:`
+    if (!firstLine(same).startsWith(one)) fail(`main never merged in: the hand-over's first line is ${JSON.stringify(firstLine(same))}, expected it to start ${JSON.stringify(one)}`)
+    const unread = (await execute(newRepo(), { date: DATE }, { verify: { forkPoint: '' } })).result.handover.text
+    if (!/fork point not read; the night's base b{40}\./.test(firstLine(unread))) fail(`no fork point returned: the hand-over's first line is ${JSON.stringify(firstLine(unread))}`)
+    const vp = (await execute(newRepo(), { date: DATE }, {})).prompt('verify')
+    if (!/forkPoint/.test(vp) || !/merge-base origin\/main overnight\//.test(vp)) fail('the Verify prompt does not ask for the fork point, the merge base of origin/main and the integration branch')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

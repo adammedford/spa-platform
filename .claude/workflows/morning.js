@@ -196,7 +196,7 @@ const VERIFY = {
   type: 'object',
   properties: {
     outcome: { type: 'string', enum: ['ok', 'stop'] }, step: { type: 'integer' }, reason: { type: 'string' },
-    base: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' },
+    base: { type: 'string' }, forkPoint: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' },
     pr: { type: 'object', properties: { number: { type: 'integer' }, url: { type: 'string' } }, required: ['number', 'url'] },
     prBodyFile: { type: 'string' }, mergeBodyFile: { type: 'string' }, mergeSubject: { type: 'string' },
     prReused: { type: 'boolean' }, prBody: { type: 'string' },
@@ -209,7 +209,7 @@ const VERIFY = {
     claimed: { type: 'array', items: { type: 'string' } },
     record: { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] },
   },
-  required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
+  required: ['outcome', 'step', 'reason', 'base', 'forkPoint', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
 }
 const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
 // Every question carries the follow-up and ticket-edit fields, empty when its kind is another (#320),
@@ -766,7 +766,7 @@ MERGE SUBJECT: ${JSON.stringify(subjectFor(date))}
 
 Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Each step below reads durable state first and skips what is already done. Each step is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
 1. The main checkout's tracked files are unchanged: \`git -C ${REPO} status --porcelain --untracked-files=no\` prints nothing. Untracked files are listed in findings against what the run recorded at its start, never a stop.
-2. \`git -C ${REPO} fetch origin\`. The integration branch exists and the base the issue names, resolved to its full sha, is an ancestor of it: \`git -C ${REPO} merge-base --is-ancestor <base> ${p.intBranch}\`. mainMoved is whether origin/main has moved past the base; that is reported, never merged in or rebased onto.
+2. \`git -C ${REPO} fetch origin\`. The integration branch exists and the base the issue names, resolved to its full sha, is an ancestor of it: \`git -C ${REPO} merge-base --is-ancestor <base> ${p.intBranch}\`. mainMoved is whether origin/main has moved past the base; that is reported, never merged in or rebased onto. forkPoint is the integration branch's merge base with origin/main, the commit the landing merges onto, as a full sha: \`git -C ${REPO} merge-base origin/main ${p.intBranch}\`. It is the base unless main was merged into the branch (#326); "" when the branch does not exist.
 3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings. Read every worktree before you stop, and return each as {path, branch, tip: its full sha, clean, ancestor, lane, partner}: lane is the task id of the issue's row whose branch it holds, "" for a worktree no row names; partner, for a tip that is not an ancestor, is the commit on the integration branch with the same tree, which marks a rebuild rather than a lane that never merged: compare \`git -C ${REPO} rev-parse <tip>^{tree}\` with \`git -C ${REPO} log --format=%H%x09%T%x09%P <base>..${p.intBranch}\` and take the matching commit with one parent over a merge, whose tree a --no-ff merge of a lane forked from the branch's own tip shares (tools/remap_rebuild.py); "" when none matches or the tip is an ancestor. oldTip, when any integrated or partial lane's tip is not an ancestor, is the integration tip those lanes were merged into: the tip the issue's Run: paragraph names, resolved to its full sha, when every such lane tip is an ancestor of it, else the newest entry of \`git -C ${REPO} reflog --format=%H refs/heads/${p.intBranch}\` that every such lane tip is an ancestor of; "" when neither is, or when every lane tip is an ancestor. head is the integration tip, \`git -C ${REPO} rev-parse ${p.intBranch}\`, and lanes are the issue's rows, both returned even on a stop here. The script builds this stop's remedy from those fields (#321): your reason states the symptoms only.
 4. The check, as the hook runs it, from the base to the head, judging each commit of a history with merges: \`cd ${p.intWt} && tools/check.sh --base <base>\`. Its last line is its verdict; anything but "check: pass:" is a stop with the output's last lines.
 5. The push, with the hook running: compare \`git -C ${REPO} ls-remote origin refs/heads/${p.intBranch}\` with the local tip as the house rules say, then \`git -C ${p.intWt} push -u origin ${p.intBranch}\`. pushed is whether the remote now holds the local tip.
@@ -908,7 +908,12 @@ const handoverText = (s) => {
     if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push(none)
   }
   L.push(`## Morning ${s.date}`, '')
-  L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${v && v.base ? `, base ${v.base}` : ''}. Apply: ${s.apply.ran ? (s.apply.dry ? 'dry, no Confirm comment' : 'applied') : 'not run'}.`)
+  // The fork point, not the night's base, is what the landing merges onto: on 2026-10-23 main was
+  // merged into the branch, and the hand-over named the night's start as its base (#326).
+  const fork = !v ? ''
+    : v.forkPoint && v.forkPoint === v.base ? `, fork point ${v.forkPoint} (its merge base with origin/main, the night's base)`
+      : `, fork point ${v.forkPoint ? `${v.forkPoint} (its merge base with origin/main)` : 'not read'}${v.base ? `; the night's base ${v.base}` : ''}`
+  L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${fork}. Apply: ${s.apply.ran ? (s.apply.dry ? 'dry, no Confirm comment' : 'applied') : 'not run'}.`)
   list('Refusals', s.refusals)
   const prN = v && v.pr && v.pr.number
   const land = []
