@@ -276,7 +276,8 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 // 12. The merge message goes through a file (#231): git merge reads no message from standard input (`-F -` fails
 //     with "could not read file '-'"), and on 2026-10-21 the integrate agents of #155 and #194 each spent a retry on
 //     that. Every integrate prompt, first merge and retry, names the message file under the run's log directory,
-//     the ticket's own, and the merge command that reads it.
+//     the ticket's own, and the merge command that reads it. The retry writes the same file the first merge left,
+//     so the prompt asks for a heredoc, which overwrites it, where the Write tool refuses an unread file (#109).
 {
   const integrates = allPrompts.filter((c) => c.label.startsWith('integrate:'))
   if (!integrates.length) fail('no integrate prompt was rendered, so the merge-message check read nothing')
@@ -287,6 +288,7 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
       `Write the message to ${file} first`,
       `merge --no-ff --no-edit -F ${file} `,
       'never on standard input',
+      "with a quoted heredoc (`cat > <that file> <<'EOF'`)",
     ]
     for (const w of wants) if (!c.prompt.includes(w)) fail(`the ${c.label} prompt lacks: ${w}`)
     const branch = (/Task branch (\S+?)\. /.exec(c.prompt) || [])[1]
