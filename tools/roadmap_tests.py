@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Regressions for PR #14: derived task state and mandatory generated blocks; and for #70: the JSON
-mode prints the derivation the blocks are written from. Owner: integrator."""
+mode prints the derivation the blocks are written from; and for #290: the check refuses a row
+merged both whole and in part. Owner: integrator."""
 
 import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -311,6 +313,116 @@ class LandedInsideAMergeTests(unittest.TestCase):
                 else:
                     self.assertNotIn("open", [rows[row] for row in expected])
 
+
+class MergedBothWaysTests(unittest.TestCase):
+    """#290: --check refuses a history that both completes a row and leaves it unfinished.
+
+    #287's run branch was rebuilt so row 6.7's merge said "Merge part of task 6.7" (fedb593), but
+    the old "Merge task 6.7" (032eb43) was still reachable through the second parents of the rebuilt
+    lane merges. Every subject in the ancestry counts, and one full landing marks a row done for
+    good, so --check passed and the roadmap said S7 owed nothing. These cases build those histories
+    in a scratch repository, with origin/main at its first commit, and run the real script on them.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = pathlib.Path(self.scratch.name)
+        for name in ("README.md", roadmap.ROADMAP, roadmap.PLAN_TASKS, roadmap.PLAN_PHASE2):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        # Under the pre-push hook git exports GIT_DIR and friends, which would point every git call
+        # here, the script's own included, at this clone rather than the scratch repository.
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        environment.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                           GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+        stack.enter_context(patch.dict(os.environ, environment, clear=True))
+        stack.enter_context(patch.object(roadmap, "__file__", str(self.root / "tools/roadmap.py")))
+        stack.enter_context(patch.object(roadmap, "tags", return_value=set()))
+        self.git("init", "--quiet")
+        self.git("add", "--all")
+        self.base = self.commit("I-1: import the skeleton", [], tree=self.git("write-tree"))
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+
+    def git(self, *arguments):
+        done = subprocess.run(["git", "-c", "commit.gpgsign=false", *arguments], cwd=self.root,
+                              capture_output=True, text=True, check=True)
+        return done.stdout.strip()
+
+    def commit(self, subject, parents, tree=None):
+        tree = tree or self.git("rev-parse", f"{self.base}^{{tree}}")
+        flags = [flag for sha in parents for flag in ("-p", sha)]
+        return self.git("commit-tree", tree, *flags, "-m", subject)
+
+    def head(self, sha):
+        self.git("update-ref", "HEAD", sha)
+
+    def merge(self, subject, into, *parents):
+        """A merge of a task branch with one commit of its own, as a lane makes it."""
+        work = self.commit(subject.replace("Merge part of task", "Task").replace("Merge task", "Task"),
+                           [into])
+        return self.commit(subject, [into, work, *parents])
+
+    def checked(self):
+        """Write the blocks for the history as it stands, then run --check on it."""
+        written, output = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(written), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, roadmap.main([]), written.getvalue())
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            code = roadmap.main(["--check"])
+        return code, output.getvalue()
+
+    def test_287s_second_head_a_part_merge_on_the_first_parent_and_a_full_one_beside_it_is_red(self):
+        # The old lane merge, from before the rebuild, and the rebuilt one that says "part of".
+        old = self.merge("Merge task 6.7: operating notes", self.base)
+        rebuilt = self.merge("Merge part of task 6.7: operating notes", self.base)
+        # The next lane's merge, rebuilt too, whose second parent carries the old chain in.
+        self.head(self.merge("Merge task issue-999: another lane", rebuilt, old))
+
+        code, output = self.checked()
+        self.assertEqual(1, code, output)
+        self.assertIn("6.7", output)
+        self.assertIn(old[:7], output)
+        self.assertIn(rebuilt[:7], output)
+
+
+    def test_287s_third_head_the_part_merge_alone_passes(self):
+        rebuilt = self.merge("Merge part of task 6.7: operating notes", self.base)
+        self.head(self.merge("Merge task issue-999: another lane", rebuilt))
+
+        code, output = self.checked()
+        self.assertEqual(0, code, output)
+        text = (self.root / roadmap.ROADMAP).read_text()
+        block = text.split(roadmap.MARKER.format("BEGIN", "stages"), 1)[1]
+        block = block.split(roadmap.MARKER.format("END", "stages"), 1)[0]
+        s7 = [line for line in block.splitlines() if line.startswith("| S7 ")]
+        self.assertEqual(1, len(s7))
+        self.assertIn("part-landed: `6.7`", s7[0])
+
+    def test_a_row_the_trunk_lists_as_landed_is_not_held_by_a_later_part_follow_up(self):
+        # The 2.1 / 2.1b shape (#71): 2.1 landed whole on the trunk, then follow-ups said "part of".
+        trunk = self.merge("Merge task 2.1: registry validator", self.base)
+        self.git("update-ref", "refs/remotes/origin/main", trunk)
+        split = self.merge("Merge part of task 2.1b: the validator reports a timeout", trunk)
+        self.head(self.merge("Merge part of task 2.1: a follow-up to the landed row", split))
+
+        self.assertEqual(0, self.checked()[0])
+
+    def test_a_split_merged_in_part_beside_its_row_merged_whole_is_no_contradiction(self):
+        whole = self.merge("Merge task 2.1: registry validator", self.base)
+        self.head(self.merge("Merge part of task 2.1b: the validator reports a timeout", whole))
+
+        self.assertEqual(0, self.checked()[0])
+
+    def test_a_row_the_trunk_lists_as_part_landed_can_be_finished_by_the_branch(self):
+        trunk = self.merge("Merge part of task 6.7: operating notes", self.base)
+        self.git("update-ref", "refs/remotes/origin/main", trunk)
+        self.head(self.merge("Merge task 6.7: the rest of the notes", trunk))
+
+        self.assertEqual(0, self.checked()[0])
 
 if __name__ == "__main__":
     unittest.main()
