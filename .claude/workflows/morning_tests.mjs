@@ -274,7 +274,8 @@ function stub(env, scriptArgs, served) {
           prReused: !!v.prReused, prBody: v.prBody || '', merges: v.merges || [],
           ci: v.ci || 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/1', failingJobs: v.failingJobs || [],
           pushed: true, mainMoved: false, findings: [],
-          worktrees: [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true }],
+          worktrees: v.worktrees || [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true, lane: 'issue-300', partner: '' }],
+          oldTip: v.oldTip || '',
           lanes: [
             { issue: 300, task: 'issue-300', outcome: 'integrated', complete: true, mergeSha: sha('1'), outstanding: '' },
             { issue: 301, task: 'issue-301', outcome: 'partial', complete: false, mergeSha: sha('2'), outstanding: 'box 3' },
@@ -1096,6 +1097,68 @@ try {
     const applyRed = applyCase(await execute(newRepo(), { date: DATE }, {}, mutant))
     const checkRed = checkCase(await draftRun(HEADED, {}, mutant))
     if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
+  }
+
+  // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
+  //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
+  //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
+  //     says the gate is those tips and not the body, and, when every such tip has a partner, gives
+  //     tools/remap_rebuild.py's command (#318) with the old and new tips. A failed lane's tip is off
+  //     the branch by design and neither stops the run nor withholds the command.
+  checks++
+  {
+    const OLD_TIP = sha('a')
+    const lane = (name, task, tip, partner) => ({ path: `${WT}/${name}`, branch: `task/${task}-x`, tip, clean: true, ancestor: false, lane: task, partner })
+    const REBUILT = [
+      lane('ws1-infra', 'issue-300', sha('3'), sha('5')),
+      lane('ws2-hosting', 'issue-301', sha('4'), sha('6')),
+      lane('ws3-identity', 'issue-302', sha('7'), ''),
+    ]
+    const stop3 = (worktrees, oldTip = OLD_TIP, outcome = 'stop') => ({ verify: { outcome, step: outcome === 'stop' ? 3 : 0, reason: 'two lane tips are not ancestors of the integration tip', worktrees, oldTip } })
+    // The command's flags, read from tools/remap_rebuild.py's own usage line, so the copy in the
+    // stop cannot drift from the tool it names.
+    const usage = (/^ {4}python3 -I tools\/remap_rebuild\.py ([\s\S]*?)\n\n/m.exec(fs.readFileSync(path.join(top, 'tools', 'remap_rebuild.py'), 'utf8')) || [])[1] || ''
+    const flags = [...usage.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]).filter((f) => f !== '--apply')
+    if (!['--old', '--new', '--issue', '--worktree-root', '--session'].every((f) => flags.includes(f))) fail(`step 3: tools/remap_rebuild.py's usage line was not read (flags ${JSON.stringify(flags)})`)
+    const GATE = /the gate is the lane worktree tips, not the issue body/i
+
+    const rebuilt = await execute(newRepo(), { date: DATE }, stop3(REBUILT))
+    const rs = rebuilt.result.stop || ''
+    const command = (/`(cd \S+ && python3 -I tools\/remap_rebuild\.py [^`]*)`/.exec(rs) || [])[1] || ''
+    if (!command) fail(`step 3, rebuilt: the stop gives no remap command:\n${rs}`)
+    if (!command.includes(`--old ${OLD_TIP}`) || !command.includes(`--new ${HEAD}`)) fail(`step 3, rebuilt: the remap command lacks the old and new tips: ${command}`)
+    if (!command.includes(`--issue ${ISSUE}`) || !command.includes(`--worktree-root ${WT}`)) fail(`step 3, rebuilt: the remap command lacks the issue or the worktree root: ${command}`)
+    for (const f of flags) if (!command.includes(f)) fail(`step 3, rebuilt: the remap command lacks ${f}, which tools/remap_rebuild.py's usage gives`)
+    for (const w of REBUILT.slice(0, 2)) if (!rs.includes(w.path) || !rs.includes(w.tip) || !rs.includes(w.partner)) fail(`step 3, rebuilt: the stop does not name ${w.path}, its tip and its partner:\n${rs}`)
+    if (/not merged/.test(rs)) fail(`step 3, rebuilt: a lane is named as not merged:\n${rs}`)
+    if (rs.includes(`${WT}/ws3-identity`)) fail(`step 3, rebuilt: the failed lane's worktree is named in the stop:\n${rs}`)
+    if (!GATE.test(rs)) fail(`step 3, rebuilt: the stop does not say the gate is the lane worktree tips:\n${rs}`)
+    if (!rebuilt.result.handover.text.includes(command)) fail('step 3, rebuilt: the hand-over does not carry the remap command')
+    if (rebuilt.labels.some((l) => l === 'classify' || l.startsWith('apply:'))) fail(`step 3, rebuilt: Apply ran: ${rebuilt.labels.join(', ')}`)
+
+    const ONE_UNMERGED = [REBUILT[0], { ...REBUILT[1], partner: '' }, REBUILT[2]]
+    const unmerged = await execute(newRepo(), { date: DATE }, stop3(ONE_UNMERGED))
+    const us = unmerged.result.stop || ''
+    if (/remap_rebuild/.test(us)) fail(`step 3, one lane unmerged: the stop still gives the remap command:\n${us}`)
+    if (!new RegExp(`${REBUILT[1].path.replace(/[/.]/g, '\\$&')}[^\\n]*${REBUILT[1].tip}[^\\n]*not merged`).test(us)) fail(`step 3, one lane unmerged: the stop does not name ${REBUILT[1].path} at its tip as not merged:\n${us}`)
+    if (!us.includes(REBUILT[0].partner)) fail(`step 3, one lane unmerged: the rebuilt lane's partner is not named:\n${us}`)
+    if (!GATE.test(us)) fail(`step 3, one lane unmerged: the stop does not say the gate is the lane worktree tips:\n${us}`)
+
+    // Every tip has a partner but the old tip was not found: no half-filled command, and the stop says what is missing.
+    const noOld = (await execute(newRepo(), { date: DATE }, stop3(REBUILT, ''))).result.stop || ''
+    if (/remap_rebuild\.py --old/.test(noOld) || !/old tip/.test(noOld)) fail(`step 3, no old tip: ${noOld}`)
+
+    // A Verify that reports ok over an integrated lane's off-branch tip is held to its own worktrees: the script stops.
+    const lax = await execute(newRepo(), { date: DATE }, stop3(REBUILT, OLD_TIP, 'ok'))
+    if (lax.result.ok || !/step 3/.test(lax.result.stop || '') || !GATE.test(lax.result.stop || '')) fail(`step 3, reported ok over off-branch lane tips: ${JSON.stringify(lax.result.stop)}`)
+
+    // The dirty-worktree stop keeps the agent's own reason, with no remedy added.
+    const dirty = (await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'the worktree ws1-infra is dirty: stray.txt' } })).result.stop || ''
+    if (!/dirty: stray\.txt/.test(dirty) || GATE.test(dirty)) fail(`step 3, dirty: ${dirty}`)
+
+    // The prompt asks for what the stop is built from.
+    const vp = rebuilt.prompt('verify')
+    if (!/\^\{tree\}/.test(vp) || !/oldTip/.test(vp) || !/partner/.test(vp)) fail('step 3: the Verify prompt does not ask for each tip\'s tree-equal partner and the old tip')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

@@ -203,12 +203,13 @@ const VERIFY = {
     merges: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, subject: { type: 'string' } }, required: ['sha', 'subject'] } },
     ci: { type: 'string', enum: ['green', 'red', 'pending', 'none'] }, ciUrl: { type: 'string' }, failingJobs: { type: 'array', items: { type: 'string' } },
     pushed: { type: 'boolean' }, mainMoved: { type: 'boolean' }, findings: { type: 'array', items: { type: 'string' } },
-    worktrees: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' }, clean: { type: 'boolean' }, ancestor: { type: 'boolean' } }, required: ['path', 'branch', 'tip', 'clean', 'ancestor'] } },
+    worktrees: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' }, clean: { type: 'boolean' }, ancestor: { type: 'boolean' }, lane: { type: 'string' }, partner: { type: 'string' } }, required: ['path', 'branch', 'tip', 'clean', 'ancestor', 'lane', 'partner'] } },
+    oldTip: { type: 'string' },
     lanes: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, task: { type: 'string' }, outcome: { type: 'string', enum: ['integrated', 'partial', 'failed'] }, complete: { type: 'boolean' }, mergeSha: { type: 'string' }, outstanding: { type: 'string' } }, required: ['issue', 'task', 'outcome', 'complete', 'mergeSha', 'outstanding'] } },
     claimed: { type: 'array', items: { type: 'string' } },
     record: { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] },
   },
-  required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'lanes', 'claimed', 'record'],
+  required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
 }
 const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
 // Every question carries the follow-up and ticket-edit fields, empty when its kind is another (#320),
@@ -483,9 +484,38 @@ const unreadOf = (questions, conf) => {
 // still holds the agent's report to the head it verified, so a record of an older head, however it
 // is reported, never clears this one (#78 -> "Verify" step 8: a review covers the head it read).
 const FULL = /^[0-9a-f]{40}$/
-const judgeVerify = (v, subject) => {
+// Step 3's stop names its remedy (#321). On 2026-10-22 Verify stopped there with the symptoms only,
+// lane tips off the branch, and the reader edited the Overnight issue's body, which step 3 never
+// reads: the gate is each lane worktree's tip, judged by git. So the script, not the agent's prose,
+// builds the stop from the worktrees it reports: each one whose lane the issue lists as integrated
+// or partial and whose tip is off the branch, with its tip and the commit on the branch that has the
+// same tree, which marks a rebuild rather than a lane that never merged. When every such tip has one,
+// the stop gives tools/remap_rebuild.py's command (#318) with both tips; a missing tip withholds it
+// rather than print a half-filled one (CODING_STANDARDS.md -> "A check fails closed"). A failed
+// lane's tip is off the branch by design (step 3), so it neither stops the run nor withholds the
+// command.
+const offBranch = (v) => {
+  const outcomes = new Map((v.lanes || []).map((l) => [l.task, l.outcome]))
+  return (v.worktrees || []).filter((w) => w && w.ancestor === false && ['integrated', 'partial'].includes(outcomes.get(w.lane)))
+}
+const laneTipsRemedy = (v, off, issue, intBranch) => {
+  const lines = [`The gate is the lane worktree tips, not the issue body: step 3 runs \`git -C ${REPO} merge-base --is-ancestor <tip> ${intBranch}\` on each lane worktree under ${WTROOT}, so editing the shas in Overnight #${issue} clears nothing. Off the branch:`]
+  for (const w of off) {
+    lines.push(FULL.test(w.partner || '')
+      ? `- ${w.path} (${w.branch}) at ${w.tip}: rebuilt as ${w.partner}, the commit on ${intBranch} with the same tree`
+      : `- ${w.path} (${w.branch}) at ${w.tip}: not merged; no commit on ${intBranch} has its tree, so this tip is not on the branch, as merged or as rebuilt (part of its lane's work may be: compare the tip with the lane's merge)`)
+  }
+  if (off.some((w) => !FULL.test(w.partner || ''))) lines.push('Not every tip has a tree-equal partner, so this is not only a rebuild and no remap clears it: the report and git disagree on each lane named not merged.')
+  else if (!FULL.test(v.oldTip || '') || !FULL.test(v.head || '')) lines.push(`Every tip has a tree-equal partner, so ${intBranch} was rebuilt, but ${!FULL.test(v.oldTip || '') ? 'the old tip, the one the lanes merged into, was not found' : 'the new tip was not read'}; find it and run tools/remap_rebuild.py (#318) with both.`)
+  else lines.push(`Every tip has a tree-equal partner, so ${intBranch} was rebuilt (#318). Run the remap, read its dry run, then run it again with --apply: \`cd ${REPO} && python3 -I tools/remap_rebuild.py --old ${v.oldTip} --new ${v.head} --issue ${issue} --worktree-root ${WTROOT} --session "<who rebuilt it, and why>"\``)
+  return lines.join('\n')
+}
+const judgeVerify = (v, subject, issue, intBranch) => {
   if (!v) return { stop: 'Verify returned nothing', kind: 'stop' }
+  const off = offBranch(v)
+  if (v.outcome === 'stop' && v.step === 3 && off.length) return { stop: `Verify stopped at step 3: ${v.reason}\n${laneTipsRemedy(v, off, issue, intBranch)}`, kind: 'stop' }
   if (v.outcome === 'stop') return { stop: `Verify stopped at step ${v.step}: ${v.reason}`, kind: 'stop' }
+  if (off.length) return { stop: `Verify stopped at step 3: it reported ok over lane tips off ${intBranch}\n${laneTipsRemedy(v, off, issue, intBranch)}`, kind: 'stop' }
   if (!FULL.test(v.head || '')) return { stop: `Verify returned no full head sha (${JSON.stringify(v.head)})`, kind: 'stop' }
   if (v.mergeSubject !== subject || ROW_FORM.test(v.mergeSubject)) return { stop: `the drafted merge subject is ${JSON.stringify(v.mergeSubject)}, not ${JSON.stringify(subject)}`, kind: 'stop' }
   if (v.ci === 'red') return { stop: `CI is red on ${v.head}${v.failingJobs.length ? `: ${v.failingJobs.join(', ')}` : ''} (${v.ciUrl || 'no run URL'})`, kind: 'ci' }
@@ -737,7 +767,7 @@ MERGE SUBJECT: ${JSON.stringify(subjectFor(date))}
 Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Each step below reads durable state first and skips what is already done. Each step is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
 1. The main checkout's tracked files are unchanged: \`git -C ${REPO} status --porcelain --untracked-files=no\` prints nothing. Untracked files are listed in findings against what the run recorded at its start, never a stop.
 2. \`git -C ${REPO} fetch origin\`. The integration branch exists and the base the issue names, resolved to its full sha, is an ancestor of it: \`git -C ${REPO} merge-base --is-ancestor <base> ${p.intBranch}\`. mainMoved is whether origin/main has moved past the base; that is reported, never merged in or rebased onto.
-3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings.
+3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings. Read every worktree before you stop, and return each as {path, branch, tip: its full sha, clean, ancestor, lane, partner}: lane is the task id of the issue's row whose branch it holds, "" for a worktree no row names; partner, for a tip that is not an ancestor, is the commit on the integration branch with the same tree, which marks a rebuild rather than a lane that never merged: compare \`git -C ${REPO} rev-parse <tip>^{tree}\` with \`git -C ${REPO} log --format=%H%x09%T%x09%P <base>..${p.intBranch}\` and take the matching commit with one parent over a merge, whose tree a --no-ff merge of a lane forked from the branch's own tip shares (tools/remap_rebuild.py); "" when none matches or the tip is an ancestor. oldTip, when any integrated or partial lane's tip is not an ancestor, is the integration tip those lanes were merged into: the tip the issue's Run: paragraph names, resolved to its full sha, when every such lane tip is an ancestor of it, else the newest entry of \`git -C ${REPO} reflog --format=%H refs/heads/${p.intBranch}\` that every such lane tip is an ancestor of; "" when neither is, or when every lane tip is an ancestor. head is the integration tip, \`git -C ${REPO} rev-parse ${p.intBranch}\`, and lanes are the issue's rows, both returned even on a stop here. The script builds this stop's remedy from those fields (#321): your reason states the symptoms only.
 4. The check, as the hook runs it, from the base to the head, judging each commit of a history with merges: \`cd ${p.intWt} && tools/check.sh --base <base>\`. Its last line is its verdict; anything but "check: pass:" is a stop with the output's last lines.
 5. The push, with the hook running: compare \`git -C ${REPO} ls-remote origin refs/heads/${p.intBranch}\` with the local tip as the house rules say, then \`git -C ${p.intWt} push -u origin ${p.intBranch}\`. pushed is whether the remote now holds the local tip.
 6. One pull request from ${p.intBranch} to main: \`cd ${REPO} && gh pr list --head ${p.intBranch} --state open --json number,url,headRefOid\` reuses an open one. merges is the branch's first-parent merges from the base, oldest first, each {sha: the full sha, subject}: \`git -C ${REPO} log --first-parent --merges --reverse --format=%H%x09%s <base>..${p.intBranch}\`. prReused is whether you reused an open pull request rather than opening one. When you reuse one, prBody is its description exactly as served, \`cd ${REPO} && gh pr view <number> --json body --jq .body\`, and you never edit it: the script compares the head it names with this head and refreshes it (#300). Otherwise prBody is "". Draft its body to ${p.mdir}/pr-body.md from the issue and the lane merge bodies, in the shape a later morning's refresh reads: a line "Overnight issue: #${issue}. Base <base>, head <head>. <n> integrated, <m> partial, <k> failed." with both shas in full and each in backticks; then tables headed "## Integrated", "## Partial" and "## Failed", each with the header "| Task | Issue | Task merge |" and one row per lane, "| <task id> | #<n> | <the merge's short sha, in backticks> |" for an integrated or partial lane and "| <task id> | #<n> | none; <what is kept, such as its branch> |" for a failed one, even a table with no rows; one line "Closes #<n>" for each integrated row whose lane reported complete and one line "Ticket: #<n>" for each partial row (#100); the aggregated "Outstanding:" and "Outstanding test ids:" lines; the evidence line (how many gate logs, the last integration gate's head and its test count); and the merge subject above. Draft the merge body to ${p.mdir}/merge-body.md: what was verified and how, citing each task merge by sha, with the same Outstanding lines and no Closes line. Open the pull request when none is open: \`cd ${REPO} && gh pr create --base main --head ${p.intBranch} --title ${JSON.stringify(subjectFor(date))} --body-file ${p.mdir}/pr-body.md\`. mergeSubject is the merge subject above, verbatim.
@@ -1038,7 +1068,7 @@ log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
 phase('Verify')
 const verifyKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT })
 const v = await run(verifyPrompt(DATE, ISSUE, verifyKey), { label: 'verify', phase: 'Verify', schema: VERIFY })
-const verdict = judgeVerify(v, SUBJECT)
+const verdict = judgeVerify(v, SUBJECT, ISSUE, P.intBranch)
 if (!verdict.ok) refusals.push(verdict.stop)
 // The description of a pull request an earlier morning opened, refreshed to this head (#300). Read
 // whatever the record says: on 2026-10-22 it was the stale description a review held on.
