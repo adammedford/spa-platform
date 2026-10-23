@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROTOTYPE: the startup benchmark harness (#173, on the map #169). Owner: the owner OWNERSHIP.md
+"""PROTOTYPE: the startup benchmark (#173, on the map #169). Owner: the owner OWNERSHIP.md
 names for tools/bench/.
 
 Throwaway code that answers one question: how is one cold start of the gateway timed, against the
@@ -652,7 +652,7 @@ def main(argv: List[str]) -> int:
 
     options = parser.parse_args(argv)
     if options.command == "probe":
-        # The harness starts the container on this line, so the probe is polling before it starts.
+        # The startup benchmark starts the container on this line, so the probe is polling before it starts.
         print("ready", flush=True)
         marks = probe(options.address, options.port, steps_for(options.kind, options.app_host),
                       interval_s=options.interval_ms / 1000, deadline_s=options.deadline_s)
