@@ -55,7 +55,7 @@ draft to a file under `.scratch/sitting/log/`, beside the record (git-ignored, m
 draft.
 
 ```bash
-python3 -I tools/wiz_redact.py < .scratch/sitting/log/post.md > .scratch/sitting/log/post.redacted.md; echo "exit=$?"
+umask 077; python3 -I tools/wiz_redact.py < .scratch/sitting/log/post.md > .scratch/sitting/log/post.redacted.md; echo "exit=$?"
 gh issue comment <n> --body-file .scratch/sitting/log/post.redacted.md     # only on exit=0
 ```
 

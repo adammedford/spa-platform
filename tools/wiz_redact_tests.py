@@ -78,6 +78,14 @@ class RuleOneAccountIds(Redacts):
         self.assertRedacts('{"Account": "210987654321", "pin": 123456789012}\n',
                            '{"Account": "<account>", "pin": <account>}\n')
 
+    def test_a_twelve_digit_number_between_hyphens_becomes_account(self) -> None:
+        # A CDK bootstrap bucket carries the account between hyphens; a card-like 16-digit dashed
+        # number is not an account.
+        self.assertRedacts("cdk-hnb659fds-assets-123456789012-us-east-1 x-210987654321\n"
+                           "1234-5678-9012-3456\n",
+                           "cdk-hnb659fds-assets-<account>-us-east-1 x-<account>\n"
+                           "1234-5678-9012-3456\n")
+
     def test_keep_last_four_keeps_the_last_four_digits(self) -> None:
         self.assertRedacts("account 123456789012 and 1234-5678-4321\n",
                            "account <account-9012> and <account-4321>\n",
@@ -140,8 +148,13 @@ class RuleThreeValuesAfterAKey(Redacts):
         )
 
     def test_a_tags_value_is_kept(self) -> None:
-        text = '{"Tags": [{"Key": "Platform", "Value": "spa-platform"}]}\n'
+        text = ('{"Tags": [{"Key": "Platform", "Value": "spa-platform"}]}\n'
+                "--tags Key=Platform,Value=spa-platform\n")
         self.assertRedacts(text, text)
+
+    def test_a_key_in_a_nested_object_does_not_keep_the_parameters_value(self) -> None:
+        self.assertRedacts('{"Parameter": {"Value": "s3cr3t", "Tags": [{"Key": "k"}]}}\n',
+                           '{"Parameter": {"Value": "<elided>", "Tags": [{"Key": "k"}]}}\n')
 
 
 class RuleFourJsonMembers(Redacts):

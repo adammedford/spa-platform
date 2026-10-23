@@ -37,7 +37,10 @@ ACCESS_DENIED_EXIT = 3
 
 ACCESS_DENIED = re.compile(r"AccessDenied|Access Denied")
 
-ACCOUNT = re.compile(r"(?<![\d-])(\d{12}|\d{4}-\d{4}-\d{4})(?![\d-])")
+# The plain form goes wherever no digit touches it, a hyphen included, because a CDK bootstrap
+# bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between hyphens. Only the
+# console's dashed form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
+ACCOUNT = re.compile(r"(?<!\d)(\d{12})(?!\d)|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
 
 # arn:<partition>:<service>:<region>:<account>:<resource>. The resource runs to whitespace, a quote,
 # a comma or a closing bracket, so an ARN inside JSON or a sentence keeps what follows it.
@@ -59,15 +62,19 @@ JSON_MEMBER = re.compile(r"\"(clientId|secret|SecretString|AccessKeyId|SecretAcc
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
     def replace(match: re.Match) -> str:
         if keep_last_four:
-            return f"<account-{match.group(1)[-4:]}>"
+            return f"<account-{match.group(0)[-4:]}>"
         return "<account>"
     return replace
 
 
 def in_a_tag(text: str, start: int) -> bool:
-    """Whether the `Value` at start shares its object, or its shorthand list, with a `Key`."""
-    opened = max(text.rfind("{", 0, start), text.rfind("\n", 0, start))
-    closes = [i for i in (text.find("}", start), text.find("\n", start)) if i != -1]
+    """Whether the `Value` at start shares its object, or its shorthand list, with a `Key`.
+
+    The window stops at any bracket, so a `Key` inside an object nested beside the `Value` (a
+    parameter carrying "Tags": [{"Key": ...}]) does not count as the `Value`'s own.
+    """
+    opened = max(text.rfind(c, 0, start) for c in "{}[]\n")
+    closes = [i for i in (text.find(c, start) for c in "{}[]\n") if i != -1]
     closed = min(closes) if closes else len(text)
     return re.search(r"(?<![\w-])\"?Key\"?\s*[:=]", text[opened + 1:closed]) is not None
 
