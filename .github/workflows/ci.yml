@@ -267,6 +267,16 @@ jobs:
         # it, because a reader that read RED as GREEN would file nothing and look clean.
         run: python3 -I tools/retro_record_tests.py
 
+      - name: The retro's refusal count counts each Edit and Write refusal once, and a missing run as missing
+        # The retro's parent issue carries, for each overnight run, its Edit and Write calls and its
+        # "File has not been read yet" and "modified since read" refusals, counted by
+        # tools/retro_refusals.py from the subagent transcripts (#315, for #109's box 2). Its companion
+        # builds each rule's shape to trip it: a replayed call and result, a Write refusal, a Bash
+        # result quoting the refusal's words, another run's result, and a root with no transcripts,
+        # which must read as missing and never as a zero. This runner has no transcripts, so the
+        # baseline case proves the missing line here and the 2026-10-18 figures on the Mac that has them.
+        run: python3 -I tools/retro_refusals_tests.py
+
       - name: The pins inventory classifies each pin the way its rules say, and renders the same table twice
         # The pins sweep (#82) files its issues and the standing report's table from what
         # tools/pins_inventory.py decides a pin is: its family, the projects that reference it, the

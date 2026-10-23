@@ -18,6 +18,13 @@ export const meta = {
 // recurrence, coverage, the ticket body's shape) is tools/retro_record.py, which every agent calls;
 // the judgement stays in the agents. Test companion: retro_tests.mjs beside this file.
 //
+// The record holds no transcript, so the one thing the retro reads from the night's subagent
+// transcripts is the count tools/retro_refusals.py prints (#315, from #109's Q166 and Q167): each
+// overnight run's Edit and Write calls and its "File has not been read yet" and "modified since read"
+// refusals, deduplicated by tool_use_id, one line per launch of the overnight script on that date.
+// Gather puts the lines in the index's refusals, and the parent issue carries them verbatim. A
+// transcripts root with no match is a missing line, never a zero.
+//
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/retro.js
 //   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-17", "dryRun": true,
@@ -90,6 +97,7 @@ const KNOWN = [...new Set(A.knownIssues || [])]
 const NIGHT_LOG = `${REPO}/.scratch/overnight/log`
 const scratchFor = (date) => `${NIGHT_LOG}/retro-${date}`
 const READER = `python3 -I ${REPO}/tools/retro_record.py`
+const REFUSALS = `python3 -I ${REPO}/tools/retro_refusals.py`
 
 // ---------------------------------------------------------------- keys, agents and slots
 // A stable key for a phase's inputs: FNV-1a over JSON with sorted keys. No clock and no randomness,
@@ -122,7 +130,7 @@ const run = (prompt, opts) => slot(() => { agentsRun++; return agent(prompt, opt
 // Agents are fresh contexts that know only their prompt (#77 -> "One workflow script"), so the rules,
 // the record's shape, the taxonomy and the evidence rules are in each one in full.
 const HOUSE = (scratch) => `Read-only rules (a retro; you change nothing you read):
-- The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset, build or test in it, and run nothing from it but the record reader named below, which reads files and prints JSON, and, in the File phase, the ticket-shape check tools/ticket_shape.py, which reads a body (and, for a #N its prose names, that issue's state) and prints its verdict. git is read-only: log, show, diff, rev-parse, reflog, status, ls-files.
+- The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset, build or test in it, and run nothing from it but the record reader named below, which reads files and prints JSON, in the Gather phase the refusal count tools/retro_refusals.py, which reads the night's subagent transcripts and prints one line per run, and, in the File phase, the ticket-shape check tools/ticket_shape.py, which reads a body (and, for a #N its prose names, that issue's state) and prints its verdict. git is read-only: log, show, diff, rev-parse, reflog, status, ls-files.
 - GitHub is read until the File phase, and only the File phase writes to it. Before then use only \`gh issue view\`, \`gh issue list\`, \`gh search issues\` and GET \`gh api\` calls. Run every \`gh\` command with \`cd ${REPO} &&\` in front.
 - The only place you may write is ${scratch}/, the retro's scratch directory under the night's git-ignored log directory, but for a script the edit rule below has you write under your scratchpad. Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file.
 - The archived ticket directories (.scratch/<slug>/issues/) are read-only (ADR-0020 decision 5). Never write there.
@@ -136,7 +144,7 @@ const RECORD = `The record of an overnight run (#77 -> "Problem Statement"), in 
 - The Issues shape (from 2026-10-18 on): the \`Overnight <date>\` issue's body, question comments and answer comments; each lane ticket's comments in order by heading (## Routing, ## Decisions taken, ## Answer, ## Review, ## Status note, ## Grilling record, ## Questions for Adam); the pending-writes file ${NIGHT_LOG}/pending-<date>.jsonl and the untracked-at-start listing when the run wrote them.
 - The archive shape (the nights up to 2026-10-17): the report file under ${REPO}/.scratch/overnight/ (REPORT-<date>.md, or REPORT.md, resolved by its first line), the questions file, and each lane ticket's archived file with its ## Comments section, where the same headings appear as sections.
 - Both: the check logs in ${NIGHT_LOG}/, one per task and stage, first line HEAD=<sha>, last line the verdict (GATE: GREEN|RED, or check: pass:|check: fail:), with the test runner's total/failed/succeeded/skipped/duration lines; a date-suffixed log is an earlier round of its task; a log without HEAD= first or a verdict last is a side log and never a verdict. The integration branch's first-parent log and merge bodies, its \`Review:\` commits, and any \`attempt, not green\` or \`partial, question for Adam\` subject in the night's branches. The workflow's return JSON when one was saved. The record's only clock is file modification times and comment timestamps.
-- It holds no agent transcripts and no tool-call counts. Never estimate either; say the record cannot show it.`
+- It holds no agent transcripts. The one count read from them is the refusal line \`${REFUSALS}\` prints for each of the night's runs (the index's refusals): its Edit and Write calls and their "File has not been read yet" and "modified since read" refusals. Never estimate anything else a transcript would show, other tool calls included; say the record cannot show it.`
 
 const TAXONOMY = `Each finding has one type (#77 -> "The finding schema"):
 - time-sink: a stage whose span between log or comment timestamps is long against its output, or a step the report says was slow.
@@ -175,6 +183,10 @@ const STATE = {
 //   pending, untracked   the pending-writes file and the untracked-at-start listing, or ""
 //   overnightScript {path, sha256, mtime}: `retro_record.py script` on the script read
 //   history        [{date, report, questions}]: earlier nights' report and questions paths, for recurrence
+//   refusals       {lines, missing}: lines is each `retro_refusals.py --date <date>` line that counted a run,
+//                  verbatim; missing is its every line for a run or a date it found no transcripts or
+//                  record for, in order and joined by newlines, else "". The parent issue carries both
+//                  verbatim (#315)
 //   missing        [string]: every record item the night lacks; the parent issue repeats it verbatim
 //   versions       {files, issues: [{number, updatedAt}]}: files is `retro_record.py fingerprint` over every
 //                  file the index names and the log directory; issues the Overnight issue and each lane
@@ -201,10 +213,11 @@ const INDEX = {
     returnJson: { type: 'string' }, pending: { type: 'string' }, untracked: { type: 'string' },
     overnightScript: { type: 'object', properties: { path: { type: 'string' }, sha256: { type: 'string' }, mtime: { type: 'string' } }, required: ['path', 'sha256', 'mtime'] },
     history: { type: 'array', items: { type: 'object', properties: { date: { type: 'string' }, report: { type: 'string' }, questions: { type: 'string' } }, required: ['date', 'report', 'questions'] } },
+    refusals: { type: 'object', properties: { lines: { type: 'array', items: { type: 'string' } }, missing: { type: 'string' } }, required: ['lines', 'missing'] },
     missing: { type: 'array', items: { type: 'string' } },
     versions: { type: 'object', properties: { files: { type: 'string' }, issues: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, updatedAt: { type: 'string' } }, required: ['number', 'updatedAt'] } } }, required: ['files', 'issues'] },
   },
-  required: ['night', 'report', 'questions', 'lanes', 'logs', 'sideLogs', 'notLogs', 'rounds', 'integration', 'worktrees', 'returnJson', 'pending', 'untracked', 'overnightScript', 'history', 'missing', 'versions'],
+  required: ['night', 'report', 'questions', 'lanes', 'logs', 'sideLogs', 'notLogs', 'rounds', 'integration', 'worktrees', 'returnJson', 'pending', 'untracked', 'overnightScript', 'history', 'refusals', 'missing', 'versions'],
 }
 const TYPES = ['time-sink', 'repeated-failure', 'misleading-instruction', 'reversed-decision', 'late-found-unfailable-assertion', 'guardrail-gap', 'tracker-hygiene']
 const OWNERS = ['ws1-infra', 'ws2-hosting', 'ws3-identity', 'ws4-proxy', 'ws5-fixtures', 'ws6-verification', 'integrator']
@@ -277,8 +290,9 @@ Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE
 6. returnJson, pending, untracked: the paths when they exist (the return JSON in ${scratch}/ or ${NIGHT_LOG}/, ${NIGHT_LOG}/pending-${date}.jsonl, the untracked-at-start listing), else "".
 7. overnightScript: \`${READER} script ${OVERNIGHT}\`.
 8. history: every earlier night's report and questions, resolved by first line as in step 1, and each earlier Overnight <date> issue (\`cd ${REPO} && gh issue list --state all --search "Overnight in:title" --json number,title\`), newest first.
-9. missing: one line for every record item the night lacks (no return JSON, no worktrees left, no transcripts and no tool-call counts, which the record never holds, a pending-writes file absent or present-and-unreplayed, a lane with no check log).
-10. versions, which decide whether the phases after you are reused, so copy each value exactly: files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT} <every other file path the index names>\`; issues is the Overnight issue and every lane ticket that is an issue, each {number, updatedAt} from \`cd ${REPO} && gh issue view <n> --json number,updatedAt\`, in number order ([] when there are none).
+9. refusals: \`${REFUSALS} --date ${date}\`, which finds every launch of the overnight script recorded for the night and prints one line per run. lines is each line that counted a run, verbatim and in order; missing is every line that says "missing:", verbatim and in order, joined by newlines (a night with two launches can lack the transcripts of both), else "". Copy the lines; never count, round or restate them. A run launched by another script, which the record names by its wf_ id, is counted with \`${REFUSALS} <run id>\` and its line added.
+10. missing: one line for every record item the night lacks (no return JSON, no worktrees left, the transcripts themselves, which the record never holds beyond the refusal lines, the refusals' missing line verbatim when it has one, a pending-writes file absent or present-and-unreplayed, a lane with no check log).
+11. versions, which decide whether the phases after you are reused, so copy each value exactly: files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT} <every other file path the index names>\`; issues is the Overnight issue and every lane ticket that is an issue, each {number, updatedAt} from \`cd ${REPO} && gh issue view <n> --json number,updatedAt\`, in number order ([] when there are none).
 Return the index.`
 
 const lanePrompt = (unit, scratch, date, index, phaseKey) => `Lanes: find what cost time or went wrong in ${unit.title} on the overnight run of ${date}.
@@ -315,6 +329,12 @@ The script adds these findings, one for each RED verdict line no lane cited; ran
 2. drop: a finding an open issue already covers: search open issues for the noun (\`cd ${REPO} && gh search issues --repo adammedford/spa-platform --state open "<noun>" --json number,title\`), read each candidate with \`gh issue view\`, and drop it as "#NNN" only when that issue's body asks for the same fix. A finding whose fix has already landed: \`git -C ${REPO} log --first-parent --format='%H %s' origin/main\` carries the noun in a subject or body after the night; drop it with the commit's sha as its issue.
 3. coverage: ${KNOWN.length ? `the known issues are ${KNOWN.map((n) => '#' + n).join(', ')}. Read each with \`gh issue view\`, then pipe {"known": [{"number", "text": title and body}], "findings": [...the ranked and dropped findings...], "missing": <the index's missing list>, "why": {"<number>": "<the missing entry that explains the miss>"}} to \`${READER} coverage\` and return its output.` : 'no knownIssues were given: {"matched": [], "missed": []}.'}`
 
+// The refusal lines the parent carries (#315): each counted run's line, then the missing line, verbatim.
+const refusalLines = (index) => {
+  const r = index.refusals || {}
+  return [...(r.lines || []), ...(r.missing ? [r.missing] : [])]
+}
+
 const filePrompt = (scratch, date, issue, index, rank, toFile, phaseKey) => {
   const bodies = `${scratch}/${DRY ? 'dry-run' : 'bodies'}`
   const ticketFile = (i) => `${bodies}/ticket-${String(i + 1).padStart(2, '0')}.md`
@@ -332,10 +352,12 @@ ${toFile.map((_, i) => `OUTPUT FILE: ${ticketFile(i)}`).join('\n')}
 THE TICKETS, in rank order, at most ${MAX_TICKETS}; file exactly these, in this order:
 ${JSON.stringify(toFile.map((f) => ({ type: f.type, title: f.title, noun: f.noun, cost: f.cost, score: f.score, recurrence: f.recurrence, fix: f.fix, confidence: f.confidence, evidence: f.evidence, blockedBy: f.blockedBy || [] })), null, 1)}
 Dropped: ${JSON.stringify(rank.dropped)}. Coverage: ${JSON.stringify(rank.coverage)}. The index's missing list: ${JSON.stringify(index.missing)}.
+REFUSAL LINES (tools/retro_refusals.py, from the night's subagent transcripts):
+${refusalLines(index).join('\n') || '(none: the index carries no refusal line, so say the count is missing)'}
 
 1. ${DRY ? 'A dry run reads GitHub only for the citations below.' : `Look again for an open "Retro ${date}" issue (\`cd ${REPO} && gh issue list --state open --search "Retro ${date} in:title" --json number,title,url\`). If one is titled exactly that, file nothing: return it as parent, tickets [], refused "an open Retro ${date} exists".`}
 2. Every #NNN a body cites is one you read with \`cd ${REPO} && gh issue view <n>\` in this run; cite nothing from memory.
-3. The parent's body, written to ${bodies}/parent.md: the night's one-line summary and base (${index.night.base || 'from the index'}${issue ? `, Overnight #${issue}` : ''}); a table of the findings with type, cost, confidence and ticket; the dropped list with its #NNN citations; the coverage block${KNOWN.length ? '' : ' (none: no knownIssues)'}; the index's missing list verbatim; and one paragraph saying what a record-only retrospective cannot see (transcripts, tool-call counts, anything the missing list names). Its title is "Retro ${date}". It carries no triage label.
+3. The parent's body, written to ${bodies}/parent.md: the night's one-line summary and base (${index.night.base || 'from the index'}${issue ? `, Overnight #${issue}` : ''}); a table of the findings with type, cost, confidence and ticket; the dropped list with its #NNN citations; the coverage block${KNOWN.length ? '' : ' (none: no knownIssues)'}; the index's missing list verbatim; the REFUSAL LINES above verbatim, under the heading "Edit and Write refusals", a missing line as missing and never as a zero; and one paragraph saying what a record-only retrospective cannot see (the transcripts beyond the refusal lines, anything the missing list names). Its title is "Retro ${date}". It carries no triage label.
 4. Each ticket's body, written to its OUTPUT FILE in order, in the overnight collect step's shape: \`**Owner:** <fix.owner>\`, \`**Plan row:** none\`, \`**What to build:**\` with the finding's evidence lines (ref and quote) and its cost, and \`## Acceptance\` with \`- [ ]\` boxes each naming an observable in a later run's record ("no lane's log shows the repair"). A fix with a diff carries it in a \`\`\`diff block for the human to apply. Check each with \`${READER} body-check < <file>\` and fix it until it exits 0. The label: ready-for-agent when the fix is provable on this Mac by a build, a test, a check run or terraform validate, writes only its owner's paths and needs no decision; ready-for-human when fix.kind is decision, or it needs a contract or ADR change, an AWS action, or applying a diff to the local workflow. A ticket pairing a tracked change with a workflow diff is ready-for-agent and carries the diff (#68's precedent). Its title is "<type>: <title>".
 ${DRY ? `5. ${SHAPE_CHECK(bodies, true)}
 6. Write nothing to GitHub. Return parent {number: 0, url: "", title: "Retro ${date}", file: "${bodies}/parent.md"}, and each ticket that passed with number 0, url "", its label and its file, dryRun true, refused (the check's lines for each ticket it did not pass, else ""), unreachable false.` : `5. Create the parent: \`cd ${REPO} && gh issue create --title "Retro ${date}" --body-file ${bodies}/parent.md\`.
@@ -441,7 +463,7 @@ const result = {
   date: DATE, issue: ISSUE, scratch: SCRATCH, dryRun: DRY, filed: false,
   parent: null, tickets: [], dropped: rank.dropped, coverage: rank.coverage,
   delta: [], unfiled: rank.ranked.slice(MAX_TICKETS).map((f) => f.noun),
-  missing: index.missing, overnightScript: index.overnightScript,
+  missing: index.missing, refusals: refusalLines(index), overnightScript: index.overnightScript,
   agents: agentsRun, reused,
 }
 const open = (state.openRetro || []).filter((r) => r.title === `Retro ${DATE}`)
