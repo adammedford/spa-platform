@@ -490,7 +490,9 @@ wait_and_assert() {
 # the registry when it starts.
 #
 # It knows nothing of ECS states. A task ECS is stopping has desired status STOPPED and leaves the
-# list, and a draining target receives no new requests, so neither is read here (P2-5, decision 6).
+# list, and a draining target receives no new requests, so neither is read here (P2-5, decision 6;
+# desiredStatus in https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ListTasks.html,
+# deregistration delay in https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#deregistration-delay).
 # The 2-second poll and the 5-minute deadline are spactl's own.
 #
 # deploy.sh is its first caller. The ALB is internal, so from a workstation the origin is the
@@ -499,8 +501,9 @@ wait_for_revision() {
   local origin="$1" revision="$2" arn ids="" status=0
   aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
     --desired-status RUNNING --query taskArns
-  # Word splitting on purpose: list-tasks prints the ARNs tab-separated on one line, and none holds a
-  # space.
+  # Word splitting on purpose: --output text prints a list's strings tab-separated, a line for each
+  # page the CLI fetched, and no ARN holds a space or a glob character.
+  # https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-output-format.html#text-output
   for arn in $(tr '\t' ' ' < "$OUT"); do
     ids="${ids:+${ids},}${arn##*/}"
   done
