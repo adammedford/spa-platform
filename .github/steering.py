@@ -92,10 +92,10 @@ a number is an issue or a pull request, and a ticket is an issue. The listing ca
 with no error (#297), so a number it lacks is asked about alone before it is refused: a 404 or a
 410 refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
 against the comment GitHub keeps under its id, and that comment's author against the account
-that confirms (#316): the one docs/agents/issue-tracker.md names, or the repository's owner while
-it names none, since a `Confirm` by any other account that can comment confirms nothing. Offline,
-the trailer is still required, and its citations are reported as not checked; the line the rule
-passes prints how many held commits GitHub vouched for.
+that confirms (#316): the one docs/agents/issue-tracker.md names at the base, or the repository's
+owner while it names none, since a `Confirm` by any other account that can comment confirms
+nothing. Offline, the trailer is still required, and its citations are reported as not checked;
+the line the rule passes prints how many held commits GitHub vouched for.
 
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py --base origin/main
 """
@@ -1248,8 +1248,17 @@ def main(argv: list[str] | None = None) -> int:
         number: issue_kind(root, number) for number in wanted_numbers(held, issues | pulls)
     }
     comments = {comment: comment_url(root, comment) for comment in wanted_comments(held)}
-    guide = root / GUIDE
-    account = named_account(guide.read_text() if guide.is_file() else None)
+    # The account is read from the guide as it stood at the base, not from the tree being judged:
+    # a range that renamed the account in the guide would otherwise vouch its own steering commits,
+    # the guide's renaming among them, on comments the new account wrote (#316 review). With no
+    # base, the whole history is judged and the tree is the only guide there is.
+    if base is None:
+        guide = root / GUIDE
+        account = named_account(guide.read_text() if guide.is_file() else None)
+    else:
+        # base resolved above, so a failure here is a guide the base does not have.
+        shown = git(root, "show", f"{base}:{GUIDE}")
+        account = named_account(shown.stdout if shown.returncode == 0 else None)
     nameless, refused, unverified, vouched, undecided, unconfirmed = unauthorised(
         held, issues, pulls, unchecked, looked_up, comments, account
     )
