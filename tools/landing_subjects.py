@@ -55,9 +55,9 @@ BOX = re.compile(r"(?m)^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
 # in, and signs in from its keyring or from GH_TOKEN.
 GH_ISSUE_BODY = ("gh", "issue", "view", "{number}", "--json", "body", "--jq", ".body")
 
-# How long to wait for gh before saying so, as .github/steering.py waits: the hook runs this on
-# every push.
-GH_TIMEOUT = 60
+# How long to wait for gh, or for git's listing of the range, before saying so, as
+# .github/steering.py waits for gh: the hook runs this on every push.
+TIMEOUT = 60
 
 PREFIX = "landing-subjects:"
 
@@ -75,7 +75,7 @@ def commits(base: str) -> list[tuple[str, str, str]]:
     try:
         listed = subprocess.run(
             ["git", "log", "--reverse", "--format=%h%x1f%s%x1f%B%x1e", f"{base}..HEAD", "--"],
-            capture_output=True, text=True, timeout=GH_TIMEOUT)
+            capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Broken(f"git log could not run: {error}") from error
     if listed.returncode != 0:
@@ -95,11 +95,11 @@ def issue_body(number: int) -> tuple[str | None, str]:
     """Issue `number`'s body, or None with the reason gh could not give it."""
     command = [part.replace("{number}", str(number)) for part in GH_ISSUE_BODY]
     try:
-        asked = subprocess.run(command, capture_output=True, text=True, timeout=GH_TIMEOUT)
+        asked = subprocess.run(command, capture_output=True, text=True, timeout=TIMEOUT)
     except FileNotFoundError:
         return None, "gh is not on PATH"
     except subprocess.TimeoutExpired:
-        return None, f"gh did not answer within {GH_TIMEOUT} seconds"
+        return None, f"gh did not answer within {TIMEOUT} seconds"
     except OSError as error:
         return None, f"gh could not run: {error}"
     if asked.returncode != 0:

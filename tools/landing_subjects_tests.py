@@ -193,6 +193,16 @@ class JudgedTests(unittest.TestCase):
         self.assertTrue(held[1].startswith(f"landing-subjects: held: {second} "), held)
         self.assertTrue(last_line(done).startswith("landing-subjects: fail: 2 full-landing merges name"))
 
+    def test_a_box_ticked_with_a_capital_x_counts_in_the_places(self):
+        # GitHub ticks a box as `[x]` but takes `[X]` as ticked too; it is still a box, so the open
+        # one after it is box 2, not box 1.
+        case = Case(self)
+        case.issue(310, "- [X] Done.\n- [ ] Open.\n")
+        case.commit("Merge task issue-310: capital", "Ticket: #310")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn('box 2 "Open."', done.stdout)
+
     def test_an_indented_box_is_a_box(self):
         case = Case(self)
         case.issue(304, "- [x] Top.\n  - [ ] Nested.\n")
