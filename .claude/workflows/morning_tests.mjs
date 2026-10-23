@@ -835,6 +835,9 @@ try {
     // A pull request this run opened has no description to compare.
     const fresh = await execute(newRepo(), { date: DATE }, { verify: { merges: MERGES_287 } })
     if (fresh.labels.includes('pr-refresh') || (fresh.result.refresh || {}).state !== 'none') fail(`a pull request opened this run: dispatched ${fresh.labels.join(', ')}, refresh ${(fresh.result.refresh || {}).state}`)
+    // Even when Verify hands back a description, one this run opened is never compared or rewritten.
+    const opened = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prReused: false } })
+    if (opened.labels.includes('pr-refresh') || (opened.result.refresh || {}).state !== 'none') fail(`a pull request opened this run, returned with a description: dispatched ${opened.labels.join(', ')}, refresh ${(opened.result.refresh || {}).state}`)
 
     // A Closes line the rewrite keeps for a row now partial is named, never rewritten and never silent.
     const closing = BODY_287_FIRST.replace('Ticket: #62', 'Closes #62')
