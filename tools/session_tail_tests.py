@@ -140,15 +140,40 @@ class PrintsTheLastTextTurns(Tail):
         self.assertEqual(out, EXPECTED_LAST_THREE)
 
     def test_six_turns_by_default(self) -> None:
-        self.write(FIXTURE)
+        # Eight text turns, so a default of five, seven or "all of them" each prints a different
+        # count or a different first turn from the six asserted here.
+        earlier = [human("Turn one, before the default reaches.", "2026-10-22T22:30:00.000Z"),
+                   assistant([text("Turn two, before the default reaches.")],
+                             "2026-10-22T22:30:05.000Z", "msg_a"),
+                   human("Turn three, the first the default prints.", "2026-10-22T22:31:00.000Z")]
+        self.write(earlier + FIXTURE)
         done = self.tail(SESSION)
         self.assertEqual(done.returncode, 0, done.stderr.decode())
         out = done.stdout.decode("utf-8")
-        self.assertEqual(out.count("\n--- ") + out.startswith("--- "), 5,
-                         "the fixture holds five text turns, so the default of six prints them all")
-        self.assertTrue(out.startswith("--- human 2026-10-22T22:40:00.000Z ---\n"
-                                       "First, an early turn the tail does not reach.\n"), out)
+        self.assertEqual(out.count("\n--- ") + out.startswith("--- "), 6, out)
+        self.assertTrue(out.startswith("--- human 2026-10-22T22:31:00.000Z ---\n"
+                                       "Turn three, the first the default prints.\n"), out)
         self.assertTrue(out.endswith(EXPECTED_LAST_THREE), out)
+
+    def test_one_reply_written_across_records_is_one_turn(self) -> None:
+        # Claude Code writes each content block of a reply as a record of its own, all carrying the
+        # reply's message id; a block with no text between them does not split the reply.
+        self.write([
+            human("Two blocks, please.", "2026-10-22T23:10:00.000Z"),
+            assistant([text("First block.")], "2026-10-22T23:10:01.000Z", "msg_5"),
+            assistant([{"type": "thinking", "thinking": THINKING, "signature": "c2ln"}],
+                      "2026-10-22T23:10:02.000Z", "msg_5"),
+            assistant([text("Second block.")], "2026-10-22T23:10:03.000Z", "msg_5"),
+            assistant([text("A new reply.")], "2026-10-22T23:10:09.000Z", "msg_6"),
+        ])
+        done = self.tail(SESSION, "-n", "2")
+        self.assertEqual(done.returncode, 0, done.stderr.decode())
+        self.assertEqual(done.stdout.decode("utf-8"),
+                         "--- assistant 2026-10-22T23:10:01.000Z ---\n"
+                         "First block.\nSecond block.\n"
+                         "\n"
+                         "--- assistant 2026-10-22T23:10:09.000Z ---\n"
+                         "A new reply.\n")
 
 
 class CutsALongTurn(Tail):

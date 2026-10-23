@@ -14,7 +14,10 @@ $CLAUDE_CONFIG_DIR/projects), where `<folder>` is the path the session started i
 character other than a letter or digit made a hyphen: /Users/adammedford/Projects/spa-platform is
 -Users-adammedford-Projects-spa-platform, and its .claude/worktrees/roadmap worktree is
 -Users-adammedford-Projects-spa-platform--claude-worktrees-roadmap. The path defaults to the current
-directory, so run it from where the session ran, or name that path with --project.
+directory, so run it from where the session ran, or name that path with --project. This layout and
+the record shapes below are Claude Code's own, read off this repository's transcripts on 2026-10-22
+rather than from a Claude Code document, so a Claude Code update can move them: a moved folder shows
+as an unknown id, a renamed field as a missing or extra turn.
 
 A turn is one line whose top-level `type` is `user` or `assistant`; the other record types
 (`api-request-blob`, `attachment`, `queue-operation` and the rest) are bookkeeping, and an
