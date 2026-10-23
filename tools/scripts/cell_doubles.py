@@ -728,6 +728,12 @@ def apply_platform(world: dict, variables: dict):
     world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
                        "taskDefinition": previous if world["faults"].get("running_definition") else name,
                        "gatewayDigest": world["faults"].get("running_digest", digest)}]
+    # "extra_tasks": more tasks of the applied deployment, each with its own healthy target, as a
+    # cell that runs more than one task has (P2-4).
+    for _ in range(world["faults"].get("extra_tasks", 0)):
+        world["next_task"] += 1
+        world["tasks"].append({"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING", "taskDefinition": name,
+                               "gatewayDigest": digest})
     # "new_target": the new task's target in another state than healthy, or None for not registered.
     # "extra_targets": more targets in the group, as [id, state] pairs.
     group = world["target_group"]
@@ -736,6 +742,7 @@ def apply_platform(world: dict, variables: dict):
     new_state = world["faults"].get("new_target", "healthy")
     if new_state is not None:
         group["targets"].append({"id": task_ip(world["tasks"][0]), "state": new_state})
+    group["targets"] += [{"id": task_ip(task), "state": "healthy"} for task in world["tasks"][1:]]
     group["targets"] += [{"id": ident, "state": state} for ident, state in world["faults"].get("extra_targets", [])]
 
 
@@ -841,9 +848,84 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
     return status
 
 
+def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
+    """`spactl wait --url <origin> --revision <N> --instances <id,...>` (tools/spactl/Commands.cs,
+    WaitAsync), with each running task answering /readyz through the load balancer. Every task serves
+    the registry's live revision, but "behind": n leaves the last n tasks one revision short, and
+    "unsampled": n means the load balancer never hands a read to the last n. It answers as spactl
+    does: 0 and a Ready line when every listed id answered at N or later, else 1 and the timeout that
+    names each id behind or never answered (InstanceWait.Behind). A listed id that is no task's, an
+    empty element or a missing option is not a call the scripts make."""
+    options = {}
+    for index in range(1, len(args), 2):
+        if not args[index].startswith("--") or index + 1 >= len(args) or args[index] in options:
+            raise Unexpected(f"spactl {args}")
+        options[args[index]] = args[index + 1]
+    if set(options) - {"--url", "--revision", "--instances", "--timeout"} or not {"--url", "--revision", "--instances"} <= set(options):
+        raise Unexpected(f"spactl {args}")
+    if not re.fullmatch(r"https?://[^/]+", options["--url"]) or not re.fullmatch(r"[1-9][0-9]*", options["--revision"]):
+        raise Unexpected(f"spactl wait {options}")
+    listed = options["--instances"].split(",")
+    tasks = [task["id"] for task in world["tasks"]]
+    if any(not re.fullmatch(r"[0-9a-f]{32}", ident) or ident not in tasks for ident in listed):
+        raise Unexpected(f"spactl wait --instances {options['--instances']}: not the running tasks' ids")
+    live = (world["registry"] or {}).get("revision", 0)
+    behind = tasks[len(tasks) - world["faults"].get("behind", 0):]
+    unsampled = tasks[len(tasks) - world["faults"].get("unsampled", 0):]
+    revision = int(options["--revision"])
+    readyz = options["--url"] + "/readyz"
+    answered = {ident: (None if ident in unsampled else live - 1 if ident in behind else live) for ident in listed}
+    short = [(ident, at) for ident, at in answered.items() if at is None or at < revision]
+    if not short:
+        summary = ", ".join(f"instance {ident} at revision {at}" for ident, at in answered.items())
+        stdout.write(f"Ready: {readyz} reports revision {revision} or later from {summary}.\n")
+        return 0
+    named = "; ".join(f"instance {ident} never answered" if at is None else f"instance {ident} last answered revision {at}"
+                      for ident, at in short)
+    stderr.write(f"{readyz} did not report revision {revision} or later from every listed instance within "
+                 f"{options.get('--timeout', '300')} seconds: {named}.\n")
+    return 1
+
+
+def spactl_change(world: dict, args: list[str], record: dict) -> int:
+    """`spactl release publish` and `spactl app add`, the two commands seed.sh runs."""
+    status = 0
+    options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
+    outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
+    bucket = outputs["bucket"]
+    if args[:2] == ["release", "publish"]:
+        app, directory, release = args[2:5]
+        root = pathlib.Path(directory)
+        for file in sorted(p for p in root.rglob("*") if p.is_file()):
+            key = f"apps/{app}/releases/{release}/{file.relative_to(root).as_posix()}"
+            if not any(entry["Key"] == key for entry in world["objects"]):
+                world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
+        sys.stdout.write(f"Published apps/{app}/releases/{release}/ to {bucket}.\n")
+    elif args[:2] == ["app", "add"]:
+        definition = json.loads(pathlib.Path(args[2]).read_text())
+        config = json.loads(pathlib.Path(options["--config"]).read_text())
+        record["config"] = config
+        app = definition["appId"]
+        if app not in outputs["clients"]:
+            sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
+            status = 1
+        else:
+            registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
+            registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
+            registry["apps"].append({"appId": app, "release": options["--release"]})
+            registry["revision"] += 1
+            world["registry"] = registry
+            world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})
+            sys.stdout.write(f"Added {app} at release {options['--release']}. Revision {registry['revision']}.\n")
+    else:
+        raise Unexpected(f"spactl {args}")
+    return status
+
+
 def spactl_double(argv: list[str], case: pathlib.Path) -> int:
     """`dotnet run --project <tools/spactl> -- <spactl arguments>`, answering as spactl does for the
-    two commands seed.sh runs, with the bucket's objects and registry in the world."""
+    two commands seed.sh runs, with the bucket's objects and registry in the world, and for the wait
+    deploy.sh runs (spactl_wait)."""
     world = json.loads((case / "world.json").read_text())
     record = {"tool": "dotnet", "argv": argv}
     status = 0
@@ -853,35 +935,10 @@ def spactl_double(argv: list[str], case: pathlib.Path) -> int:
         record["project"] = argv[2]
         args = argv[4:]
         record["spactl"] = args
-        options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
-        outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
-        bucket = outputs["bucket"]
-        if args[:2] == ["release", "publish"]:
-            app, directory, release = args[2:5]
-            root = pathlib.Path(directory)
-            for file in sorted(p for p in root.rglob("*") if p.is_file()):
-                key = f"apps/{app}/releases/{release}/{file.relative_to(root).as_posix()}"
-                if not any(entry["Key"] == key for entry in world["objects"]):
-                    world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
-            sys.stdout.write(f"Published apps/{app}/releases/{release}/ to {bucket}.\n")
-        elif args[:2] == ["app", "add"]:
-            definition = json.loads(pathlib.Path(args[2]).read_text())
-            config = json.loads(pathlib.Path(options["--config"]).read_text())
-            record["config"] = config
-            app = definition["appId"]
-            if app not in outputs["clients"]:
-                sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
-                status = 1
-            else:
-                registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
-                registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
-                registry["apps"].append({"appId": app, "release": options["--release"]})
-                registry["revision"] += 1
-                world["registry"] = registry
-                world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})
-                sys.stdout.write(f"Added {app} at release {options['--release']}. Revision {registry['revision']}.\n")
+        if args[:1] == ["wait"]:
+            status = spactl_wait(world, args, sys.stdout, sys.stderr)
         else:
-            raise Unexpected(f"spactl {args}")
+            status = spactl_change(world, args, record)
     except Unexpected as error:
         record["unexpected"] = str(error)
         sys.stderr.write(f"dotnet double: unexpected call: {error}\n")

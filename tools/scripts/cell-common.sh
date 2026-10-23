@@ -219,6 +219,32 @@ aws_read() {
 # The first line of the last call's output.
 printed() { awk 'NR == 1' "$OUT"; }
 
+# --- spactl ----------------------------------------------------------------------------------------
+#
+# spactl is `dotnet run --project tools/spactl`, unless SPACTL names an executable to run instead (a
+# published spactl, say). seed.sh publishes and adds through it, and wait_for_revision waits with it.
+
+need_spactl() {
+  if [ -z "${SPACTL:-}" ]; then
+    need_tool dotnet "brew install --cask dotnet-sdk"
+  fi
+}
+
+spactl() {
+  if [ -n "${SPACTL:-}" ]; then
+    "$SPACTL" "$@"
+  else
+    dotnet run --project "${REPO_ROOT}/tools/spactl" -- "$@"
+  fi
+}
+
+# spactl's own output, through the redaction, and its status kept.
+spactl_shown() {
+  local status=0
+  spactl "$@" 2>&1 | redact_stream || status=$?
+  return "$status"
+}
+
 # --- Terraform -------------------------------------------------------------------------------------
 
 need_terraform() { need_tool terraform "brew install hashicorp/tap/terraform"; }
@@ -448,4 +474,42 @@ wait_and_assert() {
   recorded="$(outputs_field gatewayImage)"
   [ "$recorded" = "$gateway" ] || fail "the outputs document's gatewayImage is $(redact "$recorded"), not the image applied."
   note "steady: task definition $(revision_of "$definition") runs gateway ${digest}, healthy on ${READY_PATH}"
+}
+
+# --- convergence -----------------------------------------------------------------------------------
+
+# Wait until every running task of $SERVICE in $CLUSTER has answered /readyz at revision $2 or later,
+# read through the gateway origin $1. Change request P2-5, decision 6 (#309): the load balancer hands
+# each read to the task it picks, so one answer at N says only that one task is at N.
+#
+# The tasks are the service's RUNNING ones, each named by its task id, the last segment of its ARN
+# and never the ARN, which carries the account id and the Region (P2-5, decision 1). spactl wait
+# reads through the one origin until each id has answered at $2 or later, and times out naming each
+# one still behind or never answered: a task the load balancer never picks fails the wait rather
+# than passing it. A task that starts during the wait is not listed and is not waited for; it reads
+# the registry when it starts.
+#
+# It knows nothing of ECS states. A task ECS is stopping has desired status STOPPED and leaves the
+# list, and a draining target receives no new requests, so neither is read here (P2-5, decision 6).
+# The 2-second poll and the 5-minute deadline are spactl's own.
+#
+# deploy.sh is its first caller. The ALB is internal, so from a workstation the origin is the
+# tunnel's (tools/scripts/tunnel.sh), which the caller names.
+wait_for_revision() {
+  local origin="$1" revision="$2" arn ids="" status=0
+  aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+    --desired-status RUNNING --query taskArns
+  # Word splitting on purpose: list-tasks prints the ARNs tab-separated on one line, and none holds a
+  # space.
+  for arn in $(tr '\t' ' ' < "$OUT"); do
+    ids="${ids:+${ids},}${arn##*/}"
+  done
+  [ -n "$ids" ] || fail "${SERVICE} has no running task to wait for."
+  note "waiting through ${origin} until each running task reports revision ${revision} or later: ${ids}"
+  spactl wait --url "$origin" --revision "$revision" --instances "$ids" > "$OUT" 2> "$ERR" || status=$?
+  redact_stream < "$OUT"
+  if [ "$status" -ne 0 ]; then
+    redact_stream < "$ERR" >&2
+    fail "not every running task of ${SERVICE} reports revision ${revision}. If nothing answered at ${origin}, the tunnel is not running or its task was replaced: restart tools/scripts/tunnel.sh."
+  fi
 }
