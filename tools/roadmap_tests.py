@@ -389,7 +389,6 @@ class MergedBothWaysTests(unittest.TestCase):
         self.assertIn(old[:7], output)
         self.assertIn(rebuilt[:7], output)
 
-
     def test_287s_third_head_the_part_merge_alone_passes(self):
         rebuilt = self.merge("Merge part of task 6.7: operating notes", self.base)
         self.head(self.merge("Merge task issue-999: another lane", rebuilt))
@@ -433,6 +432,7 @@ class MergedBothWaysTests(unittest.TestCase):
         self.head(self.merge("Merge task 6.7: the rest of the notes", trunk))
 
         self.assertEqual(0, self.checked()[0])
+
 
 if __name__ == "__main__":
     unittest.main()

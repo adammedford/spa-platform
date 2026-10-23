@@ -245,6 +245,18 @@ def citations(root: pathlib.Path, rows: list[str]) -> list[str]:
 # --- what git says happened ----------------------------------------------------------------------
 
 
+def trunk(root: pathlib.Path) -> str | None:
+    """The trunk ref here: origin/main, else main, else None.
+
+    `subjects` reads its history beside HEAD's and `merged_both_ways` reads the range from it to
+    HEAD, so the two ask this one function and cannot settle on different trunks (#290).
+    """
+    for ref in ("origin/main", "main"):
+        if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root):
+            return ref
+    return None
+
+
 def subjects(root: pathlib.Path) -> list[str]:
     """Commit subjects from the integration lines: this branch, and origin/main where it exists.
 
@@ -252,11 +264,8 @@ def subjects(root: pathlib.Path) -> list[str]:
     a branch that main has moved past does not, and deriving from HEAD alone would then rewrite the
     block to drop work that is in the trunk.
     """
-    refs = ["HEAD"]
-    for ref in ("origin/main", "main"):
-        if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root):
-            refs.append(ref)
-            break
+    ref = trunk(root)
+    refs = ["HEAD"] if ref is None else ["HEAD", ref]
     return run(["git", "log", "--format=%s", *refs], root).splitlines()
 
 
@@ -360,18 +369,11 @@ def merged_both_ways(root: pathlib.Path) -> list[str] | None:
     and its row's whole landing beside it is no contradiction. With no trunk to compare against
     there is no range: None, which the caller reports rather than passing in silence.
     """
-    trunk = next(
-        (
-            ref
-            for ref in ("origin/main", "main")
-            if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root)
-        ),
-        None,
-    )
-    if trunk is None:
+    base = trunk(root)
+    if base is None:
         return None
     seen: dict[str, dict[str, list[str]]] = {}
-    for line in run(["git", "log", "--format=%h %s", f"{trunk}..HEAD"], root).splitlines():
+    for line in run(["git", "log", "--format=%h %s", f"{base}..HEAD"], root).splitlines():
         sha, _, subject = line.partition(" ")
         for id_, how in reading(subject):
             seen.setdefault(id_, {}).setdefault(how, []).append(f"{sha} '{subject}'")
@@ -380,7 +382,7 @@ def merged_both_ways(root: pathlib.Path) -> list[str] | None:
         if "landed" in by and "part" in by:
             problems.append(
                 f"'{id_}' is merged whole by {', '.join(by['landed'])} and in part by "
-                f"{', '.join(by['part'])}, both between {trunk} and HEAD"
+                f"{', '.join(by['part'])}, both between {base} and HEAD"
             )
     return problems
 
@@ -639,17 +641,17 @@ def main(argv: list[str]) -> int:
     if check:
         contradictions = merged_both_ways(root)
         if contradictions is None:
-            print(
+            say(
                 "roadmap: no merge compared: neither origin/main nor main is here, so a row merged "
                 "both whole and in part is not looked for."
             )
         elif contradictions:
             for line in contradictions:
-                print(f"  {line}")
-            print()
-            print("ROADMAP FAILED: this branch both completes a row and leaves it unfinished, and")
-            print("every subject in the ancestry counts, so the full merge would win (#290). Take the")
-            print("one that is wrong off the branch: rebuild it so that commit is not an ancestor.")
+                say(f"  {line}")
+            say()
+            say("ROADMAP FAILED: this branch both completes a row and leaves it unfinished, and")
+            say("every subject in the ancestry counts, so the full merge would win (#290). Take the")
+            say("one that is wrong off the branch: rebuild it so that commit is not an ancestor.")
             return 1
 
     closed = tags(root)
