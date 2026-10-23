@@ -2,7 +2,7 @@
 """Test companion for tools/bench/startup.py (#173). Owner: the owner OWNERSHIP.md names for
 tools/bench/.
 
-The harness's Docker half needs a Docker daemon and minutes of wall time, so it is proved by running
+The startup benchmark's Docker half needs a Docker daemon and minutes of wall time, so it is proved by running
 it (the numbers in #173's Answer), not here. What runs here is everything that decides a number
 without Docker: reading dockerd's timestamps, the probe's clocks against a real socket, the summary's
 medians, maxima and gaps, and the gateway's environment, read from the contract's example rather
@@ -124,7 +124,7 @@ class Probe(unittest.TestCase):
 
 
 def run(started_s: int, **after_ms):
-    """A run as the harness records one: dockerd's StartedAt and the probe's marks, in ns."""
+    """A run as the startup benchmark records one: dockerd's StartedAt and the probe's marks, in ns."""
     started = started_s * 1_000_000_000
     marks = {name: {"at_ns": None if ms is None else started + ms * 1_000_000, "after_ns": started, "attempts": 1,
                     "status": None} for name, ms in after_ms.items()}
