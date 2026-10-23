@@ -141,6 +141,7 @@ const jsonAfter = (prompt, marker) => {
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
 //           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
 //           filerDrops: [title],
+//           replay: {pending, renamed, stoppedAt, reason}, the Replay agent's own fields as it returned them,
 //           rewrite: [issue], after: {...}, nothingFrom: [label], the agents that return nothing,
 //           as a failed agent does }
 function stub(env, scriptArgs, served) {
@@ -170,6 +171,7 @@ function stub(env, scriptArgs, served) {
           phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)),
           counts: served.replayCounts || { comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 } },
           pending: '', renamed: '', stoppedAt: 0, reason: '',
+          ...(served.replay || {}),
         }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -659,6 +661,34 @@ try {
     }
     const fn = (src) => (/^const followUpsOf = [\s\S]*?\n}\n/m.exec(src) || [''])[0]
     if (!fn(mine) || fn(mine) !== fn(theirs)) fail('the grammar: morning.js\'s followUpsOf is not review-queue.js\'s')
+  }
+
+  // 19. A Replay field holding only a pair of quotes, or only whitespace, is empty (#299). On
+  //     2026-10-22 no pending-writes file existed, and the Replay agent returned pending, renamed and
+  //     reason as the two-character string "" (its result in that morning's workflow record, the
+  //     counts all zero), which the run read as a stop: "Replay stopped at line 0 of \"\": \"\"".
+  //     The first case is that result; the second, a real stop, must still be refused by its line.
+  checks++
+  {
+    const ZERO = { applied: 0, skipped: 0, failed: 0 }
+    const OCT22 = { counts: { comment: ZERO, edit: ZERO, close: ZERO }, pending: '""', renamed: '""', stoppedAt: 0, reason: '""' }
+    const replayLine = (t) => (/### Replay\n\n- (.*)\n/.exec(t) || [])[1] || ''
+    const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; nothing was replayed'
+    for (const [label, replay] of [
+      ['2026-10-22\'s Replay result', OCT22],
+      ['a reason of whitespace', { ...OCT22, pending: '', renamed: ' ', reason: ' \n ' }],
+      ['a quoted empty reason padded with whitespace', { ...OCT22, reason: ' "" ' }],
+    ]) {
+      const { result } = await execute(newRepo(), { date: DATE }, { replay })
+      if (result.refusals.length) fail(`${label}: refused ${JSON.stringify(result.refusals)}, expected none`)
+      if (result.replay.reason !== '' || result.replay.renamed !== '') fail(`${label}: the run returns reason ${JSON.stringify(result.replay.reason)} and renamed ${JSON.stringify(result.replay.renamed)}, expected both empty`)
+      if (replayLine(result.handover.text) !== NOTHING) fail(`${label}: the hand-over's Replay line is ${JSON.stringify(replayLine(result.handover.text))}, expected ${JSON.stringify(NOTHING)}`)
+    }
+    const PENDING = `/tmp/morning-tests-repo/.scratch/overnight/log/pending-${DATE}.jsonl`
+    const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
+    const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
+    if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
+    if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
