@@ -251,8 +251,18 @@ judge() {
       case "$OUTCOME" in
         success) ecs_status "$arn" ;;
         # What DescribeTaskDefinition answers for a revision ECS has removed: "Unable to describe
-        # task definition", a ClientException.
-        ClientException) DELETED=$((DELETED + 1)) ;;
+        # task definition", a ClientException. ECS also answers ClientException for a caller without
+        # permission and for an identifier that is not valid, so the code alone cannot judge: only
+        # that message counts as gone, and any other ClientException fails (CODING_STANDARDS.md, "A
+        # check fails closed").
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTaskDefinition.html
+        ClientException)
+          if awk '/Unable to describe task definition/ { found = 1 } END { exit !found }' "$ERR"; then
+            DELETED=$((DELETED + 1))
+          else
+            fail "describing $(redact "$arn"): ClientException, and not the answer for a removed revision"
+          fi
+          ;;
         *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
       esac
       ;;

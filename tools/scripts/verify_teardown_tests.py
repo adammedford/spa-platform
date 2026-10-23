@@ -144,6 +144,15 @@ class ATornDownCellPasses(Verify):
         _, result = self.verify(world)
         self.assertEqual(0, result.status, result.output)
 
+    def test_a_task_definition_ecs_has_removed_passes(self):
+        # The index still lists a revision DescribeTaskDefinition no longer knows: "Unable to describe
+        # task definition", a ClientException.
+        world = torn_down_world()
+        world["task_definitions"] = {}
+        _, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("1 ECS records deleted", result.stdout)
+
     def test_an_ec2_id_describe_still_knows_passes_once_it_lets_go(self):
         # The index lags a deletion, and so does EC2's describe for a moment: retried within the
         # plan's few minutes (docs/plan/05-infrastructure-and-cost.md, Teardown).
@@ -237,6 +246,16 @@ class AStandingResourceFails(Verify):
 class AReaderThatCannotJudgeFails(Verify):
     """A check fails closed (CODING_STANDARDS.md): an answer that is neither found nor not-found is
     a failure, never a pass."""
+
+    def test_a_task_definition_client_exception_that_is_not_a_removed_revision(self):
+        # ECS answers ClientException for a caller without permission as well as for a revision it
+        # removed (API_DescribeTaskDefinition, Errors): only the removed revision's message passes.
+        world = torn_down_world()
+        world["faults"]["ecs describe-task-definition"] = ["ClientException", "DescribeTaskDefinition"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("ClientException", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
 
     def test_a_describe_refused(self):
         world = torn_down_world()
