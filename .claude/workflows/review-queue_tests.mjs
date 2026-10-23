@@ -977,6 +977,11 @@ try {
     const none = commentOf(env, 287).split('\n')
     const h = none.indexOf('## Follow-ups')
     if (h < 0 || !/^- None/.test(none[h + 2] || '') || (resultOf(287, result).followUps || [1]).length) fail(`PR 287 with every carried finding owned: followUps ${JSON.stringify(resultOf(287, result).followUps)}, section line ${JSON.stringify(none[h + 2])}`)
+    // A ticket that is not "#<n>" names no ticket: a verdict writing "none" or "-" for one loses no finding.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [{ ...CARRIED[1], ticket: 'none' }, { ...CARRIED[2], ticket: '-' }, CARRIED[0]] } })
+    result = await execute(env)
+    const kept = (resultOf(287, result).followUps || []).map((f) => f.title)
+    if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
     if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
   }
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended

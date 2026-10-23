@@ -203,7 +203,8 @@ const sameFinding = (a, b) => String(a).toLowerCase().replace(/\s+/g, ' ').trim(
 // a finding no record carried before is this record's, "" until it is posted.
 const followUpsFrom = (carried, records) => {
   const urls = records.map((r) => r.url).filter(Boolean)
-  return (carried || []).filter((f) => f && f.title && !String(f.ticket || '').trim()).map((f) => {
+  // Only a "#<n>" names a ticket: "none" or "-" in its place loses no finding (a check fails closed).
+  return (carried || []).filter((f) => f && f.title && !/^#\d+$/.test(String(f.ticket || '').trim())).map((f) => {
     const named = records.flatMap((r) => followUpsOf(r.body, r.url)).filter((x) => sameFinding(x.title, f.title)).map((x) => x.firstCarried)
     const first = [...named, f.firstCarried].filter((u) => urls.includes(u)).sort((a, b) => urls.indexOf(a) - urls.indexOf(b))[0] || ''
     return { axis: f.axis, title: f.title, where: f.where, firstCarried: first }
