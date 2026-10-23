@@ -440,6 +440,23 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   }
 }
 
+// 15. A Confirm names the questions it covers, and each question carries both its numbers (#301). The morning reads
+//     only a Confirm comment's first sentence for the questions it covers (ADR-0021 decision 2), so a bare "Confirm"
+//     covers none: on 2026-10-22 a draft opening with one would have confirmed 21 of 263 answers, the ones its
+//     override lines named. The report's first line says so, with a range example. And each questions comment numbers
+//     a question night-wide, then by the number its ticket's own comment gave it, so an answer citing "#244 Q9" turns
+//     into the number a Confirm names without counting down a comment.
+{
+  const FIRST_LINE = 'Adam confirms pre-accepted answers with one comment on this issue beginning "Confirm", whose first sentence names the questions it covers, as in "Confirm Q1 to Q<last>, with the overrides below." where Q<last> is the last question\'s night-wide number; a bare "Confirm" covers no question, because the morning reads only that first sentence for them (ADR-0021 decision 2)'
+  const BOTH_NUMBERS = 'Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket\'s own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note\'s question, a proposed steering change) opens with the night-wide number alone, as in "**Q95.**"'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('no report prompt was rendered, so the Confirm and numbering checks read nothing')
+  for (const c of reports) {
+    if (!c.prompt.includes(FIRST_LINE)) fail('the report prompt\'s first line does not say that a Confirm\'s first sentence names the questions it covers and that a bare "Confirm" covers none (#301)')
+    if (!c.prompt.includes(BOTH_NUMBERS)) fail('the report prompt does not number each question night-wide and then by its ticket-local number (#301)')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
