@@ -310,6 +310,14 @@ jobs:
         # reads the task branches, local and on origin, from real git in a throwaway clone.
         run: python3 -I tools/overnight_collect_tests.py
 
+      - name: The wiz skill's redaction leaves no account id, code or secret in a post, and stops on AccessDenied
+        # Every post the wiz skill makes to a ticket goes through tools/wiz_redact.py (#259), and a rule
+        # that stops matching would leak into a public comment without a word. Its companion starts the
+        # real script on hand-written input: an account id inside an ARN, a code in a URL, a client id
+        # in JSON, the keep-last-four option, text with nothing to redact, and an Access Denied body,
+        # which must write nothing and exit 3 so the sitting stops and names the cause.
+        run: python3 -I tools/wiz_redact_tests.py
+
       - name: An image build sends no secret or host build output, and the runtime user can read the image
         # A workstation's image build sent the local CA's private key, the scratch directory and
         # its own bin/ and obj/ to the builder, and the gateway it built could not read its own
