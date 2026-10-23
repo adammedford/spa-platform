@@ -24,6 +24,12 @@ partial instead of never starting. This reads one issue and fails it, naming the
 - sitting-or-landing: under `ready-for-agent`, an open `- [ ]` box using a word of SITTING_OR_LANDING
   (rules 2 and 3). A word list misfires; the escape is to reword the box, or to move it to a
   ready-for-human ticket blocked by the one that builds what it runs;
+- shared-commit: under `ready-for-agent`, an open `- [ ]` box that requires another ticket's commit
+  on this ticket's branch or in its pull request, by SHARED_COMMIT (#295). A lane integrates its
+  ticket alone, so such a box cannot go green: on 2026-10-22 #145 failed the build that only #146's
+  commit fixes, and the eight tickets it blocked were skipped (#286). The pair is reshaped under
+  rule 4 before a lane takes either half. A box that only cites another ticket ("through #144's
+  overload") passes;
 - blocker-edge: a "Blocked by #N", "after #N" or "once #N lands" where #N is an open issue with no
   native blocked-by edge, so the scheduler cannot see the wait the prose states (ADR-0020). A #N
   that is a closed issue, a pull request or no issue at all states no wait any more (#284): each is
@@ -105,6 +111,20 @@ SITTING_OR_LANDING = tuple((word, re.compile(pattern, flags)) for word, pattern,
     ("pull request", r"\bpull requests?\b", re.IGNORECASE),
     ("on main", r"\bon `?main\b", re.IGNORECASE),
     ("posted on #", r"\bposted on #", re.IGNORECASE),
+))
+# The words of a box that needs another ticket's commit on this ticket's branch or in its pull
+# request (#295), each naming that ticket's number: its commit ("carries #146's workstream-6
+# commit", "the commit of #12"), or its branch or pull request as the place this work goes ("sits on
+# #145's pull request", "in #12's pull request"). A ticket's number with any other noun ("#144's
+# overload", "it is #139's") is a citation, not a shared commit. Up to three words may come between
+# "#N's" and "commit" or the place, and no punctuation: "#12's review, and the commit" is two
+# clauses.
+SHARED_COMMIT = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"#(?P<number>\d+)'s[ \t]+(?:[\w-]+[ \t]+){0,3}?commits?\b",
+    r"\bcommits?[ \t]+(?:of|from)[ \t]+#(?P<number>\d+)\b",
+    r"\bsits?[ \t]+on[ \t]+#(?P<number>\d+)'s",
+    r"\b(?:on|in|into)[ \t]+#(?P<number>\d+)'s[ \t]+(?:[\w-]+[ \t]+){0,3}?"
+    r"(?:branch|pull[ \t]+requests?|PR)\b",
 ))
 OPEN_BOX = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
 
@@ -349,6 +369,14 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
             if words:
                 failures.append(Failure("sitting-or-landing", f"an open box says {said(words)}: "
                                         f"{text[:120]}"))
+        for box in OPEN_BOX.finditer(issue.body):
+            text = box.group("text")
+            numbers = list(dict.fromkeys(f"#{found.group('number')}" for pattern in SHARED_COMMIT
+                                         for found in pattern.finditer(text)))
+            if numbers:
+                failures.append(Failure("shared-commit", f"an open box requires {said(numbers)}'s "
+                                        "commit on this ticket's branch, which a lane that "
+                                        f"integrates this ticket alone cannot have: {text[:160]}"))
 
     states = states_of(issue, states)
     unedged = [n for n in stated(issue.body) if n not in issue.blockers and states[n] == "OPEN"]
