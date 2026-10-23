@@ -265,6 +265,17 @@ def index_entry(world: dict, arn: str, kind: str) -> dict | None:
     return next((entry for entry in world["tagged"] if entry["arn"] == arn and entry["type"] == kind), None)
 
 
+def ecs_answer(entry: dict | None) -> str:
+    """What DescribeClusters or DescribeServices answers for one resource: its status, or the
+    failure's reason, MISSING for one ECS does not know. An entry's describe_failure sets the reason;
+    an empty one is an answer that carries neither."""
+    if entry is None:
+        return "MISSING"
+    if "describe_failure" in entry:
+        return entry["describe_failure"]
+    return entry.get("status", "ACTIVE")
+
+
 def task_definition_name(reference: str) -> str:
     return reference.split("task-definition/", 1)[-1]
 
@@ -333,15 +344,13 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         # The CLI prints the object's metadata, as text with --output text.
         return [len(json.dumps(world["registry"])), "application/json", '"etag"']
     if command == "ecs describe-clusters":
-        # A cluster ECS does not know is a failure with reason MISSING, not an error, so the query
-        # answers nothing: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeClusters.html
-        if query != "clusters[].status":
+        # A cluster ECS does not know is a failure with reason MISSING, not an error:
+        # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeClusters.html
+        if query != "[clusters[].status, failures[].reason][]":
             raise Unexpected(f"describe-clusters --query {query!r}")
-        return [index_entry(world, arn, "ecs:cluster").get("status", "ACTIVE") for arn in options["clusters"]
-                if index_entry(world, arn, "ecs:cluster")]
-    if command == "ecs describe-services" and query == "services[].status":
-        found = [index_entry(world, arn, "ecs:service") for arn in options["services"]]
-        return [entry.get("status", "ACTIVE") for entry in found if entry]
+        return [ecs_answer(index_entry(world, arn, "ecs:cluster")) for arn in options["clusters"]]
+    if command == "ecs describe-services" and query == "[services[].status, failures[].reason][]":
+        return [ecs_answer(index_entry(world, arn, "ecs:service")) for arn in options["services"]]
     if words[:2] == ["ecs", "describe-services"]:
         service = world["service"]
         if service is None:
