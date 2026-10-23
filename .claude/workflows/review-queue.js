@@ -57,8 +57,9 @@ export const meta = {
 // names the current head. Anything else, a force-push or a range nobody could read, is a full
 // review, and the comment says which.
 //
-// A review after a hold (#289), full or delta: the tests the held record's Mutations table lists as
-// did-not-fail are mutated first, with the break that record named and under the stated mutation's
+// A review after a hold (#289), full or delta: the tests the earlier records' Mutations tables list
+// as did-not-fail, and no later record reproduced, are mutated first, with the break the record named
+// and under the stated mutation's
 // hold rule, since a rebuilt branch is no descendant of the held head and a full review would
 // otherwise put them back in inventory order. The candidates a `Review: ...` commit touches come
 // next among the candidates. A candidate an earlier record reproduced is not mutated again while
@@ -445,19 +446,28 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 }
 
 // What the earlier records say about this review's mutation list (#289). held: when the latest record
-// held on another head, its url and its Mutations table's did-not-fail rows. clearers: newest first,
-// each earlier record whose head the range agent diffed against this one, with its url, the files
-// changed since its head, and the Test cells of the rows it reproduced. With no range read, nothing
-// is known to be unchanged, so nothing clears.
+// held on another head, the did-not-fail rows of the Mutations tables of every record on another head,
+// each with the record's url and the Test cells later records reproduced, which answer it. On #287 the
+// latest record held for other reasons and its table had no did-not-fail row; the record before it
+// held on two LibraryTests cases nobody mutated again, so the rows are carried forward until a later
+// record reproduces them. clearers: newest first, each earlier record whose head the range agent
+// diffed against this one, with its url, the files changed since its head, and the Test cells of the
+// rows it reproduced. With no range read, or an empty diff read, nothing is known to be unchanged, so
+// nothing clears: an agent that left a list empty must not clear what changed.
 const priorOf = (records, inv, rg) => {
   const latest = records[records.length - 1]
+  const other = records.filter((r) => r.head !== inv.head)
   const held = latest && latest.head !== inv.head && latest.verdict === 'hold'
-    ? { url: latest.url, rows: mutationTableOf(latest.body).filter((r) => r.result === 'did-not-fail') }
+    ? { url: latest.url, rows: other.flatMap((r, i) => mutationTableOf(r.body).filter((x) => x.result === 'did-not-fail').map((x) => ({
+      ...x, url: r.url,
+      later: other.slice(i + 1).flatMap((l) => mutationTableOf(l.body).filter((y) => y.result === 'reproduced').map((y) => y.test)),
+    }))) }
     : null
   const changed = new Map()
+  const known = (files) => Array.isArray(files) && files.length > 0
   if (rg && !rg.error && latest) {
-    if (Array.isArray(rg.changedFiles)) changed.set(latest.head, rg.changedFiles)
-    for (const s of rg.since || []) if (s && !s.error && Array.isArray(s.changedFiles) && !changed.has(s.head)) changed.set(s.head, s.changedFiles)
+    if (known(rg.changedFiles)) changed.set(latest.head, rg.changedFiles)
+    for (const s of rg.since || []) if (s && !s.error && known(s.changedFiles) && !changed.has(s.head)) changed.set(s.head, s.changedFiles)
   }
   const clearers = records.filter((r) => r.head !== inv.head && changed.has(r.head)).reverse()
     .map((r) => ({ url: r.url, files: changed.get(r.head), reproduced: mutationTableOf(r.body).filter((x) => x.result === 'reproduced').map((x) => x.test) }))
@@ -473,7 +483,8 @@ const sinceHeadsOf = (records, inv) => {
   return [...new Set(heads)]
 }
 
-// The mutation list: first the tests the latest record held on as did-not-fail, when it held (#289);
+// The mutation list: when the latest record held, first the tests the records list as did-not-fail
+// and no later record reproduced (#289);
 // then the body's stated mutations, then the Standards axis's nominations, then the candidates whose
 // file or broken source a commit titled `Review: ...` since the fork point touches, then the
 // inventory's remaining candidates; deduplicated by test and cut at the cap. A held row whose Test
@@ -488,10 +499,14 @@ const sinceHeadsOf = (records, inv) => {
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []
   const byTest = new Map(candidates.map((c) => [c.test, c]))
-  const held = prior.held ? prior.held.rows.flatMap((h) => {
-    const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: prior.held.url, cell: h.test }
+  // Newest first, so a test two records held on is mutated by the latest one's break; one a later
+  // record reproduced is answered and drops out.
+  const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
+    const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
     const named = candidates.filter((c) => names(h.test, c.test))
-    return named.length ? named.map((c) => ({ ...c, ...base })) : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
+    const answered = (test) => h.later.some((t) => t === test || names(t, test))
+    return named.length ? named.filter((c) => !answered(c.test)).map((c) => ({ ...c, ...base }))
+      : answered(h.test) ? [] : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
   }) : []
   const reviewed = new Set((inv.reviewCommits || []).filter((c) => c && /^Review:/.test(c.subject || '')).flatMap((c) => c.files || []))
   const touched = (c) => [c.file, c.breaks].some((f) => f && reviewed.has(f))

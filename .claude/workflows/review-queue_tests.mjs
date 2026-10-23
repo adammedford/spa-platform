@@ -737,6 +737,33 @@ try {
     result = await execute(env)
     if (JSON.stringify(env.mutations.slice(0, 2).map((m) => m.test)) !== JSON.stringify([LIB1, LIB2])) fail(`PR 287's shape as a delta: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected the held tests first`)
     if ((resultOf(287, result).outsideRange || []).some((t) => t === LIB1 || t === LIB2)) fail('PR 287\'s shape as a delta: a held test is listed as outside the range, cleared by the record that held on it')
+    // #287 as it happened: the first record held on the LibraryTests cases, the second held on
+    // something else and mutated neither, and the third review is the one that must reach them. The
+    // did-not-fail rows of the older held record are carried forward, since no later record reproduced them.
+    const FIRST = record('https://github.com/o/r/pull/287#issuecomment-6340588449', '2026-10-22T08:00:00Z', H1, 'hold', [
+      [`tools/check_tests.py: ${LIB1} (first half) and ${LIB2} (second half)`, LIB_BREAK, '3 of 71', 'did-not-fail: both named tests stayed green'],
+      [STORAGE, 'replaced the early return in AssertEmpty', '2 of 111', 'reproduced: it went red'],
+    ])
+    const SECOND = record('https://github.com/o/r/pull/287#issuecomment-6342205384', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [DOCKER, 'deleted the chmod line from fixtures/MockApi/Dockerfile', '2 of 199', 'reproduced: it failed at line 31'],
+    ])
+    const CHAIN = { 287: { ...SHAPE[287], comments: [FIRST, SECOND] } }
+    env = run({ prs: [287] }, CHAIN, { range })
+    result = await execute(env)
+    if (JSON.stringify(env.mutations.map((m) => m.test)) !== JSON.stringify([LIB1, LIB2, 'ReviewFixed'])) fail(`#287 as it happened: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected the first record's held tests first`)
+    if (!(env.mutations[0] || { prompt: '' }).prompt.includes(FIRST.html_url)) fail('#287 as it happened: the held mutation does not name the record that held on it')
+    // A later record that reproduced a held test answers it: it is not carried forward.
+    const ANSWERED = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-3', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [LIB1, 'the same break', '1 of 71', 'reproduced: it went red'],
+    ])] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, ANSWERED, { range })
+    await execute(env)
+    const kinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    if (kinds[LIB1] !== 'other' || kinds[LIB2] !== 'held') fail(`a held test a later record reproduced: kinds ${JSON.stringify(kinds)}, expected ${LIB2} held and ${LIB1} not`)
+    // A range that read no changed file at all clears nothing: an empty list is no evidence.
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: { ...range[287], changedFiles: [], since: [{ head: H1, changedFiles: [], error: '' }] } } })
+    result = await execute(env)
+    if ((resultOf(287, result).clearedByEarlier || []).length) fail(`PR 287's shape with an empty diff read: cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}, expected nothing`)
   }
 
   // 18. The open queue (#86), empty: launched with no list, the queue agent runs, the stubbed gh lists
