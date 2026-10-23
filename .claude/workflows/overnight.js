@@ -7,7 +7,7 @@ export const meta = {
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
     { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
-    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a conflict back-merges the run branch into the ticket\'s branch, resolves, re-runs the check and retries once (#136)' },
+    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue' },
     { title: 'Report', detail: 'one issue, Overnight <date>: the report, then the questions Q1..Qn' },
   ],
@@ -179,22 +179,30 @@ const REVIEW = {
     findingsSkipped: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' }, question: { type: 'string' },
     proposedSteering: { type: 'array', items: { type: 'string' } },
+    // the files the branch changed, read from its diff against the review's fixed point after the review's commit,
+    // both sides of a rename included: the integrate step locks them, so two tickets that changed one file
+    // integrate in order (#279)
+    changedFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['outcome', 'headSha', 'findingsFixed', 'findingsSkipped', 'summary', 'question', 'proposedSteering'],
+  required: ['outcome', 'headSha', 'findingsFixed', 'findingsSkipped', 'summary', 'question', 'proposedSteering', 'changedFiles'],
 }
 const INT = {
   type: 'object',
   properties: {
     ok: { type: 'boolean' }, mergeSha: { type: 'string' }, notes: { type: 'string' },
+    // the integration branch's HEAD the gate passed on, "" on failure: the last verified tip, which a ticket sent back
+    // to its lane back-merges, never a merge whose gate is still running (#279)
+    headSha: { type: 'string' },
     // the files a content conflict stopped the merge on, [] when the merge did not conflict (#136)
     conflictFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['ok', 'mergeSha', 'notes', 'conflictFiles'],
+  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha'],
 }
 const RESOLVE = {
   type: 'object',
-  properties: { outcome: { type: 'string', enum: ['resolved', 'unresolved'] }, headSha: { type: 'string' }, notes: { type: 'string' } },
-  required: ['outcome', 'headSha', 'notes'],
+  // tip: the run branch's sha the back-merge took in, the fixed point of the second review (#279)
+  properties: { outcome: { type: 'string', enum: ['resolved', 'unresolved'] }, headSha: { type: 'string' }, tip: { type: 'string' }, notes: { type: 'string' } },
+  required: ['outcome', 'headSha', 'tip', 'notes'],
 }
 const GRILL = {
   type: 'object',
@@ -314,31 +322,44 @@ Gap decisions that are not human-owned you may take; list each in delegatedDecis
 
 Return outcome, branch, forkSha, headSha (\`git -C ${WT(t)} rev-parse HEAD\`), complete, outstanding ("" if none), summary (2-4 sentences), question ("" if none), delegatedDecisions, proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "## Answer" comment; [] if none).`
 
-const reviewPrompt = (t, impl) => `Review ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) before it integrates. You did not write it. Unattended overnight.
+// The review, and the second review of a ticket sent back to its lane by a conflict at integrate (#279): `back` is
+// {tip, files, notes} from the resolve, and the second review judges the ticket's change and its resolution against
+// the run branch's tip the back-merge took in, so its fixed point is that tip and its record a heading of its own.
+const reviewPrompt = (t, impl, back) => {
+  const fork = back ? back.tip : impl.forkSha
+  const heading = back ? '## Review after conflict' : '## Review'
+  const subject = back ? 'Review after conflict:' : 'Review:'
+  const gateLog = `${LOG}/${t.id}-${back ? 'review-again' : 'review'}.txt`
+  const prior = `${LOG}/${t.id}-${back ? 'resolve' : 'implement'}.txt`
+  return `Review ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) before it integrates. You did not write it. Unattended overnight.
 ${HOUSE}
 
-Worktree ${WT(t)}, branch ${impl.branch}, fixed point ${impl.forkSha}. Implementer's summary (orientation only): ${impl.summary}
+Worktree ${WT(t)}, branch ${impl.branch}, fixed point ${fork}. Implementer's summary (orientation only): ${impl.summary}
+${back ? `
+This is the second review (#279). The ticket passed its first review (its "## Review" comment), then its merge into ${INT_BRANCH} stopped on a content conflict in: ${back.files.join(', ')}. It went back to its lane, where its branch back-merged ${INT_BRANCH} at ${back.tip} and resolved the conflict, with the check green (the "## Conflict at integrate" comment). The resolver's notes: ${back.notes}
+Review the ticket's change as it now stands against that tip, the resolution commits included: the diff from the fixed point is what the retry merges. Hold each conflicted file to the resolver's rule: both intents kept, the ticket's change and every change the run branch already holds. In this review, "## Review" below reads "${heading}" and "Review:" reads "${subject}" wherever they name this review's record or commit, and the "## Review" comment of the first review is history, not this review's record.
+` : ''}
+STEP 0 — durable state: read the issue once, \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments hold the implementer's "## Decisions taken" and "## Answer"). If \`git -C ${WT(t)} log -1 --format=%s\` starts with "${subject}" or a comment headed "${heading}" already exists, the review is done: return "committed" with the current HEAD and the findings recorded there.
 
-STEP 0 — durable state: read the issue once, \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments hold the implementer's "## Decisions taken" and "## Answer"). If \`git -C ${WT(t)} log -1 --format=%s\` starts with "Review:" or a comment headed "## Review" already exists, the review is done: return "committed" with the current HEAD and the findings recorded there.
+STEP 1 — the gate, once. If the first line of ${prior} is "HEAD=<sha>" equal to \`git -C ${WT(t)} rev-parse HEAD\` and its last line starts "check: pass:", copy it to ${gateLog} and do NOT rebuild. Otherwise run:
+${GATE({ dir: WT(t), log: gateLog, kind: 'task', fork, port: PORT(t.n) })}
 
-STEP 1 — the gate, once. If the first line of ${LOG}/${t.id}-implement.txt is "HEAD=<sha>" equal to \`git -C ${WT(t)} rev-parse HEAD\` and its last line starts "check: pass:", copy it to ${LOG}/${t.id}-review.txt and do NOT rebuild. Otherwise run:
-${GATE({ dir: WT(t), log: `${LOG}/${t.id}-review.txt`, kind: 'task', fork: impl.forkSha, port: PORT(t.n) })}
-
-STEP 2 — ${skill('code-review')}, fixed point ${impl.forkSha}, in ${WT(t)}. The spec is issue #${t.issue}'s body plus its plan row and the contracts/ rows naming the task (landing-work.md "Review": there is no per-task spec file). Standards sources include CODING_STANDARDS.md. Tell both axes: the tests have been run and their output is ${LOG}/${t.id}-review.txt; read it rather than running dotnet. CODING_STANDARDS.md asks a runtime claim to be verified by a run — that file is the run; a claim it does not cover may run one test project, never the solution.
+STEP 2 — ${skill('code-review')}, fixed point ${fork}, in ${WT(t)}. The spec is issue #${t.issue}'s body plus its plan row and the contracts/ rows naming the task (landing-work.md "Review": there is no per-task spec file). Standards sources include CODING_STANDARDS.md. Tell both axes: the tests have been run and their output is ${gateLog}; read it rather than running dotnet. CODING_STANDARDS.md asks a runtime claim to be verified by a run — that file is the run; a claim it does not cover may run one test project, never the solution.
 Launch every sub-agent with \`run_in_background: false\` and wait until each axis has reported before you write anything: a background sub-agent lets you hand back before it reports. If sub-agents are unavailable, do both axes yourself in turn and keep the two reports separate.
-Steering documents (#103): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/ (contracts/changes/ excepted), read the trailer of the commit that changed it, \`git -C ${WT(t)} log --format='%h %(trailers:key=Authority,valueonly)' ${impl.forkSha}..HEAD -- <path>\`, and the item it cites. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, or a confirmed answer; a pre-accepted answer, a proposal, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change with no Authority trailer, or one whose cited item does not decide it, is held: take it out of the branch (restore the file to ${impl.forkSha} when the whole change lacks authority, else edit the sentence out, and commit), put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under "## Proposed steering changes" in your "## Review" comment, and list it there under "Held". Make no steering change of your own; propose it the same way.
+Steering documents (#103): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/ (contracts/changes/ excepted), read the trailer of the commit that changed it, \`git -C ${WT(t)} log --format='%h %(trailers:key=Authority,valueonly)' ${fork}..HEAD -- <path>\`, and the item it cites. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, or a confirmed answer; a pre-accepted answer, a proposal, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change with no Authority trailer, or one whose cited item does not decide it, is held: take it out of the branch (restore the file to ${fork} when the whole change lacks authority, else edit the sentence out, and commit), put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under "## Proposed steering changes" in your "## Review" comment, and list it there under "Held". Make no steering change of your own; propose it the same way.
 Then read the "## Decisions taken" comment, if any. Each human-owned decision the implementer took is a finding on the Spec axis unless its alternatives were real (not strawmen), its costs were stated against the plan row, contract or ADR that bears on it, and the choice holds against every frozen contract and accepted ADR. Re-weigh each one yourself; where the implementer's choice loses on those terms, reverse it in code and say so in your "## Review" comment under "Decisions reversed".
-Claims are re-run, not read (#202): read every commit message and merge body on the branch, \`git -C ${WT(t)} log --format='%h%n%B' ${impl.forkSha}..HEAD\`, and the implementer's "## Answer" comment, and re-run every mutation they claim, such as a guard broken on purpose with its test or companion failing each time: apply each mutation in ${WT(t)}, run only the test project or companion the claim names, see it fail, and restore the file with \`git -C ${WT(t)} checkout -- <path>\` before the next. A claimed failure you cannot reproduce is a finding on the Spec axis: on 2026-10-20 a merge body said every guard had been broken on purpose and the companions failed each time, and five of those guards could be removed with every companion green. A promise that something "never prints X" (a token, a secret, a cookie, a path) is unproven until a test plants a canary value of X and asserts that the output lacks it, as N-16 does for every log line; with no such test it is a finding, not a fact. List each claim in your "## Review" comment as reproduced or not. \`git -C ${WT(t)} status --porcelain\` must print nothing before STEP 3, so no mutation reaches the review's commit.
+Claims are re-run, not read (#202): read every commit message and merge body on the branch, \`git -C ${WT(t)} log --format='%h%n%B' ${fork}..HEAD\`, and the implementer's "## Answer" comment, and re-run every mutation they claim, such as a guard broken on purpose with its test or companion failing each time: apply each mutation in ${WT(t)}, run only the test project or companion the claim names, see it fail, and restore the file with \`git -C ${WT(t)} checkout -- <path>\` before the next. A claimed failure you cannot reproduce is a finding on the Spec axis: on 2026-10-20 a merge body said every guard had been broken on purpose and the companions failed each time, and five of those guards could be removed with every companion green. A promise that something "never prints X" (a token, a secret, a cookie, a path) is unproven until a test plants a canary value of X and asserts that the output lacks it, as N-16 does for every log line; with no such test it is a finding, not a fact. List each claim in your "## Review" comment as reproduced or not. \`git -C ${WT(t)} status --porcelain\` must print nothing before STEP 3, so no mutation reaches the review's commit.
 
-STEP 3 — fix every finding you verify as real; for each one you reject, say why. If you changed files, re-run the gate above into ${LOG}/${t.id}-review.txt (at most twice) and keep it green. Untick any acceptance box that is not actually met (${TICK(t, 'untick')}). Post one comment headed "## Review" on issue #${t.issue} (both axes' findings, what you fixed, what you skipped and why, decisions upheld or reversed). Commit with subject "Review: <what changed>" (a review with no code change commits nothing; say so). The issue stays open whatever you tick or untick: the landing closes it (#100).
+STEP 3 — fix every finding you verify as real; for each one you reject, say why. If you changed files, re-run the gate above into ${gateLog} (at most twice) and keep it green. Untick any acceptance box that is not actually met (${TICK(t, 'untick')}). Post one comment headed "${heading}" on issue #${t.issue} (both axes' findings, what you fixed, what you skipped and why, decisions upheld or reversed). Commit with subject "${subject} <what changed>" (a review with no code change commits nothing; say so). The issue stays open whatever you tick or untick: the landing closes it (#100).
 A human-owned decision of your own: same rule as the implementer, weigh it and record it in a comment headed "## Decisions taken", or hand it over in a comment headed "## Status note" plus \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\` and outcome needs-human when it is not yours to take. Cannot get green: a "## Status note" comment, \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`, commit what exists, return failed.
 
-Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "## Review" comment, held ones included; [] if none).`
+Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "${heading}" comment, held ones included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
+}
 
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
 ${HOUSE}
 ${retry ? `
-This is the retry (#136): the first merge of ${impl.branch} stopped on a conflict, and its branch has since back-merged ${INT_BRANCH} and resolved it in ${WT(t)}, with the check green there. A conflict now is not resolved again: it is reported, not merged.
+This is the retry (#136, #279): the first merge of ${impl.branch} stopped on a conflict, the ticket went back to its lane, and its branch has since back-merged ${INT_BRANCH} and resolved it in ${WT(t)}, with the check green there, and passed a second review. A conflict now is not resolved again: it is reported, not merged, and the ticket fails.
 ` : ''}
 Integration worktree ${INT_WT} (branch ${INT_BRANCH}). Task branch ${impl.branch}. Partial row: ${impl.complete ? 'no' : 'yes — outstanding: ' + impl.outstanding}.
 The implementer's summary: ${impl.summary}
@@ -352,33 +373,34 @@ STEP 1 — merge. Record old=\`git -C ${INT_WT} rev-parse HEAD\`. The merge mess
 - subject "${impl.complete ? `Merge task ${t.id}: <what landed>` : `Merge part of task ${t.id}: <what landed>`}"
 - body: what was verified and how (the gate, the review's findings fixed), the line "Ticket: #${t.issue}" (ADR-0020 decision 4: the merge body cites the issue it came from, as #<n>, never by file path), ${impl.complete ? '' : 'an "Outstanding:" line and an "Outstanding test ids:" line, '}then the attribution line the house rules name.
 Write the message to ${LOG}/${t.id}-merge-message.txt first, with a quoted heredoc (\`cat > <that file> <<'EOF'\`), which replaces the file an earlier attempt at this ticket left there, where the Write tool refuses a file this session has not read (#109), then merge from that file: \`git -C ${INT_WT} merge --no-ff --no-edit -F ${LOG}/${t.id}-merge-message.txt ${impl.branch}\`. The message goes through the file, never on standard input: git merge reads no message from stdin (\`-F -\` fails with "could not read file '-'"), and the integrate agents of #155 and #194 each spent a retry on that (#231).
-A conflict: list the conflicted files with \`git -C ${INT_WT} diff --name-only --diff-filter=U\`, then \`git -C ${INT_WT} merge --abort\`, and return ok=false, mergeSha "", and those paths in conflictFiles. Resolve nothing here: ${retry ? 'this was the one retry, so the ticket is reported with its files' : 'the script sends the conflict to the ticket\'s own worktree and retries once'} (#136). Every other return has conflictFiles [].
+A conflict: list the conflicted files with \`git -C ${INT_WT} diff --name-only --diff-filter=U\`, then \`git -C ${INT_WT} merge --abort\`, and return ok=false, mergeSha "", and those paths in conflictFiles. Resolve nothing here: ${retry ? 'this was the one retry, so the ticket is reported with its files' : 'the script sends the ticket back to its lane, which resolves it in the ticket\'s own worktree, and retries once'} (#136, #279). Every other return has conflictFiles [].
 Then run \`python3 -I tools/roadmap.py\` in ${INT_WT}; if it changed README.md or docs/roadmap.md, commit those two alone there, subject "Refresh the generated roadmap blocks after merging ${t.id}". The check below runs the roadmap check, and a lane forked from this tip cannot fix docs/roadmap.md from another owner's paths.
 
 STEP 2 — the integration gate:
 ${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: BASE, port: PORT(t.n) })}
 Red: \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines. Do not fix code here.
 
-Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles.`
+Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise).`
 
-// A conflict at integrate (#136): the ticket's branch back-merges the run branch in its own worktree and resolves
-// it there, so the integration worktree never holds a half-resolved merge. The integration lock is held
-// throughout, so the run branch does not move under the resolve and the retry merges what was resolved.
-const resolvePrompt = (t, impl, rev, files) => `Resolve a merge conflict for ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) so it can integrate into ${INT_BRANCH}. Unattended overnight. You run inside the integration lock: ${INT_BRANCH} does not move until you return.
+// A conflict at integrate (#136): the ticket goes back to its lane (#279), where its branch back-merges the run
+// branch in its own worktree and resolves it there, so the integration worktree never holds a half-resolved merge.
+// The integration lock is released meanwhile, so other tickets integrate; the files this ticket changed stay
+// locked, so no ticket that changed one of them merges under the resolve, and a conflict on the retry fails it.
+const resolvePrompt = (t, impl, rev, files, verified) => `Resolve a merge conflict for ticket ${t.n} (task ${t.id}, issue #${t.issue}, ${t.url}) so it can integrate into ${INT_BRANCH}. Unattended overnight. The ticket is back in its lane (#279): ${INT_BRANCH} may move while you work, though no ticket that changed one of this branch's files merges until this one has integrated or failed; the retry merges once, after a second review, and a conflict then fails the ticket.
 ${HOUSE}
 
 Worktree ${WT(t)}, branch ${impl.branch}, fork point ${impl.forkSha}. Merging it into ${INT_BRANCH} stopped on a content conflict in: ${files.join(', ')}.
 The implementer's summary: ${impl.summary}
 The reviewer's summary: ${rev.summary}
 
-STEP 0 — durable state: tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
-STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${INT_BRANCH}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
+STEP 0 — durable state: ${verified ? `tip=${verified}, the head of ${INT_BRANCH} whose integration gate last passed. Take it, not \`git -C ${REPO} rev-parse ${INT_BRANCH}\`: outside the integration lock the branch may hold a merge whose gate is still running, and a red gate resets it away (#279).` : `tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`, read once and used below; no integration gate has passed in this run, so no verified tip was handed over.`} If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
+STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${verified || '<tip>'}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
 STEP 2 — the check, against the run branch's tip that was merged in, so the diff judged is this ticket's change and its resolution:
 ${GATE({ dir: WT(t), log: `${LOG}/${t.id}-resolve.txt`, kind: 'task', fork: '<tip>', port: PORT(t.n) })}
   Red: fix the resolution only (never the ticket's own behaviour) and re-run, at most two runs in total. Still red: \`git -C ${WT(t)} reset --hard <before>\` and return "unresolved" with the failing lines.
 STEP 3 — record it on the issue: one comment headed "## Conflict at integrate" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): the files, how each was resolved or why it was not, the back-merge's sha, and the check's last line.
 
-Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse HEAD\`), notes (the files and how each was resolved, or why not).`
+Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse HEAD\`), tip (the <tip> sha of STEP 0, the run branch's tip the back-merge took in; "" when unresolved), notes (the files and how each was resolved, or why not).`
 
 const grillPrompt = (t, context) => `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
 ${context ? `Context from tonight: ${context}\n` : ''}
@@ -428,6 +450,26 @@ const release = () => { const w = waiters.shift(); if (w) w(); else slots++ }
 const withSlot = async (fn) => { await acquire(); try { return await fn() } finally { release() } }
 let intLock = Promise.resolve()
 const serial = (fn) => { const p = intLock.then(fn, fn); intLock = p.catch(() => {}); return p }
+// File locks (#279): a ticket about to integrate queues on the files its branch changed, as its review read them
+// from its diff against its fork point, and waits for every earlier ticket in the queue that changed one of them,
+// so two tickets that both edited a file integrate in the order they reached integrate, whatever their planned
+// groups. A ticket holds its files from its first merge to its last, its time back in its lane included, so no
+// ticket merges a change to them under its resolve. An empty list locks every file: a reviewer that read no diff
+// is not taken to have changed nothing (CODING_STANDARDS.md, "A check fails closed"). A ticket waits only on
+// tickets queued before it, so the waits cannot form a cycle.
+const fileQueue = []   // {id, files: Set, all, done}, in the order the tickets reached integrate
+const lockFiles = async (t, files) => {
+  const me = { id: t.id, files: new Set(files), all: !files.length }
+  me.done = new Promise((res) => { me.release = () => { fileQueue.splice(fileQueue.indexOf(me), 1); res() } })
+  const shared = (o) => (o.all || me.all) ? ['every file'] : [...o.files].filter((f) => me.files.has(f))
+  const ahead = fileQueue.filter((o) => shared(o).length)
+  fileQueue.push(me)
+  if (ahead.length) {
+    log(`${t.id}: waiting to integrate behind ${ahead.map((o) => `${o.id} (${shared(o).join(', ')})`).join(', ')}`)
+    await Promise.all(ahead.map((o) => o.done))
+  }
+  return me.release
+}
 
 // ---------------------------------------------------------------- run
 phase('Collect')
@@ -457,6 +499,9 @@ const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 const results = {}      // id -> {stage, outcome, ...}
 const grillQueue = []   // grill promises
 let failures = 0
+// The head of the run branch whose integration gate last passed (#279): a ticket sent back to its lane back-merges
+// this, since outside the integration lock the branch's tip may be a merge still under its gate.
+let verifiedTip = ''
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
 let halted = null
 
@@ -541,30 +586,57 @@ const finish = async (t, impl, at) => {
     if (rev.outcome !== 'committed') return fail(t, 'review', { ...rev, impl })
 
     at.stage = 'integrate'
-    // One ticket at a time (#136): the lock covers the first merge, a conflict's resolve and the one retry.
-    const merge = (retry, head) => withSlot(() => agent(integratePrompt(t, head, rev, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT }))
-    const { integ, conflict } = await serial(async () => {
-      const first = await merge(false, impl)
-      const files = (first && !first.ok && first.conflictFiles) || [] // empty-ok: a null first leaves integ null, failed below as integrate 'agent died'
-      if (!files.length) return { integ: first, conflict: null }
-      log(`${t.id}: conflict at integrate in ${files.join(', ')}; back-merging ${INT_BRANCH} into ${impl.branch}`)
-      const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
-      if (!res || res.outcome !== 'resolved') return { integ: { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }, conflict: { files, resolved: false } }
-      const second = await merge(true, { ...impl, headSha: res.headSha })
-      const again = (second && !second.ok && second.conflictFiles) || [] // empty-ok: a null second leaves integ null, failed below as integrate 'agent died'
-      return { integ: again.length ? { ...second, notes: `still in conflict after the back-merge, in ${again.join(', ')}; reported, not merged. ${second.notes}` } : second,
-        conflict: { files: [...new Set([...files, ...again])], resolved: !!(second && second.ok) } }
-    })
-    if (conflict) {
-      conflicts.push({ id: t.id, issue: t.issue, ...conflict })
-      log(`conflict: ${t.id} ${conflict.files.join(', ')} -> ${conflict.resolved ? 'resolved' : 'unresolved'}`)
+    // One merge at a time (#136): the integration lock covers each merge and its gate, not a conflict's resolve.
+    // A green merge's head becomes the verified tip as the agent returns, before its slot is released (#279).
+    const merge = (retry, head, r) => serial(() => withSlot(async () => {
+      const out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      if (out && out.ok && out.headSha) verifiedTip = out.headSha
+      return out
+    }))
+    const release = await lockFiles(t, rev.changedFiles || [])
+    let integ, conflict = null, rev2 = null
+    try {
+      integ = await merge(false, impl, rev)
+      const files = (integ && !integ.ok && integ.conflictFiles) || [] // empty-ok: a null first leaves integ null, failed below as integrate 'agent died'
+      if (files.length) {
+        // Back to its lane (#279): the resolve and a second review run in the ticket's own worktree outside the
+        // integration lock, holding its file locks, and the retry merges once; a second conflict fails the ticket.
+        at.stage = 'resolve'
+        log(`${t.id}: conflict at integrate in ${files.join(', ')}; back to its lane to back-merge ${INT_BRANCH} into ${impl.branch}`)
+        const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
+        if (!res || res.outcome !== 'resolved') {
+          integ = { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }
+          conflict = { files, resolved: false }
+        } else {
+          at.stage = 'review'
+          const head = { ...impl, headSha: res.headSha }
+          rev2 = await withSlot(() => agent(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
+          if (!rev2 || rev2.outcome !== 'committed') {
+            conflict = { files, resolved: false }
+            if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
+            return fail(t, 'review', { ...(rev2 || { why: 'agent died' }), impl, conflict })
+          }
+          at.stage = 'integrate'
+          const second = await merge(true, { ...head, headSha: rev2.headSha }, rev2)
+          const again = (second && !second.ok && second.conflictFiles) || [] // empty-ok: a null second leaves integ null, failed below as integrate 'agent died'
+          integ = again.length ? { ...second, notes: `still in conflict after the back-merge, in ${again.join(', ')}; reported, not merged. ${second.notes}` } : second
+          conflict = { files: [...new Set([...files, ...again])], resolved: !!(second && second.ok) }
+        }
+      }
+    } finally {
+      release()
+      if (conflict) {
+        conflicts.push({ id: t.id, issue: t.issue, ...conflict })
+        log(`conflict: ${t.id} ${conflict.files.join(', ')} -> ${conflict.resolved ? 'resolved' : 'unresolved'}`)
+      }
     }
-    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, impl, rev })
+    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, impl, rev: rev2 || rev })
 
+    const last = rev2 || rev
     results[t.id] = { stage: 'integrated', outcome: impl.complete ? 'integrated' : 'partial', mergeSha: integ.mergeSha, outstanding: impl.outstanding,
-      summary: impl.summary, findingsFixed: rev.findingsFixed, delegatedDecisions: impl.delegatedDecisions, conflict,
-      proposedSteering: { implement: impl.proposedSteering || [], review: rev.proposedSteering || [] } }
-    log(`${t.id}: integrated ${integ.mergeSha}`)
+      summary: impl.summary, findingsFixed: [...rev.findingsFixed, ...(rev2 ? rev2.findingsFixed : [])], delegatedDecisions: impl.delegatedDecisions, conflict,
+      proposedSteering: { implement: impl.proposedSteering || [], review: [...(rev.proposedSteering || []), ...(rev2 ? rev2.proposedSteering || [] : [])] } }
+    log(`${t.id}: integrated ${integ.mergeSha}${last === rev2 ? ' after a second review' : ''}`)
     return true
 }
 
