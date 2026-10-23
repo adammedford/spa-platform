@@ -48,12 +48,23 @@ tickets this sitting serves.
 
 ### The redaction function
 
-Apply to every post, in this order: a twelve-digit number → `<account>` (keep the last four digits
-only where the ticket's grill asks for them, as #125 does); `arn:aws:…:<name>` → the trailing
-resource name; any value that follows `code=`, `client_id=`, `ClientId`, `ClientSecret`, `Value`
-(of a parameter) or `SessionToken` → `<elided>`; any JSON member named `clientId`, `secret`,
-`SecretString`, `AccessKeyId` or `SecretAccessKey` → `<elided>`. Then read the result once as a
-reviewer would; the function catches shapes, not meaning.
+The function is `tools/wiz_redact.py`; its rules are in its header and its companion,
+`tools/wiz_redact_tests.py`, holds each to a case (#259). Every post goes through it: write the
+draft to a file under `.scratch/sitting/log/`, beside the record (git-ignored, mode 600, never
+`/tmp`), pipe it through the script, and post the script's output with `--body-file`, never the
+draft.
+
+```bash
+python3 -I tools/wiz_redact.py < .scratch/sitting/log/post.md > .scratch/sitting/log/post.redacted.md; echo "exit=$?"
+gh issue comment <n> --body-file .scratch/sitting/log/post.redacted.md     # only on exit=0
+```
+
+Add `--keep-last-four` only where the ticket's grill asks for an account id's last four digits, as
+#125 does. On exit 3 the draft carries `AccessDenied` or `Access Denied` and the script wrote
+nothing: post nothing, stop the sitting and name the cause (rule 7: ask about the spend limit, AWS
+Settings → Billing, per `docs/agents/aws-rules.md`). On any other non-zero exit post nothing and
+say the redaction failed. On exit 0, read the result once as a reviewer would before posting; the
+script catches shapes, not meaning.
 
 ## Stage 0: where things stand
 
