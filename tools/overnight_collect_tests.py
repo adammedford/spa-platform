@@ -44,10 +44,20 @@ roadmap = load("roadmap")
 
 # Answers from the fake gh: the listing for whichever label the call names, from GH_FIXTURES, with
 # each call's arguments logged to GH_LOG; GH_FAIL makes it fail as gh does when it cannot reach
-# GitHub. Anything else it is asked exits 97.
+# GitHub. A timeline call answers with GH_FIXTURES/timeline-<n>.txt, the lines GH_TIMELINE's --jq
+# writes. Anything else it is asked exits 97.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "gh: could not reach GitHub" >&2; exit 1; fi
+if [ "$1" = "api" ]; then
+  for argument in "$@"; do
+    case "$argument" in repos/*/issues/*/timeline*)
+      number="${argument#repos/*/issues/}"; number="${number%%/*}"
+      cat "$GH_FIXTURES/timeline-$number.txt"; exit $? ;;
+    esac
+  done
+  exit 97
+fi
 [ "$1 $2" = "issue list" ] || exit 97
 for argument in "$@"; do
   case "$argument" in ready-for-agent|ready-for-human|needs-triage) label="$argument" ;; esac
@@ -205,24 +215,55 @@ def body(row: str = "none", owner: str = "integrator", boxes: str = "- [ ] one")
     return f"**Owner:** {owner}\n**Plan row:** {row}\n\n## Acceptance\n{boxes}\n"
 
 
-def resolved(agent=(), human=(), triage=(), branches=(), road=None, states=None) -> dict:
+# The account the fixtures' URLs name as the repository's owner: https://github.com/o/r/...
+OWNER = "o"
+
+
+def labeled(label: str, actor: str | None, when: str = "2026-10-22T10:00:00Z") -> dict:
+    """One `labeled` event as GitHub's timeline gives it, trimmed to the fields that matter and a
+    few that do not; actor None is a deleted account, which GitHub gives as a null actor."""
+    return {"id": 1, "node_id": "LE_x", "event": "labeled", "created_at": when,
+            "actor": None if actor is None else {"login": actor, "id": 7, "type": "User"},
+            "label": {"name": label, "color": "0e8a16"}}
+
+
+def by(actor: str | None) -> list[dict]:
+    """A timeline whose one ready-for-agent labelling was by actor."""
+    return [labeled("ready-for-agent", actor)]
+
+
+def resolved(agent=(), human=(), triage=(), branches=(), road=None, states=None, timelines=None,
+             guide=None) -> dict:
+    """The answer for these listings. Each ready-for-agent ticket was labelled by the repository's
+    owner unless timelines says otherwise."""
     listings = {"ready-for-agent": list(agent), "ready-for-human": list(human),
                 "needs-triage": list(triage)}
-    return collect.resolve(listings, list(branches), road or ROAD, states=states)
+    given = {raw["number"]: by(OWNER) for raw in agent}
+    given.update(timelines or {})
+    return collect.resolve(listings, list(branches), road or ROAD, states=states, timelines=given,
+                           guide=guide)
 
 
 def refuse_gh(numbers):
     raise AssertionError(f"a test asked GitHub for {sorted(numbers)}; give the case its states")
 
 
+def refuse_timeline(root, number):
+    raise AssertionError(f"a test asked GitHub for the timeline of #{number}; give the case its "
+                         "timelines")
+
+
 def setUpModule():
-    # Every in-process case states what the numbers its prose names are; none is asked of gh.
+    # Every in-process case states what the numbers its prose names are, and who labelled each
+    # ready-for-agent ticket; none is asked of gh.
     shape = collect.ticket_shape()
     setUpModule.kept, shape.look_up = shape.look_up, refuse_gh
+    setUpModule.timeline, collect.timeline = collect.timeline, refuse_timeline
 
 
 def tearDownModule():
     collect.ticket_shape().look_up = setUpModule.kept
+    collect.timeline = setUpModule.timeline
 
 
 def by_issue(answer: dict) -> dict:
@@ -529,6 +570,121 @@ class WillEndPartial(unittest.TestCase):
         self.assertEqual([], self.flags(209, label="human"))
 
 
+class LabelledBy(unittest.TestCase):
+    """#316: `ready-for-agent` is a lane's promise, and CODING_STANDARDS.md -> "An authorisation is
+    read from its author" says it counts only when the account the rule names applied it. So the
+    actor of the last `labeled` event that applied it is read off the issue's timeline, and any
+    other actor leaves the ticket needs-triage, named in "why"."""
+
+    # The guide's line as the proposal on #316 words it, typed here: the live guide names no account
+    # yet, and a case on it would pass on the fallback alone.
+    GUIDE = ("## This repository's additions\n\n"
+             "- **The human's account is `@adam-m`.** A `Confirm` comment and the\n"
+             "  `ready-for-agent` label count only when this account wrote them.\n")
+
+    def ticket(self, timeline: list[dict], guide: str | None = None, **listed) -> dict:
+        listed.setdefault("agent", [issue(5, body())])
+        return by_issue(resolved(timelines={5: timeline}, guide=guide, **listed))[5]
+
+    def test_a_label_another_account_applied_is_needs_triage_naming_the_actor(self):
+        found = self.ticket(by("mallory"))
+        self.assertEqual("needs-triage", found["status"])
+        self.assertEqual("ready-for-agent was last applied by @mallory, not by @o, the "
+                         "repository's owner, since docs/agents/issue-tracker.md names no account; "
+                         "a lane goes only where that account applied it", found["why"])
+
+    def test_the_owners_label_is_ready_for_agent(self):
+        found = self.ticket(by(OWNER))
+        self.assertEqual(("ready-for-agent", "ready-for-agent with no open blocker"),
+                         (found["status"], found["why"]))
+
+    def test_the_login_is_compared_without_case(self):
+        """GitHub's logins are case-insensitive, so the owner's own label is its own whatever the
+        case the URL spells it in."""
+        self.assertEqual("ready-for-agent", self.ticket(by(OWNER.upper()))["status"])
+
+    def test_on_a_saved_timeline_the_last_ready_for_agent_labelling_is_the_one_read(self):
+        """A timeline as GitHub gives one: other events, another label, the label applied, removed
+        and applied again. Only the last application of ready-for-agent says who promised it."""
+        unlabeled = dict(labeled("ready-for-agent", OWNER), event="unlabeled")
+        history = [
+            {"event": "cross-referenced", "actor": {"login": "mallory"}},
+            labeled("ready-for-agent", "mallory", "2026-10-20T10:00:00Z"),
+            unlabeled,
+            labeled("ready-for-agent", OWNER, "2026-10-21T10:00:00Z"),
+            labeled("needs-info", "mallory", "2026-10-22T10:00:00Z"),
+            {"event": "commented", "actor": {"login": "mallory"}, "body": "ready-for-agent"},
+        ]
+        self.assertEqual("ready-for-agent", self.ticket(history)["status"])
+        history.append(labeled("ready-for-agent", "mallory", "2026-10-23T10:00:00Z"))
+        found = self.ticket(history)
+        self.assertEqual("needs-triage", found["status"])
+        self.assertIn("@mallory", found["why"])
+
+    def test_no_labelling_event_or_a_deleted_actor_is_needs_triage(self):
+        """Fails closed: a label nothing says the account applied is not the account's."""
+        for name, timeline, said in (
+            ("no event", [], "shows no `labeled` event applying it"),
+            ("another label only", [labeled("bug", OWNER)], "shows no `labeled` event"),
+            ("a deleted actor", by(None), "last applied by an account GitHub no longer names"),
+        ):
+            with self.subTest(name=name):
+                found = self.ticket(timeline)
+                self.assertEqual("needs-triage", found["status"])
+                self.assertIn(said, found["why"])
+
+    def test_an_assignee_does_not_make_an_outsiders_label_a_claim(self):
+        """The label does not count at all, so what sits on top of it is not read as a claim."""
+        found = self.ticket(by("mallory"), agent=[issue(5, body(), assignees=("adam",))])
+        self.assertEqual("needs-triage", found["status"])
+
+    def test_the_human_and_triage_labels_come_first_and_are_not_read_from_the_timeline(self):
+        """Neither unlocks a lane, so its writer is not asked; refuse_timeline proves no read."""
+        for listed, expected in (({"human": [issue(5, body())]}, "ready-for-human"),
+                                 ({"triage": [issue(5, body())]}, "needs-triage")):
+            with self.subTest(expected=expected):
+                answer = collect.resolve(
+                    {"ready-for-agent": [], "ready-for-human": listed.get("human", []),
+                     "needs-triage": listed.get("triage", [])}, [], ROAD, timelines={})
+                self.assertEqual(expected, by_issue(answer)[5]["status"])
+
+    def test_a_blocker_labelled_by_another_account_blocks_its_dependent(self):
+        answer = by_issue(resolved(agent=[issue(5, body(), blockers=((6, "OPEN"),)),
+                                          issue(6, body())], timelines={6: by("mallory")}))
+        self.assertEqual(("blocked", "needs-triage"), (answer[5]["status"], answer[6]["status"]))
+
+    def test_the_account_the_guide_names_is_the_one_read_not_the_owner(self):
+        """Both directions: under the guide's line the owner's label no longer counts, and the
+        named account's does."""
+        self.assertEqual("adam-m", collect.named_account(self.GUIDE))
+        owners = self.ticket(by(OWNER), guide=self.GUIDE)
+        self.assertEqual("needs-triage", owners["status"])
+        self.assertIn("not by @adam-m, the account docs/agents/issue-tracker.md names",
+                      owners["why"])
+        self.assertEqual("ready-for-agent", self.ticket(by("adam-m"), guide=self.GUIDE)["status"])
+
+    def test_prose_about_an_account_names_none(self):
+        for text in (None, "", "A `Confirm` comment is the human's act.",
+                     "The human's account is `@adam-m`.",
+                     "  - **The human's account is `@adam-m`.** indented, so not the guide's line"):
+            with self.subTest(text=text):
+                self.assertIsNone(collect.named_account(text))
+
+    def test_the_live_guide_parses(self):
+        """The guide as it stands either names an account or names none; it never fails to read."""
+        text = (ROOT / collect.GUIDE).read_text()
+        self.assertIn(collect.named_account(text), (None, *[m.group("login") for m in
+                                                            collect.ACCOUNT_LINE.finditer(text)]))
+
+    def test_the_account_line_is_the_steering_checks(self):
+        """One line names the account for both readers: the label here, a `Confirm` there."""
+        spec = importlib.util.spec_from_file_location("steering", ROOT / ".github" / "steering.py")
+        steering = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(steering)
+        self.assertEqual(collect.ACCOUNT_LINE.pattern, steering.ACCOUNT_LINE.pattern)
+        self.assertEqual(collect.GUIDE, steering.GUIDE)
+
+
 class ThroughGh(unittest.TestCase):
     """main() end to end, with the fake gh on PATH and nothing else of the caller's environment."""
 
@@ -550,12 +706,21 @@ class ThroughGh(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def listings(self, agent=(), human=(), triage=()) -> None:
+    def listings(self, agent=(), human=(), triage=(), actor: str = OWNER) -> None:
         for label, issues in (("ready-for-agent", agent), ("ready-for-human", human),
                               ("needs-triage", triage)):
             (self.fixtures / f"{label}.json").write_text(json.dumps(list(issues)))
+        for raw in agent:
+            events = [labeled("bug", "someone"), labeled("ready-for-agent", actor)]
+            (self.fixtures / f"timeline-{raw['number']}.txt").write_text(
+                "".join(json.dumps(event) + "\n" for event in events))
 
     def run_main(self, *argv: str, **extra: str) -> tuple[int, str, str]:
+        # The real timeline read, which setUpModule replaces for the in-process cases.
+        with mock.patch.object(collect, "timeline", setUpModule.timeline):
+            return self.run_main_as_is(*argv, **extra)
+
+    def run_main_as_is(self, *argv: str, **extra: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, {**self.env, **extra}, clear=True), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -567,9 +732,12 @@ class ThroughGh(unittest.TestCase):
         code, out, err = self.run_main("--json")
         self.assertEqual(0, code, err)
         calls = self.log.read_text().splitlines()
-        self.assertEqual(3, len(calls))
+        self.assertEqual(4, len(calls))
         for label, call in zip(collect.LABELS, calls):
             self.assertIn(f"--label {label} --limit 500 --json {collect.FIELDS}", call)
+        # And the one ready-for-agent ticket's timeline, which says who labelled it.
+        self.assertIn("api --paginate repos/{owner}/{repo}/issues/1/timeline?per_page=100",
+                      calls[3])
         self.assertIn("subIssuesSummary", collect.FIELDS)
         answer = json.loads(out)
         self.assertEqual([[], []], [t["willEndPartial"] for t in answer["tickets"]])
@@ -601,12 +769,51 @@ class ThroughGh(unittest.TestCase):
         saved = pathlib.Path(self.tmp.name) / "saved"
         saved.mkdir()
         (saved / "ready-for-agent.json").write_text(json.dumps([issue(1, body())]))
+        (saved / "timelines").mkdir()
+        (saved / "timelines" / "1.json").write_text(json.dumps(by(OWNER)))
         (saved / "branches.txt").write_text("task/issue-1-claimed\n")
         (saved / "roadmap.json").write_text(json.dumps(ROAD))
         code, out, err = self.run_main("--json", "--from", str(saved))
         self.assertEqual(0, code, err)
         self.assertFalse(self.log.exists(), "gh was asked although the listings were given")
         self.assertEqual("claimed", json.loads(out)["tickets"][0]["status"])
+
+    def test_an_outsiders_label_read_live_is_needs_triage(self):
+        self.listings(agent=[issue(1, body())], actor="mallory")
+        code, out, err = self.run_main("--json")
+        self.assertEqual(0, code, err)
+        ticket = json.loads(out)["tickets"][0]
+        self.assertEqual("needs-triage", ticket["status"])
+        self.assertIn("last applied by @mallory", ticket["why"])
+
+    def test_a_timeline_line_that_is_not_an_event_is_refused(self):
+        self.listings(agent=[issue(1, body())])
+        for text in ("not json\n", "[1, 2]\n"):
+            with self.subTest(text=text):
+                (self.fixtures / "timeline-1.txt").write_text(text)
+                code, out, err = self.run_main("--json")
+                self.assertEqual((1, ""), (code, out))
+                self.assertIn("the timeline of #1 gave", err)
+
+    def test_a_failed_timeline_read_exits_1(self):
+        self.listings(agent=[issue(1, body())])
+        (self.fixtures / "timeline-1.txt").unlink()
+        code, out, err = self.run_main("--json")
+        self.assertEqual((1, ""), (code, out))
+        self.assertIn("no tickets printed", err)
+
+    def test_a_saved_run_without_a_ready_for_agent_tickets_timeline_is_refused(self):
+        """Not read live, and not read as the account's: the answer would be a guess."""
+        saved = pathlib.Path(self.tmp.name) / "saved"
+        saved.mkdir()
+        (saved / "ready-for-agent.json").write_text(json.dumps([issue(1, body())]))
+        (saved / "ready-for-human.json").write_text(json.dumps([issue(2, body())]))
+        (saved / "branches.txt").write_text("")
+        (saved / "roadmap.json").write_text(json.dumps(ROAD))
+        code, out, err = self.run_main("--json", "--from", str(saved))
+        self.assertEqual((1, ""), (code, out))
+        self.assertIn("timelines/1.json is missing", err)
+        self.assertFalse(self.log.exists(), "gh was asked although the run was a saved one")
 
     def test_a_listing_in_another_shape_is_refused_rather_than_read_as_unblocked(self):
         """gh gives blockedBy as nodes, each with its state. A listing that does not is unreadable,
@@ -647,6 +854,8 @@ class ForecastFailsClosed(unittest.TestCase):
                 saved = tree / "saved"
                 saved.mkdir()
                 (saved / "ready-for-agent.json").write_text(json.dumps([issue(198, FILED[198])]))
+                (saved / "timelines").mkdir()
+                (saved / "timelines" / "198.json").write_text(json.dumps(by(OWNER)))
                 (saved / "branches.txt").write_text("")
                 (saved / "roadmap.json").write_text(json.dumps(ROAD))
                 done = subprocess.run(
@@ -667,6 +876,8 @@ class ForecastFailsClosed(unittest.TestCase):
             saved = tree / "saved"
             saved.mkdir()
             (saved / "ready-for-agent.json").write_text(json.dumps([issue(204, FILED[204])]))
+            (saved / "timelines").mkdir()
+            (saved / "timelines" / "204.json").write_text(json.dumps(by(OWNER)))
             (saved / "branches.txt").write_text("")
             (saved / "roadmap.json").write_text(json.dumps(ROAD))
             done = subprocess.run(
