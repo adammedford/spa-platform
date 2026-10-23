@@ -273,6 +273,28 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   }
 }
 
+// 12. The merge message goes through a file (#231): git merge reads no message from standard input (`-F -` fails
+//     with "could not read file '-'"), and on 2026-10-21 the integrate agents of #155 and #194 each spent a retry on
+//     that. Every integrate prompt, first merge and retry, names the message file under the run's log directory,
+//     the ticket's own, and the merge command that reads it.
+{
+  const integrates = allPrompts.filter((c) => c.label.startsWith('integrate:'))
+  if (!integrates.length) fail('no integrate prompt was rendered, so the merge-message check read nothing')
+  for (const c of integrates) {
+    const id = c.label.split(':')[1]
+    const file = `${LOG}/${id}-merge-message.txt`
+    const wants = [
+      `Write the message to ${file} first`,
+      `merge --no-ff --no-edit -F ${file} `,
+      'never on standard input',
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`the ${c.label} prompt lacks: ${w}`)
+    const branch = (/Task branch (\S+?)\. /.exec(c.prompt) || [])[1]
+    if (!branch) fail(`the ${c.label} prompt names no task branch`)
+    else if (c.prompt.includes(`merge --no-ff ${branch}`)) fail(`the ${c.label} prompt still merges ${branch} without the message file`)
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
