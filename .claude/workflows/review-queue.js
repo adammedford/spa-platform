@@ -66,6 +66,13 @@ export const meta = {
 // neither its test file nor the source it breaks has changed since that record's head; the comment
 // names it as cleared by that record, beside the cap's cut.
 //
+// Follow-ups (#292). A finding the review carries rather than holds on lived only in records: #287's
+// three records each carried three with no ticket. The verdict agent names, for every carried finding,
+// the open ticket that owns it or none, and the earliest record on the pull request that carried it;
+// the ones with none are returned as followUps and end the comment's findings as the table under
+// "## Follow-ups", which morning.js reads from the latest record and files. The review still writes
+// nothing outside its log and its one comment.
+//
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
 // the run-level headMoved list) so the operator runs again. GitHub unreachable at posting time is
@@ -166,6 +173,43 @@ const mutationTableOf = (body) => {
 // Whether a row's Test cell names a test: the cell is the name, or holds it whole, as #287's first
 // record held two LibraryTests cases in one cell.
 const names = (cellText, test) => !!test && new RegExp(`(?<![\\w.])${test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`).test(cellText)
+
+// The follow-ups table (#292): the carried findings that name no open ticket, which the comment ends
+// its findings with and the morning run files. One row per finding, its First carried by cell the
+// earliest record on the pull request that carried it, or THIS_RECORD for the record the comment
+// ends in. morning.js reads the same table with its own copy of FOLLOW_UP_HEAD, THIS_RECORD and this
+// parser, since a workflow script imports nothing; morning_tests.mjs holds the two copies equal, so
+// a change to the table is an edit to both scripts together. followUpsOf(body, url) reads a comment's
+// table back, THIS_RECORD resolved to url, the comment's own address; a comment with no table yields
+// none.
+const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by |'
+const THIS_RECORD = 'this record'
+const followUpsOf = (body, url = '') => {
+  const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
+  const at = lines.indexOf(FOLLOW_UP_HEAD)
+  if (at < 0) return []
+  const rows = []
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith('|') || !line.endsWith('|')) break
+    const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+    if (cells.length === 4 && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3] })
+  }
+  return rows
+}
+const sameFinding = (a, b) => String(a).toLowerCase().replace(/\s+/g, ' ').trim() === String(b).toLowerCase().replace(/\s+/g, ' ').trim()
+// The verdict's carried findings that name no open ticket, each with the earliest record on the pull
+// request that carried it: the earliest of the record the verdict names and every earlier record whose
+// own follow-ups table lists the finding by title. A URL that is no record here is not trusted, and
+// a finding no record carried before is this record's, "" until it is posted.
+const followUpsFrom = (carried, records) => {
+  const urls = records.map((r) => r.url).filter(Boolean)
+  // Only a "#<n>" names a ticket: "none" or "-" in its place loses no finding (a check fails closed).
+  return (carried || []).filter((f) => f && f.title && !/^#\d+$/.test(String(f.ticket || '').trim())).map((f) => {
+    const named = records.flatMap((r) => followUpsOf(r.body, r.url)).filter((x) => sameFinding(x.title, f.title)).map((x) => x.firstCarried)
+    const first = [...named, f.firstCarried].filter((u) => urls.includes(u)).sort((a, b) => urls.indexOf(a) - urls.indexOf(b))[0] || ''
+    return { axis: f.axis, title: f.title, where: f.where, firstCarried: first }
+  })
+}
 
 // ---------------------------------------------------------------- agents and slots
 let agentsRun = 0
@@ -302,8 +346,11 @@ const VERDICT = {
     summary: { type: 'string' },
     // A delta review after a hold: each finding of the held record, and whether the range answers it.
     earlierFindings: { type: 'array', items: { type: 'object', properties: { finding: { type: 'string' }, answered: { type: 'boolean' }, how: { type: 'string' } }, required: ['finding', 'answered', 'how'] } },
+    // Every finding the review carries rather than holds on (#292), with the open ticket that owns
+    // it ("" for none) and the earliest record on this pull request that carried it ("" for none).
+    followUps: { type: 'array', items: { type: 'object', properties: { axis: { type: 'string', enum: ['Standards', 'Spec'] }, title: { type: 'string' }, where: { type: 'string' }, ticket: { type: 'string' }, firstCarried: { type: 'string' } }, required: ['axis', 'title', 'where', 'ticket', 'firstCarried'] } },
   },
-  required: ['verdict', 'findings', 'claims', 'outstanding', 'summary', 'earlierFindings'],
+  required: ['verdict', 'findings', 'claims', 'outstanding', 'summary', 'earlierFindings', 'followUps'],
 }
 const RESULTS = ['reproduced', 'did-not-fail', 'could-not-run']
 const MUTATION = {
@@ -416,7 +463,9 @@ The mutation rows, each output file under ${DIR(n)}/ (first line the head, last 
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files.
+Write the result as JSON to the OUTPUT FILE, then return it.`
 
 const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
 const mutationLog = (n, i) => `${DIR(n)}/mutation-${i}.txt`
@@ -613,7 +662,13 @@ const earlierLines = (d, v) => (d && d.verdict === 'hold'
   ? ['## The earlier hold', '', `The findings of ${d.url}, checked for an answer in ${deltaRange(d)}:`,
     ...(v.earlierFindings.length ? v.earlierFindings.map((f) => `- ${f.finding}: ${f.answered ? 'answered' : 'not answered'}. ${f.how}`) : ['- The verdict listed none, so the hold stands: a held record\'s findings are never dropped unchecked.']), '']
   : [])
-const commentBody = (inv, v, record, mut, d, full) => [
+const followUpLines = (list) => ['## Follow-ups', '',
+  ...(list.length
+    ? ['Carried findings that name no open ticket; the morning run files each one (#292).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
+      ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD].map(cell).join(' | ')} |`)]
+    : ['- None: the review carries no finding that names no open ticket.']),
+  '']
+const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   '## Review',
   '',
   `Head ${inv.head}, read against the fork point ${inv.forkPoint} (origin/main at ${inv.baseTip}).`,
@@ -633,6 +688,7 @@ const commentBody = (inv, v, record, mut, d, full) => [
   "The author's claims:",
   ...(v.claims.length ? v.claims.map((c) => `- ${c.claim}: ${c.verified ? 'verified' : 'not verified'}. ${c.how}`) : ['- None stated.']),
   '',
+  ...followUpLines(followUps),
   ...earlierLines(d, v),
   '## Mutations',
   '',
@@ -655,6 +711,7 @@ const blank = (n) => ({
   number: n, head: '', base: '', baseTip: '', verdict: '', outcome: 'failed', stage: '', recordUrl: '',
   findings: { verified: [], suspected: [] }, mutations: [], notMutated: [], skippedBecauseRecorded: false,
   headMoved: false, earlierRecords: [], earlierRecord: null, range: null, outsideRange: [], clearedByEarlier: [], commentFile: '',
+  followUps: [],
 })
 const failed = (res, stage) => ({ ...res, outcome: 'failed', stage, verdict: '', recordUrl: '' })
 const review = async (n) => {
@@ -739,8 +796,10 @@ const reviewOne = async (n, res, at) => {
   const verdict = mut.holds.length || unanswered ? 'hold' : v.verdict
   // The record names the head the inventory read, whatever the post agent finds later.
   const record = recordLine(inv.head, inv.forkPoint, verdict)
-  const body = commentBody(inv, v, record, mut, d, full)
+  const followUps = followUpsFrom(v.followUps, records)
+  const body = commentBody(inv, v, record, mut, d, full, followUps)
   res.verdict = verdict
+  res.followUps = followUps
   res.findings = {
     verified: v.findings.filter((f) => f.status === 'verified'),
     suspected: v.findings.filter((f) => f.status === 'suspected'),

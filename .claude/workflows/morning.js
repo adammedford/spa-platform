@@ -6,6 +6,7 @@ export const meta = {
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, then applies the pending-writes file in order, recording each line, and renames it when every line is applied' },
     { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it' },
     { title: 'Apply', detail: 'one classifier, then at most maxParallel appliers: commit appliers one at a time on integrator/morning-<date>, tracker-only appliers in parallel; dry with no Confirm comment' },
+    { title: 'Follow-ups', detail: 'one agent reads every open pull request into main and the follow-ups already filed; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue' },
     { title: 'After', detail: 'after: true only, one agent: refuses until origin/main contains the integration tip, then closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes' },
   ],
@@ -40,8 +41,16 @@ export const meta = {
 //                          appliers Apply dispatches (#78 -> "Agent budget").
 //
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 classifier and at most
-// maxParallel appliers, Hand-over 1: seven at the default. The issue lookup is the Replay agent's
-// first step, not an agent of its own, so the budget holds; `after` is one agent.
+// maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: nine at the
+// default. The issue lookup is the Replay agent's first step, not an agent of its own, so the budget
+// holds; `after` is one agent.
+//
+// Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
+// review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
+// name no open ticket; the morning reads the table of the latest record on each open pull request
+// into main, and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
+// to the record, as neither a sub-issue nor a blocker (docs/agents/issue-tracker.md). Neither Verify's
+// verdict nor a Confirm comment gates it: the review decided the finding, and the night did not.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel']
 const badArguments = (a) => {
@@ -205,6 +214,25 @@ const APPLIED = {
   },
   required: ['unit', 'commits', 'issues', 'candidates', 'rewrites', 'skipped', 'pushed', 'refused', 'unreachable'],
 }
+const ENTRY = {
+  type: 'object',
+  properties: {
+    body: { type: 'string' }, author_association: { type: 'string' }, html_url: { type: 'string' },
+    created_at: { type: 'string' }, submitted_at: { type: 'string' }, state: { type: 'string' },
+  },
+  required: ['body', 'author_association', 'html_url'],
+}
+const FOLLOWUPS = {
+  type: 'object',
+  properties: {
+    prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: ENTRY }, reviews: { type: 'array', items: ENTRY } }, required: ['number', 'comments', 'reviews'] } },
+    filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
+    error: { type: 'string' },
+  },
+  required: ['prs', 'filed', 'error'],
+}
+const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
+const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'unreachable', 'reason'] }
 const HANDED = { type: 'object', properties: { url: { type: 'string' }, posted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['url', 'posted', 'reason'] }
 const AFTERED = {
   type: 'object',
@@ -235,6 +263,76 @@ const judgeLookup = (listing) => {
   return { issue: hits[0].number, date: A.date }
 }
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
+
+// ---------------------------------------------------------------- follow-ups, read here
+// review-queue.js's record recogniser and follow-ups table, by copy: a workflow script imports
+// nothing, and morning_tests.mjs holds each line below equal to its twin there, so a change to the
+// grammar is an edit to both scripts together (and to tools/review_record.py for the record line).
+const PY_LINE_BREAK = /\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/
+const PY_SPACE = '[\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]'
+const PY_STRIP = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g')
+const RECORD = /^Reviewed ([0-9a-f]{40}) against ([0-9a-f]{40}): (merge|hold)$/
+const REPOSITORY_ACCOUNTS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by |'
+const THIS_RECORD = 'this record'
+const followUpsOf = (body, url = '') => {
+  const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
+  const at = lines.indexOf(FOLLOW_UP_HEAD)
+  if (at < 0) return []
+  const rows = []
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith('|') || !line.endsWith('|')) break
+    const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+    if (cells.length === 4 && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3] })
+  }
+  return rows
+}
+const sameFinding = (a, b) => String(a).toLowerCase().replace(/\s+/g, ' ').trim() === String(b).toLowerCase().replace(/\s+/g, ' ').trim()
+// The latest record on a pull request, as review-queue.js's recordsIn orders them: every record line
+// in its comments and its COMMENTED reviews from an account the repository let in, by time.
+const latestRecordOf = (pr) => {
+  const found = []
+  const read = (entry, at) => {
+    if (!entry || typeof entry.body !== 'string' || !REPOSITORY_ACCOUNTS.includes(entry.author_association)) return
+    for (const raw of entry.body.split(PY_LINE_BREAK)) if (RECORD.test(raw.replace(PY_STRIP, ''))) found.push({ url: entry.html_url || '', at: entry[at] || '', body: entry.body })
+  }
+  for (const c of pr.comments || []) read(c, 'created_at')
+  for (const r of pr.reviews || []) if (r && r.state === 'COMMENTED') read(r, 'submitted_at')
+  found.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0))
+  return found[found.length - 1] || null
+}
+// A follow-up is already filed when an issue carries its finding as its title and names the pull
+// request on its Raised-by line, the shape this script files and a hand-filed one can take.
+const filedAs = (filed, pr, title) => (filed || []).find((i) => i && sameFinding(i.title, title)
+  && new RegExp(`^\\*\\*Raised by:\\*\\*[^\\n]*#${pr}(?!\\d)`, 'm').test(String(i.body || ''))) || null
+const followUpBody = (pr, record, f) => [
+  `**Raised by:** #${pr}, from its review record ${record}`,
+  '',
+  '## What to build',
+  '',
+  `The review of #${pr} carried this finding rather than holding on it (${f.axis || 'no'} axis), first carried by ${f.firstCarried || record}: ${f.title}, at ${f.where || 'no place named'}. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+  '',
+  '## Acceptance criteria',
+  '',
+  `- [ ] ${f.title}: fixed, or declined with the reason in this issue's Answer.`,
+].join('\n')
+// The rows to file and those already filed, from what the reader returned: per open pull request, the
+// latest record's table, each row checked against the issues already filed.
+const followUpsToFile = (read, mdir) => {
+  const toFile = []
+  const already = []
+  for (const pr of read.prs || []) {
+    const latest = pr && Number.isInteger(pr.number) ? latestRecordOf(pr) : null
+    if (!latest) continue
+    followUpsOf(latest.body, latest.url).forEach((f) => {
+      const hit = filedAs(read.filed, pr.number, f.title)
+      if (hit) { already.push({ pr: pr.number, title: f.title, number: hit.number, url: hit.url || '' }); return }
+      const k = toFile.filter((x) => x.pr === pr.number).length + 1
+      toFile.push({ pr: pr.number, title: f.title, record: latest.url, file: `${mdir}/followups/pr-${pr.number}-${k}.md`, body: followUpBody(pr.number, latest.url, f) })
+    })
+  }
+  return { toFile, already }
+}
 
 // ---------------------------------------------------------------- the questions, read here
 // The night's questions are comments on the Overnight issue, never its body (#104): each headed
@@ -447,6 +545,36 @@ Rewrites (a ticket with "rewrite": true): first preserve the current body verbat
 A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
 }
 
+const followupsPrompt = (date) => {
+  const p = paths(date)
+  return `Follow-ups: read every open pull request into main with its review records, and the follow-ups already filed (#292). Read and report; you file nothing, and the script decides what is filed.
+
+${HOUSE(p.mdir)}
+
+OUTPUT FILE: ${p.mdir}/followups-read.txt
+1. \`cd ${REPO} && gh pr list --state open --base main --limit 500 --json number\`.
+2. For each pull request it lists: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served; reviews = the same for \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads the records and their follow-ups tables from them.
+3. filed: for each pull request, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
+4. If GitHub cannot be reached, error says so and prs and filed are []. error is "" when nothing stopped you.
+Write the whole result as JSON to the OUTPUT FILE, then return it. It is named .txt so that a later morning's Replay, which reads every .json file there as a phase file, passes over it.`
+}
+
+const fileFollowUpsPrompt = (date, items) => {
+  const p = paths(date)
+  return `Follow-ups: file each carried review finding below as an issue of its own (#292). The script chose them: each is a row of the follow-ups table of the latest review record on its pull request, and no issue it was shown holds it.
+
+${HOUSE(p.mdir)}
+
+FOLLOW-UPS: ${JSON.stringify(items)}
+${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
+
+For each follow-up, in order:
+1. Write its body, exactly, to its file.
+2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
+3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/issue-tracker.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you.`
+}
+
 const handoverPrompt = (date, issue, text) => {
   const p = paths(date)
   return `Hand-over: post the morning's hand-over on the Overnight issue (#78 -> "Hand-over"). The text between the markers is the hand-over, written by the script; post it exactly, adding and removing nothing.
@@ -515,6 +643,9 @@ const handoverText = (s) => {
   list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (s.replay.reason ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason}` : '')])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
+  const fu = s.followUps || { filed: [], already: [] }
+  list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title} (${f.url})`), 'none')
+  if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   return L.join('\n').replace(/`/g, "'")
 }
 
@@ -644,8 +775,33 @@ if (!verdict.ok) {
   }
 }
 
+phase('Follow-ups')
+// Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
+const followUps = { filed: [], already: [] }
+const fr = await run(followupsPrompt(DATE), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
+if (!fr) refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
+else if (fr.error) refusals.push(`the follow-ups agent could not read the open pull requests: ${fr.error}; none was filed`)
+else {
+  const { toFile, already } = followUpsToFile(fr, P.mdir)
+  followUps.already.push(...already)
+  if (toFile.length) {
+    const fd = await run(fileFollowUpsPrompt(DATE, toFile), { label: 'followups-file', phase: 'Follow-ups', schema: FILED })
+    if (!fd) refusals.push(`the follow-ups filer returned nothing: ${toFile.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} may be unfiled; relaunch to file them`)
+    else {
+      followUps.filed.push(...fd.filed)
+      followUps.already.push(...fd.skipped)
+      // A follow-up the filer accounts for in neither list is named, never read as filed: the hand-over
+      // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
+      const told = [...fd.filed, ...fd.skipped]
+      const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
+      if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${lost.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} neither filed nor skipped; relaunch to file them`)
+      if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
+    }
+  }
+}
+
 phase('Hand-over')
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep })
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps })
 log(text)
 const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
@@ -656,5 +812,6 @@ return {
   pr: v ? v.pr : null, head: v ? v.head : '', ci: v ? v.ci : 'none', record: v ? v.record : null,
   apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
   handover: { url: handed ? handed.url : '', posted: handed ? handed.posted : false, text },
+  followUps,
   agents: agentsRun, reused,
 }

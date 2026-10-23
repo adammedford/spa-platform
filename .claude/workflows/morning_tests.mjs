@@ -74,6 +74,23 @@ const LISTING_ONE = [{ number: ISSUE, title: `Overnight ${DATE}`, state: 'OPEN' 
 const prComment = (id, body, at) => ({ body, created_at: at, html_url: `https://github.com/adammedford/spa-platform/pull/400#issuecomment-${id}`, author_association: 'OWNER', user: { login: 'adammedford' } })
 const RECORD_MERGE = [prComment(11, `Findings: none.\n\nReviewed ${HEAD} against ${BASE}: merge`, '2026-10-21T07:00:00Z')]
 
+// Follow-ups (#292): pull request #287's three review records, as GitHub serves them, the latest
+// ending its findings with the follow-ups table review-queue.js writes. Of #287's three carried
+// findings, deploy.sh building without --pull is owned by #288 by the third record, so the table
+// lists the other two: logs_tests.py and cell_doubles_tests.py running in no CI job, and the
+// provisional #244 Q9 answer disagreeing with end-app-sessions.md. #288 is served as filed, in its
+// real shape, whose Raised-by line names #287 too.
+const PR287 = 'https://github.com/adammedford/spa-platform/pull/287'
+const R287 = [`${PR287}#issuecomment-6340588449`, `${PR287}#issuecomment-6342205384`, `${PR287}#issuecomment-6343000001`]
+const H287 = ['ed8d0633e9c1360fb7c2e425f63237676f4db648', '701ba9465d3d90575cecf19c09afee80346ada39', '76704c53c36ea51a9a4a81a206b76de7cf46e98c']
+const F287 = 'ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5'
+const FINDING_CI = 'logs_tests.py and cell_doubles_tests.py run in no CI job'
+const FINDING_Q9 = 'The provisional #244 Q9 answer disagrees with end-app-sessions.md'
+const FOLLOW_UPS_287 = `## Follow-ups\n\nCarried findings that name no open ticket; the morning run files each one.\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${FINDING_CI} | Spec | 76704c5:.github/workflows/ci.yml lines 321-326 \\| tools/scripts | ${R287[0]} |\n| ${FINDING_Q9} | Spec | #244 Q9; docs/runbooks/end-app-sessions.md | this record |\n`
+const rec287 = (i, verdict, extra = '') => ({ body: `## Review\n\nHead ${H287[i]}.\n\n## Spec\n\n- a finding\n\n${extra}\n## Mutations\n\n- none\n\nReviewed ${H287[i]} against ${F287}: ${verdict}`, author_association: 'OWNER', html_url: R287[i], created_at: `2026-10-22T0${i + 1}:00:00Z` })
+const ISSUE_288 = { number: 288, title: 'deploy.sh pulls the base image when it builds the gateway', body: `**Raised by:** #273, from the reviews of #287 (${R287[1]})\n**Owner:** ws1-infra\n`, url: 'https://github.com/adammedford/spa-platform/issues/288' }
+const FU287 = { prs: [{ number: 287, comments: [rec287(0, 'hold'), rec287(1, 'hold'), rec287(2, 'merge', FOLLOW_UPS_287)], reviews: [] }], filed: [ISSUE_288] }
+
 const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 
@@ -122,6 +139,8 @@ const jsonAfter = (prompt, marker) => {
 }
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
+//           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
+//           filerDrops: [title],
 //           rewrite: [issue], after: {...}, nothingFrom: [label], the agents that return nothing,
 //           as a failed agent does }
 function stub(env, scriptArgs, served) {
@@ -193,6 +212,25 @@ function stub(env, scriptArgs, served) {
         }
       } else if (label === 'handover') {
         out = { url: `${URL(ISSUE)}#issuecomment-99`, posted: true, reason: '' }
+      } else if (label === 'followups') {
+        // The open pull requests into main with their comments and reviews as gh serves them, and the
+        // issues already filed: those the fixture serves, then those an earlier run's filer filed.
+        const f = served.followUps || { prs: [], filed: [] }
+        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], error: f.error || '' }
+      } else if (label === 'followups-file') {
+        // The filer files each follow-up it is given, as gh issue create would, and remembers it in
+        // env, so a rerun on the same checkout reads it back as filed.
+        // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
+        // lost one would.
+        const items = (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
+        env.filed = env.filed || []
+        const filed = items.map((it) => {
+          const number = 900 + env.filed.length
+          const issue = { number, title: it.title, body: it.body, url: URL(number) }
+          env.filed.push(issue)
+          return { pr: it.pr, title: it.title, number, url: issue.url }
+        })
+        out = { filed, skipped: [], unreachable: false, reason: '' }
       } else if (label === 'after') {
         const a = served.after || {}
         const contained = a.contained !== false
@@ -248,7 +286,7 @@ try {
   const meta = loadMeta()
   if (!meta || meta.name !== 'morning') fail(`meta.name is ${meta && meta.name}, expected morning`)
   const titles = ((meta && meta.phases) || []).map((p) => p.title)
-  if (titles.slice(0, 4).join() !== 'Replay,Verify,Apply,Hand-over') fail(`meta phases ${titles.join(', ')}; expected Replay, Verify, Apply, Hand-over first`)
+  if (titles.slice(0, 5).join() !== 'Replay,Verify,Apply,Follow-ups,Hand-over') fail(`meta phases ${titles.join(', ')}; expected Replay, Verify, Apply, Follow-ups, Hand-over first`)
   if (!titles.includes('After')) fail('meta declares no After phase for the after mode')
   for (const [label, a] of [
     ['neither date nor issue', {}],
@@ -433,13 +471,14 @@ try {
     if ((tight.peaks.tracker || 0) > 2 || tight.peaks.all > 2) fail(`maxParallel 2: ${tight.peaks.tracker} tracker appliers and ${tight.peaks.all} agents in flight at once`)
   }
 
-  // 9. Budget: at the default maxParallel a night of eight tickets of every kind dispatches at most
-  //    seven agents, and the return counts what ran.
+  // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
+  //    file, dispatches at most nine agents, and the return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
-    const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303] })
-    if (labels.length > 7 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
+    if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
+    if (labels.length > 9 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -555,6 +594,71 @@ try {
     const own = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, outsider(40, 'Confirm Q2.', '2026-10-21T07:59:00Z'), comment(41, 'Confirm Q1.', '2026-10-21T08:00:00Z')]) })
     const o = own.result.apply.answers
     if (own.result.apply.dry || !o[1].confirmed || o[2].confirmed || !own.labels.some((l) => l.startsWith('apply:commit'))) fail(`Adam's Confirm Q1 beside an outsider's Confirm Q2: dry ${own.result.apply.dry}, answers ${JSON.stringify(o)}, dispatched ${own.labels.join(', ')}`)
+  }
+
+  // 17. Follow-ups (#292). The morning reads the follow-ups table of the latest review record on each
+  //     open pull request into main and files each row no issue already holds, with a Raised-by line
+  //     naming the pull request and a link to the record, as neither a sub-issue nor a blocker. #287's
+  //     latest record lists two; #288, filed by hand for the third finding, names #287 on its
+  //     Raised-by line and holds neither of them. A rerun files nothing; Verify's verdict gates none of it.
+  checks++
+  {
+    const env = newRepo()
+    const first = await execute(env, { date: DATE }, { followUps: FU287 })
+    const sent = jsonAfter(first.prompt('followups-file'), 'FOLLOW-UPS') || []
+    if (JSON.stringify(sent.map((f) => [f.pr, f.title])) !== JSON.stringify([[287, FINDING_CI], [287, FINDING_Q9]])) fail(`follow-ups: the filer was given ${JSON.stringify(sent.map((f) => [f.pr, f.title]))}, expected #287's two rows`)
+    for (const f of sent) {
+      if (!f.body.startsWith('**Raised by:** #287')) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not open with the Raised-by line: ${JSON.stringify(f.body.split('\n')[0])}`)
+      if (!f.body.includes(R287[2])) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not link the record ${R287[2]}`)
+    }
+    if (sent[0] && !sent[0].body.includes(R287[0])) fail('follow-ups: the first row\'s body does not name the earliest record that carried it')
+    if (sent[0] && !sent[0].body.includes('76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts')) fail('follow-ups: the escaped bar in the Where cell was not read back')
+    if (sent[1] && !sent[1].body.includes(`first carried by ${R287[2]}`)) fail('follow-ups: "this record" was not read as the record the table is in')
+    const fp = first.prompt('followups-file')
+    const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    if (!spans.some((x) => /gh issue create\b/.test(x) && /--label needs-triage\b/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with the needs-triage label')
+    if (spans.some((x) => /--parent\b|blocked-by/.test(x))) fail(`follow-ups: the filer prompt files a sub-issue or a blocker: ${spans.filter((x) => /--parent\b|blocked-by/.test(x)).join(' | ')}`)
+    const ho = first.result.handover.text
+    if (!/### Follow-ups filed/.test(ho) || !ho.includes(FINDING_CI) || !ho.includes(FINDING_Q9)) fail(`follow-ups: the hand-over does not list what was filed:\n${ho}`)
+    if (JSON.stringify((first.result.followUps || {}).filed || []) === '[]') fail('follow-ups: the return lists nothing filed')
+    const again = await execute(env, { date: DATE }, { followUps: FU287 })
+    if (again.labels.includes('followups-file')) fail('follow-ups: a rerun filed again what the first run filed')
+    if (((again.result.followUps || {}).already || []).length !== 2) fail(`follow-ups: a rerun reports ${JSON.stringify((again.result.followUps || {}).already)} as already filed, expected both rows`)
+    // Filed by hand under the finding's title, with a Raised-by line naming the pull request, counts.
+    const byHand = await execute(newRepo(), { date: DATE }, { followUps: { ...FU287, filed: [ISSUE_288, { number: 777, title: FINDING_Q9, body: '**Raised by:** #287\n', url: URL(777) }] } })
+    const sent2 = (jsonAfter(byHand.prompt('followups-file'), 'FOLLOW-UPS') || []).map((f) => f.title)
+    if (JSON.stringify(sent2) !== JSON.stringify([FINDING_CI])) fail(`follow-ups: with ${FINDING_Q9} filed by hand, the filer was given ${JSON.stringify(sent2)}`)
+    // Only the latest record decides: an earlier record's table, a newer record without one, files nothing.
+    const older = await execute(newRepo(), { date: DATE }, { followUps: { prs: [{ number: 287, comments: [rec287(1, 'hold', FOLLOW_UPS_287), rec287(2, 'merge')], reviews: [] }], filed: [] } })
+    if (older.labels.includes('followups-file')) fail('follow-ups: an earlier record\'s table was filed though the latest record lists none')
+    // A table under a line that is no record, or posted from outside the repository, files nothing.
+    const outsider = { ...rec287(2, 'merge', FOLLOW_UPS_287), author_association: 'NONE' }
+    const out = await execute(newRepo(), { date: DATE }, { followUps: { prs: [{ number: 287, comments: [outsider], reviews: [] }], filed: [] } })
+    if (out.labels.includes('followups-file')) fail('follow-ups: a table in a comment from outside the repository was filed')
+    // Verify's stop does not hold the follow-ups back: they are decided by the review, not the night.
+    const stopped = await execute(newRepo(), { date: DATE }, { followUps: FU287, verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
+    if (!stopped.labels.includes('followups-file')) fail('follow-ups: a Verify stop kept the follow-ups from being filed')
+    // A read agent that returns nothing is named, never read as a queue with nothing to file.
+    const dead = await execute(newRepo(), { date: DATE }, { followUps: FU287, nothingFrom: ['followups'] })
+    if (!dead.result.refusals.some((r) => /follow-ups agent returned nothing/.test(r))) fail(`follow-ups: a dead read agent is not named: ${JSON.stringify(dead.result.refusals)}`)
+    // A filer that returns a follow-up neither filed nor skipped has not accounted for it: the run
+    // names it, never reads the silence as done (CODING_STANDARDS.md -> "A check fails closed").
+    const lost = await execute(newRepo(), { date: DATE }, { followUps: FU287, filerDrops: [FINDING_Q9] })
+    if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
+  }
+
+  // 18. The follow-ups table has one grammar: morning.js's copy of its header, its "this record" cell,
+  //     the record line and its parser are review-queue.js's, character for character.
+  checks++
+  {
+    const mine = fs.readFileSync(scriptPath, 'utf8')
+    const theirs = fs.readFileSync(path.join(here, 'review-queue.js'), 'utf8')
+    for (const name of ['FOLLOW_UP_HEAD', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
+      const line = (src) => (new RegExp(`^const ${name} = .*$`, 'm').exec(src) || [''])[0]
+      if (!line(mine) || line(mine) !== line(theirs)) fail(`the grammar: morning.js's ${name} is ${JSON.stringify(line(mine))}, review-queue.js's ${JSON.stringify(line(theirs))}`)
+    }
+    const fn = (src) => (/^const followUpsOf = [\s\S]*?\n}\n/m.exec(src) || [''])[0]
+    if (!fn(mine) || fn(mine) !== fn(theirs)) fail('the grammar: morning.js\'s followUpsOf is not review-queue.js\'s')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

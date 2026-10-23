@@ -81,6 +81,7 @@ const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({
 
 // behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold',
 //           range: { [n]: what the range agent reports }, earlier: { [n]: the verdict's earlierFindings },
+//           followUps: { [n]: the verdict's followUps, each carried finding with the ticket it names },
 //           gh: a stubbed GitHub (ghStub below) }
 // Without behave.gh the post agent posts and reports the head unchanged; with it, the stubbed gh
 // decides, and its store of posted comments outlives the run, so a rerun reads what a run posted.
@@ -167,7 +168,7 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], followUps: (behave.followUps || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
@@ -904,6 +905,84 @@ try {
       if ((result.prs || []).some((r) => r.outcome !== 'recorded')) fail(`the hand-off, k ${k}: outcomes ${(result.prs || []).map((r) => r.outcome).join(', ')}`)
     }
     if (over.length) fail(`the hand-off: more agents in flight than the 2 slots, at ${over.length} of 25 offsets: ${over.join('; ')}`)
+  }
+  // 23. Follow-ups (#292). The verdict returns each finding it carries with the open ticket that owns
+  //     it, or none. #287's third record carried three findings: deploy.sh builds without --pull
+  //     (owned by #288 by then), logs_tests.py and cell_doubles_tests.py run in no CI job, and the
+  //     provisional #244 Q9 answer disagrees with end-app-sessions.md (#244 names it but owns no fix).
+  //     The run returns the two that name no open ticket as followUps, each with its axis, where, and
+  //     the earliest record on the pull request that carried it; the comment ends its findings with
+  //     them as a table under "## Follow-ups", before "## Mutations", and the record stays last.
+  checks++
+  {
+    const H287 = '76704c53c36ea51a9a4a81a206b76de7cf46e98c'
+    const F287 = 'ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5'
+    const R1 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6340588449'
+    const R2 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6342205384'
+    const rec = (url, head, at, extra = '') => ({ author_association: 'OWNER', created_at: at, html_url: url, body: `## Review\n\n${extra}Reviewed ${head} against ${F287}: hold` })
+    const CARRIED = [
+      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', ticket: '#288', firstCarried: R1 },
+      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', ticket: '', firstCarried: R1 },
+      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', ticket: '', firstCarried: R2 },
+    ]
+    const served = (comments) => ({ 287: pr(287, ['.github/workflows/ci.yml'], { head: H287, forkPoint: F287, commits: [H287], comments }) })
+    const tableOf = (body) => {
+      const lines = body.split('\n')
+      const at = lines.indexOf('| Finding | Axis | Where | First carried by |')
+      if (at < 0) return null
+      const rows = []
+      for (const l of lines.slice(at + 2)) {
+        if (!l.startsWith('|')) break
+        rows.push(l.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|')))
+      }
+      return { at, rows }
+    }
+    const EARLIER = [rec(R1, 'ed8d0633e9c1360fb7c2e425f63237676f4db648', '2026-10-22T01:00:00Z'), rec(R2, '701ba9465d3d90575cecf19c09afee80346ada39', '2026-10-22T02:00:00Z')]
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: CARRIED } })
+    result = await execute(env)
+    const r = resultOf(287, result)
+    const want = [
+      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1 },
+      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2 },
+    ]
+    if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`PR 287: followUps ${JSON.stringify(r.followUps)}, expected the two carried findings that name no open ticket, ${JSON.stringify(want)}`)
+    const body = commentOf(env, 287)
+    const lines = body.split('\n')
+    const t = tableOf(body)
+    if (!t) fail('PR 287: the comment carries no follow-ups table')
+    else {
+      const head = lines.indexOf('## Follow-ups')
+      if (!(lines.indexOf('## Spec') < head && head < t.at && t.at < lines.indexOf('## Mutations'))) fail('PR 287: the follow-ups table does not end the findings: it must sit under "## Follow-ups", after "## Spec" and before "## Mutations"')
+      const rows = JSON.stringify(t.rows)
+      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried]))
+      if (rows !== wantRows) fail(`PR 287: the follow-ups table reads back as ${rows}, expected ${wantRows}`)
+    }
+    if (lines[lines.length - 1] !== `Reviewed ${H287} against ${F287}: merge`) fail(`PR 287: the comment's last line is ${JSON.stringify(lines[lines.length - 1])}, not the record`)
+
+    // An earlier record whose own table carried the finding decides the earliest record, whatever the
+    // verdict says; "this record" in that table is that record. A first-carried URL that is no record
+    // on this pull request is read as this record, the first to carry it.
+    const R2_TABLE = rec(R2, '701ba9465d3d90575cecf19c09afee80346ada39', '2026-10-22T02:00:00Z', `## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${CARRIED[2].title} | Spec | there | this record |\n\n`)
+    const later = [{ ...CARRIED[1], firstCarried: 'https://example.invalid/not-a-record' }, { ...CARRIED[2], firstCarried: '' }]
+    env = run({ prs: [287] }, served([EARLIER[0], R2_TABLE]), { followUps: { 287: later } })
+    result = await execute(env)
+    const got = (resultOf(287, result).followUps || []).map((f) => f.firstCarried)
+    if (JSON.stringify(got) !== JSON.stringify(['', R2])) fail(`PR 287: first carried by ${JSON.stringify(got)}, expected ["", "${R2}"]: an unknown URL is this record, and the earlier record's own table names it`)
+    const rows = (tableOf(commentOf(env, 287)) || { rows: [] }).rows
+    if (!rows[0] || rows[0][3] !== 'this record') fail(`PR 287: a finding this record carries first is written ${JSON.stringify(rows[0] && rows[0][3])}, expected "this record"`)
+
+    // No carried finding without a ticket: the section says so, and nothing is returned.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[0]] } })
+    result = await execute(env)
+    const none = commentOf(env, 287).split('\n')
+    const h = none.indexOf('## Follow-ups')
+    if (h < 0 || !/^- None/.test(none[h + 2] || '') || (resultOf(287, result).followUps || [1]).length) fail(`PR 287 with every carried finding owned: followUps ${JSON.stringify(resultOf(287, result).followUps)}, section line ${JSON.stringify(none[h + 2])}`)
+    // A ticket that is not "#<n>" names no ticket: a verdict writing "none" or "-" for one loses no finding.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [{ ...CARRIED[1], ticket: 'none' }, { ...CARRIED[2], ticket: '-' }, CARRIED[0]] } })
+    result = await execute(env)
+    const kept = (resultOf(287, result).followUps || []).map((f) => f.title)
+    if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
+    if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
   }
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
   // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.
