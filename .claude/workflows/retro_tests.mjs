@@ -134,7 +134,7 @@ function stub(env, scriptArgs, served) {
             // same file from this checkout runs in its place, and the case checks the path it named.
             const ran = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_refusals.py'), '--date', m[2], '--root', served.refusalsRoot], { encoding: 'utf8' })
             const lines = ran.stdout.split('\n').filter(Boolean)
-            out.refusals = { lines: lines.filter((l) => !/: missing: /.test(l)), missing: lines.find((l) => /: missing: /.test(l)) || '' }
+            out.refusals = { lines: lines.filter((l) => !/: missing: /.test(l)), missing: lines.filter((l) => /: missing: /.test(l)).join('\n') }
             env.refusalsRun = { status: ran.status, script: m[1], lines }
           }
         }
@@ -486,6 +486,18 @@ try {
     if (!env.refusalsRun || env.refusalsRun.status !== 1) fail(`an empty transcripts root: the count exited ${env.refusalsRun && env.refusalsRun.status}, expected 1`)
     if (!new RegExp(`\\nretro-refusals: ${DATE}: missing: no overnight run recorded for this date under \\S+\\n`).test(fpNone)) fail('an empty transcripts root: the File prompt does not carry the missing line')
     if (/Edit and Write calls/.test(fpNone.split('REFUSAL LINES')[1] || '')) fail('an empty transcripts root reached the File prompt as a count')
+    // Two more launches recorded for the night with no transcripts: each one's missing line reaches
+    // the parent beside the counted run's line, none of them dropped and none read as a zero.
+    for (const [id, hour] of [['wf_3b77ab2e-215', '23'], ['wf_3b77ab2e-216', '23']]) {
+      fs.writeFileSync(path.join(base, 's1', 'workflows', `${id}.json`), JSON.stringify({ runId: id, timestamp: `${DATE}T${hour}:00:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    }
+    env = newRepo()
+    const some = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    const fpSome = filePromptOf(some)
+    for (const id of ['wf_3b77ab2e-215', 'wf_3b77ab2e-216']) {
+      if (!fpSome.includes(`\nretro-refusals: ${id}: missing: no subagent transcripts for this run under ${root}\n`)) fail(`a launch with no transcripts (${id}): its missing line does not reach the File prompt`)
+    }
+    if (!fpSome.includes(`\n${LINE}\n`)) fail('beside missing launches, the counted run\'s line does not reach the File prompt')
   }
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)

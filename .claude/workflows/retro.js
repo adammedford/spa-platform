@@ -184,8 +184,9 @@ const STATE = {
 //   overnightScript {path, sha256, mtime}: `retro_record.py script` on the script read
 //   history        [{date, report, questions}]: earlier nights' report and questions paths, for recurrence
 //   refusals       {lines, missing}: lines is each `retro_refusals.py --date <date>` line that counted a run,
-//                  verbatim; missing is its line for a run or a date it found no transcripts or record
-//                  for, else "". The parent issue carries both verbatim (#315)
+//                  verbatim; missing is its every line for a run or a date it found no transcripts or
+//                  record for, in order and joined by newlines, else "". The parent issue carries both
+//                  verbatim (#315)
 //   missing        [string]: every record item the night lacks; the parent issue repeats it verbatim
 //   versions       {files, issues: [{number, updatedAt}]}: files is `retro_record.py fingerprint` over every
 //                  file the index names and the log directory; issues the Overnight issue and each lane
@@ -289,7 +290,7 @@ Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE
 6. returnJson, pending, untracked: the paths when they exist (the return JSON in ${scratch}/ or ${NIGHT_LOG}/, ${NIGHT_LOG}/pending-${date}.jsonl, the untracked-at-start listing), else "".
 7. overnightScript: \`${READER} script ${OVERNIGHT}\`.
 8. history: every earlier night's report and questions, resolved by first line as in step 1, and each earlier Overnight <date> issue (\`cd ${REPO} && gh issue list --state all --search "Overnight in:title" --json number,title\`), newest first.
-9. refusals: \`${REFUSALS} --date ${date}\`, which finds every launch of the overnight script recorded for the night and prints one line per run. lines is each line that counted a run, verbatim and in order; missing is the line that says "missing:", verbatim, else "". Copy the lines; never count, round or restate them. A run launched by another script, which the record names by its wf_ id, is counted with \`${REFUSALS} <run id>\` and its line added.
+9. refusals: \`${REFUSALS} --date ${date}\`, which finds every launch of the overnight script recorded for the night and prints one line per run. lines is each line that counted a run, verbatim and in order; missing is every line that says "missing:", verbatim and in order, joined by newlines (a night with two launches can lack the transcripts of both), else "". Copy the lines; never count, round or restate them. A run launched by another script, which the record names by its wf_ id, is counted with \`${REFUSALS} <run id>\` and its line added.
 10. missing: one line for every record item the night lacks (no return JSON, no worktrees left, the transcripts themselves, which the record never holds beyond the refusal lines, the refusals' missing line verbatim when it has one, a pending-writes file absent or present-and-unreplayed, a lane with no check log).
 11. versions, which decide whether the phases after you are reused, so copy each value exactly: files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT} <every other file path the index names>\`; issues is the Overnight issue and every lane ticket that is an issue, each {number, updatedAt} from \`cd ${REPO} && gh issue view <n> --json number,updatedAt\`, in number order ([] when there are none).
 Return the index.`
