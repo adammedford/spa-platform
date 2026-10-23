@@ -705,13 +705,21 @@ const ids = (pred) => Object.entries(results).filter(([, r]) => pred(r)).map(([i
 const REASON_MAX = 300
 const oneLine = (s) => { const l = String(s || '').replace(/\s+/g, ' ').trim(); return l.length > REASON_MAX ? l.slice(0, REASON_MAX - 1) + '…' : l }
 const reasonOf = (r) => oneLine((r.outcome === 'needs-human' && r.question) || r.why || r.notes || r.summary) || 'no reason recorded'
-const humanIds = humanT.map((t) => t.id)
+const entry = (id, outcome, stage, reason) => ({ id, issue: byId[id].issue, outcome, stage, reason })
+const fromResults = (outcome) => ids((r) => r.outcome === outcome).map((id) => entry(id, outcome, results[id].stage, reasonOf(results[id])))
+// A ready-for-human ticket has no outcome in results, only its grill: say how the grill went.
+const grillNote = (id) => {
+  const g = results[id] && results[id].grill
+  if (!g) return ''
+  return typeof g === 'object' ? `, ${g.questions.length} question(s) on #${byId[id].issue}` : ': the grill agent died'
+}
+const humanWithoutOutcome = humanT.map((t) => t.id).filter((id) => !(results[id] && results[id].outcome))
 const reasons = [
-  ...ids((r) => r.outcome === 'failed').map((id) => ({ id, issue: byId[id].issue, outcome: 'failed', stage: results[id].stage, reason: reasonOf(results[id]) })),
-  ...ids((r) => r.outcome === 'skipped').map((id) => ({ id, issue: byId[id].issue, outcome: 'skipped', stage: results[id].stage, reason: reasonOf(results[id]) })),
-  ...humanIds.filter((id) => !(results[id] && results[id].outcome)).map((id) => ({ id, issue: byId[id].issue, outcome: 'needs-human', stage: humanStage[id] || 'collect',
-    reason: oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; grilled on paper${results[id] && results[id].grill && typeof results[id].grill === 'object' ? `, ${results[id].grill.questions.length} question(s) on #${byId[id].issue}` : results[id] && results[id].grill ? ': the grill agent died' : ''}`) })),
-  ...ids((r) => r.outcome === 'needs-human').map((id) => ({ id, issue: byId[id].issue, outcome: 'needs-human', stage: results[id].stage, reason: reasonOf(results[id]) })),
+  ...fromResults('failed'),
+  ...fromResults('skipped'),
+  ...humanWithoutOutcome.map((id) => entry(id, 'needs-human', humanStage[id] || 'collect',
+    oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; grilled on paper${grillNote(id)}`))),
+  ...fromResults('needs-human'),
 ]
 return {
   halted,
