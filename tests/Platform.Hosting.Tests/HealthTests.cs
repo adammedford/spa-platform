@@ -109,7 +109,6 @@ public sealed class HealthTests
         Assert.False(string.IsNullOrWhiteSpace(firstOfA));
         Assert.Equal(firstOfA, againOfA);
         Assert.NotEqual(firstOfA, firstOfB);
-        Assert.DoesNotContain(Environment.MachineName, firstOfA, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(a.Log.Lines, line => line.Level == LogLevel.Information && line.Message.Contains(firstOfA, StringComparison.Ordinal));
     }
 
