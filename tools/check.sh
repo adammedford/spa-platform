@@ -26,8 +26,10 @@
 # the libraries that name that one (#237). CI runs the companions .github/workflows/ci.yml lists,
 # one step each, whatever the diff, so that file says which run there; this check runs only those
 # the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
-# when the other changes. Neither mode runs tools/check_tests.py, which runs this file and so stays
-# CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
+# when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
+# script's test companion with node, and fails on a script that has none (#276); those CI runs on
+# the same answer from .github/touches.sh, in one step. Neither mode runs tools/check_tests.py,
+# which runs this file and so stays CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
 # exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
 # bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
 #
@@ -637,6 +639,63 @@ if $full; then
     else
       ran="$ran, the test companions $listed"
     fi
+  fi
+fi
+
+# --- in full, the workflow scripts' test companions -------------------------------------------
+#
+# Every workflow script under .claude/workflows/ has a test companion beside it, `<name>_tests.mjs`
+# with the script's name kept whole (overnight.js's is overnight_tests.mjs, pins-sweep.js's is
+# pins-sweep_tests.mjs), and on #271 all of them were run by hand before each fix round because
+# nothing else ran them (#276). A change anywhere under .claude/workflows/ runs every one, since
+# they share the fixtures there, and a change elsewhere skips them, as the halves skip;
+# .github/touches.sh says what a workflow change is, and CI's Documents job reads the same answer
+# and runs the same companions. A workflow script without its companion fails the check, naming
+# the script, before any companion runs, so a script cannot lose its companion and stay green. The
+# companions' own output is shown, so a red one's last lines sit above the verdict, and the check
+# stops at the first. Only a tracked file directly in the folder is a script or a companion: what
+# sits under fixtures/ is data. Without node the check fails, as the header says of any tool.
+if $full; then
+  if touches workflows; then
+    workflow_scripts=""
+    workflow_companions=""
+    # A failed listing is not an empty folder: in a `for` list its exit status is lost, and an
+    # empty list passes with nothing judged (CODING_STANDARDS.md, "A check fails closed").
+    workflow_tracked="$(git ls-files -- .claude/workflows)" \
+      || fail "the workflow test companions were not judged: git ls-files failed."
+    for found in $workflow_tracked; do
+      case "${found#.claude/workflows/}" in
+        */*) ;;
+        *_tests.mjs) workflow_companions="$workflow_companions $found" ;;
+        *.js) workflow_scripts="$workflow_scripts $found" ;;
+      esac
+    done
+    for found in $workflow_scripts; do
+      case "$workflow_companions " in
+        *" ${found%.js}_tests.mjs "*) ;;
+        *) fail "the workflow script $found has no test companion; add ${found%.js}_tests.mjs beside it." ;;
+      esac
+    done
+    if [ -z "$workflow_companions" ]; then
+      echo "check: no workflow test companion is tracked in .claude/workflows/."
+    else
+      command -v node > /dev/null || missing node "the workflow test companions"
+      listed=""
+      count=0
+      for found in $workflow_companions; do
+        echo "check: the workflow test companion $found:"
+        node "$found" || fail "the workflow test companion $found failed."
+        listed="${listed:+$listed, }$found"
+        count=$((count + 1))
+      done
+      if [ "$count" -eq 1 ]; then
+        ran="$ran, the workflow test companion $listed"
+      else
+        ran="$ran, the workflow test companions $listed"
+      fi
+    fi
+  else
+    echo "check: workflow test companions skipped: nothing under .claude/workflows/ changed."
   fi
 fi
 

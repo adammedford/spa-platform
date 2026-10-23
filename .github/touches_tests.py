@@ -51,19 +51,37 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(1, self.classify("terraform", [path]))
 
+    def test_anything_under_the_workflows_folder_triggers_the_workflows_half(self):
+        # A script, a companion or a fixture: the companions share the fixtures (#276).
+        for path in (".claude/workflows/overnight.js", ".claude/workflows/overnight_tests.mjs",
+                     ".claude/workflows/fixtures/2026-10-20-tickets.json"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("workflows", [path]))
+                self.assertEqual(1, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+
+    def test_neighbours_of_the_workflows_folder_do_not_trigger_it(self):
+        for path in (".claude/settings.json", ".claude/skills/wiz/SKILL.md", ".github/workflows/ci.yml",
+                     "docs/.claude/workflows/x.js", "tools/workflow_parse_tests.py"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("workflows", [path]))
+
     def test_an_early_match_survives_a_path_list_larger_than_the_pipe_buffer(self):
         trailing = [f"docs/{i:05d}-{'a' * 100}.md" for i in range(3000)]
         for half, first in (("build", "Directory.Build.props"),
-                            ("terraform", "infra/main.tf")):
+                            ("terraform", "infra/main.tf"),
+                            ("workflows", ".claude/workflows/overnight.js")):
             with self.subTest(half=half):
                 self.assertEqual(0, self.classify(half, [first, *trailing]))
 
 
 class WorkflowDecisionTests(unittest.TestCase):
     def decide(self, paths, *, event="push", missing_base=False):
-        """Which jobs run: the decision step's outputs, less the base it resolved."""
+        """Which expensive jobs run: the decision step's outputs, less the base it resolved and the
+        workflow companions' answer, which WorkflowCompanionDecisionTests reads."""
         outputs = self.outputs(paths, event=event, missing_base=missing_base)
         outputs.pop("base")
+        outputs.pop("workflows")
         return outputs
 
     def outputs(self, paths, *, event="push", missing_base=False):
@@ -150,6 +168,33 @@ class WorkflowDecisionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual({"build": "true", "terraform": "true"},
                                  self.decide([path, *trailing]))
+
+
+class WorkflowCompanionDecisionTests(unittest.TestCase):
+    """#276: the Documents job's step that runs the workflow scripts' test companions runs when a
+    file under .claude/workflows/ changed, and whenever every job runs; otherwise it is skipped."""
+
+    # The same run of the decision step's real block, without inheriting its cases.
+    outputs = WorkflowDecisionTests.outputs
+
+    def workflows(self, paths, **kwargs):
+        return self.outputs(paths, **kwargs)["workflows"]
+
+    def test_a_workflow_change_runs_the_companions(self):
+        for path in (".claude/workflows/overnight.js", ".claude/workflows/fixtures/tickets.json"):
+            with self.subTest(path=path):
+                self.assertEqual("true", self.workflows([path], event="pull_request"))
+
+    def test_a_change_elsewhere_skips_them(self):
+        for path in ("docs/note.md", "src/Example.cs", "infra/main.tf", ".claude/settings.json"):
+            with self.subTest(path=path):
+                self.assertEqual("false", self.workflows([path], event="pull_request"))
+
+    def test_they_run_whenever_every_job_runs(self):
+        self.assertEqual("true", self.workflows(["docs/note.md"], missing_base=True))
+        for path in (".github/workflows/ci.yml", ".github/touches.sh"):
+            with self.subTest(path=path):
+                self.assertEqual("true", self.workflows([path]))
 
 
 if __name__ == "__main__":

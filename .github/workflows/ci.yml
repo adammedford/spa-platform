@@ -5,13 +5,15 @@
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
 # the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
 # scripts under tools/scripts/ (tunnel.sh and verify-tunnel.sh, seed.sh, deploy.sh, rollback.sh,
-# teardown.sh and verify-release-immutability.sh), whether every tracked shell script parses, and --
-# first, so the two expensive jobs can read the answer -- which halves of the repository the change
-# touches. Those two run when their inputs changed: the solution builds and every test project runs
+# teardown.sh and verify-release-immutability.sh), whether every tracked shell script parses, the
+# workflow scripts' test companions when a file under .claude/workflows/ changed, and -- first, so
+# the two expensive jobs and that step can read the answer -- which halves of the repository the
+# change touches. Those two run when their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
 # infra/ and the floor's own file and helper. The hook shares these path patterns
-# through .github/touches.sh. CI's decision step also runs both jobs for changes to its workflow,
-# the classifier, tools/smoke.sh or tools/image-check.sh, or when the base cannot be resolved.
+# through .github/touches.sh. CI's decision step also runs both jobs, and the workflow companions,
+# for changes to its workflow, the classifier, tools/smoke.sh or tools/image-check.sh, or when the
+# base cannot be resolved.
 #
 # A job skipped that way still satisfies main's protection, which requires `Build and test` and
 # `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
@@ -75,7 +77,8 @@ jobs:
         id: touches
         # Against the base of the pull request, or the commit a push to main moved from, in the
         # three-dot form the hook uses, so the diff is what the change adds and not what main did
-        # meanwhile. The two jobs below read the answer. Every job runs when there is no base to
+        # meanwhile. The two jobs below read the answer, and so does this job's step that runs the
+        # workflow scripts' test companions (#276). Every job runs when there is no base to
         # diff against -- a push whose `before` GitHub does not have -- and when the files that make
         # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh and
         # tools/image-check.sh, which only the build job exercises. A decision cannot vouch for a
@@ -94,6 +97,7 @@ jobs:
           esac
           build=true
           terraform=true
+          workflows=true
           resolved=""
           if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
             echo "::notice::no base to diff against ($base), so every job runs."
@@ -106,12 +110,14 @@ jobs:
             else
               printf '%s\n' "$changed" | .github/touches.sh build || build=false
               printf '%s\n' "$changed" | .github/touches.sh terraform || terraform=false
+              printf '%s\n' "$changed" | .github/touches.sh workflows || workflows=false
             fi
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "terraform=$terraform" >> "$GITHUB_OUTPUT"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
           echo "base=$resolved" >> "$GITHUB_OUTPUT"
-          echo "build=$build terraform=$terraform"
+          echo "build=$build terraform=$terraform workflows=$workflows"
 
       - name: CI path decisions include build inputs and survive large diffs
         run: python3 -I .github/touches_tests.py
@@ -140,20 +146,51 @@ jobs:
           python3 -I .github/workflow_parse_tests.py
           python3 -I .github/workflow-parse.py
 
-      - name: The overnight script schedules its lanes as its test companion says
-        # .claude/workflows/overnight_tests.mjs runs overnight.js end to end with every agent mocked,
-        # on the tracked fixture of 2026-10-20, and checks what integrates, what skips for a blocker,
-        # that a lane runs its first ready ticket rather than idling behind a blocked one, and (#136)
-        # that each ticket has its own worktree, that a lane implements while its last ticket is in
-        # review or integrating, that no two merges run at once, and that a conflict back-merges,
-        # retries once and is reported, not merged, when it still conflicts. It is
-        # the script's only behavioural proof, so a scheduler edit fails at its push, before the
-        # launch it is for (ADR-0027, #213). It runs on every push with no path condition, like every
-        # step in this job, and takes about a second on the node the step above printed. It is
-        # wall-clock timed (a 1 ms tick against sleeps of 30 to 180 ms); a virtual clock comes only
-        # if it ever flakes here. tools/check.sh does not run it: CI on the landing pull request is
-        # what proves a scheduler edit before its launch (ADR-0026 decision 3).
-        run: node .claude/workflows/overnight_tests.mjs
+      - name: Every workflow script has a test companion, and every companion passes
+        id: workflow-companions
+        # Each workflow script under .claude/workflows/ has a test companion beside it,
+        # `<name>_tests.mjs`, which runs the script with every agent mocked; overnight_tests.mjs, for
+        # one, runs overnight.js end to end on the tracked fixture of 2026-10-20 and checks how its
+        # lanes schedule (ADR-0027, #213). They are the scripts' only behavioural proof, and on #271
+        # all of them were run by hand before each fix round because nothing ran them (#276). So a
+        # change anywhere under .claude/workflows/ runs every one, as the decision step's
+        # `workflows` answer says, since they share the fixtures; #213's step, which ran the
+        # overnight companion alone on every push, is folded into this one. A script without its
+        # companion fails the step, naming the script, before any companion runs, so a script cannot
+        # lose its companion and stay green. A red companion stops the step, below its own lines.
+        # tools/check.sh --full runs the same companions under the same answer, and
+        # tools/check_tests.py runs this block as the workflow holds it. They take about half a
+        # minute together on the node printed here.
+        if: ${{ steps.touches.outputs.workflows != 'false' }}
+        run: |
+          set -euo pipefail
+          command -v node > /dev/null || { echo "::error::node is not on PATH."; exit 1; }
+          node --version
+          scripts=""
+          companions=""
+          # A failed listing is not an empty folder: in a `for` list its exit status is lost.
+          tracked="$(git ls-files -- .claude/workflows)" \
+            || { echo "::error::the workflow test companions were not judged: git ls-files failed."; exit 1; }
+          for found in $tracked; do
+            case "${found#.claude/workflows/}" in
+              */*) ;;
+              *_tests.mjs) companions="$companions $found" ;;
+              *.js) scripts="$scripts $found" ;;
+            esac
+          done
+          for found in $scripts; do
+            case "$companions " in
+              *" ${found%.js}_tests.mjs "*) ;;
+              *)
+                echo "::error::the workflow script $found has no test companion; add ${found%.js}_tests.mjs beside it."
+                exit 1
+                ;;
+            esac
+          done
+          for found in $companions; do
+            echo "the workflow test companion $found:"
+            node "$found" || { echo "::error::the workflow test companion $found failed."; exit 1; }
+          done
 
       - name: What a session steers by says what the repository says, every citation resolves, and every change to it names its authority
         # Before anything else, because it costs a second and a stale AGENTS.md misleads every
