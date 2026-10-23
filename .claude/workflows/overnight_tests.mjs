@@ -13,9 +13,11 @@
 // merge conflict at integrate (#136, #279): one that others wait on, which goes back to its lane, resolves,
 // passes a second review and integrates on the retry, and one nobody waits on, whose retry conflicts again.
 // Each mocked review reports the files its branch changed, and every integrated ticket but the second shares
-// one, so the run must integrate those one after the other (#279). It also checks that each ticket has its own
-// worktree, that a lane implements while its last ticket is in review or integrating, and that no two merges
-// run at once. No agent, gh or git call is made.
+// one, so the run must integrate those one after the other (#279). One more ticket nobody waits on stops at its
+// implement on a question for Adam, and the run's return value must give every failed, skipped and needs-human
+// ticket its stage and a one-line reason (#280). It also checks that each ticket has its own worktree, that a
+// lane implements while its last ticket is in review or integrating, and that no two merges run at once. No
+// agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,11 +39,15 @@ const dependantsOf = (id) => fixture.expect.integrated.filter((d) => byId[d].blo
 const CONFLICT_ONCE = fixture.expect.integrated.find((id) => dependantsOf(id).length)
 const CONFLICT_ALWAYS = free[free.length - 1]
 const CONFLICT_FILES = ['.github/workflows/ci.yml', 'docs/dependencies.md']
+// One ticket nobody waits on, other than CONFLICT_ALWAYS, stops at its implement on a question for Adam (#280), so the
+// run's reasons carry a needs-human ticket from a lane, whose reason is its question.
+const NEEDS_HUMAN = free.find((id) => id !== CONFLICT_ALWAYS)
+const QUESTION = 'Which store holds the rotated keys: the parameter store or the secrets manager?'
 // The files each mocked review says its branch changed (#279): a file of its own, and SHARED_FILE for every ticket
 // the fixture integrates except CONFLICT_ALWAYS, so those tickets share a file with no planned group in common,
 // and CONFLICT_ALWAYS shares none, so other tickets may integrate while it is back in its lane.
 const SHARED_FILE = '.gitignore'
-const changedFiles = (id) => (id === CONFLICT_ALWAYS || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
+const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
 const greens = []          // {at, head}, each green mocked integrate, in order: the verified tips (#279)
 const RESOLVE_TIP = 't'.repeat(40)   // the run branch's tip the mocked resolve back-merged
@@ -70,12 +76,13 @@ globalThis.agent = async (prompt, opts) => {
   events.push({ at: tick, kind, id, edge: 'start', n })
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
   events.push({ at: tick, kind, id, edge: 'end', n })
+  if (kind === 'implement' && id === NEEDS_HUMAN) return { outcome: 'needs-human', branch: 'b', forkSha: 'f', headSha: 'h', complete: false, outstanding: '', summary: 'stopped on a storage question', question: QUESTION, delegatedDecisions: [], proposedSteering: [] }
   if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], proposedSteering: [] }
   if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [], changedFiles: changedFiles(id) }
   if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
-    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: CONFLICT_FILES, headSha: '' }
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '' }
     greens.push({ at: tick, head: `verified-${id}` })
     return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}` }
   }
@@ -124,7 +131,7 @@ const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id
 const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS))
+const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN))
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -375,6 +382,62 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   if (!reviewPrompts.length) fail('no review prompt was captured, so the changed-files listing check read nothing')
   const blind = reviewPrompts.filter((c) => !c.prompt.includes('diff --no-renames --name-only '))
   if (blind.length) fail(`${blind.length} review prompt(s) ask for the changed files without --no-renames, so a renamed file locks only its new path`)
+}
+
+// 14. The run's return value says why (#280): every failed, skipped and needs-human ticket has one entry in its
+//     "reasons", with the stage it stopped at and a one-line reason, so a launching session reads why without
+//     rebuilding it from the run's journal. The failed ticket's reason names its conflicting files.
+{
+  const reasons = result.reasons || []
+  const of = (id) => reasons.filter((r) => r.id === id)
+  for (const [outcome, list] of [['failed', result.failed], ['skipped', result.skipped], ['needs-human', result.needsHuman]]) {
+    for (const id of list || []) {
+      const rs = of(id)
+      if (rs.length !== 1) { fail(`${id} (${outcome}) has ${rs.length} entries in the run's reasons, not 1`); continue }
+      const [r] = rs
+      if (r.outcome !== outcome) fail(`${id}'s reason says outcome ${r.outcome}, not ${outcome}`)
+      if (!r.stage) fail(`${id}'s reason names no stage`)
+      if (typeof r.reason !== 'string' || !r.reason.trim() || /\n/.test(r.reason)) fail(`${id}'s reason is not one non-empty line: ${JSON.stringify(r.reason)}`)
+    }
+  }
+  const failed = of(CONFLICT_ALWAYS)[0]
+  if (!failed) fail(`the run's reasons hold no entry for ${CONFLICT_ALWAYS}, which failed`)
+  else {
+    if (failed.stage !== 'integrate') fail(`${CONFLICT_ALWAYS} failed at integrate; its reason says stage ${failed.stage}`)
+    for (const f of CONFLICT_FILES) if (!failed.reason.includes(f)) fail(`${CONFLICT_ALWAYS}'s reason does not name its conflicting file ${f}: ${failed.reason}`)
+  }
+  // A ticket skipped because a need did not integrate names that need, and not a need that did integrate: the
+  // skipped ticket the fixture blocks on two tickets, one integrated tonight and one that did not.
+  const twoNeeds = fixture.expect.skippedForBlocker.map((id) => byId[id])
+    .find((t) => t.blockedBy.some((b) => got.has(b)) && t.blockedBy.some((b) => !got.has(b)))
+  if (!twoNeeds) fail('no ticket skipped for a blocker also waits on one that integrated, so the need-naming check read nothing')
+  else {
+    const r = of(twoNeeds.id)[0]
+    const unmet = twoNeeds.blockedBy.filter((b) => !got.has(b)), met = twoNeeds.blockedBy.filter((b) => got.has(b))
+    if (!r) fail(`the run's reasons hold no entry for ${twoNeeds.id}, which was skipped`)
+    else {
+      if (r.stage !== 'implement') fail(`${twoNeeds.id} was skipped before its implement; its reason says stage ${r.stage}`)
+      for (const b of unmet) if (!r.reason.includes(b)) fail(`${twoNeeds.id}'s reason does not name ${b}, the need that did not integrate: ${r.reason}`)
+      for (const b of met) if (r.reason.includes(b)) fail(`${twoNeeds.id}'s reason names ${b}, a need that integrated: ${r.reason}`)
+    }
+  }
+  // A needs-human ticket from a lane gives its stage and its question; one grilled from collect says it went to a human.
+  if (!NEEDS_HUMAN) fail('the fixture has no free ticket to stop on a question, so the needs-human check read nothing')
+  else {
+    if (!(result.needsHuman || []).includes(NEEDS_HUMAN)) fail(`${NEEDS_HUMAN} stopped on a question and is not reported needs-human`)
+    const r = of(NEEDS_HUMAN)[0]
+    if (!r) fail(`the run's reasons hold no entry for ${NEEDS_HUMAN}, which needs a human`)
+    else {
+      if (r.stage !== 'implement') fail(`${NEEDS_HUMAN} stopped at its implement; its reason says stage ${r.stage}`)
+      if (!r.reason.includes(QUESTION)) fail(`${NEEDS_HUMAN}'s reason is not its question: ${r.reason}`)
+    }
+  }
+  const grilled = tickets.filter((t) => t.status === 'ready-for-human' && (result.needsHuman || []).includes(t.id))
+  if (!grilled.length) fail('no ready-for-human ticket was reported needs-human, so the grilled-ticket check read nothing')
+  for (const t of grilled) {
+    const r = of(t.id)[0]
+    if (r && (r.stage !== 'collect' || !r.reason.includes(t.why))) fail(`${t.id}, ready-for-human from collect, has reason ${JSON.stringify(r)}, not stage collect with its collect why`)
+  }
 }
 
 if (failures.length) {

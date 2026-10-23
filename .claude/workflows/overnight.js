@@ -490,7 +490,13 @@ phase('Route')
 const triage = tickets.filter((t) => t.status === 'needs-triage' && inScope(t))
 const routed = await parallel(triage.map((t) => () =>
   agent(routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })))
-triage.forEach((t, i) => { const r = routed[i]; t.status = r && r.flow === 'agent' ? 'ready-for-agent' : 'ready-for-human' })
+// A ticket routed to a human stopped at route, with the router's reason (#280).
+const humanStage = {}, humanWhy = {}
+triage.forEach((t, i) => {
+  const r = routed[i]
+  t.status = r && r.flow === 'agent' ? 'ready-for-agent' : 'ready-for-human'
+  if (t.status === 'ready-for-human') { humanStage[t.id] = 'route'; humanWhy[t.id] = r ? `routed ${r.flow}: ${r.reason}` : 'the route agent died, so it went to a human' }
+})
 
 const agentT = tickets.filter((t) => t.status === 'ready-for-agent' && inScope(t))
 const humanT = tickets.filter((t) => t.status === 'ready-for-human' && inScope(t))
@@ -562,7 +568,14 @@ log(forecastFailed ? `forecast: did not run: ${forecastFailed}`
 const implement = async (t) => {
     const deps = await Promise.all(t.blockedBy.map((b) => (byId[b] && done[b]) ? done[b] : Promise.resolve(!byId[b])))
     // a blocker not in tonight's agent set counts as met only if collect did not list it as a ticket
-    if (deps.some((ok) => !ok)) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: `blocker not integrated: ${t.blockedBy.join(', ')}` }; return false }
+    // The why names each need that did not integrate and what became of it, never one that did (#280).
+    const unmet = t.blockedBy.filter((b, i) => !deps[i]).map((b) => {
+      const r = results[b], o = byId[b]
+      if (r && r.outcome) return `${b} (${r.outcome} at ${r.stage})`
+      if (!done[b]) return `${b} (${o.status}${inScope(o) ? '' : ', left out of this run'}, so no lane ran it)`
+      return `${b} (did not integrate)`
+    })
+    if (unmet.length) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: `blocker not integrated: ${unmet.join(', ')}` }; return false }
     if (halted) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: halted }; return false }
 
     const impl = await withSlot(() => agent(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
@@ -686,6 +699,20 @@ const summary = {
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
 
 const ids = (pred) => Object.entries(results).filter(([, r]) => pred(r)).map(([id]) => id)
+// Why, in the return value (#280): one entry per failed, skipped and needs-human ticket, with the stage it stopped
+// at and a one-line reason, the short form a launching session reads first; the report issue keeps the detail. On
+// 2026-10-21 the notice carried ids alone, and why #213 failed and five tickets skipped was rebuilt from the journal.
+const REASON_MAX = 300
+const oneLine = (s) => { const l = String(s || '').replace(/\s+/g, ' ').trim(); return l.length > REASON_MAX ? l.slice(0, REASON_MAX - 1) + '…' : l }
+const reasonOf = (r) => oneLine((r.outcome === 'needs-human' && r.question) || r.why || r.notes || r.summary) || 'no reason recorded'
+const humanIds = humanT.map((t) => t.id)
+const reasons = [
+  ...ids((r) => r.outcome === 'failed').map((id) => ({ id, issue: byId[id].issue, outcome: 'failed', stage: results[id].stage, reason: reasonOf(results[id]) })),
+  ...ids((r) => r.outcome === 'skipped').map((id) => ({ id, issue: byId[id].issue, outcome: 'skipped', stage: results[id].stage, reason: reasonOf(results[id]) })),
+  ...humanIds.filter((id) => !(results[id] && results[id].outcome)).map((id) => ({ id, issue: byId[id].issue, outcome: 'needs-human', stage: humanStage[id] || 'collect',
+    reason: oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; grilled on paper${results[id] && results[id].grill && typeof results[id].grill === 'object' ? `, ${results[id].grill.questions.length} question(s) on #${byId[id].issue}` : results[id] && results[id].grill ? ': the grill agent died' : ''}`) })),
+  ...ids((r) => r.outcome === 'needs-human').map((id) => ({ id, issue: byId[id].issue, outcome: 'needs-human', stage: results[id].stage, reason: reasonOf(results[id]) })),
+]
 return {
   halted,
   integrated: ids((r) => r.outcome === 'integrated'),
@@ -698,6 +725,7 @@ return {
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   conflicts,
+  reasons,
   reportIssue: rep ? rep.issue : null,
   reportUrl: rep ? rep.url : null,
 }
