@@ -127,6 +127,7 @@ public sealed class CellOnboardingTests : IDisposable
 
         Assert.All(runner.Commands.Where(command => command.Program is "spactl" or "terraform"), command => Assert.Equal(Project, command.Environment));
         Assert.Contains(runner.Commands, command => command.Program == "spactl");
+        Assert.All(runner.Commands.Where(command => command.Program == "aws"), command => Assert.Empty(command.Environment));
     }
 
     [Fact]
@@ -139,7 +140,7 @@ public sealed class CellOnboardingTests : IDisposable
         InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
             () => Onboarding(runner, new Tunnel(runner)).OnboardAsync("app3", TestContext.Current.CancellationToken));
 
-        Assert.Contains("no change", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("no resource change", refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] is "show" or "apply");
         Assert.DoesNotContain(runner.Calls, call => call.Program == "spactl");
     }

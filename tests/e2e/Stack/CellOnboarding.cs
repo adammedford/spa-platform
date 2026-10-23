@@ -60,7 +60,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
             if (planned.Count == 0)
             {
                 throw new InvalidOperationException(
-                    $"the apps root's plan with the onboarding definition shows no change (terraform plan -detailed-exitcode exited 0), so it cannot show {appId}'s onboarding and nothing was applied.");
+                    $"the apps root's plan with the onboarding definition shows no resource change, so it cannot show {appId}'s onboarding and nothing was applied.");
             }
 
             Require(planned, [.. expected.Select(address => new PlannedChange(address, "create"))], "onboarding " + appId);
