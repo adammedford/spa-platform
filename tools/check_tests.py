@@ -144,9 +144,9 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
-# the file modes, and so a name to the list of what ran.
-HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, "
-            "the artifacts, the file modes")
+# the file modes, and so a name to the list of what ran; #291 added the part-row merges.
+HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
+            "the roadmap, the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -435,7 +435,8 @@ class HookTests(CheckTestCase):
         case.git("branch", "-q", "-m", "main", "trunk", cwd=case.work)
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertLines(["pre-push: A-05 not checked: no main to diff against."], result.stderr)
+        self.assertLines(["pre-push: A-05 not checked: no main to diff against.",
+                          "pre-push: part-row merges not checked: no main to diff against."], result.stderr)
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         # No base, so the steering check is handed none and reads every commit HEAD reaches.
@@ -773,6 +774,145 @@ class BothHalvesTests(CheckTestCase):
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual(PYTHON_CHECKS + BUILD + terraform_checks(), case.calls())
+
+
+OUTSTANDING = "Outstanding: box 2 waits on a change request."
+OUTSTANDING_IDS = "Outstanding test ids: none"
+PART_ROW_FAIL = ("a part-row merge lacks a line docs/agents/landing-work.md requires of a row that "
+                 "stays unfinished.")
+
+
+def part_row_missing(me: str, sha: str, subject: str, line: str) -> str:
+    """The line the check writes for one part-row merge lacking one line (#291)."""
+    return f'{me}: the part-row merge {sha} "{subject}" has no line starting "{line}".'
+
+
+class PartRowMergeTests(CheckTestCase):
+    """#291: a "Merge part of task" commit carries the two lines docs/agents/landing-work.md asks of
+    a row that lands unfinished, `Outstanding:` and `Outstanding test ids:`. On #287 row 6.7's merge
+    340fd07 carried neither, and nothing caught it before later commits sat on top of it."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    @staticmethod
+    def short(case: Case, ref: str = "HEAD") -> str:
+        return subprocess.run(["git", "rev-parse", "--short", ref], cwd=case.work, env=case.env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def merge(self, case: Case, subject: str, *body: str) -> str:
+        """Merges a one-commit side branch into `task` with --no-ff and the message `subject`, a
+        blank line, then `body`'s lines; returns the merge's short sha."""
+        side = f"side-{len(list(case.work.glob('docs/side-*.md')))}"
+        case.git("checkout", "-q", "-b", side, cwd=case.work)
+        path = case.work / "docs" / f"{side}.md"
+        path.write_text(f"{side}\n")
+        path.chmod(0o644)
+        case.git("add", str(path.relative_to(case.work)), cwd=case.work)
+        case.git("commit", "-q", "-m", f"Task {side}: a change", cwd=case.work)
+        case.git("checkout", "-q", "task", cwd=case.work)
+        message = subject + ("\n\n" + "\n".join(body) if body else "")
+        case.git("merge", "-q", "--no-ff", "-m", message, side, cwd=case.work)
+        return self.short(case)
+
+    def test_a_missing_outstanding_line_fails_naming_the_merge_and_the_line(self):
+        case = Case(self, change="docs/notes.md")
+        subject = "Merge part of task 6.7: operating notes"
+        sha = self.merge(case, subject, "What landed.", "", "Ticket: #62", OUTSTANDING_IDS)
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines([part_row_missing("check", sha, subject, "Outstanding:"),
+                          f"check: fail: {PART_ROW_FAIL}"], result.stderr)
+        # Held before the roadmap, after the steering check, whose range it shares.
+        self.assertEqual(PYTHON_CHECKS[:2], case.calls())
+
+    def test_a_missing_outstanding_test_ids_line_is_reported_on_its_own(self):
+        case = Case(self, change="docs/notes.md")
+        subject = "Merge part of task issue-241: certs.sh resolves its Region"
+        sha = self.merge(case, subject, "What landed.", "", "Ticket: #241", OUTSTANDING)
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines([part_row_missing("check", sha, subject, "Outstanding test ids:"),
+                          f"check: fail: {PART_ROW_FAIL}"], result.stderr)
+
+    def test_both_missing_are_each_reported_and_a_mention_mid_line_is_not_the_line(self):
+        case = Case(self, change="docs/notes.md")
+        subject = "Merge part of task 6.7: operating notes"
+        sha = self.merge(case, subject, "It should have had an Outstanding: line and an",
+                         "  Outstanding test ids: line, and has neither at the start of a line.")
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines([part_row_missing("check", sha, subject, "Outstanding:"),
+                          part_row_missing("check", sha, subject, "Outstanding test ids:"),
+                          f"check: fail: {PART_ROW_FAIL}"], result.stderr)
+
+    def test_both_lines_present_pass(self):
+        case = Case(self, change="docs/notes.md")
+        self.merge(case, "Merge part of task issue-241: certs.sh resolves its Region", "What landed.", "",
+                   "Ticket: #241", OUTSTANDING, "the request's two ci.yml steps.", OUTSTANDING_IDS)
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"check: pass: {FULL_RAN}.", result.last_line(result.stdout))
+        self.assertNotIn("part-row", result.stderr)
+
+    def test_a_full_row_merge_is_held_to_neither_line(self):
+        case = Case(self, change="docs/notes.md")
+        for subject in ("Merge task 6.7: operating notes", "Merge tasks issue-145 and issue-146: StageHost"):
+            self.merge(case, subject, "What landed.", "", "Ticket: #62")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(f"check: pass: {FULL_RAN}.", result.last_line(result.stdout))
+
+    def test_every_offending_merge_is_named_before_the_verdict(self):
+        # A plural subject is the same rule: "Merge part of tasks" is in main's history once.
+        case = Case(self, change="docs/notes.md")
+        first = "Merge part of task 2.4: one"
+        first_sha = self.merge(case, first, OUTSTANDING_IDS)
+        self.merge(case, "Merge part of task 2.5: fine", OUTSTANDING, OUTSTANDING_IDS)
+        second = "Merge part of tasks 2.6 and 2.7: two"
+        second_sha = self.merge(case, second, OUTSTANDING)
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        # Newest first, as git log lists them.
+        self.assertLines([part_row_missing("check", second_sha, second, "Outstanding test ids:"),
+                          part_row_missing("check", first_sha, first, "Outstanding:"),
+                          f"check: fail: {PART_ROW_FAIL}"], result.stderr)
+
+    def test_a_part_row_commit_that_is_not_a_merge_is_held_too(self):
+        # The subject is the convention roadmap.py and land.sh read, whatever the commit's shape.
+        case = Case(self, change="docs/notes.md")
+        subject = "Merge part of task 2.4: squashed"
+        case.git("commit", "-q", "--allow-empty", "-m", subject, cwd=case.work)
+        sha = self.short(case)
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertIn(part_row_missing("check", sha, subject, "Outstanding:"), result.stderr.splitlines())
+
+    def test_a_merge_the_base_already_has_is_not_judged(self):
+        # 340fd07 is on main and stays there: the check judges what the branch adds, from its base.
+        case = Case(self)
+        case.git("checkout", "-q", "main", cwd=case.work)
+        subject = "Merge part of task 6.7: operating notes"
+        case.git("commit", "-q", "--allow-empty", "-m", subject, cwd=case.work)
+        case.git("push", "-q", "origin", "main", cwd=case.work)
+        case.git("checkout", "-q", "task", cwd=case.work)
+        case.git("merge", "-q", "--ff-only", "main", cwd=case.work)
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        # Nor one before a base the caller names, as an overnight lane names its fork point.
+        sha = self.merge(case, subject)
+        self.merge(case, "Merge part of task 6.8: later", OUTSTANDING, OUTSTANDING_IDS)
+        result = self.full(case, "--base", sha)
+        self.assertEqual(0, result.status, result.stderr)
+
+    def test_the_hook_holds_it_too(self):
+        case = Case(self, change="docs/notes.md")
+        subject = "Merge part of task 6.7: operating notes"
+        sha = self.merge(case, subject, OUTSTANDING_IDS)
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines([part_row_missing("pre-push", sha, subject, "Outstanding:"),
+                          f"pre-push: {PART_ROW_FAIL}", HOOK_FIX], result.stderr)
 
 
 class FloorTests(CheckTestCase):
