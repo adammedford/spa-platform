@@ -967,6 +967,12 @@ try {
       const r = await execute(newRepo(), a)
       if (!r.result || !r.result.halted || r.calls.length) fail(`draft check, ${label}: ${r.calls.length} agent(s) ran; returned ${JSON.stringify(r.result)}`)
     }
+    // wt is optional beside confirmFile, since the draft check makes and reads no worktree; without
+    // confirmFile a missing wt is still refused. stub supplies wt, so each case sets it undefined.
+    const noWt = await execute(newRepo(), { date: DATE, confirmFile: FILE, wt: undefined }, { issue: issueWith(big), draft: HEADED })
+    if (noWt.result.halted || noWt.result.mode !== 'check' || !noWt.result.ok || noWt.labels.join() !== 'draft-read') fail(`draft check without wt: ${JSON.stringify(noWt.result.halted || { mode: noWt.result.mode, ok: noWt.result.ok, labels: noWt.labels })}`)
+    const noWtMorning = await execute(newRepo(), { date: DATE, wt: undefined })
+    if (!noWtMorning.result || !/wt: /.test(noWtMorning.result.halted || '') || noWtMorning.calls.length) fail(`a morning without wt or confirmFile was not refused: ${JSON.stringify(noWtMorning.result)}`)
 
     // The sort is the apply step's own code (#302): the first-word rule mutated in the script turns
     // both the apply case (Q2 overridden "no, ...") and the check case (Q19 opening "No") red.
