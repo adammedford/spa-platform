@@ -263,6 +263,10 @@ const judgeLookup = (listing) => {
   return { issue: hits[0].number, date: A.date }
 }
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
+// A Replay string field holding only a pair of quotes, or only whitespace, is empty (#299). On
+// 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
+// as the two-character string "", which the run read as a stop and refused beside the real one.
+const blankField = (s) => (typeof s === 'string' && /^\s*(?:""\s*)?$/.test(s) ? '' : s)
 
 // ---------------------------------------------------------------- follow-ups, read here
 // review-queue.js's record recogniser and follow-ups table, by copy: a workflow script imports
@@ -640,7 +644,8 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (s.replay.reason ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason}` : '')])
+  const none = !s.replay.reason && !s.replay.renamed && ['comment', 'edit', 'close'].every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
+  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (s.replay.reason ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [] }
@@ -666,6 +671,7 @@ if (AFTER) {
 // ---------------------------------------------------------------- run: the morning
 phase('Replay')
 const rep = await run(replayPrompt(), { label: 'replay', phase: 'Replay', schema: REPLAY })
+if (rep) for (const f of ['pending', 'renamed', 'reason']) rep[f] = blankField(rep[f])
 const look = judgeLookup(rep && rep.listing)
 if (look.refused) {
   const breach = rep && replayedAny(rep.counts) ? '; the Replay agent applied lines despite the refusal, which its prompt forbids' : ''
