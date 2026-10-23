@@ -1098,8 +1098,10 @@ class Workflow(unittest.TestCase):
         self.assertEqual(sorted(t.strip() for t in found.group("types").split(",")),
                          ["edited", "labeled", "opened"])
 
-    def test_it_may_write_issues(self):
-        self.assertRegex(self.code, r"(?m)^permissions:\n  issues: write\n  contents: read$")
+    def test_it_may_write_issues_and_read_pull_requests(self):
+        # pull-requests: read lets look_up() answer for a #N that is a pull request (#284).
+        self.assertRegex(self.code, r"(?m)^permissions:\n  issues: write\n  pull-requests: read\n"
+                                    r"  contents: read$")
 
     def test_it_runs_the_check_on_the_event_issue(self):
         self.assertRegex(self.code, r"python3 -I tools/ticket_shape\.py \"\$NUMBER\"")
