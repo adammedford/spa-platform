@@ -3,9 +3,9 @@ export const meta = {
   description: 'Land the mechanical half of an overnight run: replay its pending tracker writes, verify and push its integration branch, open its one pull request, apply the confirmed answers, and hand over what only Adam runs',
   whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath with the night\'s date or its Overnight <date> issue; once Adam has landed the pull request, again with after: true',
   phases: [
-    { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, then applies the pending-writes file in order, recording each line, and renames it when every line is applied' },
+    { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
     { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
-    { title: 'Apply', detail: 'one classifier, then at most maxParallel appliers: commit appliers one at a time on integrator/morning-<date>, tracker-only appliers in parallel; dry with no Confirm comment' },
+    { title: 'Apply', detail: 'one reader of the Overnight issue\'s comments, one classifier, then at most maxParallel appliers: commit appliers one at a time on integrator/morning-<date>, tracker-only appliers in parallel; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads every open pull request into main and the follow-ups already filed; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
@@ -54,11 +54,17 @@ export const meta = {
 // verify agent and writes nothing. It fails only on a question number no questions comment yields; a
 // leading "no" is a normal override, listed and never a failure.
 //
-// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 classifier and at most
-// maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: nine at the
-// default. The issue lookup is the Replay agent's first step, not an agent of its own, so the budget
-// holds; `after` is one agent. A re-run whose open pull request's description names an older head
-// than the branch's adds one, the description writer (#300), so such a run may take ten.
+// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments reader, 1 classifier and
+// at most maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: ten at
+// the default. The issue lookup is the Replay agent's first step, not an agent of its own; `after` is
+// one agent. A re-run whose open pull request's description names an older head than the branch's
+// adds one, the description writer (#300), so such a run may take eleven.
+//
+// The comments are read by the phase that uses them (#319). Replay once returned the issue's body and
+// every comment verbatim, and on 2026-10-22, with no pending-writes file, it took 7.4 minutes and 108k
+// tokens, most of it carrying sheets of 263 questions through its return. Replay now checks for the
+// pending-writes file before any replay step and returns no comment; Apply's reader returns them,
+// every one, in order, for the questions, the Confirm comments and the hand-over's open lists.
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
@@ -184,13 +190,21 @@ const REPLAY = {
   type: 'object',
   properties: {
     listing: LISTED,
-    issue: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' }, body: { type: 'string' }, comments: { type: 'array', items: COMMENT } }, required: ['number', 'title', 'url', 'state', 'body', 'comments'] },
+    issue: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' } }, required: ['number', 'title', 'url', 'state'] },
     phaseFiles: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, inputs: { type: 'string' }, result: { type: 'object' } }, required: ['name', 'inputs', 'result'] } },
     counts: { type: 'object', properties: { comment: COUNTS, edit: COUNTS, close: COUNTS }, required: ['comment', 'edit', 'close'] },
     pending: { type: 'string' }, renamed: { type: 'string' },
     stoppedAt: { type: 'integer' }, reason: { type: 'string' },
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'pending', 'renamed', 'stoppedAt', 'reason'],
+}
+const COMMENTS_READ = {
+  type: 'object',
+  properties: {
+    issue: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: COMMENT } }, required: ['number', 'comments'] },
+    error: { type: 'string' },
+  },
+  required: ['issue', 'error'],
 }
 const VERIFY = {
   type: 'object',
@@ -634,15 +648,15 @@ const replayPrompt = () => `Replay: find the night's Overnight issue, then repla
 ${HOUSE(paths(A.date || '<date>').mdir)}
 
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below.`)}
-2. The pending-writes file is ${LOG}/pending-<date>.jsonl: JSON lines {"issue", "action": "comment"|"edit"|"close", "body"}. If ${LOG}/pending-<date>.replayed.jsonl exists and the pending file does not, an earlier morning replayed it: replay nothing. If neither exists, there is nothing to replay. Otherwise apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied:
+2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing and skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close", "body"}: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied:
    - a comment: write its body to ${LOG}/morning-<date>/replay-<line>.md and post it, \`cd ${REPO} && gh issue comment <issue> --body-file ${LOG}/morning-<date>/replay-<line>.md\`;
    - an edit that changes labels or assignees: \`cd ${REPO} && gh issue edit <issue> <its flags>\`;
    - an edit that replaces a body (--body-file): only if the issue's body is still the one the lane read, which the lane's saved body file in ${LOG}/ shows (\`cd ${REPO} && gh issue view <issue> --json body --jq .body\`, compared byte for byte); otherwise skip it and count it skipped, because a stale body would clobber a newer spec;
    - a close: \`cd ${REPO} && gh issue close <issue>\`.
    The first line that fails stops the replay: nothing after it is applied, stoppedAt is its line number and reason the error. When every line is applied, rename the file, \`mv ${LOG}/pending-<date>.jsonl ${LOG}/pending-<date>.replayed.jsonl\`, and never delete it. pending is the pending file's path or "", renamed the new path or "".
-3. The issue, read after the replay so the comments you return are complete: \`cd ${REPO} && gh issue view <number> --json number,title,url,state,body,comments\`. issue carries its number, title, url, state and body verbatim, and comments as {author: the login, createdAt, url, body}, every one, in order, each body verbatim.
+3. The issue: \`cd ${REPO} && gh issue view <number> --json number,title,url,state\`. issue carries its number, title, url and state. Return none of its body or comments: the Apply phase reads the comments itself (#319).
 4. The morning's durable state: every JSON file under ${LOG}/morning-<date>/ (apply/ included), each as {name: its path under that directory without .json, inputs, result} from its contents; an empty list when there is none.
-Return listing, issue, phaseFiles, counts per action (applied, skipped, failed), pending, renamed, stoppedAt (0 when nothing stopped) and reason ("" when nothing stopped).`
+Return listing, issue, phaseFiles, counts per action (applied, skipped, failed), pending, renamed, stoppedAt (the number of the line that failed, 0 when no line failed) and reason (that line's error, "" when no line failed).`
 
 const verifyPrompt = (date, issue, phaseKey) => {
   const p = paths(date)
@@ -667,6 +681,19 @@ Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json bo
 8. The review record naming the head. Read the pull request's records exactly as tools/land.sh does: \`cd ${REPO} && comments=$(gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments) && reviews=$(gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews) && printf '{"comments": %s, "reviews": %s}\\n' "$comments" "$reviews" | ${READER} <head>\`. Exit 0: record {verdict "merge", head: the head you passed, url: the URL it printed}. Exit 1 with "says hold: <url>": record {verdict "hold", head, url}. Exit 1 otherwise: record {verdict "none", head "", url ""}. Exit 2: a stop with its message. reader is the exit status and its first line. A hand-written record in the fixed form counts; nothing else does, and you never write one.
 Return every field: lanes from the issue's rows (issue, task, outcome, complete, mergeSha, outstanding), claimed the claimed branches the issue names, worktrees as step 3 read them, findings as plain lines. Fields a stop left unread are empty.`
 }
+
+// Its agent writes nothing anywhere and keeps no phase file, since a rerun must read the comments as
+// they are then, so it carries these rules rather than the house rules (as the draft check's does).
+const commentsPrompt = (issue) => `Comments: read the Overnight issue's comments for Apply and return them verbatim (#319). You read; the script reads the questions and the Confirm comments from them.
+
+Rules (a comments read; you write nothing anywhere):
+- Write no file, anywhere, and post, edit, file or close nothing on GitHub: use only \`gh issue view\`, with \`cd ${REPO} &&\` in front so it resolves this repository.
+- Never commit, checkout, switch, stash, reset or build in ${REPO}, and make no worktree.
+- Never quote a secret, token, cookie, code or state value in anything you return but the comments, verbatim.
+
+1. \`cd ${REPO} && gh issue view ${issue} --json number,comments\`. issue carries its number, and comments as {author: the login, createdAt, url, body}, every one, in order, each body verbatim, byte for byte.
+2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
+Return issue and error.`
 
 const classifyPrompt = (date, issue, questions, dry, phaseKey) => {
   const p = paths(date)
@@ -824,8 +851,11 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  const none = !s.replay.reason && !s.replay.renamed && ['comment', 'edit', 'close'].every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
-  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (s.replay.reason ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
+  // A stop is a failed line (#319): only stoppedAt above zero says "stopped"; a reason the agent gave
+  // with no line stopped is kept as its note, never read as a stop.
+  const stopped = s.replay.stoppedAt > 0
+  const none = !stopped && !s.replay.renamed && ['comment', 'edit', 'close'].every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
+  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [] }
@@ -945,7 +975,10 @@ const reuse = (name, inputs, done = () => true) => {
   return null
 }
 const refusals = []
-if (rep.reason) refusals.push(`Replay stopped at line ${rep.stoppedAt} of ${rep.pending || P.pending}: ${rep.reason}`)
+// A stop is a failed line, so the refusal keys on stoppedAt above zero, never on reason alone (#319):
+// on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A numbered
+// stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
+if (rep.stoppedAt > 0) refusals.push(`Replay stopped at line ${rep.stoppedAt} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
 
 phase('Verify')
@@ -974,7 +1007,16 @@ if (v && v.outcome === 'ok' && v.prReused && !v.prBody) {
 }
 
 phase('Apply')
-const comments = rep.issue.comments || []
+// The comments, read here by the phase that uses them (#319), whatever Verify said: the hand-over's open
+// lists come from them too. A read that failed is named and nothing is sorted or applied, never read
+// as an issue with no questions and no Confirm comment (CODING_STANDARDS.md -> "A check fails closed").
+const cr = await run(commentsPrompt(ISSUE), { label: 'comments', phase: 'Apply', schema: COMMENTS_READ })
+const commentsRefusal = !cr ? `the comments reader returned nothing: no question or Confirm comment of #${ISSUE} was read, so nothing was sorted or applied; relaunch to apply`
+  : cr.error ? `the comments reader could not read the comments of #${ISSUE}: ${cr.error}; nothing was sorted or applied`
+    : cr.issue.number !== ISSUE ? `the comments reader read the comments of #${cr.issue.number}, not #${ISSUE}; nothing was sorted or applied`
+      : ''
+if (commentsRefusal) refusals.push(commentsRefusal)
+const comments = commentsRefusal ? [] : (cr.issue.comments || []) // empty-ok: a failed read is named in refusals above and skips Apply below
 const read = readQuestions(comments)
 refusals.push(...read.refusals)
 const conf = readConfirmations(comments)
@@ -989,7 +1031,9 @@ const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answer
 const sorted = sortAnswers(read.questions, conf, dry)
 Object.assign(apply, { answers: sorted.answers, open: sorted.open, no: sorted.no })
 const toClassify = sorted.toClassify
-if (!verdict.ok) {
+if (commentsRefusal) {
+  log('Apply skipped: the comments were not read')
+} else if (!verdict.ok) {
   // Any Verify stop goes to the hand-over: nothing is applied over a head no record clears (#78 ->
   // "Verify" step 8; the morning resumes once a record exists).
   log('Apply skipped: Verify did not clear the head')
