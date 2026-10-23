@@ -342,7 +342,8 @@ class MergedBothWaysTests(unittest.TestCase):
         stack.enter_context(patch.dict(os.environ, environment, clear=True))
         stack.enter_context(patch.object(roadmap, "__file__", str(self.root / "tools/roadmap.py")))
         stack.enter_context(patch.object(roadmap, "tags", return_value=set()))
-        self.git("init", "--quiet")
+        # A branch named neither main nor master, so the trunk is the origin/main set below or none.
+        self.git("init", "--quiet", "--initial-branch=scratch")
         self.git("add", "--all")
         self.base = self.commit("I-1: import the skeleton", [], tree=self.git("write-tree"))
         self.git("update-ref", "refs/remotes/origin/main", self.base)
@@ -416,6 +417,15 @@ class MergedBothWaysTests(unittest.TestCase):
         self.head(self.merge("Merge part of task 2.1b: the validator reports a timeout", whole))
 
         self.assertEqual(0, self.checked()[0])
+
+    def test_with_no_trunk_to_compare_against_the_check_says_so(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        old = self.merge("Merge task 6.7: operating notes", self.base)
+        self.head(self.merge("Merge part of task 6.7: operating notes", old))
+
+        code, output = self.checked()
+        self.assertEqual(0, code, output)
+        self.assertIn("no merge compared", output)
 
     def test_a_row_the_trunk_lists_as_part_landed_can_be_finished_by_the_branch(self):
         trunk = self.merge("Merge part of task 6.7: operating notes", self.base)

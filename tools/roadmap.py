@@ -344,7 +344,7 @@ def landings(root: pathlib.Path) -> list[tuple[str, str]]:
     return [found for subject in subjects(root) for found in reading(subject)]
 
 
-def merged_both_ways(root: pathlib.Path) -> list[str]:
+def merged_both_ways(root: pathlib.Path) -> list[str] | None:
     """Each id the commits between the trunk and HEAD merge both whole and in part.
 
     `landed` lets one full landing anywhere in the ancestry win for good, which is right for the
@@ -358,7 +358,7 @@ def merged_both_ways(root: pathlib.Path) -> list[str]:
     follow-up (2.1, then 2.1b, #71), and a row the trunk lists as part-landed can be finished by
     the range. Ids are compared as the subjects write them: a split such as 2.1b is its own id here,
     and its row's whole landing beside it is no contradiction. With no trunk to compare against
-    there is no range, and nothing is held.
+    there is no range: None, which the caller reports rather than passing in silence.
     """
     trunk = next(
         (
@@ -369,7 +369,7 @@ def merged_both_ways(root: pathlib.Path) -> list[str]:
         None,
     )
     if trunk is None:
-        return []
+        return None
     seen: dict[str, dict[str, list[str]]] = {}
     for line in run(["git", "log", "--format=%h %s", f"{trunk}..HEAD"], root).splitlines():
         sha, _, subject = line.partition(" ")
@@ -638,7 +638,12 @@ def main(argv: list[str]) -> int:
 
     if check:
         contradictions = merged_both_ways(root)
-        if contradictions:
+        if contradictions is None:
+            print(
+                "roadmap: no merge compared: neither origin/main nor main is here, so a row merged "
+                "both whole and in part is not looked for."
+            )
+        elif contradictions:
             for line in contradictions:
                 print(f"  {line}")
             print()
