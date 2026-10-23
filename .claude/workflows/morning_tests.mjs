@@ -324,6 +324,14 @@ function stub(env, scriptArgs, served) {
           return { pr: it.pr, title: it.title, number, url: issue.url }
         })
         out = { filed, skipped: [], unreachable: false, reason: '' }
+      } else if (label === 'draft-read') {
+        // The draft check's one agent (#302) reads the issue and the draft file and returns them verbatim.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        out = {
+          listing: served.listing || LISTING_ONE,
+          issue: issue ? { number: issue.number, title: issue.title, url: issue.url, state: issue.state, comments: issue.comments } : { number: 0, title: '', url: '', state: '', comments: [] },
+          draft: served.draft === undefined ? '' : served.draft, error: served.draftError || '',
+        }
       } else if (label === 'after') {
         const a = served.after || {}
         const contained = a.contained !== false
@@ -353,9 +361,9 @@ function stub(env, scriptArgs, served) {
 
 const allPrompts = []
 const driftAll = []
-async function execute(env, scriptArgs, served = {}) {
+async function execute(env, scriptArgs, served = {}, source = null) {
   const calls = stub(env, scriptArgs, served)
-  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const src = (source === null ? fs.readFileSync(scriptPath, 'utf8') : source).replace(/^export const meta/m, 'const meta')
   const result = await new Function('return (async () => {' + src + '\n})()')()
   for (const c of calls) allPrompts.push(c)
   for (const f of env.schemaFailures.splice(0)) driftAll.push(f)
@@ -890,6 +898,89 @@ try {
     if (JSON.stringify(now.result.apply.answers) !== JSON.stringify(old.result.apply.answers)) fail(`both numbers: answers differ, old ${JSON.stringify(old.result.apply.answers)}, new ${JSON.stringify(now.result.apply.answers)}`)
     if (!sent(old).length) fail('both numbers: the old form sent the classifier nothing, so the comparison read nothing')
     if (JSON.stringify(sent(now)) !== JSON.stringify(sent(old))) fail(`both numbers: the classifier was sent ${JSON.stringify(sent(now))} from the new form, ${JSON.stringify(sent(old))} from the old`)
+  }
+
+  // 22. A draft Confirm is sorted the way the apply step would sort it, before it is posted (#302).
+  //     Launched with confirmFile on an issue with no Confirm comment, the morning takes the file's
+  //     text as the Confirm, sorts the issue's questions through the apply step's own code, prints the
+  //     result and stops: one read agent, no classifier, applier or verify agent, nothing written. The
+  //     fixture is 2026-10-22's shape: 263 questions, a draft of 21 override lines, two opening "No".
+  checks++
+  {
+    const TOTAL = 263
+    const perTicket = 53
+    const big = []
+    for (let t = 0; t * perTicket < TOTAL; t++) {
+      const qs = []
+      for (let q = t * perTicket + 1; q <= Math.min(TOTAL, (t + 1) * perTicket); q++) qs.push(`**Q${q}.** Do thing ${q}?\nRecommended: Yes.\n${PRE}\n`)
+      big.push(comment(60 + t, `## Questions: #${320 + t}, issue-${320 + t}, Ticket ${t}\n\n${qs.join('\n')}`, `2026-10-22T06:0${t}:00Z`))
+    }
+    const NO19 = 'No, the follow-through this line states is a separate ticket and it is filed by hand later'
+    const NO20 = 'no'
+    const LINES = [...Array.from({ length: 18 }, (_, i) => `Q${i + 1}: yes, as recommended`), `Q19: ${NO19}`, `Q20: ${NO20}`, 'Q94: open']
+    const BARE = `Confirm\n\n${LINES.join('\n')}\n`
+    const HEADED = `Confirm Q1 to Q263, with the overrides below.\n\n${LINES.join('\n')}\n`
+    const FILE = '/tmp/morning-tests-draft/confirm-286.md'
+    const draftRun = (draft, extra = {}, source = null) => execute(newRepo(), { date: DATE, confirmFile: FILE }, { issue: issueWith(big), draft, ...extra }, source)
+
+    // The bare Confirm: its first sentence covers none, its own lines confirm 21.
+    const bare = await draftRun(BARE)
+    const b = bare.result
+    if (bare.labels.join() !== 'draft-read') fail(`draft check: dispatched ${bare.labels.join(', ')}, expected the one read agent`)
+    if (b.mode !== 'check' || b.total !== TOTAL || b.covered !== 0 || b.overrides !== 21 || b.confirmed !== 21 || b.byOwnLines !== 21) fail(`draft check, bare Confirm: ${JSON.stringify({ mode: b.mode, total: b.total, covered: b.covered, overrides: b.overrides, confirmed: b.confirmed, byOwnLines: b.byOwnLines })}`)
+    if (!/first sentence covers 0 of 263/.test(b.text || '') || !/21 confirmed by their own Q<n>: lines/.test(b.text || '')) fail(`draft check, bare Confirm: the printed result does not say 0 of 263 and 21 by their own lines:\n${b.text}`)
+    if (b.applied !== 18 || (b.no || []).length !== 2 || (b.open || []).length !== TOTAL - 20) fail(`draft check, bare Confirm: applied ${b.applied}, no ${b.no && b.no.length}, open ${b.open && b.open.length}; expected 18, 2, ${TOTAL - 20}`)
+    if (!b.ok) fail(`draft check, bare Confirm: failed though every number is found: ${JSON.stringify(b.unknown)}`)
+
+    // The headed Confirm: all 263 confirmed; the two No lines and Q94 sorted with their first sixty characters.
+    const headed = await draftRun(HEADED)
+    const h = headed.result
+    if (h.covered !== TOTAL || h.confirmed !== TOTAL || h.overrides !== 21 || !/263 confirmed/.test(h.text || '')) fail(`draft check, headed Confirm: covered ${h.covered}, confirmed ${h.confirmed}, overrides ${h.overrides}`)
+    if (h.applied !== TOTAL - 3) fail(`draft check, headed Confirm: applied ${h.applied}, expected ${TOTAL - 3}`)
+    if (JSON.stringify(h.no) !== JSON.stringify([{ q: 19, answer: NO19.slice(0, 60) }, { q: 20, answer: NO20 }])) fail(`draft check: answered no lists ${JSON.stringify(h.no)}`)
+    if (JSON.stringify((h.open || []).map((o) => [o.q, o.answer])) !== JSON.stringify([[94, 'open']])) fail(`draft check: left open lists ${JSON.stringify(h.open)}`)
+    if (!String(h.text).includes(`- Q19: ${NO19.slice(0, 60)}`) || !h.text.includes('- Q94: open') || NO19.length <= 60) fail(`draft check: the printed result does not list Q19's first sixty characters and Q94:\n${h.text}`)
+    if (!h.ok || (h.unknown || []).length) fail(`draft check: a leading No failed the check: ${JSON.stringify(h.unknown)}`)
+
+    // A number no questions comment yields fails the check, by name.
+    const lost = await draftRun(HEADED.replace('Q94: open', 'Q94: open\nQ300: yes'))
+    if (lost.result.ok || JSON.stringify(lost.result.unknown) !== '[300]' || !/Q300/.test(lost.result.text || '') || !/^check: fail/m.test(lost.result.text || '')) fail(`draft check: Q300 did not fail the check by name: ok ${lost.result.ok}, unknown ${JSON.stringify(lost.result.unknown)}`)
+    const ranged = await draftRun('Confirm Q1 to Q264.\n')
+    if (ranged.result.ok || JSON.stringify(ranged.result.unknown) !== '[264]') fail(`draft check: a first sentence naming Q264 did not fail by name: ${JSON.stringify(ranged.result.unknown)}`)
+
+    // It runs one read agent and writes nothing: no command it is given posts, edits, files, closes,
+    // commits or pushes, and it names no OUTPUT or PHASE FILE.
+    const rp = bare.prompt('draft-read')
+    const spans = [...rp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    if (!spans.some((x) => /gh issue view\b/.test(x))) fail('draft check: the read prompt runs no gh issue view, so the search below read nothing')
+    const WRITES = /gh (issue|pr) (comment|edit|create|close|reopen)\b|gh api\b[^`]*-X|\bgit\b[^`]*\b(commit|push|worktree add)\b|\bmv\b|\brm\b/
+    for (const x of spans) if (WRITES.test(x)) fail(`draft check: the read prompt asks for a write: ${x}`)
+    if (/^(OUTPUT|PHASE) FILE:/m.test(rp)) fail('draft check: the read prompt names a file to write')
+    if (!rp.includes(FILE)) fail('draft check: the read prompt does not name the draft file')
+
+    // An issue that already has a Confirm comment, a draft the agent could not read, and a bad launch are refused.
+    const has = await execute(newRepo(), { date: DATE, confirmFile: FILE }, { draft: BARE })
+    if (!has.result.halted || !/already has a Confirm comment/.test(has.result.halted) || has.labels.join() !== 'draft-read') fail(`draft check over a confirmed issue: ${JSON.stringify(has.result.halted)}`)
+    const unreadable = await draftRun('', { draftError: 'no such file' })
+    if (!unreadable.result.halted || !/no such file/.test(unreadable.result.halted)) fail(`draft check, unreadable draft: ${JSON.stringify(unreadable.result.halted)}`)
+    for (const [label, a] of [['a relative confirmFile', { date: DATE, confirmFile: 'draft.md' }], ['confirmFile with after', { date: DATE, confirmFile: FILE, after: true }]]) {
+      const r = await execute(newRepo(), a)
+      if (!r.result || !r.result.halted || r.calls.length) fail(`draft check, ${label}: ${r.calls.length} agent(s) ran; returned ${JSON.stringify(r.result)}`)
+    }
+
+    // The sort is the apply step's own code (#302): the first-word rule mutated in the script turns
+    // both the apply case (Q2 overridden "no, ...") and the check case (Q19 opening "No") red.
+    const applyCase = (r) => (r.result.apply && r.result.apply.no.includes(2) && !(jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).some((q) => q.q === 2) ? [] : ['apply: Q2 answered no was not held back'])
+    const checkCase = (r) => (r.result.no && r.result.no.some((n) => n.q === 19) ? [] : ['check: Q19 opening No is not listed under answered no'])
+    const real = fs.readFileSync(scriptPath, 'utf8')
+    const rule = (/^const verdictOf = .*$/m.exec(real) || [''])[0]
+    const mutant = real.replace(rule, rule.replace('/^no\\b/i', '/^nope\\b/i'))
+    if (!rule || mutant === real) fail('draft check: the first-word rule (const verdictOf, /^no\\b/i) was not found, so the mutation changed nothing')
+    const realRed = [...applyCase(await execute(newRepo(), { date: DATE })), ...checkCase(await draftRun(HEADED))]
+    if (realRed.length) fail(`draft check: the cases fail on the real script: ${realRed.join('; ')}`)
+    const applyRed = applyCase(await execute(newRepo(), { date: DATE }, {}, mutant))
+    const checkRed = checkCase(await draftRun(HEADED, {}, mutant))
+    if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
