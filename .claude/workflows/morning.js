@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath with the night\'s date or its Overnight <date> issue; once Adam has landed the pull request, again with after: true',
   phases: [
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, then applies the pending-writes file in order, recording each line, and renames it when every line is applied' },
-    { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it' },
+    { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
     { title: 'Apply', detail: 'one classifier, then at most maxParallel appliers: commit appliers one at a time on integrator/morning-<date>, tracker-only appliers in parallel; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads every open pull request into main and the follow-ups already filed; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue' },
@@ -43,7 +43,8 @@ export const meta = {
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 classifier and at most
 // maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: nine at the
 // default. The issue lookup is the Replay agent's first step, not an agent of its own, so the budget
-// holds; `after` is one agent.
+// holds; `after` is one agent. A re-run whose open pull request's description names an older head
+// than the branch's adds one, the description writer (#300), so such a run may take ten.
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
@@ -181,6 +182,8 @@ const VERIFY = {
     base: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' },
     pr: { type: 'object', properties: { number: { type: 'integer' }, url: { type: 'string' } }, required: ['number', 'url'] },
     prBodyFile: { type: 'string' }, mergeBodyFile: { type: 'string' }, mergeSubject: { type: 'string' },
+    prBody: { type: 'string' },
+    merges: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, subject: { type: 'string' } }, required: ['sha', 'subject'] } },
     ci: { type: 'string', enum: ['green', 'red', 'pending', 'none'] }, ciUrl: { type: 'string' }, failingJobs: { type: 'array', items: { type: 'string' } },
     pushed: { type: 'boolean' }, mainMoved: { type: 'boolean' }, findings: { type: 'array', items: { type: 'string' } },
     worktrees: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' }, clean: { type: 'boolean' }, ancestor: { type: 'boolean' } }, required: ['path', 'branch', 'tip', 'clean', 'ancestor'] } },
@@ -188,7 +191,7 @@ const VERIFY = {
     claimed: { type: 'array', items: { type: 'string' } },
     record: { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] },
   },
-  required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'lanes', 'claimed', 'record'],
+  required: ['outcome', 'step', 'reason', 'base', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'lanes', 'claimed', 'record'],
 }
 const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record']
 const CLASSIFY = {
@@ -234,6 +237,7 @@ const FOLLOWUPS = {
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
 const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'unreachable', 'reason'] }
 const HANDED = { type: 'object', properties: { url: { type: 'string' }, posted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['url', 'posted', 'reason'] }
+const REFRESHED = { type: 'object', properties: { edited: { type: 'boolean' }, reason: { type: 'string' } }, required: ['edited', 'reason'] }
 const AFTERED = {
   type: 'object',
   properties: {
@@ -447,6 +451,118 @@ const judgeVerify = (v, subject) => {
   return { stop: `no review record names ${v.head}, the pull request's head${other}`, kind: 'record' }
 }
 
+// ---------------------------------------------------------------- the description, refreshed here
+// #300. On 2026-10-22 the run branch gained review-fix commits and was rebuilt to correct row 6.7's
+// merge subject; the description the morning had written still named the first head, the old
+// task-merge shas and the old counts, and #287's second review held on it until it was rewritten
+// outside the workflow. So a re-run that finds the pull request open compares the head its
+// description names with the branch's head and, when they differ, rewrites the lines it owns from
+// the branch's first-parent merges: the head in the head line, the integrated and partial counts,
+// and the rows of the Integrated and Partial tables, whose merge shas are replaced and which move
+// between the two tables when a merge's subject did. Every other line is kept byte for byte (#300's
+// acceptance), so a cell's annotation after its sha is kept too and the hand-over shows it. A
+// description it cannot read in that shape is refused whole rather than half-refreshed
+// (CODING_STANDARDS.md -> "A check fails closed"). A "Closes #<n>" line whose row is now partial is
+// kept as well, since the rewrite does not own it, and named as a refusal: a Closes line closes its
+// issue at the landing, which a partial row must not (#100).
+const LANE_MERGE = /^Merge (part of )?task ([^\s:]+):/
+const HEAD_IN = /\bhead `([0-9a-f]{7,40})`/
+const COUNTS_IN = /\b(\d+) integrated, (\d+) partial\b/
+const TABLES = ['Integrated', 'Partial']
+const cellsOf = (line) => (line.startsWith('|') && line.trimEnd().endsWith('|') ? line.trimEnd().slice(1, -1).split('|').map((c) => c.trim()) : null)
+const tableIn = (lines, name) => {
+  const at = lines.findIndex((l) => l.trim() === `## ${name}`)
+  if (at < 0) return null
+  let i = at + 1
+  while (i < lines.length && !lines[i].trim()) i++
+  const header = cellsOf(lines[i] || '')
+  if (!header || header.length !== 3) return null
+  const start = Math.min(i + 2, lines.length) // past the header and its separator row
+  let end = start
+  while (end < lines.length && cellsOf(lines[end])) end++
+  return { name, start, end, rows: lines.slice(start, end).map((line) => ({ line, cells: cellsOf(line) })) }
+}
+const refreshDescription = (body, head, merges, lanes) => {
+  const lines = String(body).split('\n')
+  const h = lines.findIndex((l) => HEAD_IN.test(l))
+  if (h < 0) return { state: 'refused', reason: 'the open pull request\'s description names no head in the form head `<sha>`, so it was not compared or refreshed' }
+  const named = HEAD_IN.exec(lines[h])[1]
+  if (head.startsWith(named)) return { state: 'untouched', named }
+  const refuse = (why) => ({ state: 'refused', named, reason: `the open pull request's description names the head ${named}, not ${head}, and was not refreshed: ${why}` })
+  // Each task's last first-parent merge decides its table and its sha.
+  const tasks = new Map()
+  for (const m of merges || []) {
+    const x = LANE_MERGE.exec(String(m.subject || ''))
+    if (!x) continue
+    tasks.delete(x[2])
+    tasks.set(x[2], { sha: m.sha, partial: !!x[1] })
+  }
+  if (!tasks.size) return refuse('the branch reports no "Merge task" or "Merge part of task" merge to read rows from')
+  const c = lines.findIndex((l) => COUNTS_IN.test(l))
+  if (c < 0) return refuse('it carries no "<n> integrated, <m> partial" line')
+  const tables = Object.fromEntries(TABLES.map((n) => [n, tableIn(lines, n)]))
+  if (!tables.Integrated) return refuse('it has no "## Integrated" table with the columns Task, Issue and Task merge')
+  const rowOf = new Map()
+  for (const t of TABLES.map((n) => tables[n]).filter(Boolean)) {
+    for (const r of t.rows) {
+      if (!tasks.has(r.cells[0])) return refuse(`its ${t.name} row for ${r.cells[0]} names no task merge on the branch`)
+      if (!/`[0-9a-f]{7,40}`/.test(r.cells[2])) return refuse(`its ${t.name} row for ${r.cells[0]} names no merge sha`)
+      rowOf.set(r.cells[0], { table: t.name, ...r })
+    }
+  }
+  const rewrote = []
+  const out = { Integrated: [], Partial: [] }
+  for (const t of TABLES) for (const r of (tables[t] || { rows: [] }).rows) out[t].push(r.cells[0])
+  const rowText = new Map()
+  for (const [task, m] of tasks) {
+    const to = m.partial ? 'Partial' : 'Integrated'
+    if (!tables[to]) return refuse(`${task}'s merge belongs in a "## ${to}" table it does not have`)
+    const r = rowOf.get(task)
+    if (!r) {
+      const lane = (lanes || []).find((l) => l.task === task)
+      if (!lane || !Number.isInteger(lane.issue)) return refuse(`${task} has a merge on the branch, no row, and no lane naming its issue`)
+      const line = `| ${task} | #${lane.issue} | \`${m.sha.slice(0, 7)}\` |`
+      out[to].push(task)
+      rowText.set(task, line)
+      rewrote.push(`added to ${to}: ${line}`)
+      continue
+    }
+    const old = /`([0-9a-f]{7,40})`/.exec(r.cells[2])[1]
+    const line = m.sha.startsWith(old) ? r.line : r.line.replace(`\`${old}\``, `\`${m.sha.slice(0, old.length)}\``)
+    rowText.set(task, line)
+    if (r.table !== to) {
+      out[r.table] = out[r.table].filter((x) => x !== task)
+      out[to].push(task)
+      rewrote.push(`moved from ${r.table} to ${to}: ${r.line} became ${line}`)
+    } else if (line !== r.line) rewrote.push(`${r.line} became ${line}`)
+  }
+  const counts = [...tasks.values()].reduce((n, m) => (m.partial ? { ...n, p: n.p + 1 } : { ...n, i: n.i + 1 }), { i: 0, p: 0 })
+  const lineAt = new Map()
+  lineAt.set(h, lines[h].replace(`head \`${named}\``, `head \`${head.slice(0, named.length)}\``))
+  lineAt.set(c, (lineAt.get(c) || lines[c]).replace(COUNTS_IN, `${counts.i} integrated, ${counts.p} partial`))
+  const result = []
+  const headLines = []
+  const at = Object.fromEntries(TABLES.filter((t) => tables[t]).map((t) => [tables[t].start, t]))
+  for (let i = 0; i <= lines.length; i++) {
+    const t = at[i]
+    if (t) {
+      // A table's rows, written where its old rows began; an empty table's go before the line there.
+      for (const task of out[t]) result.push(rowText.get(task))
+      if (tables[t].end > i) { i = tables[t].end - 1; continue }
+    }
+    if (i === lines.length) break
+    if (lineAt.has(i) && lineAt.get(i) !== lines[i]) headLines.push(`${lines[i]} became ${lineAt.get(i)}`)
+    result.push(lineAt.has(i) ? lineAt.get(i) : lines[i])
+  }
+  rewrote.unshift(...headLines)
+  // The Closes lines the rewrite keeps but a partial row must not carry.
+  const closing = [...tasks].filter(([, m]) => m.partial).map(([task]) => {
+    const n = (/#(\d+)/.exec((rowOf.get(task) || { cells: ['', ''] }).cells[1]) || [])[1]
+    return n && lines.some((l) => l.trim() === `Closes #${n}`) ? `the refreshed description still carries "Closes #${n}" for ${task}, whose merge on the branch is now "Merge part of task": change it to "Ticket: #${n}" before landing, or the landing closes #${n} (#100)` : null
+  }).filter(Boolean)
+  return { state: 'rewritten', named, body: result.join('\n'), rewrote, closing }
+}
+
 // ---------------------------------------------------------------- applier units
 // One applier per grilled ticket with work to do (#78 -> "Apply"), at most maxParallel in all
 // (#78 -> "Agent budget"). Past that, every committing ticket shares one applier, since they run on
@@ -505,7 +621,7 @@ Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json bo
 3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings.
 4. The check, as the hook runs it, from the base to the head, judging each commit of a history with merges: \`cd ${p.intWt} && tools/check.sh --base <base>\`. Its last line is its verdict; anything but "check: pass:" is a stop with the output's last lines.
 5. The push, with the hook running: compare \`git -C ${REPO} ls-remote origin refs/heads/${p.intBranch}\` with the local tip as the house rules say, then \`git -C ${p.intWt} push -u origin ${p.intBranch}\`. pushed is whether the remote now holds the local tip.
-6. One pull request from ${p.intBranch} to main: \`cd ${REPO} && gh pr list --head ${p.intBranch} --state open --json number,url,headRefOid\` reuses an open one. Draft its body to ${p.mdir}/pr-body.md from the issue and the lane merge bodies: the integrated, partial and failed rows with their merge shas; one line "Closes #<n>" for each integrated row whose lane reported complete and one line "Ticket: #<n>" for each partial row (#100); the aggregated "Outstanding:" and "Outstanding test ids:" lines; the evidence line (how many gate logs, the last integration gate's head and its test count); and the merge subject above. Draft the merge body to ${p.mdir}/merge-body.md: what was verified and how, citing each task merge by sha, with the same Outstanding lines and no Closes line. Open the pull request when none is open: \`cd ${REPO} && gh pr create --base main --head ${p.intBranch} --title ${JSON.stringify(subjectFor(date))} --body-file ${p.mdir}/pr-body.md\`. mergeSubject is the merge subject above, verbatim.
+6. One pull request from ${p.intBranch} to main: \`cd ${REPO} && gh pr list --head ${p.intBranch} --state open --json number,url,headRefOid\` reuses an open one. merges is the branch's first-parent merges from the base, oldest first, each {sha: the full sha, subject}: \`git -C ${REPO} log --first-parent --merges --reverse --format=%H%x09%s <base>..${p.intBranch}\`. When you reuse an open pull request, prBody is its description exactly as served, \`cd ${REPO} && gh pr view <number> --json body --jq .body\`, and you never edit it: the script compares the head it names with this head and refreshes it (#300). Otherwise prBody is "". Draft its body to ${p.mdir}/pr-body.md from the issue and the lane merge bodies, in the shape a later morning's refresh reads: a line "Overnight issue: #${issue}. Base <base>, head <head>. <n> integrated, <m> partial, <k> failed." with both shas in full and each in backticks; then tables headed "## Integrated", "## Partial" and "## Failed", each with the header "| Task | Issue | Task merge |" and one row per lane, "| <task id> | #<n> | <the merge's short sha, in backticks> |", even a table with no rows; the integrated, partial and failed rows with their merge shas; one line "Closes #<n>" for each integrated row whose lane reported complete and one line "Ticket: #<n>" for each partial row (#100); the aggregated "Outstanding:" and "Outstanding test ids:" lines; the evidence line (how many gate logs, the last integration gate's head and its test count); and the merge subject above. Draft the merge body to ${p.mdir}/merge-body.md: what was verified and how, citing each task merge by sha, with the same Outstanding lines and no Closes line. Open the pull request when none is open: \`cd ${REPO} && gh pr create --base main --head ${p.intBranch} --title ${JSON.stringify(subjectFor(date))} --body-file ${p.mdir}/pr-body.md\`. mergeSubject is the merge subject above, verbatim.
 7. CI on the exact head: the pull request's headRefOid must equal the local tip, else stop. Wait for its required checks in one Bash call with a 600000 ms timeout, \`cd ${REPO} && gh pr checks <number> --watch --interval 30\`, then read \`cd ${REPO} && gh pr checks <number> --json name,state,bucket,link\`. A skipped job counts as passing. ci is green, red (failingJobs naming each failing job), pending (the wait ran out) or none (no checks reported); ciUrl is a run's link on that head.
 8. The review record naming the head. Read the pull request's records exactly as tools/land.sh does: \`cd ${REPO} && comments=$(gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments) && reviews=$(gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews) && printf '{"comments": %s, "reviews": %s}\\n' "$comments" "$reviews" | ${READER} <head>\`. Exit 0: record {verdict "merge", head: the head you passed, url: the URL it printed}. Exit 1 with "says hold: <url>": record {verdict "hold", head, url}. Exit 1 otherwise: record {verdict "none", head "", url ""}. Exit 2: a stop with its message. reader is the exit status and its first line. A hand-written record in the fixed form counts; nothing else does, and you never write one.
 Return every field: lanes from the issue's rows (issue, task, outcome, complete, mergeSha, outstanding), claimed the claimed branches the issue names, worktrees as step 3 read them, findings as plain lines. Fields a stop left unread are empty.`
@@ -595,6 +711,22 @@ ${text}
 END HAND-OVER`
 }
 
+const refreshPrompt = (date, pr, head, body) => {
+  const p = paths(date)
+  return `Refresh: replace the description of pull request #${pr} with the one the script refreshed to the branch's head ${head} (#300). The text between the markers is the new description; write it exactly, adding and removing nothing.
+
+${HOUSE(p.mdir)}
+
+OUTPUT FILE: ${p.mdir}/pr-body-refreshed.md
+1. \`cd ${REPO} && gh pr view ${pr} --json state,headRefOid\`. Unless state is OPEN and headRefOid is ${head}, stop: edited false, reason says which, and edit nothing.
+2. Write the text between the markers, without the markers, to ${p.mdir}/pr-body-refreshed.md.
+3. \`cd ${REPO} && gh pr edit ${pr} --body-file ${p.mdir}/pr-body-refreshed.md\`. edited is true when it succeeded.
+reason is "" unless you stopped or the edit failed, and then why.
+BEGIN DESCRIPTION
+${body}
+END DESCRIPTION`
+}
+
 const afterPrompt = () => `After: the post-landing mode (#78 grill Q10). It closes, unassigns and removes worktrees only once origin/main contains the integration tip, and otherwise does nothing.
 
 ${HOUSE(paths(A.date || '<date>').mdir)}
@@ -631,6 +763,13 @@ const handoverText = (s) => {
     land.push(`Landing command, yours to run once a record names this head with merge and CI is green: git -C ${REPO} worktree add --detach ${p.landWt} origin/main, then cd ${p.landWt} && tools/land.sh ${prN} --subject "${subjectFor(s.date)}" --body-file ${v.mergeBodyFile || p.mdir + '/merge-body.md'}`)
   }
   list('Landing', land, 'no pull request: Verify stopped before step 6')
+  const rf = s.refresh || { state: 'none' }
+  const described = rf.state === 'rewritten'
+    ? [`#${prN}'s description named ${rf.named}, not ${v.head}; ${rf.edited ? 'rewritten' : `not rewritten (${rf.reason || 'the writer returned nothing'})`}. The lines ${rf.edited ? 'it rewrote' : 'it would have rewritten'}, everything else kept:`, ...rf.rewrote]
+    : rf.state === 'untouched' ? [`#${prN}'s description names this head (${rf.named}); untouched`]
+      : rf.state === 'refused' ? [rf.reason]
+        : []
+  list('Pull request description', described, prN ? 'drafted by this run, or no open pull request was read' : 'none')
   const lanes = (v && v.lanes) || [] // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
   list('Issues to close', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closes it at the landing; after: true closes it if still open`))
   list('Issues to unassign, once merged', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
@@ -700,6 +839,20 @@ const verifyKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT })
 const v = await run(verifyPrompt(DATE, ISSUE, verifyKey), { label: 'verify', phase: 'Verify', schema: VERIFY })
 const verdict = judgeVerify(v, SUBJECT)
 if (!verdict.ok) refusals.push(verdict.stop)
+// The description of a pull request an earlier morning opened, refreshed to this head (#300). Read
+// whatever the record says: on 2026-10-22 it was the stale description a review held on.
+let refresh = { state: 'none' }
+if (v && v.outcome === 'ok' && FULL.test(v.head || '') && v.pr && v.pr.number && v.prBody) {
+  refresh = refreshDescription(v.prBody, v.head, v.merges, v.lanes)
+  if (refresh.state === 'refused') refusals.push(refresh.reason)
+  if (refresh.state === 'rewritten') {
+    const w = await run(refreshPrompt(DATE, v.pr.number, v.head, refresh.body), { label: 'pr-refresh', phase: 'Verify', schema: REFRESHED })
+    refresh.edited = !!(w && w.edited)
+    refresh.reason = w ? w.reason : 'the description writer returned nothing'
+    if (!refresh.edited) refusals.push(`the description of #${v.pr.number} names ${refresh.named}, not ${v.head}, and was not rewritten: ${refresh.reason || 'the writer said it did not edit it'}; relaunch to refresh it`)
+    refusals.push(...refresh.closing)
+  }
+}
 
 phase('Apply')
 const comments = rep.issue.comments || []
@@ -807,7 +960,7 @@ else {
 }
 
 phase('Hand-over')
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps })
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps, refresh })
 log(text)
 const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
@@ -819,5 +972,6 @@ return {
   apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
   handover: { url: handed ? handed.url : '', posted: handed ? handed.posted : false, text },
   followUps,
+  refresh: { state: refresh.state, named: refresh.named || '', edited: !!refresh.edited, rewrote: refresh.rewrote || [], reason: refresh.reason || '', body: refresh.body || '' },
   agents: agentsRun, reused,
 }

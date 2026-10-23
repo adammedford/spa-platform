@@ -91,6 +91,94 @@ const rec287 = (i, verdict, extra = '') => ({ body: `## Review\n\nHead ${H287[i]
 const ISSUE_288 = { number: 288, title: 'deploy.sh pulls the base image when it builds the gateway', body: `**Raised by:** #273, from the reviews of #287 (${R287[1]})\n**Owner:** ws1-infra\n`, url: 'https://github.com/adammedford/spa-platform/issues/288' }
 const FU287 = { prs: [{ number: 287, comments: [rec287(0, 'hold'), rec287(1, 'hold'), rec287(2, 'merge', FOLLOW_UPS_287)], reviews: [] }], filed: [ISSUE_288] }
 
+// #300: #287's description as the morning wrote it at the first head, served verbatim from its edit
+// history, and the first-parent merges of the branch it was rebuilt to (76704c5), oldest first.
+const BODY_287_FIRST = [
+  "Land the overnight run of 2026-10-22",
+  "",
+  "Overnight issue: #286. Base `ae6e2e19be974ca96e75ac0a0aef1e588a9ba9a5`, head `ed8d0633e9c1360fb7c2e425f63237676f4db648`. 15 integrated, 1 partial, 1 failed, 7 skipped (blocked by the failed one).",
+  "",
+  "## Integrated",
+  "",
+  "| Task | Issue | Task merge |",
+  "| --- | --- | --- |",
+  "| issue-233 | #233 | `6964163` |",
+  "| issue-235 | #235 | `58f0285` |",
+  "| issue-239 | #239 | `192f2a6` |",
+  "| 6.7 | #62 | `032eb43` (+ `eab8420`, roadmap refresh) |",
+  "| issue-158 | #158 | `9b46ca8` |",
+  "| issue-193 | #193 | `246c1a0` |",
+  "| issue-234 | #234 | `a30b942` |",
+  "| issue-251 | #251 | `9916904` |",
+  "| issue-253 | #253 | `53f5d7a` |",
+  "| issue-198 | #198 | `fff1181` |",
+  "| issue-254 | #254 | `c32e8f3` |",
+  "| issue-237 | #237 | `2946115` |",
+  "| issue-240 | #240 | `9765c54` |",
+  "| issue-243 | #243 | `10828ec` |",
+  "| issue-273 | #273 | `ed8d063` |",
+  "",
+  "## Partial",
+  "",
+  "| Task | Issue | Task merge |",
+  "| --- | --- | --- |",
+  "| issue-241 | #241 | `2eebae1` (\"Merge part of task issue-241\") |",
+  "",
+  "## Failed",
+  "",
+  "| Task | Issue | Merge |",
+  "| --- | --- | --- |",
+  "| issue-145 | #145 | none; branch `task/issue-145-stage-host-2-10-stagehost-capturedlog-and-rawhtt` at `2e14356` is kept for #146 to fork from (CS0104 collision only #146's commit removes) |",
+  "| skipped: #146, #147, #148, #149, #150, #151, #152 | | none; \"blocker not integrated: issue-145\" |",
+  "",
+  "#239 and #62 carry `Ticket:` rather than `Closes`: #239's lane reported box 2 as Outstanding (its task merge `192f2a6` names the count, so tick box 2 and change the line to `Closes #239` if you agree), and #62 still holds boxes 2 and 3, moved to #244 under #232 Q9, whose removal from #62's body is a morning act (#244's Q6).",
+  "",
+  "Closes #233",
+  "Closes #235",
+  "Closes #158",
+  "Closes #193",
+  "Closes #234",
+  "Closes #251",
+  "Closes #253",
+  "Closes #198",
+  "Closes #254",
+  "Closes #237",
+  "Closes #240",
+  "Closes #243",
+  "Closes #273",
+  "Ticket: #239",
+  "Ticket: #62",
+  "Ticket: #241",
+  "",
+  "Outstanding: #241: CI does not run tools/scripts/certs_tests.py yet; that waits on change request contracts/changes/issue-241-ci-runs-the-certs-companion.md (two ci.yml steps and a D-3 sentence). Until then only tools/check.sh --full runs it. #239: box 2 is met by task merge 192f2a6 but not ticked. #62: boxes 2 and 3 moved to #244 and are still in #62's body.",
+  "Outstanding test ids: none",
+  "",
+  "Evidence: 16 integration gate logs in .scratch/overnight/log (one per merged lane); the last, issue-273-integrate.txt, ran tools/check.sh --full at HEAD=ed8d0633e9c1360fb7c2e425f63237676f4db648 and ended \"check: pass:\", with 1715 .NET tests passed, 0 failed. The morning re-ran tools/check.sh --base ae6e2e1 at that head (pass) and pushed with the pre-push hook running.",
+  "",
+  "Merge subject: Land the overnight run of 2026-10-22",
+  "",
+  "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+  "",
+].join('\n')
+const MERGES_287 = [
+  { sha: "993b0801081fbddf0c7ad9afbfba7a702399e6a4", subject: "Merge task issue-233: the mock API image makes /app readable by the runtime user" },
+  { sha: "d93ed8acae9df4deb71c3817fc3d1af59846bcd4", subject: "Merge task issue-235: spactl references AWSSDK.Signin, and a test loads a login_session profile" },
+  { sha: "2ece748e3a476f64e2e92b9980b95247545f92a5", subject: "Merge task issue-239: the trust and execution documents merge no other policy document" },
+  { sha: "340fd0758f9dcda06328b4a8c605fcde524264c3", subject: "Merge part of task 6.7: operating notes for deploy, rollbacks, secret rotation, ending an app's sessions and teardown" },
+  { sha: "118293a4bab2f07d4fd4daa51e9319a160267e1b", subject: "Merge part of task issue-241: certs.sh resolves its Region the way preflight.sh does and refuses without one" },
+  { sha: "4bd8ea7e319642564bdc176beab3e19a11f70d0e", subject: "Merge task issue-158: the rule-id-literal rule takes the eleven problem codes" },
+  { sha: "4564c13d30896939a56ff0d5e74010ab58192564", subject: "Merge task issue-193: change requests 1.6b, 1.7 and issue-122 decided, and the decision rule holds disagreeing Status lines" },
+  { sha: "4028026334330e80a3ac8df841dd95d4c08a040e", subject: "Merge task issue-234: image_build_tests.py holds the mock API's Dockerfile to the runtime-read case" },
+  { sha: "8cf855383ab8f522a70e5c0a838ed57764225a79", subject: "Merge task issue-251: deploy.sh and rollback.sh redact the apps' client ids in the platform root's plan" },
+  { sha: "b3122dab203cca3f4e52feb9e46f05a0d2aa23a3", subject: "Merge task issue-253: Playwright failures in the deployed e2e rows print no URL query, and F-06's switch-back runs under its own bound" },
+  { sha: "559b8911b46ade3242418a580f60422df2aad3b5", subject: "Merge task issue-198: tunnel.sh reads the cluster, service and ALB from the outputs document" },
+  { sha: "9e32b7532af8cb8c66ce0ec06322ad14c069d975", subject: "Merge task issue-254: F-05's web storage check names nothing on failure" },
+  { sha: "cefbd4a08ed7eb10975d167f0e34988dc7dc71c3", subject: "Merge task issue-237: the full check runs the companions of a library a change touches" },
+  { sha: "5f63d6ac61f9859bee7eb4bd9f05523198a4b3a0", subject: "Merge task issue-240: GLOSSARY.md carries Problem code and OAuth error value" },
+  { sha: "dec982d9923aca156731cf3bfa0a8c64542cc071", subject: "Merge task issue-243: CI runs the cell scripts' six companions in both jobs, and D-3 names them" },
+  { sha: "27ad35d7264e45029ced64b58fc63b3f610f1be7", subject: "Merge task issue-273: the gateway image runs .NET runtime 10.0.13, and the three runtimes are read one way" },
+]
+
 const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 
@@ -142,7 +230,7 @@ const jsonAfter = (prompt, marker) => {
 //           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
 //           filerDrops: [title],
 //           replay: {pending, renamed, stoppedAt, reason}, the Replay agent's own fields as it returned them,
-//           rewrite: [issue], after: {...}, nothingFrom: [label], the agents that return nothing,
+//           rewrite: [issue], after: {...}, refresh: the description writer's return (#300), nothingFrom: [label], the agents that return nothing,
 //           as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
@@ -183,6 +271,7 @@ function stub(env, scriptArgs, served) {
           pr: { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400' },
           prBodyFile: `${env.repo}/${MORNING_REL}/pr-body.md`, mergeBodyFile: `${env.repo}/${MORNING_REL}/merge-body.md`,
           mergeSubject: jsonAfter(prompt, 'MERGE SUBJECT') || '',
+          prBody: v.prBody || '', merges: v.merges || [],
           ci: v.ci || 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/1', failingJobs: v.failingJobs || [],
           pushed: true, mainMoved: false, findings: [],
           worktrees: [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true }],
@@ -212,6 +301,8 @@ function stub(env, scriptArgs, served) {
           rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
         }
+      } else if (label === 'pr-refresh') {
+        out = served.refresh || { edited: true, reason: '' }
       } else if (label === 'handover') {
         out = { url: `${URL(ISSUE)}#issuecomment-99`, posted: true, reason: '' }
       } else if (label === 'followups') {
@@ -689,6 +780,79 @@ try {
     const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
     if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
     if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
+  }
+
+  // 20. A re-run refreshes the description of the pull request an earlier morning opened (#300). The
+  //     fixture is 2026-10-22's: #287's first description, as the morning wrote it at ed8d063, and the
+  //     first-parent merges of the branch rebuilt to 76704c5, where "Merge task 6.7" became "Merge part
+  //     of task 6.7". The refresh rewrites the head, the task-merge shas and the counts, moves 6.7 to
+  //     Partial, keeps every other line byte for byte, and the hand-over names each line it rewrote.
+  checks++
+  {
+    const NOW = '76704c53c36ea51a9a4a81a206b76de7cf46e98c'
+    const reran = { verify: { head: NOW, prBody: BODY_287_FIRST, merges: MERGES_287 }, agentRecord: { verdict: 'hold', head: NOW, url: R287[1], reader: 'exit 1: hold' } }
+    const r = await execute(newRepo(), { date: DATE }, reran)
+    const wrote = (/BEGIN DESCRIPTION\n([\s\S]*)\nEND DESCRIPTION/.exec(r.prompt('pr-refresh')) || [])[1]
+    if (r.labels.filter((l) => l === 'pr-refresh').length !== 1 || wrote === undefined) fail(`2026-10-22's re-run: dispatched ${r.labels.join(', ')}, expected one description writer`)
+    const body = wrote || ''
+    if (body !== (r.result.refresh || {}).body) fail('2026-10-22\'s re-run: the writer was given a description other than the one the run returns')
+    const before = BODY_287_FIRST.split('\n')
+    const after = body.split('\n')
+    const headLine = (ls) => ls.find((l) => l.startsWith('Overnight issue: '))
+    if (headLine(after) !== `Overnight issue: ${cite(286)}. Base \`${F287}\`, head \`${NOW}\`. 14 integrated, 2 partial, 1 failed, 7 skipped (blocked by the failed one).`) fail(`2026-10-22's re-run: the head line reads ${JSON.stringify(headLine(after))}`)
+    // The task-merge shas, each read from the merge the branch reports for its task.
+    const section = (ls, name) => { const at = ls.indexOf(`## ${name}`); const rows = []; for (let i = at + 4; i < ls.length && ls[i].startsWith('|'); i++) rows.push(ls[i]); return rows }
+    const rowsOf = (ls, name) => section(ls, name).map((l) => l.split('|').map((c) => c.trim())).map((c) => [c[1], (/`([0-9a-f]+)`/.exec(c[3]) || [])[1]])
+    const lastMerge = new Map(MERGES_287.map((m) => [/^Merge (?:part of )?task ([^\s:]+):/.exec(m.subject)[1], m]))
+    for (const [name, partial] of [['Integrated', false], ['Partial', true]]) {
+      for (const [task, short] of rowsOf(after, name)) {
+        const m = lastMerge.get(task)
+        if (!m || !m.sha.startsWith(short) || /^Merge part of/.test(m.subject) !== partial) fail(`2026-10-22's re-run: the ${name} row ${task} names ${short}, but its merge on the branch is ${m && m.sha} "${m && m.subject}"`)
+      }
+    }
+    if (rowsOf(after, 'Integrated').length !== 14 || rowsOf(after, 'Partial').length !== 2) fail(`2026-10-22's re-run: ${rowsOf(after, 'Integrated').length} Integrated and ${rowsOf(after, 'Partial').length} Partial rows, expected 14 and 2`)
+    if (rowsOf(after, 'Integrated').some(([t]) => t === '6.7') || !section(after, 'Partial').includes('| 6.7 | #62 | `340fd07` (+ `eab8420`, roadmap refresh) |')) fail(`2026-10-22's re-run: 6.7 did not move to Partial with its new merge: ${JSON.stringify(section(after, 'Partial'))}`)
+    // Every line the rewrite does not own is kept, byte for byte and in order: the Outstanding and
+    // Evidence lines, the Closes and Ticket lines, the Failed table, the prose.
+    const owned = (ls) => { const skip = new Set([...section(ls, 'Integrated'), ...section(ls, 'Partial'), headLine(ls)]); return ls.filter((l) => !skip.has(l)) }
+    if (JSON.stringify(owned(after)) !== JSON.stringify(owned(before))) fail('2026-10-22\'s re-run: a line the rewrite does not own changed')
+    for (const kept of before.filter((l) => /^(Outstanding( test ids)?|Evidence):/.test(l))) if (!after.includes(kept)) fail(`2026-10-22's re-run: the line ${JSON.stringify(kept.slice(0, 60))} was not kept verbatim`)
+    if (before.filter((l) => /^(Outstanding( test ids)?|Evidence):/.test(l)).length !== 3) fail('2026-10-22\'s fixture lost its Outstanding and Evidence lines, so the check above read nothing')
+    // The hand-over names every line that changed, as it read before and after.
+    const ho = r.result.handover.text
+    const changed = before.filter((l) => !after.includes(l))
+    if (changed.length < 15) fail(`2026-10-22's re-run: only ${changed.length} lines changed, so the hand-over check reads too little`)
+    for (const l of [...changed, ...after.filter((x) => !before.includes(x))]) if (!ho.includes(l.replace(/`/g, "'"))) fail(`2026-10-22's re-run: the hand-over does not name the rewritten line ${JSON.stringify(l)}`)
+    if (!/### Pull request description\n\n- #400's description named ed8d0633e9c1360fb7c2e425f63237676f4db648, not 76704c5\S*; rewritten/.test(ho)) fail(`2026-10-22's re-run: the hand-over's description section reads ${JSON.stringify((/### Pull request description\n\n[^\n]*/.exec(ho) || [''])[0])}`)
+    if (r.result.refusals.some((x) => /description/.test(x))) fail(`2026-10-22's re-run: refused ${JSON.stringify(r.result.refusals)}`)
+
+    // Heads that match leave the description untouched: the description as it was rewritten by hand,
+    // naming 76704c5 short, dispatches no writer.
+    const BODY_287_NOW = BODY_287_FIRST.replace(/head `ed8d0633e9c1360fb7c2e425f63237676f4db648`\. 15 integrated, 1 partial/, 'head `76704c5`. 14 integrated, 2 partial')
+    if (BODY_287_NOW === BODY_287_FIRST) fail('the matching-head fixture is the stale one')
+    const same = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: BODY_287_NOW } })
+    if (same.labels.includes('pr-refresh') || (same.result.refresh || {}).state !== 'untouched' || !/description names this head \(76704c5\); untouched/.test(same.result.handover.text)) fail(`heads that match: dispatched ${same.labels.join(', ')}, refresh ${JSON.stringify((same.result.refresh || {}).state)}`)
+    // A pull request this run opened has no description to compare.
+    const fresh = await execute(newRepo(), { date: DATE }, { verify: { merges: MERGES_287 } })
+    if (fresh.labels.includes('pr-refresh') || (fresh.result.refresh || {}).state !== 'none') fail(`a pull request opened this run: dispatched ${fresh.labels.join(', ')}, refresh ${(fresh.result.refresh || {}).state}`)
+
+    // A Closes line the rewrite keeps for a row now partial is named, never rewritten and never silent.
+    const closing = BODY_287_FIRST.replace('Ticket: #62', 'Closes #62')
+    const cl = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: closing } })
+    if (!String((cl.result.refresh || {}).body).split('\n').includes('Closes #62')) fail('a Closes line for a row now partial was not kept verbatim')
+    if (!cl.result.refusals.some((x) => /still carries "Closes #62" for 6\.7/.test(x))) fail(`a Closes line for a row now partial is not named: ${JSON.stringify(cl.result.refusals)}`)
+
+    // Fails closed: a description with no head in the drafted form, or a row whose task has no merge on
+    // the branch, is refused whole and nothing is written; a writer that did not edit is named.
+    const headless = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, prBody: BODY_287_FIRST.replace(/, head `[0-9a-f]+`/, '') } })
+    if (headless.labels.includes('pr-refresh') || !headless.result.refusals.some((x) => /names no head/.test(x))) fail(`a description naming no head: dispatched ${headless.labels.join(', ')}, refusals ${JSON.stringify(headless.result.refusals)}`)
+    const stray = await execute(newRepo(), { date: DATE }, { ...reran, verify: { ...reran.verify, merges: MERGES_287.filter((m) => !/issue-198:/.test(m.subject)) } })
+    if (stray.labels.includes('pr-refresh') || !stray.result.refusals.some((x) => /row for issue-198 names no task merge on the branch/.test(x))) fail(`a row with no merge on the branch: dispatched ${stray.labels.join(', ')}, refusals ${JSON.stringify(stray.result.refusals)}`)
+    const unwritten = await execute(newRepo(), { date: DATE }, { ...reran, refresh: { edited: false, reason: 'headRefOid is 1111111' } })
+    if (!unwritten.result.refusals.some((x) => /was not rewritten: headRefOid is 1111111/.test(x)) || !/not rewritten \(headRefOid is 1111111\)/.test(unwritten.result.handover.text)) fail(`a writer that did not edit: refusals ${JSON.stringify(unwritten.result.refusals)}`)
+    // The Verify prompt reads the open description and the first-parent merges, and edits neither.
+    const vp = r.prompt('verify')
+    if (!vp.includes('log --first-parent --merges --reverse') || !vp.includes('gh pr view <number> --json body --jq .body')) fail('the Verify prompt does not read the open description and the first-parent merges')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
