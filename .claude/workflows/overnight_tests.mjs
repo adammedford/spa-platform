@@ -369,6 +369,12 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     const during = events.filter((e) => e.kind === 'integrate' && e.id !== CONFLICT_ALWAYS && e.edge === 'start' && e.at >= from && e.at < to)
     if (!during.length) fail(`no ticket integrated while ${CONFLICT_ALWAYS}, which shares no file, was back in its lane (${from}..${to}): the run waited on it`)
   } else fail(`${CONFLICT_ALWAYS} did not run two integrates, so the send-back window check read nothing`)
+  // git diff --name-only lists only a rename's new path, so a ticket that renamed a shared file would not lock the
+  // old one: every review asks for its changed files with --no-renames, which lists both sides.
+  const reviewPrompts = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviewPrompts.length) fail('no review prompt was captured, so the changed-files listing check read nothing')
+  const blind = reviewPrompts.filter((c) => !c.prompt.includes('diff --no-renames --name-only '))
+  if (blind.length) fail(`${blind.length} review prompt(s) ask for the changed files without --no-renames, so a renamed file locks only its new path`)
 }
 
 if (failures.length) {

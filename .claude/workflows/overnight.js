@@ -179,8 +179,9 @@ const REVIEW = {
     findingsSkipped: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' }, question: { type: 'string' },
     proposedSteering: { type: 'array', items: { type: 'string' } },
-    // the files the branch changed, read from its diff against the review's fixed point after the review's commit:
-    // the integrate step locks them, so two tickets that changed one file integrate in order (#279)
+    // the files the branch changed, read from its diff against the review's fixed point after the review's commit,
+    // both sides of a rename included: the integrate step locks them, so two tickets that changed one file
+    // integrate in order (#279)
     changedFiles: { type: 'array', items: { type: 'string' } },
   },
   required: ['outcome', 'headSha', 'findingsFixed', 'findingsSkipped', 'summary', 'question', 'proposedSteering', 'changedFiles'],
@@ -352,7 +353,7 @@ Claims are re-run, not read (#202): read every commit message and merge body on 
 STEP 3 — fix every finding you verify as real; for each one you reject, say why. If you changed files, re-run the gate above into ${gateLog} (at most twice) and keep it green. Untick any acceptance box that is not actually met (${TICK(t, 'untick')}). Post one comment headed "${heading}" on issue #${t.issue} (both axes' findings, what you fixed, what you skipped and why, decisions upheld or reversed). Commit with subject "${subject} <what changed>" (a review with no code change commits nothing; say so). The issue stays open whatever you tick or untick: the landing closes it (#100).
 A human-owned decision of your own: same rule as the implementer, weigh it and record it in a comment headed "## Decisions taken", or hand it over in a comment headed "## Status note" plus \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\` and outcome needs-human when it is not yours to take. Cannot get green: a "## Status note" comment, \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`, commit what exists, return failed.
 
-Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "${heading}" comment, held ones included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279).`
+Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "${heading}" comment, held ones included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
 }
 
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
