@@ -804,6 +804,12 @@ try {
       const bare = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', stoppedAt: 2, reason: '""' } })
       if (!bare.result.refusals.some((r) => /^Replay stopped at line 2 of .*: no reason given$/.test(r))) fail(`a numbered stop with no reason: refusals ${JSON.stringify(bare.result.refusals)}`)
       if (!/; stopped at line 2: no reason given/.test(replayLine(bare.result.handover.text))) fail(`a numbered stop with no reason: the Replay line is ${JSON.stringify(replayLine(bare.result.handover.text))}`)
+      // A failed count is a failed line even when the agent leaves stoppedAt at 0, which contradicts
+      // its prompt as 2026-10-22's '""' did: it is still refused, never kept as a note (#319 review;
+      // CODING_STANDARDS.md -> "A check fails closed").
+      const unnumbered = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', counts: { comment: { applied: 1, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, reason: 'HTTP 502: Bad Gateway' } })
+      if (!unnumbered.result.refusals.some((r) => /^Replay stopped at a line it did not number of .*: HTTP 502: Bad Gateway$/.test(r))) fail(`a failed count with stoppedAt 0: refusals ${JSON.stringify(unnumbered.result.refusals)}`)
+      if (!/; stopped at a line it did not number: HTTP 502/.test(replayLine(unnumbered.result.handover.text)) || /the agent noted/.test(unnumbered.result.handover.text)) fail(`a failed count with stoppedAt 0: the Replay line is ${JSON.stringify(replayLine(unnumbered.result.handover.text))}`)
     }
     const PENDING = `/tmp/morning-tests-repo/.scratch/overnight/log/pending-${DATE}.jsonl`
     const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
@@ -822,7 +828,9 @@ try {
   {
     const ok = await execute(newRepo(), { date: DATE })
     const rp = ok.prompt('replay')
-    for (const m of rp.matchAll(/`([^`]*gh issue view <number>[^`]*)`/g)) if (/comments|body/.test(m[1])) fail(`the Replay prompt still reads the issue's comments or body: ${m[1]}`)
+    const reads = [...rp.matchAll(/`([^`]*gh issue view <number>[^`]*)`/g)]
+    if (!reads.length) fail('the Replay prompt names no `gh issue view <number>` command, so its fields were not checked')
+    for (const m of reads) if (/comments|body/.test(m[1])) fail(`the Replay prompt still reads the issue's comments or body: ${m[1]}`)
     const schema = (ok.calls.find((c) => c.label === 'replay') || {}).schema || {}
     const issueProps = Object.keys(((schema.properties || {}).issue || {}).properties || {})
     if (issueProps.includes('comments') || issueProps.includes('body')) fail(`Replay's schema still returns ${issueProps.join(', ')}`)

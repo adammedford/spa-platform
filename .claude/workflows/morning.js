@@ -298,6 +298,11 @@ const judgeLookup = (listing) => {
   return { issue: hits[0].number, date: A.date }
 }
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
+// Where Replay stopped, or "" when no line failed (#319). A stop is a failed line: stoppedAt above zero
+// names it, and a failed count with stoppedAt 0 is still one, whose number the agent did not give, so
+// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed").
+const replayStop = (r) => (r.stoppedAt > 0 ? `line ${r.stoppedAt}`
+  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number' : '')
 // A Replay string field holding only a pair of quotes, or only whitespace, is empty (#299). On
 // 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
 // as the two-character string "", which the run read as a stop and refused beside the real one.
@@ -851,11 +856,11 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  // A stop is a failed line (#319): only stoppedAt above zero says "stopped"; a reason the agent gave
-  // with no line stopped is kept as its note, never read as a stop.
-  const stopped = s.replay.stoppedAt > 0
+  // A stop is a failed line (#319): only a failed line (replayStop) says "stopped"; a reason the agent
+  // gave with no line failed is kept as its note, never read as a stop.
+  const stopped = replayStop(s.replay)
   const none = !stopped && !s.replay.renamed && ['comment', 'edit', 'close'].every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
-  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at line ${s.replay.stoppedAt}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
+  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [] }
@@ -975,10 +980,10 @@ const reuse = (name, inputs, done = () => true) => {
   return null
 }
 const refusals = []
-// A stop is a failed line, so the refusal keys on stoppedAt above zero, never on reason alone (#319):
-// on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A numbered
+// A stop is a failed line, so the refusal keys on a failed line (replayStop), never on reason alone
+// (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A
 // stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
-if (rep.stoppedAt > 0) refusals.push(`Replay stopped at line ${rep.stoppedAt} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
+if (replayStop(rep)) refusals.push(`Replay stopped at ${replayStop(rep)} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
 
 phase('Verify')
