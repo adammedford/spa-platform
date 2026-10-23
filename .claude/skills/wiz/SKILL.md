@@ -139,20 +139,18 @@ IMPORTED_CERT=$(aws acm list-certificates --query "CertificateSummaryList[?Domai
 if [ -n "$LISTENER_CERT" ] && [ "$LISTENER_CERT" != "None" ] && [ "$LISTENER_CERT" = "$IMPORTED_CERT" ]; then echo "certificate: match"; else echo "certificate: MISMATCH"; fi
 ```
 
-The load balancer is named `spa-poc` (`local.lb_name` in `infra/modules/cell/alb.tf`, read back on 2026-10-20). If the name differs, find it by the `Platform` tag: the A5 `get-resources` call
-with `--resource-type-filters elasticloadbalancing:loadbalancer`. Expect: `internal`, both
-attributes `true`, one listener on 443 HTTPS with one certificate and one `forward`, one rule (the
-default), the target group `ip`, `HTTP`, 8080, path `/`, and `certificate: match`: the listener's
-certificate ARN equals the imported, issued `*.spa-poc.test` certificate's, compared in the shell so
-that the post carries the one word and no ARN. A count and a separate listing cannot show the
-attachment; the comparison can. Post on #55 under "Read-back, Q12", with the ARNs removed. Then,
+Before comparing a read, read #55 → "Read-back expectations": it names the load balancer and says
+what each read above must show, the certificate comparison's one word included. If the load
+balancer's name differs, find it by the `Platform` tag: the A5 `get-resources` call with
+`--resource-type-filters elasticloadbalancing:loadbalancer`. Post on #55 under "Read-back, Q12",
+with the ARNs removed. Then,
 under "Held" unless #98's Q13 is confirmed (it is): close #55 with an `## Answer` comment saying
 the apply was recorded on 2026-10-18, the plan and the
 read-back are above, and task 1.6b checks it end to end.
 
-**A4, #56, Q6 to Q8's read-back.** Names from the module: cluster `spa-poc`, service `gateway`,
-task definition `spa-platform-poc`, task role `spa-platform-poc-task`, log group
-`/spa-platform/poc/gateway`. Read the pin from the git-ignored
+**A4, #56, Q6 to Q8's read-back.** Before comparing a read, read #56 → "Read-back expectations":
+it names the cluster, the service, the task definition, both roles and the log group the commands
+below use, and says what each read must show. Read the pin from the git-ignored
 `infra/envs/poc/platform/terraform.tfvars`.
 
 ```bash
@@ -176,13 +174,7 @@ aws iam list-role-tags --role-name spa-platform-poc-task --query "Tags[?Key=='Pl
 aws iam list-role-tags --role-name spa-platform-poc-task-execution --query "Tags[?Key=='Platform'].Value"
 ```
 
-The execution role is `spa-platform-poc-task-execution` (read from the task definition's `executionRoleArn` on 2026-10-20; `spa-platform-poc-execution` does not exist).
-Expect, per #56's Q6 to Q8: the waiter exits 0; desired 1, running 1, pending 0; one `PRIMARY`
-deployment `COMPLETED`; a steady-state event and no rollback; the task `RUNNING` with the image
-equal to the pin and the Exec agent `RUNNING`; `256`, `1024`, `ARM64`; Exec on, the breaker with
-rollback, public IP `ENABLED`; one target on 8080 `healthy`; retention 14; one inline policy with
-statement ids `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages` and no
-managed policy; `Platform = spa-platform` on all six. Post on #56 under "Read-back, Q6 to Q8",
+Compare each read with #56 → "Read-back expectations". Post on #56 under "Read-back, Q6 to Q8",
 names and fields only, and add the sentence Q7 asks for: this is what IAM holds for the role, not
 its effective permission under the project's managed SCPs and RCPs. If any read differs, post it
 as it is and say #56 stays open.
@@ -218,12 +210,12 @@ otherwise list it under "Held" with the reason, confirmation or evidence:
 - #125: `gh issue close 125 --comment "<## Answer: the apply on 2026-10-18 at 19:17:25Z, the plan
   and outputs in the grill of 2026-10-19, the login above>"` (#125's Q7), only when A2's login
   reached `?code=`.
-- #55: the close under A3 (#98's Q13, confirmed), only when every A3 read matched what Q12 expects,
-  `certificate: match` included.
+- #55: the close under A3 (#98's Q13, confirmed), only when every A3 read matched #55 →
+  "Read-back expectations", the certificate comparison included.
 - #56: `gh issue edit 56 --remove-label ready-for-human --add-label ready-for-agent` (#56's Q11),
   and the blocker removals for #57 and #58 (#56's Q12: "once every read holds") through the
   dependencies API, as `docs/agents/issue-tracker.md` → Blocking shows, only when every A4 read
-  matched what Q6 to Q8 expect. A differing read is posted as it is, and #56 stays as it was.
+  matched #56 → "Read-back expectations". A differing read is posted as it is, and #56 stays as it was.
 - #125 as #55's blocker (#125's Q6): on the confirmation alone, since the dependency it modelled,
   the apps root's state, has held since 2026-10-18.
 
@@ -258,8 +250,9 @@ aws resourcegroupstaggingapi get-resources --tag-filters Key=Platform,Values=spa
 aws iam list-roles --query "Roles[?starts_with(RoleName, 'spa-platform-poc')].RoleName"
 ```
 
-The certificate, the identity root and the apps root stay. The bucket must be empty (A6's
-clean-up); if the destroy refuses on the bucket, stop and say so rather than forcing it. Post the
+Before reading the destroy plan, read #55 → "Read-back expectations" (Q14): it says what the
+destroy may touch and what stays. A6's clean-up empties the bucket; if the destroy refuses on the
+bucket, stop and say so rather than forcing it. Post the
 destroy's exit code and the two reads on #118 as its second data point, and a dated note on #56
 that the cell is down until `deploy.sh`.
 
