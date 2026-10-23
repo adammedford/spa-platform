@@ -8,6 +8,7 @@ export const meta = {
     { title: 'Apply', detail: 'one classifier, then at most maxParallel appliers: commit appliers one at a time on integrator/morning-<date>, tracker-only appliers in parallel; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads every open pull request into main and the follow-ups already filed; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue' },
+    { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
     { title: 'After', detail: 'after: true only, one agent: refuses until origin/main contains the integration tip, then closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes' },
   ],
 }
@@ -39,6 +40,19 @@ export const meta = {
 //   after        optional  boolean, default false: the post-landing mode (#78 grill Q10).
 //   maxParallel  optional  positive integer, default 3: agents in flight at once, and the most
 //                          appliers Apply dispatches (#78 -> "Agent budget").
+//   confirmFile  optional  an absolute path to a draft Confirm comment (#302). The run is then the
+//                          draft check alone: it reads the issue and the file, sorts the questions
+//                          the way Apply would, prints the result and stops. wt is not needed for it,
+//                          and after is refused beside it.
+//
+// The draft check (#302). A Confirm is read by its first sentence and by the first word of each
+// "Q<n>:" line, and nothing showed the human what a draft would do until it was posted: on 2026-10-22
+// the draft for #286 opened with a bare "Confirm", which confirms only its override lines, and two of
+// those opened "No". With confirmFile, one read agent returns the issue's comments and the file's
+// text; the script sorts the questions through sortAnswers, the code Apply runs, with the draft as the
+// one Confirm comment, and returns the counts and lists. It classifies nothing, runs no applier or
+// verify agent and writes nothing. It fails only on a question number no questions comment yields; a
+// leading "no" is a normal override, listed and never a failure.
 //
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 classifier and at most
 // maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: nine at the
@@ -53,7 +67,7 @@ export const meta = {
 // to the record, as neither a sub-issue nor a blocker (docs/agents/issue-tracker.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not.
 const A = args || {}
-const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel']
+const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
 const badArguments = (a) => {
   const bad = []
   const abs = (p) => typeof p === 'string' && p.startsWith('/') && p.length > 1
@@ -63,7 +77,9 @@ const badArguments = (a) => {
   if (a.date !== undefined && (typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date))) bad.push('date: YYYY-MM-DD, the night the Overnight issue is titled for')
   if (a.issue !== undefined && !count(a.issue)) bad.push('issue: the Overnight <date> issue\'s number, a positive integer')
   if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /Users/adammedford/Projects/spa-platform')
-  if (!abs(a.wt)) bad.push('wt: the worktree root the run used, an absolute path, e.g. /Users/adammedford/.worktrees/overnight-2026-10-21')
+  if (a.confirmFile !== undefined && !abs(a.confirmFile)) bad.push('confirmFile: the draft Confirm comment\'s file as an absolute path')
+  if (a.confirmFile !== undefined && a.after === true) bad.push('confirmFile: the draft check runs alone; drop after, or drop confirmFile')
+  if (a.confirmFile !== undefined && a.wt === undefined) { /* the draft check makes and reads no worktree */ } else if (!abs(a.wt)) bad.push('wt: the worktree root the run used, an absolute path, e.g. /Users/adammedford/.worktrees/overnight-2026-10-21')
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; no worktree is made under the repository')
   if (a.after !== undefined && typeof a.after !== 'boolean') bad.push('after: true or false, a boolean (the string "true" is refused)')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
@@ -75,7 +91,8 @@ if (BAD_LAUNCH.length) {
   return { halted: 'bad launch; no agent started. Fix each argument and relaunch with all of them:\n- ' + BAD_LAUNCH.join('\n- ') }
 }
 const REPO = A.repo.replace(/\/+$/, '')
-const WTROOT = A.wt.replace(/\/+$/, '')
+const WTROOT = (A.wt || '').replace(/\/+$/, '')
+const CHECK = A.confirmFile !== undefined
 const AFTER = A.after === true
 const MAX_PAR = A.maxParallel || 3
 // The night's git-ignored log directory (.gitignore: .scratch/*/log/), where the overnight run left
@@ -431,6 +448,30 @@ const readConfirmations = (comments) => {
   return { confirms, covered, overrides }
 }
 const verdictOf = (answer) => (/^yes\b/i.test(answer) ? 'yes' : /^no\b/i.test(answer) ? 'no' : (!answer || /^open\b/i.test(answer)) ? 'open' : 'answered')
+// The sort Apply runs and the draft check prints (#302): each question's answer (its override, or the
+// night's), whether a Confirm confirmed it, and where it goes. Without a Confirm comment (dry) only a
+// "yes" goes on, to the would-do list; with one, a question no Confirm names or overrides, or answered
+// open, stays open, one answered no is recorded and applies nothing, and any other opening is applied
+// as written.
+const sortAnswers = (questions, conf, dry) => {
+  const out = { answers: {}, open: [], no: [], toClassify: [] }
+  for (const q of questions) {
+    const o = conf.overrides.get(q.q)
+    const confirmed = !dry && (conf.covered.has(q.q) || !!o)
+    const answer = o ? o.answer : q.answer
+    const vd = verdictOf(answer)
+    out.answers[q.q] = { answer, confirmed, verdict: vd }
+    if (dry ? vd !== 'yes' : (!confirmed || vd === 'open')) { out.open.push(q.q); continue }
+    if (vd === 'no') { out.no.push(q.q); continue }
+    out.toClassify.push({ q: q.q, issue: q.issue, task: q.task, title: q.title, text: q.text, recommendation: q.recommendation, answer, authority: dry ? '' : (o ? o.url : conf.covered.get(q.q)) })
+  }
+  return out
+}
+// The questions a Confirm names or overrides that no questions comment yielded.
+const unreadOf = (questions, conf) => {
+  const readQs = new Set(questions.map((q) => q.q))
+  return [...new Set([...conf.covered.keys(), ...conf.overrides.keys()])].filter((q) => !readQs.has(q)).sort((a, b) => a - b)
+}
 
 // ---------------------------------------------------------------- the record, judged here
 // tools/review_record.py, run by the Verify agent, decides which record clears a head; the script
@@ -793,6 +834,79 @@ const handoverText = (s) => {
   return L.join('\n').replace(/`/g, "'")
 }
 
+// ---------------------------------------------------------------- run: the draft check (#302)
+const DRAFTED = {
+  type: 'object',
+  properties: {
+    listing: LISTED,
+    issue: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' }, comments: { type: 'array', items: COMMENT } }, required: ['number', 'title', 'url', 'state', 'comments'] },
+    draft: { type: 'string' }, error: { type: 'string' },
+  },
+  required: ['listing', 'issue', 'draft', 'error'],
+}
+// Its agent writes nothing anywhere, so it carries these rules rather than the house rules, which
+// let an agent write under the run log.
+const draftPrompt = () => `Draft check: read the Overnight issue's comments and a draft Confirm comment, and return both verbatim (#302). You read; the script sorts.
+
+Rules (a draft check; you write nothing anywhere):
+- Write no file, anywhere, and post, edit, file or close nothing on GitHub: use only \`gh issue view\` and \`gh issue list\`, each with \`cd ${REPO} &&\` in front so it resolves this repository.
+- Never commit, checkout, switch, stash, reset or build in ${REPO}, and make no worktree.
+- Never quote a secret, token, cookie, code or state value in anything you return but the two texts below, verbatim.
+
+${LOOKUP('')}
+2. The issue: \`cd ${REPO} && gh issue view <number> --json number,title,url,state,comments\`. issue carries its number, title, url and state, and comments as {author: the login, createdAt, url, body}, every one, in order, each body verbatim.
+3. The draft: open ${A.confirmFile} with the Read tool. draft is its whole text, byte for byte, without the Read tool's line numbers. If it cannot be read, draft is "" and error says why.
+Return listing, issue, draft and error ("" when nothing stopped you).`
+
+const first60 = (s) => String(s).slice(0, 60)
+const checkText = (r) => {
+  const L = [`## Draft Confirm, Overnight ${r.date} (#${r.issue})`, '']
+  L.push(`The first sentence covers ${r.covered} of ${r.total} questions.`)
+  L.push(`${r.overrides} Q<n>: line(s) override; ${r.byOwnLines} confirmed by their own Q<n>: lines alone, named by no first sentence.`)
+  L.push(`${r.confirmed} confirmed of ${r.total}: ${r.applied} applied, ${r.no.length} answered no, ${r.open.length} left open.`)
+  if (r.notConfirm) L.push('The draft does not begin with "Confirm", so the apply step would read it as no Confirm comment at all.')
+  const list = (title, items) => { L.push('', `### ${title}`, ''); if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push('none') }
+  list('Answered no', r.no.map((n) => `Q${n.q}: ${n.answer}`))
+  list('Left open', r.open.map((n) => `Q${n.q}: ${n.answer}${n.confirmed ? '' : ' (not confirmed)'}`))
+  list('Not found', r.unknown.map((q) => `Q${q}: no "## Questions:" comment yields it`))
+  if (r.refusals.length) list('Questions not read', r.refusals)
+  L.push('', r.ok ? `check: pass: ${r.confirmed} of ${r.total} confirmed, every question number in the draft found` : `check: fail: ${r.unknown.map((q) => 'Q' + q).join(', ')} named by the draft, yielded by no questions comment`)
+  return L.join('\n')
+}
+
+if (CHECK) {
+  phase('Check')
+  const d = await run(draftPrompt(), { label: 'draft-read', phase: 'Check', schema: DRAFTED })
+  const dl = judgeLookup(d && d.listing)
+  if (dl.refused) return { mode: 'check', halted: dl.refused, agents: agentsRun }
+  if (d.issue.number !== dl.issue) return { mode: 'check', halted: `the read agent read #${d.issue.number}, not the run's #${dl.issue}; nothing was sorted`, agents: agentsRun }
+  if (d.error || !d.draft.trim()) return { mode: 'check', halted: `the draft ${A.confirmFile} was not read${d.error ? `: ${d.error}` : ': it came back empty'}; nothing was sorted`, agents: agentsRun }
+  const comments = d.issue.comments || []
+  if (readConfirmations(comments).confirms.length) return { mode: 'check', halted: `#${dl.issue} already has a Confirm comment, so a draft is no longer the whole confirmation; nothing was sorted`, agents: agentsRun }
+  const read = readQuestions(comments)
+  // The draft, as the one Confirm comment Adam would post, read and sorted by Apply's own code.
+  const conf = readConfirmations([{ author: ADAM, createdAt: 'draft', url: A.confirmFile, body: d.draft }])
+  const s = sortAnswers(read.questions, conf, false)
+  const qs = read.questions.map((q) => q.q)
+  const r = {
+    mode: 'check', date: dl.date, issue: dl.issue, total: qs.length,
+    covered: qs.filter((q) => conf.covered.has(q)).length,
+    overrides: conf.overrides.size,
+    byOwnLines: qs.filter((q) => conf.overrides.has(q) && !conf.covered.has(q)).length,
+    confirmed: qs.filter((q) => s.answers[q].confirmed).length,
+    applied: s.toClassify.length,
+    no: s.no.map((q) => ({ q, answer: first60(s.answers[q].answer) })),
+    open: s.open.map((q) => ({ q, answer: first60(s.answers[q].answer), confirmed: s.answers[q].confirmed })),
+    unknown: unreadOf(read.questions, conf),
+    notConfirm: conf.confirms.length === 0,
+    refusals: read.refusals,
+  }
+  r.ok = r.unknown.length === 0
+  r.text = checkText(r)
+  log(r.text)
+  return { ...r, agents: agentsRun }
+}
+
 // ---------------------------------------------------------------- run: after
 if (AFTER) {
   phase('After')
@@ -867,23 +981,14 @@ const conf = readConfirmations(comments)
 const dry = conf.confirms.length === 0
 // A question a Confirm comment names or overrides that no questions comment yielded is a read that
 // missed something: nothing is applied over it, and the hand-over says which.
-const readQs = new Set(read.questions.map((q) => q.q))
-const unread = [...new Set([...conf.covered.keys(), ...conf.overrides.keys()])].filter((q) => !readQs.has(q)).sort((a, b) => a - b)
+const unread = unreadOf(read.questions, conf)
 if (unread.length) refusals.push(`the Confirm comments name ${unread.map((q) => 'Q' + q).join(', ')}, which no "## Questions:" comment yielded; nothing is applied until every confirmed question is read`)
 const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answers: {}, morning: { commits: 0, pushed: false, reason: '' } }
 // Without a Confirm comment the pre-accepted answers are classified for the would-do list and acted
 // on by nobody (#78 grill Q1); with one, only what it confirms is classified and applied.
-const toClassify = []
-for (const q of read.questions) {
-  const o = conf.overrides.get(q.q)
-  const confirmed = !dry && (conf.covered.has(q.q) || !!o)
-  const answer = o ? o.answer : q.answer
-  const vd = verdictOf(answer)
-  apply.answers[q.q] = { answer, confirmed, verdict: vd }
-  if (dry ? vd !== 'yes' : (!confirmed || vd === 'open')) { apply.open.push(q.q); continue }
-  if (vd === 'no') { apply.no.push(q.q); continue }
-  toClassify.push({ q: q.q, issue: q.issue, task: q.task, title: q.title, text: q.text, recommendation: q.recommendation, answer, authority: dry ? '' : (o ? o.url : conf.covered.get(q.q)) })
-}
+const sorted = sortAnswers(read.questions, conf, dry)
+Object.assign(apply, { answers: sorted.answers, open: sorted.open, no: sorted.no })
+const toClassify = sorted.toClassify
 if (!verdict.ok) {
   // Any Verify stop goes to the hand-over: nothing is applied over a head no record clears (#78 ->
   // "Verify" step 8; the morning resumes once a record exists).
