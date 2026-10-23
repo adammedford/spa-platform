@@ -168,6 +168,33 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
         self.assertIn('name = "MockApi__App2Client", value = "<client-id:app2>"', result.stdout)
 
+    def test_it_waits_until_every_running_task_reports_the_registry_revision_step_1_read(self):
+        # Change request P2-5, decision 6 (#309): after the service is steady, spactl wait covers
+        # each running task by its id, the last segment of its ARN and never the ARN, which carries
+        # the account id, at the revision of the registry document step 1 read.
+        world = seeded_world()
+        world["registry"]["revision"] = 7
+        case, result = self.deployed(world)
+        waits = [c for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"]]
+        self.assertEqual(1, len(waits))
+        args = waits[0]["spactl"]
+        running = [task["id"] for task in case.load()["tasks"]]
+        self.assertEqual(",".join(running), args[args.index("--instances") + 1])
+        self.assertEqual("7", args[args.index("--revision") + 1])
+        # The tunnel's origin by default: the ALB is internal (tools/scripts/tunnel.sh).
+        self.assertEqual("https://app1.spa-poc.test:8443", args[args.index("--url") + 1])
+        order = [c.get("command") or c["spactl"][0] for c in case.calls()
+                 if c.get("command") == "ecs wait services-stable" or c.get("spactl", [""])[:1] == ["wait"]]
+        self.assertEqual(["ecs wait services-stable", "wait"], order)
+        self.assertIn("pass:", result.stdout)
+
+    def test_the_wait_takes_the_origin_given_with_url(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        result = case.run(SCRIPT, "--url", "https://app2.spa-poc.test:9443")
+        self.assertEqual(0, result.status, result.output)
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertEqual("https://app2.spa-poc.test:9443", wait[wait.index("--url") + 1])
+
     def test_two_deployments_push_two_tags(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
         self.assertEqual(0, case.run(SCRIPT).status)
@@ -199,6 +226,15 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
     def test_no_registry_at_all(self):
         world = cell.default_world()
         self.refused(world, "Run tools/scripts/seed.sh first")
+
+    def test_a_registry_with_no_revision_to_wait_for(self):
+        # Step 5 waits for the revision step 1 read (#309), so a document without one stops before
+        # anything is built. contracts/registry.schema.json: an integer of at least 1.
+        for revision in (None, 0, True, "2"):
+            with self.subTest(revision=revision):
+                world = seeded_world()
+                world["registry"]["revision"] = revision
+                self.refused(world, "has no revision")
 
     def test_it_reads_the_bucket_and_key_the_gateway_reads(self):
         world = seeded_world()
@@ -336,6 +372,30 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         case = self.failed(world, "could not log Docker in to the cell's registry.")
         self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
         self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")])
+
+    def test_a_running_task_never_sampled_fails_the_wait(self):
+        # #309's second box. The load balancer hands each read to the task it picks, so a task it
+        # never picks has never said which revision it serves: the wait times out naming it by its
+        # id, and deploy.sh fails rather than passing on the other task's answer.
+        world = seeded_world()
+        world["faults"]["extra_tasks"] = 1
+        world["faults"]["unsampled"] = 1
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertNotIn("pass:", result.stdout)
+        sampled, unsampled = case.load()["tasks"]
+        self.assertIn(f"instance {unsampled['id']} never answered", result.stderr)
+        self.assertNotIn(f"instance {sampled['id']} never answered", result.stderr)
+        self.assertIn("did not report revision 2", result.stderr)
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertEqual(f"{sampled['id']},{unsampled['id']}", wait[wait.index("--instances") + 1])
+
+    def test_a_task_behind_the_revision_step_1_read_fails_the_wait(self):
+        world = seeded_world()
+        world["faults"]["behind"] = 1
+        self.failed(world, "last answered revision 1")
 
     def test_a_failed_build_applies_nothing(self):
         world = seeded_world()

@@ -21,6 +21,8 @@ one file back.
         contracts/platform-config.schema.json, from its task definition's environment.
     cell_documents.py apps <registry.json>
         The number of apps in a registry document.
+    cell_documents.py revision <registry.json>
+        A registry document's revision, the number /readyz reports once it is live.
     cell_documents.py release <directory>
         A release name for a fixture directory, derived from its content.
 
@@ -250,6 +252,20 @@ def apps(path: str) -> int:
     return 0
 
 
+def revision(path: str) -> int:
+    """contracts/registry.schema.json's revision: an integer of at least 1. A boolean is not one,
+    though Python counts it as an int."""
+    try:
+        document = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the live registry is not JSON")
+    value = document.get("revision") if isinstance(document, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise Refused("the live registry has no revision of at least 1")
+    print(value)
+    return 0
+
+
 # --- release ---------------------------------------------------------------------------------------
 
 def release(directory: str) -> int:
@@ -270,7 +286,7 @@ def release(directory: str) -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "release": (release, 1)}
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "release": (release, 1)}
 
 
 def main(argv: list[str]) -> int:
