@@ -16,8 +16,8 @@ replayed too.
 
 Each rule has a case that fails when the rule is removed: a replayed call and a replayed result
 counted once, a Write refusal counted with Edit's, a Bash result quoting the refusal's words left out,
-a result from another run left out, and a transcripts root with no match reported as missing and not
-as zero. The baseline case reads the 2026-10-18 run's real transcripts when they are on this machine
+a result from another run left out, a transcripts root with no match reported as missing and not
+as zero, and a line that does not parse reported as unreadable and not counted past. The baseline case reads the 2026-10-18 run's real transcripts when they are on this machine
 and asserts the script says they are not when they are not; neither branch skips.
 
 Run: python3 -I tools/retro_refusals_tests.py
@@ -188,6 +188,20 @@ class Counts(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(out.strip(), f"retro-refusals: wf_aaaa1111-000: missing: no subagent transcripts for this run under {self.t.root}")
         self.assertNotIn(" 0 ", out)
+
+    def test_a_line_that_does_not_parse_is_unreadable_not_a_count(self) -> None:
+        # A truncated line may hold a refusal; counting the rest would give a zero that is not one.
+        self.t.agent("s1", "wf_aaaa1111-000", "a1", "implement:issue-1", [
+            assistant("a1", use("toolu_1", "Edit")),
+            user("a1", result("toolu_1", NOT_READ)),
+        ])
+        directory = os.path.join(self.t.base, "s1", "subagents", "workflows", "wf_aaaa1111-000")
+        with open(os.path.join(directory, "agent-a1.jsonl"), "a", encoding="utf-8") as handle:
+            handle.write('{"type": "user", "message": {"role": "user", "content": [{"type": "tool_res\n\n')
+        status, out, _ = run("wf_aaaa1111-000", "--root", self.t.root)
+        self.assertEqual(status, 1)
+        self.assertEqual(out.strip(), "retro-refusals: wf_aaaa1111-000: unreadable: lines that do not parse "
+                                      "in agent-a1.jsonl (1); no count is given")
 
     def test_a_date_resolves_every_overnight_launch_on_it_in_order(self) -> None:
         # Q167: a second launch on the same date is a run of its own, and gets its own line.

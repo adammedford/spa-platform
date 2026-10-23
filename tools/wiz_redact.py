@@ -5,17 +5,23 @@
 
 The `wiz` skill posts each stage's evidence to its ticket from captured output, and every post goes
 through this script first (#259). It used to follow a paragraph of prose, which can fail quietly;
-tools/wiz_redact_tests.py holds each rule to a case. It applies four rules, in this order:
+tools/wiz_redact_tests.py holds each rule to a case. It applies six rules, in this order:
 
 1. A twelve-digit number, or one written 1234-5678-9012, becomes `<account>`. With
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
    digits, as #125 does. Without the option no twelve-digit number survives.
 2. An ARN, `arn:aws:<service>:<region>:<account>:<resource>`, becomes its resource field, the part
    after the account: `arn:aws:iam::<account>:role/x` becomes `role/x`.
-3. The value after `code=`, `client_id=`, `ClientId`, `ClientSecret`, `SessionToken` or a
+3. The value after `code=`, `state=`, `client_id=`, `client_secret=`, `code_verifier=`,
+   `access_token=`, `refresh_token=`, `id_token=`, `ClientId`, `ClientSecret`, `SessionToken` or a
    parameter's `Value` becomes `<elided>`. A `Value` beside a `Key`, which is a tag's, is kept.
-4. A JSON member named `clientId`, `secret`, `SecretString`, `AccessKeyId` or `SecretAccessKey`
-   becomes `"<elided>"`, whatever its value.
+4. A JSON member named `clientId`, `secret`, `SecretString`, `AccessKeyId`, `SecretAccessKey`,
+   `access_token`, `refresh_token`, `id_token` or `client_secret` becomes `"<elided>"`, whatever
+   its value.
+5. In a `Cookie:` or `Set-Cookie:` line, the value of every cookie becomes `<elided>`; its name and
+   its attributes (`Path`, `Expires`, `HttpOnly` and the rest) are kept.
+6. The credential after `Authorization:` becomes `<elided>`, its scheme (`Bearer`, `Basic`) kept; a
+   `Bearer` token of sixteen characters or more elsewhere is elided the same way.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -46,8 +52,11 @@ ACCOUNT = re.compile(r"(?<!\d)(\d{12})(?!\d)|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d
 # a comma or a closing bracket, so an ARN inside JSON or a sentence keeps what follows it.
 ARN = re.compile(r"\barn:aws[\w-]*:[\w-]*:[\w-]*:[^:\s\"']*:([^\s\"',;)\]}>]+)")
 
-# `code=` and `client_id=` are query parameters: the value runs to the next parameter.
-QUERY_KEY = re.compile(r"(?<![\w-])(code|client_id)=([^&\s\"'#`<>]+)")
+# `code=` and `state=` and the like are query parameters: the value runs to the next parameter.
+QUERY_KEY = re.compile(
+    r"(?<![\w-])(code|state|client_id|client_secret|code_verifier|access_token|refresh_token|id_token)="
+    r"([^&\s\"'#`<>]+)"
+)
 
 # The AWS names, as a JSON member ("ClientId": "x"), in YAML (ClientId: x) or in the CLI's
 # shorthand (ClientId=x).
@@ -56,7 +65,23 @@ AWS_KEY = re.compile(
     r"(\"(?:[^\"\\]|\\.)*\"|[^\s,\"'}\]]+)"
 )
 
-JSON_MEMBER = re.compile(r"\"(clientId|secret|SecretString|AccessKeyId|SecretAccessKey)\"\s*:\s*")
+JSON_MEMBER = re.compile(
+    r"\"(clientId|secret|SecretString|AccessKeyId|SecretAccessKey"
+    r"|access_token|refresh_token|id_token|client_secret)\"\s*:\s*"
+)
+
+# A cookie header line, request or response, with or without a curl -v prefix. The attributes a
+# Set-Cookie line carries are not cookies, so their names keep their values.
+COOKIE_LINE = re.compile(r"(?<![\w-])((?:Set-)?Cookie\s*:[ \t]*)([^\r\n]*)", re.IGNORECASE)
+COOKIE_ATTRIBUTES = frozenset(
+    ("path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "partitioned", "priority")
+)
+COOKIE_PAIR = re.compile(r"([^;=\s][^;=]*)=([^;]*)")
+
+# `Authorization: Bearer abc` keeps its scheme and elides the credential; a bare `Bearer <token>` of
+# sixteen characters or more goes the same way, which leaves the words "Bearer token" alone.
+AUTHORIZATION = re.compile(r"(?<![\w-])(Authorization\s*:[ \t]*)(?:([A-Za-z]+)[ \t]+)?([^\s]+)", re.IGNORECASE)
+BEARER = re.compile(r"(?<![\w-])(Bearer[ \t]+)[A-Za-z0-9._~+/=-]{16,}")
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
@@ -87,6 +112,19 @@ def aws_key(text: str) -> str:
         elided = '"<elided>"' if value.startswith('"') else "<elided>"
         return match.group(0)[: match.start(4) - match.start()] + elided
     return AWS_KEY.sub(replace, text)
+
+
+def cookie_line(match: re.Match) -> str:
+    def pair(found: re.Match) -> str:
+        if found.group(1).strip().lower() in COOKIE_ATTRIBUTES:
+            return found.group(0)
+        return f"{found.group(1)}=<elided>"
+    return match.group(1) + COOKIE_PAIR.sub(pair, match.group(2))
+
+
+def authorization(match: re.Match) -> str:
+    scheme = f"{match.group(2)} " if match.group(2) else ""
+    return f"{match.group(1)}{scheme}<elided>"
 
 
 def json_value_end(text: str, start: int) -> int:
@@ -141,6 +179,9 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = QUERY_KEY.sub(lambda m: f"{m.group(1)}=<elided>", text)
     text = aws_key(text)
     text = json_members(text)
+    text = COOKIE_LINE.sub(cookie_line, text)
+    text = AUTHORIZATION.sub(authorization, text)
+    text = BEARER.sub(lambda m: f"{m.group(1)}<elided>", text)
     return text
 
 

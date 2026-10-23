@@ -16,7 +16,10 @@ on one line, or, when the run's transcripts are not under the root,
 
     retro-refusals: <run>: missing: no subagent transcripts for this run under <root>
 
-which is never a zero: a retro that cannot read the transcripts says so (#315).
+which is never a zero: a retro that cannot read the transcripts says so (#315). A transcript line that
+does not parse is the same: the run's line is
+
+    retro-refusals: <run>: unreadable: lines that do not parse in <agent files> (<n>); no count is given
 
 **A run** is one launch of a workflow script, named by its id (`wf_3b77ab2e-214`); a second launch
 on the same date is a run of its own (Q167). Its transcripts are every `agent-*.jsonl` in each
@@ -36,7 +39,7 @@ on the call is the rule that keeps a Bash result out: a session that reads #109 
 prints those words in a result that refused nothing. A refusal's agent is the label its
 `agent-<id>.meta.json` gives (`implement:issue-102`), else its id.
 
-Exits 0 when every run was counted, 1 when one was missing, 2 on a usage error. Standard library
+Exits 0 when every run was counted, 1 when one was missing or unreadable, 2 on a usage error. Standard library
 only, under `python3 -I`. Test companion: tools/retro_refusals_tests.py.
 """
 
@@ -87,14 +90,18 @@ def count(run: str, root: str) -> tuple[int, str]:
     calls: dict[str, str] = {}
     raw = 0
     results: dict[str, tuple[str, str]] = {}
+    unreadable: dict[str, int] = {}
     for transcript in transcripts:
         agent = os.path.basename(transcript)[len("agent-"): -len(".jsonl")]
         label = label_of(transcript, agent)
         with open(transcript, encoding="utf-8") as handle:
             for text in handle:
+                if not text.strip():
+                    continue
                 try:
                     line = json.loads(text)
                 except ValueError:
+                    unreadable[os.path.basename(transcript)] = unreadable.get(os.path.basename(transcript), 0) + 1
                     continue
                 if not isinstance(line, dict):
                     continue
@@ -107,6 +114,11 @@ def count(run: str, root: str) -> tuple[int, str]:
                         for kind in KINDS:
                             if kind in body:
                                 results.setdefault(block.get("tool_use_id", ""), (kind, label))
+    if unreadable:
+        # A line that does not parse may hold a call or a refusal, so a count over the rest could be a
+        # zero that is not one (CODING_STANDARDS.md: a check fails closed).
+        named = ", ".join(f"{name} ({n})" for name, n in sorted(unreadable.items()))
+        return 1, f"retro-refusals: {run}: unreadable: lines that do not parse in {named}; no count is given"
     refusals = {i: r for i, r in results.items() if i in calls}
     not_read = [i for i, (kind, _) in refusals.items() if kind == KINDS[0]]
     modified = [i for i, (kind, _) in refusals.items() if kind == KINDS[1]]

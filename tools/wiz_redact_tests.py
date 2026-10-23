@@ -7,7 +7,7 @@ The `wiz` skill pipes every post through tools/wiz_redact.py (#259), so a rule t
 leaks an account id, an authorization code or a secret into a public comment and says nothing. Each
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
-four rules has at least one case that turns red when that rule is removed from the script; #259's
+six rules has at least one case that turns red when that rule is removed from the script; #259's
 merge body names the mutation and the case.
 
 The ids, codes and secrets below are made up for the cases; none is a real account or credential.
@@ -119,7 +119,13 @@ class RuleThreeValuesAfterAKey(Redacts):
     def test_a_code_in_a_url_is_elided(self) -> None:
         self.assertRedacts(
             "https://app1.spa-poc.test:8443/signin-oidc?code=4f1c2e9a-77aa-4c1b&state=abc\n",
-            "https://app1.spa-poc.test:8443/signin-oidc?code=<elided>&state=abc\n",
+            "https://app1.spa-poc.test:8443/signin-oidc?code=<elided>&state=<elided>\n",
+        )
+
+    def test_a_state_and_the_oauth_secrets_in_a_url_are_elided(self) -> None:
+        self.assertRedacts(
+            "cb?state=Zm9vYmFy&code_verifier=dBjftJeZ4CVP&client_secret=s3cr3t&access_token=at1&scope=openid\n",
+            "cb?state=<elided>&code_verifier=<elided>&client_secret=<elided>&access_token=<elided>&scope=openid\n",
         )
 
     def test_a_client_id_in_a_url_is_elided(self) -> None:
@@ -173,6 +179,48 @@ class RuleFourJsonMembers(Redacts):
             ' "AccessKeyId": "<elided>", "SecretAccessKey": "<elided>",'
             ' "kept": true}\n',
         )
+
+
+    def test_the_oauth_token_members_are_elided(self) -> None:
+        self.assertRedacts(
+            '{"access_token": "eyJhbGciOi.payload.sig", "refresh_token": "r3fr3sh", "id_token": "eyJ0eXAi",'
+            ' "client_secret": "s3cr3t", "token_type": "Bearer", "expires_in": 3600}\n',
+            '{"access_token": "<elided>", "refresh_token": "<elided>", "id_token": "<elided>",'
+            ' "client_secret": "<elided>", "token_type": "Bearer", "expires_in": 3600}\n',
+        )
+
+
+class RuleFiveCookies(Redacts):
+    def test_a_set_cookie_value_is_elided_and_its_attributes_are_kept(self) -> None:
+        self.assertRedacts(
+            "< Set-Cookie: __Host-spa.session=CfDJ8N0sess; path=/; secure; samesite=lax; httponly\n",
+            "< Set-Cookie: __Host-spa.session=<elided>; path=/; secure; samesite=lax; httponly\n",
+        )
+
+    def test_every_cookie_of_a_cookie_line_is_elided(self) -> None:
+        self.assertRedacts(
+            "> Cookie: __Host-spa.session=CfDJ8N0sess; theme=dark; .AspNetCore.Antiforgery.x=tok\n",
+            "> Cookie: __Host-spa.session=<elided>; theme=<elided>; .AspNetCore.Antiforgery.x=<elided>\n",
+        )
+
+    def test_an_expires_attribute_keeps_its_date(self) -> None:
+        self.assertRedacts(
+            "Set-Cookie: sid=abc123; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Max-Age=60\n",
+            "Set-Cookie: sid=<elided>; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Max-Age=60\n",
+        )
+
+
+class RuleSixAuthorization(Redacts):
+    def test_a_bearer_credential_is_elided_and_its_scheme_is_kept(self) -> None:
+        self.assertRedacts("> Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig\n",
+                           "> Authorization: Bearer <elided>\n")
+
+    def test_a_basic_credential_is_elided(self) -> None:
+        self.assertRedacts("Authorization: Basic dXNlcjpwYXNz\n", "Authorization: Basic <elided>\n")
+
+    def test_a_bare_bearer_token_is_elided_and_the_words_are_not(self) -> None:
+        self.assertRedacts("sent Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig as the Bearer token\n",
+                           "sent Bearer <elided> as the Bearer token\n")
 
 
 class AccessDenied(unittest.TestCase):
