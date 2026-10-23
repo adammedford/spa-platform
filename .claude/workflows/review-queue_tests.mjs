@@ -655,7 +655,11 @@ try {
   {
     const OLD_FIRST = sha('4')
     const NEW_FIRST = sha('5'); const NEW_MID = sha('6'); const NEW_HEAD = sha('8')
-    const REBUILT = (verdict) => ({ 207: { ...DELTA(verdict)[207], head: NEW_HEAD, commits: [NEW_HEAD, NEW_MID, NEW_FIRST] } })
+    // The recorded head forked from an older main than the rebuild did, so range-diff is asked for
+    // the record's own fork point, not the head's.
+    const OLD_BASE = sha('9')
+    const REBUILT = (verdict) => ({ 207: { ...DELTA(verdict)[207], head: NEW_HEAD, commits: [NEW_HEAD, NEW_MID, NEW_FIRST],
+      comments: [{ ...OLD_RECORD(verdict), body: `## Review\n\nReviewed ${H_OLD} against ${OLD_BASE}: ${verdict}` }] } })
     const mapping = [{ commit: NEW_HEAD, equals: '' }, { commit: NEW_MID, equals: H_OLD }, { commit: NEW_FIRST, equals: OLD_FIRST }]
     // Two of the head's commits are merges: the unmapped one is audited on its own, the mapped one not.
     const REB = { 207: { from: H_OLD, ancestor: false, commits: [], merges: [NEW_HEAD, NEW_MID], since: [], error: '',
@@ -664,7 +668,7 @@ try {
     result = await execute(env)
     const r = resultOf(207, result)
     const rp = env.prompts['range:207'] || ''
-    if (!/git -C \S+ range-diff /.test(rp) || !rp.includes(FORK)) fail('a rebuild: the range agent is not asked to map the old commits onto the new with git range-diff from the record\'s fork point')
+    if (!rp.includes(`range-diff ${OLD_BASE}..${H_OLD} ${FORK}..${NEW_HEAD}`)) fail('a rebuild: the range agent is not asked to map the old commits onto the new with git range-diff from the record\'s fork point')
     if (!/\^\{tree\}/.test(rp)) fail('a rebuild: the range agent is not asked to compare trees, only patches')
     if (r.outcome !== 'recorded') fail(`a rebuild: outcome ${r.outcome}`)
     const ran = env.mutations.map((m) => m.test).sort()
