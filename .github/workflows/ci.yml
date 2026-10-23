@@ -168,7 +168,10 @@ jobs:
           node --version
           scripts=""
           companions=""
-          for found in $(git ls-files -- .claude/workflows); do
+          # A failed listing is not an empty folder: in a `for` list its exit status is lost.
+          tracked="$(git ls-files -- .claude/workflows)" \
+            || { echo "::error::the workflow test companions were not judged: git ls-files failed."; exit 1; }
+          for found in $tracked; do
             case "${found#.claude/workflows/}" in
               */*) ;;
               *_tests.mjs) companions="$companions $found" ;;

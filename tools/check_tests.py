@@ -1248,6 +1248,19 @@ def node_calls(case: Case) -> list[list[str]]:
     return [call for call in case.calls() if call[0] == "node"]
 
 
+def fail_workflow_listing(case: Case):
+    """Swap the case's git, after the case has set itself up with it, for one that fails the listing
+    of .claude/workflows and runs the real git for everything else."""
+    real = os.path.realpath(shutil.which("git"))
+    (case.bin / "git").unlink()
+    case.write_executable(case.bin / "git", "#!/bin/bash\n"
+                          'if [ "$*" = "ls-files -- .claude/workflows" ]; then\n'
+                          '  echo "git double: ls-files failed" >&2\n'
+                          "  exit 128\n"
+                          "fi\n"
+                          f'exec {shlex.quote(real)} "$@"\n')
+
+
 class WorkflowCompanionTests(CheckTestCase):
     """#276: under --full, a change under .claude/workflows/ runs every workflow script's test
     companion with node, and the verdict names each; a red one fails the verdict below its own lines;
@@ -1321,6 +1334,17 @@ class WorkflowCompanionTests(CheckTestCase):
         self.assertIn("check: no workflow test companion is tracked in .claude/workflows/.",
                       result.stdout.splitlines())
 
+    def test_a_failed_listing_fails_rather_than_reads_as_empty(self):
+        # A git that cannot list the folder must not pass as a folder with nothing in it (#276's
+        # review; CODING_STANDARDS.md, "A check fails closed").
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
+        fail_workflow_listing(case)
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the workflow test companions were not judged: git ls-files failed.",
+                         result.last_line(result.stderr))
+        self.assertEqual([], node_calls(case))
+
     def test_the_hook_runs_no_workflow_companion(self):
         case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
         result = case.run(hook=True)
@@ -1382,6 +1406,15 @@ class CiWorkflowCompanionTests(CheckTestCase):
         completed = self.run_step(case)
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("::error::node is not on PATH.", completed.stdout)
+
+    def test_a_failed_listing_fails_it(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS)
+        fail_workflow_listing(case)
+        completed = self.run_step(case)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("::error::the workflow test companions were not judged: git ls-files failed.",
+                      completed.stdout)
+        self.assertEqual([["node", "--version"]], node_calls(case))
 
     def test_the_overnight_step_is_folded_into_it(self):
         # #213's own step ran the overnight companion alone; this step runs it with the rest.

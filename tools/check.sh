@@ -659,7 +659,11 @@ if $full; then
   if touches workflows; then
     workflow_scripts=""
     workflow_companions=""
-    for found in $(git ls-files -- .claude/workflows); do
+    # A failed listing is not an empty folder: in a `for` list its exit status is lost, and an
+    # empty list passes with nothing judged (CODING_STANDARDS.md, "A check fails closed").
+    workflow_tracked="$(git ls-files -- .claude/workflows)" \
+      || fail "the workflow test companions were not judged: git ls-files failed."
+    for found in $workflow_tracked; do
       case "${found#.claude/workflows/}" in
         */*) ;;
         *_tests.mjs) workflow_companions="$workflow_companions $found" ;;
