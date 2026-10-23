@@ -74,6 +74,13 @@
 # branch adds to main. An overnight lane names its fork point instead, so its own commits are
 # judged rather than the night's merges.
 #
+# Both modes hold a part-row merge without its Outstanding lines (#291): every commit from that base
+# to HEAD whose subject starts "Merge part of task" must carry a line starting `Outstanding:` and
+# one starting `Outstanding test ids:`, which docs/agents/landing-work.md asks of a row that lands
+# unfinished. The check names each such commit and each line it lacks, on its own line, and fails.
+# A "Merge task" commit is held to neither. On #287 row 6.7's merge 340fd07 carried neither line,
+# and fixing it then would have rewritten every later commit.
+#
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
 # Written for the bash 3.2 macOS ships, whatever shell calls it: no associative arrays, no
@@ -282,6 +289,58 @@ else
   missing python3 steering
 fi
 
+# --- the part-row merges ----------------------------------------------------------------------
+#
+# docs/agents/landing-work.md asks a merge that lands a row unfinished, "Merge part of task <id>:
+# ...", for two lines: `Outstanding:`, what the row still owes, and `Outstanding test ids:`. On #287
+# row 6.7's merge 340fd07 carried neither while its sibling 118293a carried both, and by the time
+# the review saw it, fixing it meant rewriting every later commit, so it was carried instead (#291).
+# A fixed pattern belongs here rather than with the reviewer.
+#
+# It reads commits, like the steering check's authority rule, over the same range: from the base
+# A-05 judges against to HEAD, so an overnight lane that names its fork point is judged on its own
+# commits and not on an earlier lane's. The subject decides, as it does for tools/roadmap.py and
+# tools/land.sh, whatever the commit's parents: "Merge part of task" and "Merge part of tasks" are
+# held, "Merge task(s)" is not. Each line must start a line of the message; a mention mid-sentence
+# is not the line. Every offending commit and every missing line is named before the one verdict.
+#
+# With no base it does not read every commit HEAD reaches, as the steering check does: 340fd07 is
+# on main for good, and would hold every push. The hook says it did not check; the full check has
+# already failed at A-05. A git that cannot list or read the range fails the check rather than
+# reading as a range with nothing to hold (CODING_STANDARDS.md, "A check fails closed").
+if [ -n "$base" ]; then
+  part_rows="$(git log --format='%H %s' "$base..HEAD")" \
+    || fail "the part-row merges were not judged: git log failed."
+  part_rows_missing=0
+  while IFS= read -r part_row; do
+    [ -n "$part_row" ] || continue
+    part_row_sha="${part_row%% *}"
+    part_row_subject="${part_row#* }"
+    case "$part_row_subject" in
+      "Merge part of task"*) ;;
+      *) continue ;;
+    esac
+    part_row_body="$(git show -s --format=%B "$part_row_sha")" \
+      || fail "the part-row merges were not judged: git show failed on $part_row_sha."
+    part_row_short="$(git rev-parse --short "$part_row_sha")" \
+      || fail "the part-row merges were not judged: git rev-parse failed on $part_row_sha."
+    for part_row_line in "Outstanding:" "Outstanding test ids:"; do
+      if ! printf '%s\n' "$part_row_body" | grep -E -e "^$part_row_line" > /dev/null; then
+        echo "$me: the part-row merge $part_row_short \"$part_row_subject\" has no line starting \"$part_row_line\"." >&2
+        part_rows_missing=$((part_rows_missing + 1))
+      fi
+    done
+  done << EOF
+$part_rows
+EOF
+  [ "$part_rows_missing" -eq 0 ] \
+    || fail "a part-row merge lacks a line docs/agents/landing-work.md requires of a row that stays unfinished."
+elif $full; then
+  fail "no origin/main or main to judge the part-row merges against; name one with --base."
+else
+  echo "pre-push: part-row merges not checked: no main to diff against." >&2
+fi
+
 # --- the roadmap ------------------------------------------------------------------------------
 #
 # docs/roadmap.md states how far the work has got, which is the one thing a document must never
@@ -375,7 +434,7 @@ fi
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the roadmap, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the roadmap, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
