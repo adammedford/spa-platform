@@ -644,6 +644,75 @@ try {
     if (!full.includes(OLD_RECORD('merge').html_url)) fail(`PR 207 with ${what}: no "Full review:" line naming the earlier record`)
   }
 
+  // 17a. A rebuilt head (#293). The latest record names a head that is no ancestor of this one, as on
+  //      #287 where each rebuild of the run branch cost a full review. The range agent maps the old
+  //      commits onto the new with git range-diff and reports, per new commit, the old one whose tree
+  //      it equals. Two of the three new commits map with equal trees: the review is a delta over the
+  //      one that does not, the comment says it was a rebuild and names the mapping, and only the
+  //      candidates the content diff from the recorded head touches are mutated. A rebuild that maps
+  //      no commit, or whose range nobody could read, is a full review, as before.
+  checks++
+  {
+    const OLD_FIRST = sha('4')
+    const NEW_FIRST = sha('5'); const NEW_MID = sha('6'); const NEW_HEAD = sha('8')
+    const REBUILT = (verdict) => ({ 207: { ...DELTA(verdict)[207], head: NEW_HEAD, commits: [NEW_HEAD, NEW_MID, NEW_FIRST] } })
+    const mapping = [{ commit: NEW_HEAD, equals: '' }, { commit: NEW_MID, equals: H_OLD }, { commit: NEW_FIRST, equals: OLD_FIRST }]
+    // Two of the head's commits are merges: the unmapped one is audited on its own, the mapped one not.
+    const REB = { 207: { from: H_OLD, ancestor: false, commits: [], merges: [NEW_HEAD, NEW_MID], since: [], error: '',
+      changedFiles: ['tests/Platform.Registry.Tests/Touched.cs', 'src/Fixed.cs'], mapping } }
+    env = run({ prs: [207] }, REBUILT('merge'), { range: REB })
+    result = await execute(env)
+    const r = resultOf(207, result)
+    const rp = env.prompts['range:207'] || ''
+    if (!/git -C \S+ range-diff /.test(rp) || !rp.includes(FORK)) fail('a rebuild: the range agent is not asked to map the old commits onto the new with git range-diff from the record\'s fork point')
+    if (!/\^\{tree\}/.test(rp)) fail('a rebuild: the range agent is not asked to compare trees, only patches')
+    if (r.outcome !== 'recorded') fail(`a rebuild: outcome ${r.outcome}`)
+    const ran = env.mutations.map((m) => m.test).sort()
+    if (JSON.stringify(ran) !== '["Touched","ViaSource"]') fail(`a rebuild: mutated ${JSON.stringify(ran)}, expected the delta's ["Touched","ViaSource"]`)
+    if (JSON.stringify(r.outsideRange) !== '["Untouched"]') fail(`a rebuild: outsideRange ${JSON.stringify(r.outsideRange)}`)
+    if (!r.range || !r.range.rebuilt || JSON.stringify(r.range.commits) !== JSON.stringify([NEW_HEAD])) fail(`a rebuild: range ${JSON.stringify(r.range)}, expected a rebuilt range over ${NEW_HEAD} alone`)
+    if (!r.earlierRecord || r.earlierRecord.head !== H_OLD) fail(`a rebuild: earlierRecord ${JSON.stringify(r.earlierRecord)}`)
+    if (!r.range || JSON.stringify(r.range.merges) !== JSON.stringify([NEW_HEAD])) fail(`a rebuild: merges ${JSON.stringify(r.range && r.range.merges)}, expected the unmapped merge ${NEW_HEAD} alone`)
+    const lines = commentOf(env, 207).split('\n')
+    const headAt = lines.findIndex((l) => l.startsWith(`Head ${NEW_HEAD}`))
+    const deltaAt = lines.findIndex((l) => l.startsWith('Delta review:'))
+    if (deltaAt < 0 || deltaAt !== headAt + 1) fail(`a rebuild: no "Delta review:" line straight after the head line (head at ${headAt}, delta at ${deltaAt})`)
+    const scope = lines.slice(deltaAt, deltaAt + 2).join('\n')
+    for (const want of ['rebuil', OLD_RECORD('merge').html_url, `${NEW_MID} = ${H_OLD}`, `${NEW_FIRST} = ${OLD_FIRST}`, NEW_HEAD]) if (!scope.includes(want)) fail(`a rebuild: the scope lines ${JSON.stringify(scope)} do not name ${want}`)
+    if (lines.some((l) => l.startsWith('Full review:'))) fail('a rebuild that maps two of three commits: the comment still says full review')
+    for (const axis of ['standards', 'spec']) {
+      const p = env.prompts[`${axis}:207`] || ''
+      if (!p.includes(NEW_HEAD) || !p.includes(`diff ${H_OLD} ${NEW_HEAD}`)) fail(`a rebuild: the ${axis} prompt does not name the unmapped commit and the content diff from the recorded head`)
+      // from..to over a head that is no descendant lists the whole branch, so the rebuild never says it.
+      if (p.includes(`${H_OLD}..${NEW_HEAD}`)) fail(`a rebuild: the ${axis} prompt reviews the range ${H_OLD}..${NEW_HEAD}, which is the whole branch when the recorded head is no ancestor`)
+      if (p.includes(NEW_MID + ' ') && !p.includes(`${NEW_MID} = ${H_OLD}`)) fail(`a rebuild: the ${axis} prompt asks for review of the mapped ${NEW_MID}`)
+    }
+    // A held record's findings are still checked in a rebuild; one left unanswered holds.
+    env = run({ prs: [207] }, REBUILT('hold'), { range: REB, earlier: { 207: [{ finding: 'the cap is off by one', answered: false, how: 'the unmapped commit leaves it' }] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`a rebuild after a hold left unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
+    // Every commit maps: a delta over nothing new, which still names the mapping.
+    const all = { 207: { ...REB[207], changedFiles: [], mapping: mapping.map((m) => ({ ...m, equals: m.equals || H_OLD })) } }
+    env = run({ prs: [207] }, REBUILT('merge'), { range: all })
+    result = await execute(env)
+    if (!resultOf(207, result).range || resultOf(207, result).range.commits.length !== 0 || env.mutations.length) fail(`a rebuild whose every commit maps: range ${JSON.stringify(resultOf(207, result).range)}, ${env.mutations.length} mutation(s); expected a delta over no commit and none`)
+    // Full reviews: no commit maps; the range could not be read; the mapping misses a commit of the head.
+    for (const [what, rg] of [
+      ['maps no commit', { ...REB[207], mapping: mapping.map((m) => ({ ...m, equals: '' })) }],
+      ['an unreadable range', { ...REB[207], error: 'range-diff: bad revision' }],
+      ['a mapping that misses a commit of the head', { ...REB[207], mapping: mapping.slice(1) }],
+      ['a mapping that names no sha', { ...REB[207], mapping: [{ commit: NEW_HEAD, equals: '' }, { commit: NEW_MID, equals: 'yes' }, { commit: NEW_FIRST, equals: '' }] }],
+    ]) {
+      env = run({ prs: [207] }, REBUILT('merge'), { range: { 207: rg } })
+      result = await execute(env)
+      const f = resultOf(207, result)
+      if (env.mutations.length !== 3) fail(`a rebuild with ${what}: ${env.mutations.length} mutations, expected the full review's 3`)
+      if (f.range !== null) fail(`a rebuild with ${what}: range ${JSON.stringify(f.range)}, expected null`)
+      const full = commentOf(env, 207).split('\n').find((l) => l.startsWith('Full review:')) || ''
+      if (!full.includes(OLD_RECORD('merge').html_url)) fail(`a rebuild with ${what}: no "Full review:" line naming the earlier record`)
+    }
+  }
+
   // 17b. A full review after a hold (#289), in #287's shape: the latest record held on a head that is
   //      no ancestor of this one, its Mutations table naming two LibraryTests cases in one did-not-fail
   //      cell; two `Review:` commits since the fork point; a Dockerfile candidate that record reproduced
