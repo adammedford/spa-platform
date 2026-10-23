@@ -355,6 +355,14 @@ jobs:
         # which must write nothing and exit 3 so the sitting stops and names the cause.
         run: python3 -I tools/wiz_redact_tests.py
 
+      - name: A session's tail prints its last text turns and leaves out tool output and task notifications
+        # A review or a morning reads what another session meant from the end of its transcript
+        # (#303), and #286's hand parse of one printed 18,000 characters, most of them task
+        # notifications. tools/session_tail.py prints the last text turns only; its companion runs it
+        # on a hand-written transcript holding every kind it leaves out, a turn over the 4,000-character
+        # cut and an unknown session id, which must exit non-zero and name the folder it searched.
+        run: python3 -I tools/session_tail_tests.py
+
       - name: An image build sends no secret or host build output, and the runtime user can read the image
         # A workstation's image build sent the local CA's private key, the scratch directory and
         # its own bin/ and obj/ to the builder, and the gateway it built could not read its own
