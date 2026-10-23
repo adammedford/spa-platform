@@ -530,7 +530,7 @@ const clustered = given.length ? await run(clusterPrompt(ctx, given, `${RUN}/clu
 if (!clustered || !Array.isArray(clustered.findings)) failed.push(`the Cluster agent returned nothing: ${given.length} false or stale verdicts were not grouped, and no finding was filed from them`)
 const owner = ownersOf(setup.ownership)
 const unlanded = new Set(setup.rows.unlanded)
-const findings = ((clustered && Array.isArray(clustered.findings) && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({
+const findings = ((clustered && Array.isArray(clustered.findings) && clustered.findings) || []).filter((f) => f.sites.length).map((f) => ({ // empty-ok: a null Cluster is named in failed on the line above
   ...f,
   sites: f.sites.map((s) => {
     const o = s.file.startsWith('/') ? 'integrator' : owner(s.file)
@@ -576,9 +576,9 @@ if (DRY) {
 } else if (writes.length) {
   const done = await serial(() => run(filePrompt(ctx, writes, pendingFile), { label: 'file', phase: 'File', schema: FILED }))
   const byKey = new Map(writes.map((w) => [w.key, w]))
-  for (const c of (done && done.created) || []) { const w = byKey.get(c.key); if (w && w.action === 'create') filed.push({ number: c.number, url: c.url, title: w.title, noun: w.noun, sites: w.sites }) }
-  for (const c of (done && done.commented) || []) { const w = byKey.get(c.key); if (w && w.rule) w.rule.state = `posted on #${RULE_ISSUE}: ${c.url}` }
-  for (const p of (done && done.pending) || []) {
+  for (const c of (done && done.created) || []) { const w = byKey.get(c.key); if (w && w.action === 'create') filed.push({ number: c.number, url: c.url, title: w.title, noun: w.noun, sites: w.sites }) } // empty-ok: a null File is named in failed below, and each write it held under Skipped
+  for (const c of (done && done.commented) || []) { const w = byKey.get(c.key); if (w && w.rule) w.rule.state = `posted on #${RULE_ISSUE}: ${c.url}` } // empty-ok: a null File is named in failed below, and each write it held under Skipped
+  for (const p of (done && done.pending) || []) { // empty-ok: a null File is named in failed below, and each write it held under Skipped
     const w = byKey.get(p.key)
     if (!w) continue
     pending.push({ key: p.key, what: w.action === 'create' ? `the issue ${w.title}` : `the candidate rule ${w.rule.key} on #${RULE_ISSUE}` })

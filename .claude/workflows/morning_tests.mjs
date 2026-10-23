@@ -122,7 +122,8 @@ const jsonAfter = (prompt, marker) => {
 }
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
-//           rewrite: [issue], after: {...} }
+//           rewrite: [issue], after: {...}, nothingFrom: [label], the agents that return nothing,
+//           as a failed agent does }
 function stub(env, scriptArgs, served) {
   const calls = []
   const inFlight = {}
@@ -140,6 +141,7 @@ function stub(env, scriptArgs, served) {
     try {
       await new Promise((r) => setTimeout(r, 5))
       calls.push({ label, prompt, schema: opts.schema })
+      if ((served.nothingFrom || []).includes(label)) return null
       let out
       if (label === 'replay') {
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
@@ -372,6 +374,22 @@ try {
     const flip = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, CONFIRM, comment(10, 'Confirm Q2.\n\nQ2: yes, on reflection\n', '2026-10-21T09:00:00Z')]) })
     const flipped = (jsonAfter(flip.prompt('classify'), 'QUESTIONS') || []).find((q) => q.q === 2)
     if (!flipped || flipped.answer !== 'yes, on reflection' || flipped.authority !== `${URL(ISSUE)}#issuecomment-10`) fail(`a later Confirm comment's Q2 line did not win: ${JSON.stringify(flipped)}`)
+  }
+
+  // 6a. A Classify agent that returns nothing is named as failed in the refusals and the hand-over
+  //     (#277), dry or confirmed, and nothing is applied; never read as a classifier that returned
+  //     no questions. Paired with the same runs with every agent answering, which name no failure.
+  checks++
+  {
+    const NAMED = /the Classify agent returned nothing: Q\d+(, Q\d+)* (was|were) not classified, so none is applied/
+    for (const [label, served] of [['confirmed', {}], ['dry', { issue: issueWith(QUESTIONS) }]]) {
+      const all = await execute(newRepo(), { date: DATE }, served)
+      if (all.result.refusals.some((r) => NAMED.test(r))) fail(`${label}, every agent answering: the Classify agent is named as failed: ${JSON.stringify(all.result.refusals)}`)
+      const none = await execute(newRepo(), { date: DATE }, { ...served, nothingFrom: ['classify'] })
+      if (!none.labels.includes('classify')) fail(`${label}: no classifier ran, so the null proves nothing`)
+      if (!none.result.refusals.some((r) => NAMED.test(r)) || !NAMED.test(none.result.handover.text)) fail(`${label}: a null Classify agent is not named in the refusals and the hand-over: ${JSON.stringify(none.result.refusals)}`)
+      if (APPLIERS(none.labels).length || none.result.apply.done.length || none.result.apply.wouldDo.length) fail(`${label}: after a null Classify agent, applied ${JSON.stringify(none.result.apply.done)} and would do ${JSON.stringify(none.result.apply.wouldDo)}`)
+    }
   }
 
   // 7. Questions come from the comments, numbered across them and across a split comment's parts in

@@ -557,7 +557,7 @@ END REPORT COMMENT`
 const filed = await run(filePrompt(), { label: 'file', phase: 'File', schema: FILED })
 
 phase('Report')
-const done = new Map(((filed && filed.writes) || []).map((w) => [w.key, w]))
+const done = new Map(((filed && filed.writes) || []).map((w) => [w.key, w])) // empty-ok: a null File is named in reason below, and each real write then reads not-written
 const records = decisions.map((d) => {
   const w = writes.find((x) => x.key === d.family)
   const r = w ? done.get(w.key) : null

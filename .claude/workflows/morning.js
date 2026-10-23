@@ -499,11 +499,11 @@ const handoverText = (s) => {
     land.push(`Landing command, yours to run once a record names this head with merge and CI is green: git -C ${REPO} worktree add --detach ${p.landWt} origin/main, then cd ${p.landWt} && tools/land.sh ${prN} --subject "${subjectFor(s.date)}" --body-file ${v.mergeBodyFile || p.mdir + '/merge-body.md'}`)
   }
   list('Landing', land, 'no pull request: Verify stopped before step 6')
-  const lanes = (v && v.lanes) || []
+  const lanes = (v && v.lanes) || [] // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
   list('Issues to close', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closes it at the landing; after: true closes it if still open`))
   list('Issues to unassign, once merged', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
-  list('Worktrees to remove after the landing, then git worktree prune', ((v && v.worktrees) || []).map((w) => `${w.path} (${w.branch} at ${w.tip}: ${w.clean ? 'clean' : 'dirty'}, ${w.ancestor ? 'on the integration branch' : 'not on the integration branch'})`))
-  list('Claimed branches needing their own pull requests', (v && v.claimed) || [])
+  list('Worktrees to remove after the landing, then git worktree prune', ((v && v.worktrees) || []).map((w) => `${w.path} (${w.branch} at ${w.tip}: ${w.clean ? 'clean' : 'dirty'}, ${w.ancestor ? 'on the integration branch' : 'not on the integration branch'})`)) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
+  list('Claimed branches needing their own pull requests', (v && v.claimed) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
   list('Failed lanes\' branches, kept', lanes.filter((l) => l.outcome === 'failed').map((l) => `#${l.issue} (${l.task})`))
   const mb = s.apply.morning
   list('Morning branch', mb.commits ? [`${p.morningBranch}: ${mb.commits} commit(s), ${mb.pushed ? 'pushed' : `not pushed (${mb.reason})`}. Its pull request is yours to open: gh pr create --base main --head ${p.morningBranch}`] : [], 'no commits')
@@ -599,10 +599,13 @@ if (!verdict.ok) {
   apply.ran = true
   const classifyKey = key({ questions: toClassify, dry })
   const cls = reuse('classify', classifyKey) || await run(classifyPrompt(DATE, ISSUE, toClassify, dry, classifyKey), { label: 'classify', phase: 'Apply', schema: CLASSIFY })
-  const kinds = new Map(((cls && cls.questions) || []).map((c) => [c.q, c]))
-  const rewrite = new Set(((cls && cls.rewrites) || []).map((r) => r.issue))
+  // A classifier that returned nothing is named, never read as one that classified nothing
+  // (CODING_STANDARDS.md -> "A check fails closed"; #277), and no question is applied.
+  if (!cls) refusals.push(`the Classify agent returned nothing: ${toClassify.map((q) => 'Q' + q.q).join(', ')} ${toClassify.length === 1 ? 'was' : 'were'} not classified, so none is applied`)
+  const kinds = new Map(cls ? cls.questions.map((c) => [c.q, c]) : [])
+  const rewrite = new Set(cls ? cls.rewrites.map((r) => r.issue) : [])
   const byTicket = []
-  for (const q of toClassify) {
+  for (const q of cls ? toClassify : []) {
     const c = kinds.get(q.q)
     if (!c || !KINDS.includes(c.kind)) { refusals.push(`the classifier returned no kind for Q${q.q}; it is not applied`); continue }
     let t = byTicket.find((x) => x.issue === q.issue)

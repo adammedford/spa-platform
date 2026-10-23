@@ -545,13 +545,13 @@ const finish = async (t, impl, at) => {
     const merge = (retry, head) => withSlot(() => agent(integratePrompt(t, head, rev, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT }))
     const { integ, conflict } = await serial(async () => {
       const first = await merge(false, impl)
-      const files = (first && !first.ok && first.conflictFiles) || []
+      const files = (first && !first.ok && first.conflictFiles) || [] // empty-ok: a null first leaves integ null, failed below as integrate 'agent died'
       if (!files.length) return { integ: first, conflict: null }
       log(`${t.id}: conflict at integrate in ${files.join(', ')}; back-merging ${INT_BRANCH} into ${impl.branch}`)
       const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
       if (!res || res.outcome !== 'resolved') return { integ: { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }, conflict: { files, resolved: false } }
       const second = await merge(true, { ...impl, headSha: res.headSha })
-      const again = (second && !second.ok && second.conflictFiles) || []
+      const again = (second && !second.ok && second.conflictFiles) || [] // empty-ok: a null second leaves integ null, failed below as integrate 'agent died'
       return { integ: again.length ? { ...second, notes: `still in conflict after the back-merge, in ${again.join(', ')}; reported, not merged. ${second.notes}` } : second,
         conflict: { files: [...new Set([...files, ...again])], resolved: !!(second && second.ok) } }
     })

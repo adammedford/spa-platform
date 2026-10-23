@@ -471,7 +471,7 @@ const writeReport = async (s) => {
   const outFile = `${runLog}/report.md`
   const rep = await run(reportPrompt(ctx, text, target, outFile), { label: 'report', phase: 'Report', schema: REPORTED })
   const ck = (rep && rep.checkout) || { trackedChanged: ['the Report agent returned nothing'], newUntracked: [] }
-  const left = (rep && rep.worktreesLeft) || []
+  const left = (rep && rep.worktreesLeft) || [] // empty-ok: a null Report is named in ck and in reason, so the checkout line reads dirty
   const dirty = ck.trackedChanged.length || ck.newUntracked.length || left.length
   const line = dirty
     ? CHECKOUT_FORMAT.dirty.replace('<tracked>', ck.trackedChanged.join(', ') || 'none').replace('<untracked>', ck.newUntracked.join(', ') || 'none').replace('<worktrees>', left.join(', ') || 'none')
@@ -507,7 +507,14 @@ phase('Locate')
 const batches = chunks(ids.map((x) => x.id), LOCATE_MAX)
 const located = await parallel(batches.map((b, i) => () => run(locatePrompt(ctx, b, i + 1, `${runLog}/locate-${i + 1}.json`), { label: `locate-${i + 1}`, phase: 'Locate', schema: LOCATE })))
 const loc = new Map()
-located.forEach((r, i) => { for (const x of (r && r.ids) || []) if (batches[i].includes(x.id) && !loc.has(x.id)) loc.set(x.id, x) })
+// An agent that returns nothing is named among the reasons, never read as an empty result
+// (CODING_STANDARDS.md -> "A check fails closed"; #277): a null Locate is not ids no test cites.
+const failedAgents = []
+const were = (xs) => (xs.length === 1 ? 'was' : 'were')
+located.forEach((r, i) => {
+  if (!r || !Array.isArray(r.ids)) { failedAgents.push(`locate-${i + 1} returned nothing: ${batches[i].join(', ')} ${were(batches[i])} not located, so no test citing ${batches[i].length === 1 ? 'it' : 'them'} was proved`); return }
+  for (const x of r.ids) if (batches[i].includes(x.id) && !loc.has(x.id)) loc.set(x.id, x)
+})
 const testsById = new Map(ids.map((x) => [x.id, ((loc.get(x.id) || {}).tests) || []]))
 
 phase('Prove')
@@ -525,7 +532,7 @@ agentsItems.forEach((its, i) => {
   const r = proved[i]
   if (r && r.cleanup) cleanups.push({ agent: `prove-${i + 1}`, ...r.cleanup })
   for (const it of its) {
-    const got = ((r && r.items) || []).find((x) => x.key === it.key)
+    const got = ((r && r.items) || []).find((x) => x.key === it.key) // empty-ok: a null Prove leaves got undefined, and resultOf names the Prove agent on each item, could-not-run
     fresh.set(it.key, { ...(got || {}), key: it.key, ...resultOf(got) })
   }
 })
@@ -567,7 +574,12 @@ const audited = auditBatches.length && auditable.length
   ? await parallel(auditBatches.map((b, i) => () => run(auditPrompt(ctx, b.map((r) => ({ row: r.row, owner: r.owner })), i + 1, `${runLog}/audit-${i + 1}.json`), { label: `audit-${i + 1}`, phase: 'Row audit', schema: AUDIT })))
   : []
 const auditByRow = new Map()
-audited.forEach((r, i) => { for (const a of (r && r.rows) || []) if (auditBatches[i].some((x) => x.row === a.row)) auditByRow.set(a.row, a); if (r && r.cleanup) cleanups.push({ agent: `audit-${i + 1}`, ...r.cleanup }) })
+audited.forEach((r, i) => {
+  const rows = auditBatches[i].map((x) => x.row)
+  if (!r || !Array.isArray(r.rows)) { failedAgents.push(`audit-${i + 1} returned nothing: row${rows.length === 1 ? '' : 's'} ${rows.join(', ')} ${were(rows)} not audited`); return }
+  for (const a of r.rows) if (rows.includes(a.row)) auditByRow.set(a.row, a)
+  if (r.cleanup) cleanups.push({ agent: `audit-${i + 1}`, ...r.cleanup })
+})
 const rowsNotDone = []
 for (const r of g.rows) {
   const crs = (scope.changeRequests || []).filter((c) => c.rows.includes(r.row))
@@ -579,7 +591,7 @@ for (const r of g.rows) {
 }
 
 // The verdict (#80 -> "Phase Report"): withheld whenever any one of the five holds, each named.
-const reasons = []
+const reasons = [...failedAgents]
 for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reasons.push(`${r.id} is not proved at ${p.tier === 'H' ? 'the hermetic' : 'the deployed'} tier: ${p.verdict}`)
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)
