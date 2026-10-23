@@ -1177,7 +1177,7 @@ try {
     const one = `Overnight ${cite(ISSUE)}; integration branch overnight/${DATE} at ${HEAD}, fork point ${BASE} (its merge base with origin/main, the night's base). Apply:`
     if (!firstLine(same).startsWith(one)) fail(`main never merged in: the hand-over's first line is ${JSON.stringify(firstLine(same))}, expected it to start ${JSON.stringify(one)}`)
     const unread = (await execute(newRepo(), { date: DATE }, { verify: { forkPoint: '' } })).result.handover.text
-    if (!/fork point not read; the night's base b{40}\./.test(firstLine(unread))) fail(`no fork point returned: the hand-over's first line is ${JSON.stringify(firstLine(unread))}`)
+    if (!firstLine(unread).includes(`fork point not read; the night's base ${BASE}.`)) fail(`no fork point returned: the hand-over's first line is ${JSON.stringify(firstLine(unread))}`)
     const vp = (await execute(newRepo(), { date: DATE }, {})).prompt('verify')
     if (!/forkPoint/.test(vp) || !/merge-base origin\/main overnight\//.test(vp)) fail('the Verify prompt does not ask for the fork point, the merge base of origin/main and the integration branch')
   }
