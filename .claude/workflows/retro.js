@@ -23,7 +23,8 @@ export const meta = {
 // overnight run's Edit and Write calls and its "File has not been read yet" and "modified since read"
 // refusals, deduplicated by tool_use_id, one line per launch of the overnight script on that date.
 // Gather puts the lines in the index's refusals, and the parent issue carries them verbatim. A
-// transcripts root with no match is a missing line, never a zero.
+// transcripts root with no match is a missing line, and a transcript line that does not parse an
+// unreadable one; neither is ever a zero.
 //
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/retro.js
@@ -185,8 +186,8 @@ const STATE = {
 //   history        [{date, report, questions}]: earlier nights' report and questions paths, for recurrence
 //   refusals       {lines, missing}: lines is each `retro_refusals.py --date <date>` line that counted a run,
 //                  verbatim; missing is its every line for a run or a date it found no transcripts or
-//                  record for, in order and joined by newlines, else "". The parent issue carries both
-//                  verbatim (#315)
+//                  record for, or whose transcripts it could not read ("unreadable:"), in order and
+//                  joined by newlines, else "". The parent issue carries both verbatim (#315)
 //   missing        [string]: every record item the night lacks; the parent issue repeats it verbatim
 //   versions       {files, issues: [{number, updatedAt}]}: files is `retro_record.py fingerprint` over every
 //                  file the index names and the log directory; issues the Overnight issue and each lane
@@ -290,7 +291,7 @@ Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE
 6. returnJson, pending, untracked: the paths when they exist (the return JSON in ${scratch}/ or ${NIGHT_LOG}/, ${NIGHT_LOG}/pending-${date}.jsonl, the untracked-at-start listing), else "".
 7. overnightScript: \`${READER} script ${OVERNIGHT}\`.
 8. history: every earlier night's report and questions, resolved by first line as in step 1, and each earlier Overnight <date> issue (\`cd ${REPO} && gh issue list --state all --search "Overnight in:title" --json number,title\`), newest first.
-9. refusals: \`${REFUSALS} --date ${date}\`, which finds every launch of the overnight script recorded for the night and prints one line per run. lines is each line that counted a run, verbatim and in order; missing is every line that says "missing:", verbatim and in order, joined by newlines (a night with two launches can lack the transcripts of both), else "". Copy the lines; never count, round or restate them. A run launched by another script, which the record names by its wf_ id, is counted with \`${REFUSALS} <run id>\` and its line added.
+9. refusals: \`${REFUSALS} --date ${date}\`, which finds every launch of the overnight script recorded for the night and prints one line per run. lines is each line that counted a run, verbatim and in order; missing is every line that says "missing:" or "unreadable:", verbatim and in order, joined by newlines (a night with two launches can lack the transcripts of both, or hold one it cannot read), else "". Copy the lines; never count, round or restate them. A run launched by another script, which the record names by its wf_ id, is counted with \`${REFUSALS} <run id>\` and its line added.
 10. missing: one line for every record item the night lacks (no return JSON, no worktrees left, the transcripts themselves, which the record never holds beyond the refusal lines, the refusals' missing line verbatim when it has one, a pending-writes file absent or present-and-unreplayed, a lane with no check log).
 11. versions, which decide whether the phases after you are reused, so copy each value exactly: files is the digest from \`${READER} fingerprint ${NIGHT_LOG} ${REPO}/.scratch/overnight ${OVERNIGHT} <every other file path the index names>\`; issues is the Overnight issue and every lane ticket that is an issue, each {number, updatedAt} from \`cd ${REPO} && gh issue view <n> --json number,updatedAt\`, in number order ([] when there are none).
 Return the index.`
@@ -329,7 +330,8 @@ The script adds these findings, one for each RED verdict line no lane cited; ran
 2. drop: a finding an open issue already covers: search open issues for the noun (\`cd ${REPO} && gh search issues --repo adammedford/spa-platform --state open "<noun>" --json number,title\`), read each candidate with \`gh issue view\`, and drop it as "#NNN" only when that issue's body asks for the same fix. A finding whose fix has already landed: \`git -C ${REPO} log --first-parent --format='%H %s' origin/main\` carries the noun in a subject or body after the night; drop it with the commit's sha as its issue.
 3. coverage: ${KNOWN.length ? `the known issues are ${KNOWN.map((n) => '#' + n).join(', ')}. Read each with \`gh issue view\`, then pipe {"known": [{"number", "text": title and body}], "findings": [...the ranked and dropped findings...], "missing": <the index's missing list>, "why": {"<number>": "<the missing entry that explains the miss>"}} to \`${READER} coverage\` and return its output.` : 'no knownIssues were given: {"matched": [], "missed": []}.'}`
 
-// The refusal lines the parent carries (#315): each counted run's line, then the missing line, verbatim.
+// The refusal lines the parent carries (#315): each counted run's line, then the missing and unreadable
+// lines, verbatim.
 const refusalLines = (index) => {
   const r = index.refusals || {}
   return [...(r.lines || []), ...(r.missing ? [r.missing] : [])]

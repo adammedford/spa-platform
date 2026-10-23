@@ -7,7 +7,7 @@ The `wiz` skill pipes every post through tools/wiz_redact.py (#259), so a rule t
 leaks an account id, an authorization code or a secret into a public comment and says nothing. Each
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
-six rules has at least one case that turns red when that rule is removed from the script; #259's
+seven rules has at least one case that turns red when that rule is removed from the script; #259's
 merge body names the mutation and the case.
 
 The ids, codes and secrets below are made up for the cases; none is a real account or credential.
@@ -180,13 +180,25 @@ class RuleFourJsonMembers(Redacts):
             ' "kept": true}\n',
         )
 
-
     def test_the_oauth_token_members_are_elided(self) -> None:
         self.assertRedacts(
             '{"access_token": "eyJhbGciOi.payload.sig", "refresh_token": "r3fr3sh", "id_token": "eyJ0eXAi",'
             ' "client_secret": "s3cr3t", "token_type": "Bearer", "expires_in": 3600}\n',
             '{"access_token": "<elided>", "refresh_token": "<elided>", "id_token": "<elided>",'
             ' "client_secret": "<elided>", "token_type": "Bearer", "expires_in": 3600}\n',
+        )
+
+
+    def test_a_state_and_a_code_held_as_json_members_are_elided(self) -> None:
+        self.assertRedacts('{"code": "4f1c2e9a", "state": "Zm9vYmFy", "error_code": "E1"}\n',
+                           '{"code": "<elided>", "state": "<elided>", "error_code": "E1"}\n')
+
+    def test_headers_held_as_json_members_are_elided_in_any_case(self) -> None:
+        self.assertRedacts(
+            '{"set-cookie": ["sid=abc123; path=/", "theme=dark"], "Authorization": "Bearer abc",'
+            ' "x-xsrf-token": "t0k", "X-Amz-Security-Token": "IQoJb3", "content-type": "text/html"}\n',
+            '{"set-cookie": "<elided>", "Authorization": "<elided>",'
+            ' "x-xsrf-token": "<elided>", "X-Amz-Security-Token": "<elided>", "content-type": "text/html"}\n',
         )
 
 
@@ -221,6 +233,18 @@ class RuleSixAuthorization(Redacts):
     def test_a_bare_bearer_token_is_elided_and_the_words_are_not(self) -> None:
         self.assertRedacts("sent Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig as the Bearer token\n",
                            "sent Bearer <elided> as the Bearer token\n")
+
+
+class RuleSevenTokenHeaders(Redacts):
+    def test_an_antiforgery_header_and_an_aws_session_token_header_are_elided(self) -> None:
+        self.assertRedacts("> X-XSRF-TOKEN: CfDJ8tok\n> x-amz-security-token: IQoJb3JpZ2lu\n",
+                           "> X-XSRF-TOKEN: <elided>\n> x-amz-security-token: <elided>\n")
+
+    def test_a_presigned_urls_token_and_signature_are_elided(self) -> None:
+        self.assertRedacts(
+            "https://b.s3.amazonaws.com/k?X-Amz-Security-Token=IQoJb3&X-Amz-Expires=60&X-Amz-Signature=abc123\n",
+            "https://b.s3.amazonaws.com/k?X-Amz-Security-Token=<elided>&X-Amz-Expires=60&X-Amz-Signature=<elided>\n",
+        )
 
 
 class AccessDenied(unittest.TestCase):

@@ -5,7 +5,7 @@
 
 The `wiz` skill posts each stage's evidence to its ticket from captured output, and every post goes
 through this script first (#259). It used to follow a paragraph of prose, which can fail quietly;
-tools/wiz_redact_tests.py holds each rule to a case. It applies six rules, in this order:
+tools/wiz_redact_tests.py holds each rule to a case. It applies seven rules, in this order:
 
 1. A twelve-digit number, or one written 1234-5678-9012, becomes `<account>`. With
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
@@ -13,15 +13,19 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies six rules, in th
 2. An ARN, `arn:aws:<service>:<region>:<account>:<resource>`, becomes its resource field, the part
    after the account: `arn:aws:iam::<account>:role/x` becomes `role/x`.
 3. The value after `code=`, `state=`, `client_id=`, `client_secret=`, `code_verifier=`,
-   `access_token=`, `refresh_token=`, `id_token=`, `ClientId`, `ClientSecret`, `SessionToken` or a
-   parameter's `Value` becomes `<elided>`. A `Value` beside a `Key`, which is a tag's, is kept.
+   `access_token=`, `refresh_token=`, `id_token=`, `X-Amz-Security-Token=`, `X-Amz-Signature=`,
+   `ClientId`, `ClientSecret`, `SessionToken` or a parameter's `Value` becomes `<elided>`. A `Value`
+   beside a `Key`, which is a tag's, is kept.
 4. A JSON member named `clientId`, `secret`, `SecretString`, `AccessKeyId`, `SecretAccessKey`,
-   `access_token`, `refresh_token`, `id_token` or `client_secret` becomes `"<elided>"`, whatever
-   its value.
+   `access_token`, `refresh_token`, `id_token`, `client_secret`, `code` or `state` becomes
+   `"<elided>"`, whatever its value; so does a header held as a JSON member, `Cookie`,
+   `Set-Cookie`, `Authorization` or one of rule 7's, in any case.
 5. In a `Cookie:` or `Set-Cookie:` line, the value of every cookie becomes `<elided>`; its name and
    its attributes (`Path`, `Expires`, `HttpOnly` and the rest) are kept.
 6. The credential after `Authorization:` becomes `<elided>`, its scheme (`Bearer`, `Basic`) kept; a
    `Bearer` token of sixteen characters or more elsewhere is elided the same way.
+7. The value of an `X-XSRF-TOKEN:`, `X-CSRF-TOKEN:`, `RequestVerificationToken:` or
+   `X-Amz-Security-Token:` header line becomes `<elided>`.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -54,7 +58,8 @@ ARN = re.compile(r"\barn:aws[\w-]*:[\w-]*:[\w-]*:[^:\s\"']*:([^\s\"',;)\]}>]+)")
 
 # `code=` and `state=` and the like are query parameters: the value runs to the next parameter.
 QUERY_KEY = re.compile(
-    r"(?<![\w-])(code|state|client_id|client_secret|code_verifier|access_token|refresh_token|id_token)="
+    r"(?<![\w-])(code|state|client_id|client_secret|code_verifier|access_token|refresh_token|id_token"
+    r"|X-Amz-Security-Token|X-Amz-Signature)="
     r"([^&\s\"'#`<>]+)"
 )
 
@@ -67,8 +72,13 @@ AWS_KEY = re.compile(
 
 JSON_MEMBER = re.compile(
     r"\"(clientId|secret|SecretString|AccessKeyId|SecretAccessKey"
-    r"|access_token|refresh_token|id_token|client_secret)\"\s*:\s*"
+    r"|access_token|refresh_token|id_token|client_secret|code|state)\"\s*:\s*"
 )
+
+# The headers a captured request or response can carry as JSON members, in whatever case the
+# client wrote them; the whole value goes, a list of cookies included.
+TOKEN_HEADERS = r"X-XSRF-TOKEN|X-CSRF-TOKEN|RequestVerificationToken|X-Amz-Security-Token"
+JSON_HEADER = re.compile(rf"\"(Set-Cookie|Cookie|Authorization|{TOKEN_HEADERS})\"\s*:\s*", re.IGNORECASE)
 
 # A cookie header line, request or response, with or without a curl -v prefix. The attributes a
 # Set-Cookie line carries are not cookies, so their names keep their values.
@@ -82,6 +92,8 @@ COOKIE_PAIR = re.compile(r"([^;=\s][^;=]*)=([^;]*)")
 # sixteen characters or more goes the same way, which leaves the words "Bearer token" alone.
 AUTHORIZATION = re.compile(r"(?<![\w-])(Authorization\s*:[ \t]*)(?:([A-Za-z]+)[ \t]+)?([^\s]+)", re.IGNORECASE)
 BEARER = re.compile(r"(?<![\w-])(Bearer[ \t]+)[A-Za-z0-9._~+/=-]{16,}")
+
+TOKEN_HEADER = re.compile(rf"(?<![\w-])((?:{TOKEN_HEADERS})\s*:[ \t]*)[^\s]+", re.IGNORECASE)
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
@@ -160,9 +172,9 @@ def json_value_end(text: str, start: int) -> int:
     return match.end()
 
 
-def json_members(text: str) -> str:
+def json_members(text: str, member: re.Pattern) -> str:
     out, pos = [], 0
-    for match in JSON_MEMBER.finditer(text):
+    for match in member.finditer(text):
         if match.start() < pos:
             continue
         end = json_value_end(text, match.end())
@@ -178,10 +190,12 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = ARN.sub(lambda m: m.group(1), text)
     text = QUERY_KEY.sub(lambda m: f"{m.group(1)}=<elided>", text)
     text = aws_key(text)
-    text = json_members(text)
+    text = json_members(text, JSON_MEMBER)
+    text = json_members(text, JSON_HEADER)
     text = COOKIE_LINE.sub(cookie_line, text)
     text = AUTHORIZATION.sub(authorization, text)
     text = BEARER.sub(lambda m: f"{m.group(1)}<elided>", text)
+    text = TOKEN_HEADER.sub(lambda m: f"{m.group(1)}<elided>", text)
     return text
 
 

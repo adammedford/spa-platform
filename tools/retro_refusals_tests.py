@@ -17,8 +17,9 @@ replayed too.
 Each rule has a case that fails when the rule is removed: a replayed call and a replayed result
 counted once, a Write refusal counted with Edit's, a Bash result quoting the refusal's words left out,
 a result from another run left out, a transcripts root with no match reported as missing and not
-as zero, and a line that does not parse reported as unreadable and not counted past. The baseline case reads the 2026-10-18 run's real transcripts when they are on this machine
-and asserts the script says they are not when they are not; neither branch skips.
+as zero, and a line that does not parse reported as unreadable and not counted past. The baseline
+case reads the 2026-10-18 run's real transcripts when they are on this machine and asserts the
+script says they are not when they are not; neither branch skips.
 
 Run: python3 -I tools/retro_refusals_tests.py
 """
