@@ -697,7 +697,7 @@ try {
       if (!m.prompt.includes(LIB_BREAK.replace('\\|', '|'))) fail(`PR 287's shape: the held mutation of ${m.test} is not told the break the held record named`)
       if (!m.prompt.includes(HELD.html_url)) fail(`PR 287's shape: the held mutation of ${m.test} does not name the held record`)
     }
-    if (env.prompts['range:287'] && !env.prompts['range:287'].includes(H1)) fail('PR 287\'s shape: the range agent is not asked what changed since the older record\'s head')
+    if (!(env.prompts['range:287'] || '').includes(H1)) fail('PR 287\'s shape: the range agent is not asked what changed since the older record\'s head')
     const body = commentOf(env, 287)
     const lines = body.split('\n')
     const cleared = lines.find((l) => /^Not mutated, cleared by/.test(l)) || ''
@@ -713,6 +713,16 @@ try {
       env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: row(res) } })
       result = await execute(env)
       if (resultOf(287, result).verdict !== 'hold') fail(`PR 287's shape with the held ${LIB2} ${res}: verdict ${resultOf(287, result).verdict}, expected hold`)
+    }
+    // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
+    // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.
+    env = run({ prs: [287], maxMutationsPerPr: 1 }, SHAPE, { range })
+    result = await execute(env)
+    {
+      const c = resultOf(287, result)
+      if (JSON.stringify(env.mutations.map((m) => m.test)) !== JSON.stringify([LIB1])) fail(`PR 287's shape with a cap of 1: mutated ${JSON.stringify(env.mutations.map((m) => m.test))}, expected ${LIB1} alone`)
+      if (!(c.notMutated || []).includes(LIB2)) fail(`PR 287's shape with a cap of 1: notMutated ${JSON.stringify(c.notMutated)} does not name the cut held test`)
+      if (c.verdict !== 'hold') fail(`PR 287's shape with a cap of 1: verdict ${c.verdict} with the held ${LIB2} cut by the cap, expected hold`)
     }
     // A reproduced candidate whose source changed since the record is mutated again, not cleared.
     const moved = { 287: { ...range[287], changedFiles: [...range[287].changedFiles, 'fixtures/MockApi/Dockerfile'] } }

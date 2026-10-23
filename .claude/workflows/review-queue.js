@@ -59,9 +59,9 @@ export const meta = {
 //
 // A review after a hold (#289), full or delta: the tests the earlier records' Mutations tables list
 // as did-not-fail, and no later record reproduced, are mutated first, with the break the record named
-// and under the stated mutation's
-// hold rule, since a rebuilt branch is no descendant of the held head and a full review would
-// otherwise put them back in inventory order. The candidates a `Review: ...` commit touches come
+// and under the stated mutation's hold rule, since a rebuilt branch is no descendant of the held
+// head and a full review would otherwise put them back in inventory order. A held test the cap cuts
+// is still unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a `Review: ...` commit touches come
 // next among the candidates. A candidate an earlier record reproduced is not mutated again while
 // neither its test file nor the source it breaks has changed since that record's head; the comment
 // names it as cleared by that record, beside the cap's cut.
@@ -413,7 +413,7 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
 The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
-${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test the latest record held on as did-not-fail, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
+${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line. Write the result as JSON to the OUTPUT FILE, then return it.`
@@ -484,9 +484,9 @@ const sinceHeadsOf = (records, inv) => {
 }
 
 // The mutation list: when the latest record held, first the tests the records list as did-not-fail
-// and no later record reproduced (#289);
-// then the body's stated mutations, then the Standards axis's nominations, then the candidates whose
-// file or broken source a commit titled `Review: ...` since the fork point touches, then the
+// and no later record reproduced (#289); then the body's stated mutations, then the Standards axis's
+// nominations, then the candidates whose file or broken source a commit titled `Review: ...` since
+// the fork point touches, then the
 // inventory's remaining candidates; deduplicated by test and cut at the cap. A held row whose Test
 // cell names candidates becomes one held mutation per candidate it names; one naming none is mutated
 // by the cell itself, its project left for the mutation agent to find. kind decides the hold rule a
@@ -535,7 +535,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
     if (by) cleared.push({ test: m.test, url: by.url })
     return !by
   })
-  return { list: list.slice(0, MUTATION_CAP), cut: list.slice(MUTATION_CAP).map((m) => m.test), outside: deduped.filter((m) => !inRange(m)).map((m) => m.test), cleared }
+  const cutHeld = list.slice(MUTATION_CAP).filter((m) => m.kind === 'held').map((m) => m.test)
+  return { list: list.slice(0, MUTATION_CAP), cut: list.slice(MUTATION_CAP).map((m) => m.test), cutHeld, outside: deduped.filter((m) => !inRange(m)).map((m) => m.test), cleared }
 }
 const clearedText = (cleared) => cleared.map((c) => `${c.test} (cleared by ${c.url})`).join(', ')
 
@@ -555,14 +556,15 @@ const mutationRow = (n, m, i, got) => {
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   return row
 }
-// What in the rows holds the verdict, each named.
-const mutationHolds = (rows) => rows.flatMap((r) => {
+// What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
+// hold it answers stays open (#289): merging past it is #287's third review again.
+const mutationHolds = (rows, cutHeld = []) => [...rows.flatMap((r) => {
   if (r.result === 'did-not-fail') return [`${r.test} did not fail with ${r.broken || 'what it guards'} broken`]
   if (r.kind === 'stated' && r.result !== 'reproduced') return [`the stated mutation of ${r.test} did not reproduce (${r.result})`]
   if (r.kind === 'held' && r.result !== 'reproduced') return [`the held test ${r.test} did not reproduce with the break the held record named (${r.result})`]
   if (r.kind === 'nominated' && r.result === 'could-not-run') return [`the nominated mutation of ${r.test} could not run: ${r.why}`]
   return []
-})
+}), ...cutHeld.map((t) => `the held test ${t} was cut by the cap of ${MUTATION_CAP} and stays unanswered; a run with a higher maxMutationsPerPr reaches it`)]
 
 // The comments the inventory read, by URL: a record line in one of them is an earlier run's, and a
 // record line in any other comment on this pull request is this run's, posted before a resume.
@@ -713,12 +715,12 @@ const reviewOne = async (n, res, at) => {
   if (missing.length) return failed(res, `review: the ${missing.join(' and ')} axis returned nothing`)
 
   at.stage = 'mutate'
-  const { list, cut, outside, cleared } = mutationList(inv, standards, d, priorOf(records, inv, rg))
+  const { list, cut, cutHeld, outside, cleared } = mutationList(inv, standards, d, priorOf(records, inv, rg))
   const got = await parallel(list.map((m, i) => async () => {
     try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
   }))
   const rows = list.map((m, i) => mutationRow(n, m, i + 1, got && got[i]))
-  const mut = { rows, cut, outside, cleared, holds: mutationHolds(rows) }
+  const mut = { rows, cut, outside, cleared, holds: mutationHolds(rows, cutHeld) }
   res.mutations = rows
   res.notMutated = cut
   res.outsideRange = outside
