@@ -65,6 +65,21 @@ public sealed class DeployedRunTests
         Assert.Contains("auth.callback", failed.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task N08_over_the_stand_in_starts_no_login_at_its_provider()
+    {
+        // The row's own "neither started a login" compares the navigations with the cell's Cognito
+        // authorize endpoint, which the stand-in's browser never reaches, so over the stand-in that clause
+        // cannot fail. The stand-in's provider is the harness's test provider, whose record can.
+        await using Cells cells = new();
+        Stacks.Instead.Value = cells.StartAsync;
+
+        await new HostTests().N08_an_unknown_host_and_an_app_host_on_the_wrong_port_are_404();
+
+        Run run = Assert.Single(cells.Runs);
+        Assert.Empty(run.Harness.Idp.Authorizations);
+    }
+
     /// <summary>Every negative test of a D row, by class and method, but those <see cref="CognitoOnly"/> names.</summary>
     public static TheoryData<string> DeployedRowTests => [.. RowTests().Keys.Where(test => !CognitoOnly.ContainsKey(test)).Order(StringComparer.Ordinal)];
 
