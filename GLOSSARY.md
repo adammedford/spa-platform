@@ -273,8 +273,10 @@ landed. Not a user-level skill under `~/.agents/skills` (such as `grilling` or
 `implement`), which is the human's own, shared across projects and outside this repository.
 _Avoid_: bare "skill" where the user-level kind could be meant; "wizard" for `wiz`.
 
-**Lane** — one owner's tickets in one overnight run, worked in that owner's worktree, each on a
-branch of its own. The integrator has a lane and no workstream. _Avoid_: "lane" for a workstream.
+**Lane** — one owner's tickets in one overnight run, each worked in a worktree and on a branch of
+its own (#136); the lane implements them one at a time, while its last ticket's review and
+integrate run behind it. The integrator has a lane and no workstream. _Avoid_: "lane" for a
+workstream.
 
 **Foreground session** — an agent session the human starts and watches, at the workstation, for
 work only the human can steer or approve as it happens. _Avoid_: "interactive session", and

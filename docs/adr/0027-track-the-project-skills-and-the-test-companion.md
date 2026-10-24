@@ -1,6 +1,10 @@
 # ADR-0027: Track the project skills and the overnight script's test companion under the workflow scripts' rule
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-23 by ADR-0030:** decision 2's CI step runs only when a
+  file under `.claude/workflows/` changes, and runs every workflow script's test companion, not
+  the overnight script's alone; `tools/check.sh --full` runs the same companions under the same
+  condition, so the consequence that it does not run the companion no longer holds. The other
+  decisions are unchanged.
 - **Date:** 2026-10-21
 - **Deciders:** integrator
 - **Plan ref:** No decision row. #213, grilled Q1 to Q19 on its "## Grilling record" comment, which

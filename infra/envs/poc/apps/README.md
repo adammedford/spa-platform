@@ -8,7 +8,7 @@ exactly three resources:
 | Cognito app client `spa-platform-<cell>-<appId>` | Confidential, code grant only, the definition's `oauth.scopes`, `COGNITO` sign-in | The gateway holds the secret and the tokens |
 | | Callback `https://<host>/signin-oidc`, sign-out `https://<host>/` | `host` carries the port; Cognito's logout lands on `/` (R-C7, plan row 3.7) |
 | | Access and ID tokens 5 minutes; refresh token the registry's longest session (720 minutes, read from `contracts/registry.schema.json`) plus an hour | Refresh happens during a test run; a session never outlives its refresh token |
-| | Refresh rotation with a 10-second grace, token revocation on, `ALLOW_REFRESH_TOKEN_AUTH` off | Rotation rules that flow out; logout revokes |
+| | Refresh rotation with a 60-second grace, Cognito's maximum (#332 D1), token revocation on, `ALLOW_REFRESH_TOKEN_AUTH` off | Rotation rules that flow out; a successor can recover a refresh whose holder died after rotation; logout revokes |
 | Managed-login branding style | Cognito's default values | Managed login serves a client only once it has a style |
 | `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/client-secret` | The client secret; later value changes ignored | A rotation (docs/plan/05 -> Rotating a client secret) is not undone by the next apply |
 

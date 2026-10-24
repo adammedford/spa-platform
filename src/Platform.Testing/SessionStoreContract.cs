@@ -20,12 +20,22 @@ public abstract class SessionStoreContract
     [Fact]
     public async Task A_created_session_reads_back_under_the_key_it_returned()
     {
+        // By value, so a store that serializes the record passes: its ticket comes back in a new array,
+        // which ReadOnlyMemory<byte>'s own equality never matches. The times carry sub-second ticks, so
+        // a store that keeps whole seconds fails; Record()'s whole-second times alone could not show it.
         ISessionStore store = CreateStore();
-        SessionRecord record = Record();
+        SessionRecord record = Record() with
+        {
+            CreatedAt = new DateTimeOffset(2026, 10, 12, 9, 0, 0, TimeSpan.Zero).AddTicks(1_234_567),
+            ExpiresAt = new DateTimeOffset(2026, 10, 12, 17, 0, 0, TimeSpan.Zero).AddTicks(7_654_321),
+        };
 
         string key = await store.CreateAsync(record, Ct);
 
-        Assert.Equal(record, await store.GetAsync(key, Ct));
+        SessionRecord? stored = await store.GetAsync(key, Ct);
+        Assert.NotNull(stored);
+        Assert.Equal(record with { Ticket = default }, stored with { Ticket = default });
+        Assert.Equal(record.Ticket.ToArray(), stored.Ticket.ToArray());
     }
 
     [Fact]

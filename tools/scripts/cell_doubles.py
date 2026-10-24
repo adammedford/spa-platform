@@ -91,7 +91,12 @@ TEARDOWN_TOKEN = "teardownsessiontoken/xyz=="
 # credentials, as verify_release_immutability_tests.py lists them. teardown.sh and cell-common.sh say
 # the credentials go only to one call's environment, never into a file or the output (#191).
 CREDENTIALS = (PASSWORD, TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN)
-SECRETS = (ACCOUNT, *CREDENTIALS)
+# The key ring's parameter names under the cell's prefix, /spa-platform/{cell}/data-protection/,
+# which teardown.sh lists and deletes (#338). A name is not a key, but GetParametersByPath is a call
+# that can answer with values, so cell_doubles_tests.py counts whatever it prints as handed out, and
+# the scripts print none of them: teardown.sh says how many it deleted, never which.
+RING_KEYS = tuple(f"/spa-platform/{CELL}/data-protection/key-{n:08d}-aaaa-bbbb-cccc-ddddeeeeffff" for n in range(1, 24))
+SECRETS = (ACCOUNT, *CREDENTIALS, *RING_KEYS)
 
 
 def digest_of(text: str) -> str:
@@ -184,6 +189,9 @@ def default_world() -> dict:
             "AWSServiceRoleForECS": {"tags": {}},
         },
         "policies": {},
+        # Parameter Store names that no root's state holds: the key ring the gateway writes under
+        # /spa-platform/{cell}/data-protection/ (P2-2 decision 17), which teardown.sh deletes.
+        "parameters": [],
         # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
         # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
         # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
@@ -233,7 +241,7 @@ def text(value) -> str:
 
 
 MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
-                "clusters", *(entry[0] for entry in EC2_DESCRIBES.values())}
+                "clusters", "names", *(entry[0] for entry in EC2_DESCRIBES.values())}
 
 
 def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
@@ -540,6 +548,41 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             world["task_definitions"][name]["status"] = "DELETE_IN_PROGRESS"
             world["tagged"] = [entry for entry in world["tagged"] if entry["arn"] != td_arn(name)]
         return None
+    if command == "dynamodb describe-table":
+        # A table DynamoDB does not know is ResourceNotFoundException; one being deleted answers
+        # DELETING until it goes. "describe_knows" counts the describes that still find it, as for EC2.
+        # https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html
+        if query != "Table.TableStatus":
+            raise Unexpected(f"describe-table --query {query!r}")
+        name = options.get("table-name", "")
+        entry = next((entry for entry in world["tagged"]
+                      if entry["type"] == "dynamodb:table" and entry["arn"].endswith(f":table/{name}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError("ResourceNotFoundException", "DescribeTable")
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return entry.get("status", "ACTIVE")
+    if command == "ssm get-parameters-by-path":
+        # The path is a hierarchy and takes no trailing slash; --recursive reads below its first
+        # level. The CLI pages on its own and --query applies to the whole answer.
+        # https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParametersByPath.html
+        path = options.get("path", "")
+        if query != "Parameters[].Name" or options.get("recursive") is not True or path.endswith("/"):
+            raise Unexpected(f"get-parameters-by-path {options}")
+        return [name for name in world["parameters"] if name.startswith(path + "/")]
+    if command == "ssm delete-parameters":
+        # At most ten names a call; a name that is not there comes back under InvalidParameters, not
+        # as an error. https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DeleteParameters.html
+        names = options.get("names", [])
+        if query != "length(DeletedParameters)" or not names:
+            raise Unexpected(f"delete-parameters {options}")
+        if len(names) > 10:
+            raise ServiceError("ValidationException", "DeleteParameters")
+        deleted = [name for name in names if name in world["parameters"]]
+        world["parameters"] = [name for name in world["parameters"] if name not in names]
+        world["tagged"] = [entry for entry in world["tagged"]
+                           if not (entry["type"] == "ssm:parameter" and entry["arn"].split(":parameter", 1)[-1] in names)]
+        return len(deleted)
     raise Unexpected(f"aws {command} is not a call these scripts make")
 
 

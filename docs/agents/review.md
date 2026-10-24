@@ -93,8 +93,11 @@ a review.
 
 Merge when nothing found is a defect: the spec is met, no assertion is unfailable on the thing it
 claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the
-merge body, which `docs/agents/landing-work.md` requires anyway. Hold when a finding shows the change
-does not do what it says, or when the test that proves it cannot fail.
+merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
+findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
+review-queue workflow writes; the morning run files each one as an issue of its own (#292). Hold
+when a finding shows the change does not do what it says, or when the test that proves it cannot
+fail.
 
 ### The review record
 

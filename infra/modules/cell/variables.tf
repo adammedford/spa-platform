@@ -318,6 +318,61 @@ variable "session_store" {
     )
     error_message = "session_store must be one of the values contracts/platform-config.schema.json lists for Session:Store."
   }
+
+  # The gateway's own start-up rule, held at plan so that the cell never deploys a gateway that would
+  # refuse to start (P2-2 decision 16): the DynamoDB store protects its tickets under the key ring
+  # (P2-1 item 6), so durable sessions under a per-task ring are sessions no other task can read.
+  validation {
+    condition     = var.session_store != "dynamodb" || var.data_protection_parameter_prefix != ""
+    error_message = "session_store = \"dynamodb\" needs data_protection_parameter_prefix: the DynamoDB store protects its tickets under the shared key ring, and the gateway refuses Session:Store = dynamodb with no DataProtection:ParameterPrefix at start (P2-2 decision 16)."
+  }
+}
+
+# --- Continuity (#338): the durable store's table and the shared key ring --------------------------
+
+variable "data_protection_parameter_prefix" {
+  description = <<-EOT
+    The Parameter Store prefix the cell's data-protection key ring lives under, or empty for none.
+    Empty is Phase 1: the gateway registers no ring and keeps the framework's default, per task
+    (P2-2 decision 5), and nothing below is granted or set. Set, it is exactly
+    /spa-platform/{cell}/data-protection/, the per-cell convention that keeps two cells from sharing
+    a ring (P2-2 decision 8). The task role may write and read under it and may tag what it writes;
+    it may not delete there. tools/scripts/teardown.sh deletes that prefix by the same convention.
+  EOT
+  type        = string
+  default     = ""
+
+  # The convention and nothing else, because three things read the prefix from the cell name rather
+  # than from this value: teardown's deletion, the grant's scope and the invariant that two cells
+  # never share one ring. A free-form value could put the ring where teardown never looks, or widen
+  # the grant to another cell's ring.
+  validation {
+    condition     = var.data_protection_parameter_prefix == "" || var.data_protection_parameter_prefix == "/spa-platform/${var.cell}/data-protection/"
+    error_message = "data_protection_parameter_prefix is empty or exactly /spa-platform/{cell}/data-protection/, this cell's own ring prefix (P2-2 decision 8): teardown.sh deletes that path, and the task role's grant is scoped to it."
+  }
+}
+
+variable "data_protection_kms_key_id" {
+  description = <<-EOT
+    The KMS key the ring's SecureString parameters are encrypted under, or empty for the account's
+    aws/ssm key. Empty at G6 (#332 D6: no customer-managed key). A customer-managed key needs its
+    kms:Encrypt and kms:Decrypt granted to the task role, which this module does not hold; see the
+    comment beside the client secrets' grant in iam.tf.
+  EOT
+  type        = string
+  default     = ""
+
+  # The API's own KeyId pattern (P2-2 decision 15), which admits a key id, a key ARN, an alias and
+  # an alias ARN.
+  validation {
+    condition     = var.data_protection_kms_key_id == "" || can(regex("^[a-zA-Z0-9:/_-]{1,256}$", var.data_protection_kms_key_id))
+    error_message = "data_protection_kms_key_id is empty, or a KMS key id, key ARN, alias or alias ARN (^[a-zA-Z0-9:/_-]{1,256}$)."
+  }
+
+  validation {
+    condition     = var.data_protection_kms_key_id == "" || var.data_protection_parameter_prefix != ""
+    error_message = "data_protection_kms_key_id encrypts the key ring, so it needs data_protection_parameter_prefix: with no prefix there is no ring for it to encrypt."
+  }
 }
 
 variable "session_max_sessions" {
