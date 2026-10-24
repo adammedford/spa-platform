@@ -120,11 +120,15 @@ def drop_pin(text: str, pid: str) -> str:
 
 class Parsing(Case):
     def test_the_pins_file_as_the_spec_counted_it_yields_20_pins_in_the_labelled_groups(self):
-        # #82 counted 20 on 17 October 2026; #206 added AWSSDK.Signin after it. The copy without it is
+        # #82 counted 20 on 17 October 2026; #206 added AWSSDK.Signin and #336 the DynamoDB and
+        # DataProtection.SSM pins after it. The copy without them is
         # the file #82 counted; a pin added later joins this drop list, and the live copy is held to
         # the family table below.
         r = self.repo()
-        r.write(PROPS, drop_pin(r.read(PROPS), "AWSSDK.Signin"))
+        text = r.read(PROPS)
+        for later in ("AWSSDK.Signin", "AWSSDK.DynamoDBv2", "Amazon.AspNetCore.DataProtection.SSM"):
+            text = drop_pin(text, later)
+        r.write(PROPS, text)
         data = self.inventory(r)
         self.assertEqual(20, len(data["pins"]))
         groups = {}
@@ -136,7 +140,7 @@ class Parsing(Case):
         r = self.repo()
         data = self.inventory(r)
         # Counted from the file itself, so a pin added after this was written is held to the family
-        # table rather than breaking a literal. 21 when #269 landed.
+        # table rather than breaking a literal. 21 when #269 landed, 23 when #336 did.
         self.assertEqual(len(re.findall(r"<PackageVersion\s", r.read(PROPS))), len(data["pins"]))
         self.assertEqual([], [p["id"] for p in data["pins"] if not p["family"]])
         self.assertEqual(["aspnetcore", "duende", "yarp", "aws-sdk", "opentelemetry", "xunit", "playwright",
@@ -146,7 +150,7 @@ class Parsing(Case):
         r = self.repo()
         r.write(PROPS, drop_pin(r.read(PROPS), "Yarp.ReverseProxy"))
         data = self.inventory(r)
-        self.assertEqual(20, len(data["pins"]))
+        self.assertEqual(22, len(data["pins"]))
         self.assertNotIn("yarp", [f["id"] for f in data["families"]])
         self.assertNotIn("Yarp.ReverseProxy", [p["id"] for p in data["pins"]])
 
