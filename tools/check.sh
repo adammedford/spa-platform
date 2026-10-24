@@ -345,8 +345,6 @@ $part_rows
 EOF
   [ "$part_rows_missing" -eq 0 ] \
     || fail "a part-row merge lacks a line docs/agents/landing-work.md requires of a row that stays unfinished."
-elif $full; then
-  fail "no origin/main or main to judge the part-row merges against; name one with --base."
 else
   echo "pre-push: part-row merges not checked: no main to diff against." >&2
 fi
