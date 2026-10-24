@@ -2,6 +2,7 @@
 
 - **Status:** Accepted; rationale corrected after the AWS profile mismatch reported in PR35.
   **Amended 2026-10-22 by change request 1.9:** decision 7 registers P-07.
+  P-07 is listed in `contracts/test-ids.md` since #322.
 - **Date:** 2026-10-15
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task 1.0 ("the read-only role CI assumes to
