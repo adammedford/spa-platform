@@ -80,6 +80,14 @@ export const meta = {
 // neither its test file nor the source it breaks has changed since that record's head; the comment
 // names it as cleared by that record, beside the cap's cut.
 //
+// A held test whose break the branch has since deleted (#334: a dead `fail` branch removed instead of
+// tested). There is nothing left to break, so the row is could-not-run, which holds, and a fix that
+// deletes unreachable code could never be answered. The mutation agent may report removed for a held
+// mutation only, proving it with the commit `git log -S` names; the script then holds nothing on the
+// row, and the verdict agent holds unless it shows the removed code could never run or is enforced
+// elsewhere. A removed row answers the held test in later reviews as a reproduced one does; on a
+// stated, nominated or candidate mutation it is a could-not-run.
+//
 // Follow-ups (#292). A finding the review carries rather than holds on lived only in records: #287's
 // three records each carried three with no ticket. The verdict agent names, for every carried finding,
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
@@ -187,7 +195,7 @@ const mutationTableOf = (body) => {
   for (const line of lines.slice(at + 2)) {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
-    const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run)\b/.exec(cells[3])
+    const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run|removed)\b/.exec(cells[3])
     if (result && cells[0]) rows.push({ test: cells[0], broken: cells[1], result: result[1] })
   }
   return rows
@@ -381,7 +389,7 @@ const VERDICT = {
   },
   required: ['verdict', 'findings', 'claims', 'outstanding', 'summary', 'earlierFindings', 'followUps'],
 }
-const RESULTS = ['reproduced', 'did-not-fail', 'could-not-run']
+const RESULTS = ['reproduced', 'did-not-fail', 'could-not-run', 'removed']
 const MUTATION = {
   type: 'object',
   properties: {
@@ -500,7 +508,7 @@ ${stale.length ? `The script compared every head the description states with the
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files.
 Write the result as JSON to the OUTPUT FILE, then return it.`
 
@@ -526,7 +534,7 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
 3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
-4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why. broken: what you broke, in one line.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run.` : ''} broken: what you broke, in one line.
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
@@ -546,7 +554,7 @@ const priorOf = (records, inv, rg) => {
   const held = latest && latest.head !== inv.head && latest.verdict === 'hold'
     ? { url: latest.url, rows: other.flatMap((r, i) => mutationTableOf(r.body).filter((x) => x.result === 'did-not-fail').map((x) => ({
       ...x, url: r.url,
-      later: other.slice(i + 1).flatMap((l) => mutationTableOf(l.body).filter((y) => y.result === 'reproduced').map((y) => y.test)),
+      later: other.slice(i + 1).flatMap((l) => mutationTableOf(l.body).filter((y) => y.result === 'reproduced' || y.result === 'removed').map((y) => y.test)),
     }))) }
     : null
   const changed = new Map()
@@ -634,8 +642,8 @@ const mutationRow = (n, m, i, got) => {
     test: m.test, kind: m.kind, guards: m.guards || m.why || '', mutation: m.mutation || '',
     broken: (ok && got.broken) || m.mutation || '', failed: ok && Number.isInteger(got.failed) ? got.failed : 0,
     total: ok && Number.isInteger(got.total) ? got.total : 0, failingNames: (ok && got.failingNames) || [],
-    result: ok ? got.result : 'could-not-run',
-    why: ok ? (got.why || '') : (got ? `the mutation agent returned the result ${JSON.stringify(got.result)}, which is none of ${RESULTS.join(', ')}` : 'the mutation agent died or returned nothing'),
+    result: ok ? (got.result === 'removed' && m.kind !== 'held' ? 'could-not-run' : got.result) : 'could-not-run',
+    why: ok ? (got.result === 'removed' && m.kind !== 'held' ? `removed is only for a held mutation: ${got.why || ''}` : (got.why || '')) : (got ? `the mutation agent returned the result ${JSON.stringify(got.result)}, which is none of ${RESULTS.join(', ')}` : 'the mutation agent died or returned nothing'),
     countsMatched: null, logFile: mutationLog(n, i),
   }
   // -1 is a count the body does not give (STATED): compare only the counts the author stated.
@@ -647,7 +655,7 @@ const mutationRow = (n, m, i, got) => {
 const mutationHolds = (rows, cutHeld = []) => [...rows.flatMap((r) => {
   if (r.result === 'did-not-fail') return [`${r.test} did not fail with ${r.broken || 'what it guards'} broken`]
   if (r.kind === 'stated' && r.result !== 'reproduced') return [`the stated mutation of ${r.test} did not reproduce (${r.result})`]
-  if (r.kind === 'held' && r.result !== 'reproduced') return [`the held test ${r.test} did not reproduce with the break the held record named (${r.result})`]
+  if (r.kind === 'held' && r.result !== 'reproduced' && r.result !== 'removed') return [`the held test ${r.test} did not reproduce with the break the held record named (${r.result})`]
   if (r.kind === 'nominated' && r.result === 'could-not-run') return [`the nominated mutation of ${r.test} could not run: ${r.why}`]
   return []
 }), ...cutHeld.map((t) => `the held test ${t} was cut by the cap of ${MUTATION_CAP} and stays unanswered; a run with a higher maxMutationsPerPr reaches it`)]
