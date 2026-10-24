@@ -203,6 +203,13 @@ def roadmap(root: pathlib.Path) -> dict:
     return json.loads(run([sys.executable, "-I", script, "--json"], root))
 
 
+def tracker_guide(root: pathlib.Path) -> str | None:
+    """docs/agents/issue-tracker.md, which names the account that may apply ready-for-agent, or None
+    when the checkout has no guide."""
+    path = root / GUIDE
+    return path.read_text() if path.exists() else None
+
+
 # --- resolving: pure functions over what was read ------------------------------------------------
 
 def issues_of(listings: dict[str, list[dict]]) -> list[Issue]:
@@ -550,9 +557,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise Refused(f"{saved / 'timelines' / f'{number}.json'} is missing, so who "
                                   f"applied ready-for-agent to #{number} is unread")
                 timelines[number] = json.loads(text)
-        guide = (root / GUIDE).read_text() if (root / GUIDE).exists() else None
         answer = resolve(listings, branch_names, road, ownership_rules(), timelines=timelines,
-                         guide=guide)
+                         guide=tracker_guide(root))
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1
