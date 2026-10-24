@@ -75,8 +75,8 @@ usage() {
 
 Options
   --yes         Required: tear the cell down.
-  --cell NAME   The cell: its teardown role, its certificate's Cell tag and its task definition
-                family. Default: \$SPA_CELL, else poc.
+  --cell NAME   The cell: its teardown role, its certificate's Cell tag, its task definition
+                family and its key ring prefix. Default: \$SPA_CELL, else poc.
   -h, --help    This text.
 
 Environment
