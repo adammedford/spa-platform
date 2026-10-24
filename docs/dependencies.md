@@ -41,7 +41,7 @@ Day one is tasks I-1, I-2, 1.0, 1.6a and 5.4, plus the first G0 run in `spikes/g
 
 ## NuGet packages
 
-All pinned in `Directory.Packages.props`. Each pinned version was confirmed to exist on nuget.org, and the licence is the one its package file declares. For the three AWS SDK packages the pin may not be the newest patch.
+All pinned in `Directory.Packages.props`. Each pinned version was confirmed to exist on nuget.org, and the licence is the one its package file declares. For the four AWS SDK packages the pin may not be the newest patch.
 
 | Package | Version | Licence | Expected in | Note |
 | --- | --- | --- | --- | --- |
@@ -50,8 +50,10 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | Duende.IdentityModel | 8.1.0 | Apache-2.0 | Fallback for G0 item 4, which passed without it | Already a transitive dependency of the package above |
 | Yarp.ReverseProxy | 2.3.0 | MIT | `Platform.Proxy` | The newest release. Its newest target is `net8.0`; G0 item 5 ran it on .NET 10.0.12 on 11 October 2026. |
 | AWSSDK.S3 | 4.0.101.6 | Apache-2.0 | `Platform.Registry`, `spactl` |  |
-| AWSSDK.SimpleSystemsManagement | 4.0.104.2 | Apache-2.0 | `Platform.Registry` | Parameter Store |
+| AWSSDK.SimpleSystemsManagement | 4.0.104.2 | Apache-2.0 | `Platform.Registry`, `Platform.Hosting` | Parameter Store |
 | AWSSDK.Signin | 4.0.101.13 | Apache-2.0 | `spactl` | The project's profile signs in with `login_session`, which the AWS CLI and Terraform resolve on their own and the .NET SDK resolves only with this assembly; without it every provider in the credential chain fails with `Assembly AWSSDK.Signin could not be found or loaded` (#206). Its `AWSSDK.Core` floor is 4.0.102.9, the Core the solution already resolves, so it moves no other version. It brings `BouncyCastle.Cryptography` 2.6.2 (MIT) in transitively, a package new to the solution. |
+| AWSSDK.DynamoDBv2 | 4.0.108 | Apache-2.0 | `Platform.Identity` | The Phase 2 session store (P2-1). Confirmed on nuget.org on 2026-10-19. Lifts the transitive `AWSSDK.Core` to 4.0.102.12 in the graphs that carry it, `Platform.Identity` and the gateway. |
+| Amazon.AspNetCore.DataProtection.SSM | 4.0.3 | Apache-2.0 (the package's LICENSE file; its nuspec names no expression) | `Platform.Hosting` | The shared key ring (P2-2). Confirmed on nuget.org on 2026-10-19, and on 2026-10-21 as still the newest. Brings `AWSSDK.Extensions.NETCore.Setup` 4.0.3.25, transitive. Needs no KMS package: Parameter Store encrypts on the server. It registers `XmlDeletableKeyManager` as `IKeyManager` with `AddSingleton`, replacing the framework's `XmlKeyManager`, so a test that substitutes `IKeyManager` registers after it. `Platform.Hosting` also references `AWSSDK.SimpleSystemsManagement` directly, or its graph floors that SDK at 4.0.7.3 and `AWSSDK.Core` at 4.0.3.17. Its `Microsoft.AspNetCore.DataProtection` 10.0.7 floor leaves `System.Security.Cryptography.Xml` and `.Pkcs` 10.0.7 in five `Microsoft.NET.Sdk` graphs (`Platform.Hosting`, `Platform.Hosting.Tests`, `Gateway.TestHarness`, `Gateway.IntegrationTests`, `Gateway.SecurityTests`), ten NU1902/NU1903 warnings each and 50 in all: expected, and they pass because `Directory.Build.props` downgrades advisories to warnings. They are not pinned away, because the gateway prunes both packages and runs the shared framework's copy, so a pin would change only the test hosts; and not suppressed, because a suppression would also hide the advisories that name the 10.0.12 runtime itself, whose patch is #273. |
 | OpenTelemetry.Extensions.Hosting | 1.19.1 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Instrumentation.AspNetCore | 1.19.0 | Apache-2.0 | `Platform.Telemetry` |  |
 | OpenTelemetry.Instrumentation.Http | 1.19.0 | Apache-2.0 | `Platform.Telemetry` |  |
