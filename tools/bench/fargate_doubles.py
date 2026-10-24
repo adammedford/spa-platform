@@ -84,6 +84,7 @@ def plan(**changes) -> dict:
         "log": [["Now listening on: http://[::]:8080", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
                 ["health", 503, 2000], ["health", 200, 3000], ["health", 200, 3100]],
         "redirect_ms": 640.5,
+        "bad_created_at": False,                 # the new task's createdAt is no instant the script reads
     }
     entry.update(changes)
     return entry
@@ -107,6 +108,7 @@ def world(plans=None, **changes) -> dict:
         "list_polls": 0,
         "next_task": 100,
         "initially_stable": True,
+        "service_gone_after": None,              # describe-services names no service from this restart on
     }
     document.update(changes)
     return document
@@ -178,6 +180,8 @@ def task_json(document: dict, task: dict) -> dict:
     }
     if task.get("stop"):
         out["stopCode"], out["stoppedReason"] = task["stop"]
+    if task.get("plan") is not None and entry["bad_created_at"] and not task.get("decoy"):
+        out["createdAt"] = "not an instant"
     return out
 
 
@@ -199,9 +203,8 @@ def log_events(case: pathlib.Path, document: dict, task: dict) -> list:
     if probes.exists():
         landed = [json.loads(line) for line in probes.read_text().splitlines()]
         for index, probe in enumerate(probe for probe in landed if probe["task"] == task["n"]):
-            if True:
-                lines.append(({"ts": None, "level": "info", "msg": "Request", "route": "asset", "status": 302,
-                               "duration_ms": entry["redirect_ms"]}, 40000 + index * 1000))
+            lines.append(({"ts": None, "level": "info", "msg": "Request", "route": "asset", "status": 302,
+                           "duration_ms": entry["redirect_ms"]}, 40000 + index * 1000))
     events = []
     for line, at in sorted(lines, key=lambda pair: pair[1]):
         stamp = zero + at * 1_000_000
@@ -230,6 +233,9 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
             sys.stderr.write("\nUnable to locate credentials. You can configure credentials by running \"aws configure\".\n")
             return 253
         out = {"UserId": "AROAEXAMPLE:operator", "Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/operator/x"}
+    elif shape == "ecs describe-services" and options.get("cluster") == CLUSTER and options.get("services") == [SERVICE] \
+            and document["service_gone_after"] is not None and document["restart"] >= document["service_gone_after"]:
+        out = {"services": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:service/{CLUSTER}/{SERVICE}", "reason": "MISSING"}]}
     elif shape == "ecs describe-services" and options.get("cluster") == CLUSTER and options.get("services") == [SERVICE]:
         out = {"services": [{"serviceName": SERVICE, "taskDefinition": TD_ARN, "platformVersion": "LATEST",
                              "loadBalancers": [{"targetGroupArn": TG_ARN, "containerName": GATEWAY, "containerPort": 8080}],

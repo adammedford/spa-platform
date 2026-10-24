@@ -64,8 +64,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
   4  incomplete: a deployment not stable within the waiter's bound, an expected log line absent
-     after a bounded wait, the probe never reaching the new task, or another stop; the files hold
-     the restarts so far, marked incomplete with the reason
+     after a bounded wait, the probe never reaching the new task, another stop, or any other
+     failure once restart 1's update-service was issued; the files hold the restarts so far,
+     marked incomplete with the reason
 
 **Secrecy** (Q7). No ARN, repository URI or account id reaches the .txt, the .json or stderr: tasks
 by id, an AWS error by its code, and every line written passed through redact().
@@ -483,6 +484,8 @@ class Bench:
         agent = next((a for a in container.get("managedAgents", []) if a.get("name") == "ExecuteCommandAgent"), {})
         task_id = _task_id(through["taskArn"])
         problem = Refused if refuse else Incomplete
+        # A container takes a session once its ExecuteCommandAgent's lastStatus is RUNNING.
+        # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling
         if through.get("lastStatus") != "RUNNING" or not container.get("runtimeId") or agent.get("lastStatus") != "RUNNING":
             raise problem(f"task {task_id} cannot carry a session: its {self.container} container's ExecuteCommandAgent is not running.")
         # ecs:<cluster>_<task id>_<container runtime id> names an ECS container to Session Manager.
@@ -914,9 +917,13 @@ def main(argv: List[str]) -> int:
             try:
                 bench.restart(index)
             except Refused as refusal:
-                bench.restarts.pop()
-                err(str(refusal), bench.account)
-                return EXIT_USAGE
+                if index == 1 and "deployment" not in bench.restarts[-1]:
+                    bench.restarts.pop()
+                    err(str(refusal), bench.account)
+                    return EXIT_USAGE
+                # update-service was issued, so this is no refusal before restart 1 (Q8): what was
+                # measured is written, marked incomplete.
+                raise Incomplete(str(refusal)) from refusal
     except Breach as breach:
         row = breach.row
         ending, code = "breach", EXIT_BREACH
@@ -925,6 +932,10 @@ def main(argv: List[str]) -> int:
         ending, reason, code = "incomplete", str(stop), EXIT_INCOMPLETE
     except AwsError as error:
         ending, reason, code = "incomplete", f"an AWS call failed ({error.code})", EXIT_INCOMPLETE
+    except Exception as error:
+        # Any other failure once restart 1 began still writes what was measured (Q8). Only the
+        # exception's type is kept: its message can carry what the AWS side answered (Q7).
+        ending, reason, code = "incomplete", f"an unexpected {type(error).__name__}", EXIT_INCOMPLETE
     finally:
         bench.close_forward()
     write(options, bench.facts, bench.restarts, ending, reason, bench.account)

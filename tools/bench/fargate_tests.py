@@ -95,6 +95,9 @@ def setUpModule():
         "-config", "leaf.cnf")
     run("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "leaf.pem",
         "-days", "2", "-extfile", "leaf.cnf", "-extensions", "ext")
+    # A second authority that issued nothing the double serves: the probe must refuse the forward under it.
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "other.key", "-out", "other.pem", "-days", "2",
+        "-subj", "/CN=Fargate Other CA", "-config", "ca.cnf", "-extensions", "ext")
 
 
 def tearDownModule():
@@ -131,7 +134,7 @@ class Run:
         return [" ".join(word for word in call["argv"][2:4]) for call in self.calls if call["tool"] == "aws"]
 
 
-def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(), env_changes=None) -> Run:
+def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(), env_changes=None, ca: str = "ca.pem") -> Run:
     case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-case-"))
     repo = case / "repo"
     (repo / "tools" / "bench").mkdir(parents=True)
@@ -146,7 +149,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
                    "clients": {}, "testUsers": {}, "logGroup": LOG_GROUP}
         written.update(outputs or {})
         (repo / OUTPUTS).write_text(json.dumps(written))
-    for name in ("leaf.pem", "leaf.key", "ca.pem"):
+    for name in ("leaf.pem", "leaf.key", "ca.pem", "other.pem"):
         shutil.copy(pathlib.Path(AUTHORITY) / name, case / name)
     bin_dir = case / "bin"
     bin_dir.mkdir()
@@ -164,7 +167,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
         env.pop("AWS_REGION")
     env.update(env_changes or {})
     argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / "out.txt"),
-            "--json", str(case / "out.json"), "--ca", str(case / "ca.pem"), "--local-port", str(free_port()),
+            "--json", str(case / "out.json"), "--ca", str(case / ca), "--local-port", str(free_port()),
             "--poll-seconds", "0", "--probe-interval", "0", "--task-timeout", "20", "--health-timeout", "20",
             "--log-timeout", "1", "--probe-attempts", "5", "--forward-timeout", "20", *extra]
     done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=600)
@@ -380,6 +383,37 @@ class Endings(CaseBase):
         self.assertEqual(5, len(run.probes))
         self.assertNoSecrets(run)
 
+    def test_a_forward_whose_certificate_the_authority_did_not_issue_is_never_probed_through(self):
+        # TLS is verified against --ca (Q10): under an authority that issued nothing the forward
+        # serves, no request reaches it, so no 302 lands and the run is incomplete.
+        run = run_case(world(), ca="other.pem")
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertIn("no 302 reached task", run.json["reason"])
+        self.assertEqual([], run.probes)
+        self.assertNoSecrets(run)
+
+    def test_a_refusal_after_restart_1s_update_service_still_writes_the_restart_and_exits_4(self):
+        # A restart was issued, so this is no refusal before restart 1 (Q8): the service vanishing
+        # after it is incomplete, and restart 1's marks are kept.
+        run = run_case(world(service_gone_after=1))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertIn(f"has no service {SERVICE}", run.json["reason"])
+        self.assertEqual([False], [r["complete"] for r in run.json["restarts"]])
+        self.assertNoSecrets(run)
+
+    def test_any_other_failure_after_restart_1_began_writes_the_partial_files_and_exits_4(self):
+        plans = [plan() for _ in range(10)]
+        plans[1] = plan(bad_created_at=True)
+        run = run_case(world(plans))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual("an unexpected ValueError", run.json["reason"])
+        self.assertEqual([True, False], [r["complete"] for r in run.json["restarts"]])
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
     def test_refusals_before_restart_1_exit_2_and_write_nothing(self):
         cases = {
             "no Region": dict(region=None),
@@ -525,7 +559,7 @@ class TheDoubles(unittest.TestCase):
         self.assertEqual("ecs delete-service", calls[-1]["unexpected"])
 
     def test_the_tests_and_the_script_import_nothing_from_tools_scripts(self):
-        for path in (SCRIPT, pathlib.Path(__file__).resolve()):
+        for path in (SCRIPT, DOUBLES, pathlib.Path(__file__).resolve()):
             source = path.read_text()
             self.assertNotRegex(source, r"(?m)^\s*(from|import)\s+\S*cell_")
             self.assertNotRegex(source, r"spec_from_file_location\([^)]*scripts")
