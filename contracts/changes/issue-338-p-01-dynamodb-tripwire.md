@@ -4,7 +4,7 @@
 - **Tasks:** #338; #332's G6 (S8) spec, whose T9 row says "P-01's `aws_dynamodb_table` tripwire
   becomes conditional on the variable"; #347 (T10), which builds on the same cell; P2-1
 - **Date:** 2026-10-24
-- **Status:** open
+- **Status:** decided, 2026-10-24, on https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. See the Decision section below.
 
 ## The gap
 
@@ -161,6 +161,43 @@ and the module suite gains a run on `dynamodb` asserting `pk`, the `appId` index
 the trial. Encryption stays DynamoDB's default (#332 D6), and there is no index on `subject` (G7's,
 ADR-0028).
 
+## P-03's sentence, for the same decision
+
+P-03 reads "Read on this cell's bucket prefixes and client-secret parameter path, the four
+`ssmmessages` permissions, and nothing else. No write to the registry." (`docs/plan/04-tests.md:78`).
+Its runs plan the default inputs, so they stay green. The session store and the ring prefix are
+independent inputs, though, and each brings grants of its own that the sentence does not admit:
+`ReadWriteSessions` follows `session_store`, and `ReadWriteKeyRing` and `TagKeyRingOnCreate` follow
+`data_protection_parameter_prefix`. A `memory` cell with a ring prefix changes P-03 too.
+
+| Cell's inputs | The task role holds, beyond P-03's sentence | Held by |
+| --- | --- | --- |
+| Default: `memory`, no ring prefix | Nothing. The sentence holds as written. | The platform root's P-03 runs, which plan the defaults |
+| `memory` with the cell's ring prefix | `ReadWriteKeyRing` and `TagKeyRingOnCreate`, as below, and no `ReadWriteSessions` | The module's `a_ring_under_memory_carries_the_ring_and_no_table` run (the statement set) |
+| `dynamodb` with the cell's ring prefix. The cell's validation refuses `dynamodb` without one. | `ReadWriteSessions`, `ReadWriteKeyRing` and `TagKeyRingOnCreate`, as below | The module's `under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants` run (the statement set, and each statement's actions and resources) |
+
+The three grants, exactly (`infra/modules/cell/iam.tf`; `{cell}` is the cell's name, and every ARN
+is in the cell's account and Region):
+
+- **`ReadWriteSessions`** (P2-1 Decision 7): `dynamodb:GetItem`, `dynamodb:PutItem`,
+  `dynamodb:DeleteItem`, `dynamodb:Query` and `dynamodb:BatchWriteItem`, on
+  `table/spa-platform-{cell}-sessions` and `table/spa-platform-{cell}-sessions/index/appId`.
+- **`ReadWriteKeyRing`** (P2-2 decision 12): `ssm:PutParameter` and `ssm:GetParametersByPath`, on
+  `parameter/spa-platform/{cell}/data-protection` and `parameter/spa-platform/{cell}/data-protection/*`.
+- **`TagKeyRingOnCreate`** (#274): `ssm:AddTagsToResource` on
+  `parameter/spa-platform/{cell}/data-protection/*`, only with `aws:RequestTag/Platform` =
+  `spa-platform`, `aws:RequestTag/Cell` = `{cell}` and `aws:RequestTag/ManagedBy` = `gateway`, and
+  `aws:TagKeys` within those three.
+
+In every case the role holds no registry write (the registry grant stays a read), no
+`ssm:DeleteParameter` (`teardown.sh` deletes the ring as the operator), no KMS grant (the module
+holds none; see `data_protection_kms_key_id`), and no `dynamodb:Scan`, `dynamodb:UpdateItem` or
+table administration.
+
+So P-03 reads, from G6: the sentence on the default inputs, and the sentence with exactly these
+grants added under the inputs that create them, each grant held by the module run named. Nothing
+here edits P-03 or its runs. This section answers #353.
+
 ## Why this is a request rather than an edit
 
 `root.tftest.hcl` is under `infra/`, workstream 1's path, but what P-01 proves is a plan-policy
@@ -173,3 +210,26 @@ entry; the decision is whether P-01 may read a gated declaration as no database.
 no index" under `memory` as a plan fact rather than a source fact) wait on this request. Nothing else
 of #338 does. #344's store can be built and proved against its fake without the table; the deployed
 G6 run (#348) cannot.
+
+## Decision
+
+Integrator, 2026-10-24, on Adam's answer G4 on #332, confirmed in https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. **Accepted as
+written.**
+
+1. **The tripwire admits exactly the gated session table.** The forbidden-type list keeps
+   `dynamodb_.+`. The one `aws_dynamodb_table.sessions` declaration whose body carries exactly
+   `count = local.session_store_is_dynamodb ? 1 : 0` is exempt, a plan assertion holds that on the
+   default inputs it plans no instance, the count closure and the type-count map name it, and a
+   second run on `dynamodb` with the cell's prefix expects exactly one table and every other count
+   unchanged. What P-01 stops proving is that the module's source names no DynamoDB table; what it
+   goes on proving is P-01's own sentence, that the Phase 1 plan holds no database.
+2. **The edits land with the table, in one workstream 1 commit**, under #338: `sessions.tf` as given
+   above, the three assertions in `infra/envs/poc/platform/tests/root.tftest.hcl`, the module's
+   resource-type allowlist and its two runs, and `ReadWriteSessions` reading the table's ARN in place
+   of the name-built one. It lands under #338.
+3. **P-03's reading is the section above**, recorded here and not by an edit to the frozen export:
+   the store and the ring prefix are independent conditions, and the three named cases, with each
+   grant's exact actions and resources, are what P-03 means from G6. #353 closes on it.
+4. **#347 (T10) amends this request** with its NAT gateway, Elastic IP and endpoint exemptions, under
+   the switch input its grill named, as a new section with its own decision when it is written
+   (#349 Q1). This decision covers the session table alone.
