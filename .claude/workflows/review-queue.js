@@ -372,8 +372,9 @@ const VERDICT = {
     claims: { type: 'array', items: CLAIM },
     outstanding: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' },
-    // A delta review after a hold: each finding of the held record, and whether the range answers it.
-    earlierFindings: { type: 'array', items: { type: 'object', properties: { finding: { type: 'string' }, answered: { type: 'boolean' }, how: { type: 'string' } }, required: ['finding', 'answered', 'how'] } },
+    // A delta review after a hold: each finding of the held record, whether that record held on it or
+    // carried it as a follow-up, and whether the range answers it.
+    earlierFindings: { type: 'array', items: { type: 'object', properties: { finding: { type: 'string' }, held: { type: 'boolean' }, answered: { type: 'boolean' }, how: { type: 'string' } }, required: ['finding', 'held', 'answered', 'how'] } },
     // Every finding the review carries rather than holds on (#292), with the open ticket that owns
     // it ("" for none) and the earliest record on this pull request that carried it ("" for none).
     followUps: { type: 'array', items: { type: 'object', properties: { axis: { type: 'string', enum: ['Standards', 'Spec'] }, title: { type: 'string' }, where: { type: 'string' }, ticket: { type: 'string' }, firstCarried: { type: 'string' } }, required: ['axis', 'title', 'where', 'ticket', 'firstCarried'] } },
@@ -498,7 +499,7 @@ Take every finding's severity for yourself: a sub-agent's "looks wrong" is somet
 ${stale.length ? `The script compared every head the description states with the head the inventory read, and these differ; each is a verified Spec finding the comment already carries, so weigh it in verdict and outstanding and do not list it again in findings:\n${stale.map((f) => `- ${f.title}. ${f.checked}`).join('\n')}\n` : ''}The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
-${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: answered true when the range answers it, false when it does not, and how; an unanswered one holds, and so does an empty list.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
+${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files.
 Write the result as JSON to the OUTPUT FILE, then return it.`
@@ -874,8 +875,10 @@ const reviewOne = async (n, res, at) => {
   // record's finding the range leaves unanswered (an axis that returned nothing failed the pull
   // request above). The verdict agent can hold on more, never on less. An empty earlierFindings after
   // a hold holds too: a hold always had a reason, and a list with none in it is that reason left
-  // unchecked (A check fails closed).
-  const unanswered = d && d.verdict === 'hold' && (!v.earlierFindings.length || v.earlierFindings.some((f) => f.answered === false))
+  // unchecked (A check fails closed). A follow-up the held record carried without holding on it does
+  // not hold here either (#331's third record held on one no commit could answer); a finding that does
+  // not say held: false counts as held.
+  const unanswered = d && d.verdict === 'hold' && (!v.earlierFindings.length || v.earlierFindings.some((f) => f.answered === false && f.held !== false))
   const verdict = mut.holds.length || unanswered ? 'hold' : v.verdict
   // The record names the head the inventory read, whatever the post agent finds later.
   const record = recordLine(inv.head, inv.forkPoint, verdict)
