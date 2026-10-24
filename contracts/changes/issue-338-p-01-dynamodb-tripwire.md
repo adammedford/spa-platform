@@ -161,6 +161,65 @@ and the module suite gains a run on `dynamodb` asserting `pk`, the `appId` index
 the trial. Encryption stays DynamoDB's default (#332 D6), and there is no index on `subject` (G7's,
 ADR-0028).
 
+## P-03's sentence, for the same decision
+
+P-03 reads "Read on this cell's bucket prefixes and client-secret parameter path, the four
+`ssmmessages` permissions, and nothing else. No write to the registry." (`docs/plan/04-tests.md:78`).
+Its runs plan the default inputs, so they stay green, and on those inputs the sentence still holds.
+Off them it does not, and this section records the finding of #353 (raised from #350's review
+record) here rather than in a second request (#349 Q17).
+
+Two inputs widen the task role, and they are independent conditions in `infra/modules/cell/iam.tf`,
+as the store and the ring are in the gateway (P2-2 decision 5):
+
+- `session_store = "dynamodb"` (`local.session_store_is_dynamodb`) adds `ReadWriteSessions` (P2-1
+  Decision 7);
+- a non-empty `data_protection_parameter_prefix` (`local.key_ring_enabled`) adds `ReadWriteKeyRing`
+  and `TagKeyRingOnCreate` (P2-2 decision 12, #274), whichever the store.
+
+So a memory-store cell with a ring prefix changes P-03 as surely as a `dynamodb` one. The fourth
+combination does not plan: `var.session_store`'s validation refuses `dynamodb` with no prefix
+(`dynamodb_with_no_ring_prefix_is_refused_at_plan`). That leaves three cases:
+
+| Case | Inputs | The task role's statements | The run that holds the set |
+| --- | --- | --- | --- |
+| Default | `memory`, no prefix | `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages`: P-03's sentence | `under_memory_the_cell_is_phase_1_s_unchanged` |
+| Memory plus ring | `memory`, the cell's prefix | the default's three, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `a_ring_under_memory_carries_the_ring_and_no_table` |
+| DynamoDB plus ring | `dynamodb`, the cell's prefix | the default's three, `ReadWriteSessions`, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants` |
+
+Each grant, as `iam.tf` builds it, with `{partition}`, `{region}` and `{account}` the cell's own and
+the prefix held by its validation to exactly `/spa-platform/{cell}/data-protection/`:
+
+- **`ReadWriteSessions`**, behind `session_store`: `dynamodb:GetItem`, `dynamodb:PutItem`,
+  `dynamodb:DeleteItem`, `dynamodb:Query` and `dynamodb:BatchWriteItem`, on
+  `arn:{partition}:dynamodb:{region}:{account}:table/spa-platform-{cell}-sessions` and that ARN's
+  `/index/appId`. The index is named, not `index/*`; no `Scan`, no `UpdateItem`, nothing of the
+  table's administration, and no other statement carries a DynamoDB action.
+- **`ReadWriteKeyRing`**, behind the prefix: `ssm:PutParameter` and `ssm:GetParametersByPath`, on
+  `arn:{partition}:ssm:{region}:{account}:parameter/spa-platform/{cell}/data-protection`, the
+  prefix's own ARN with no trailing slash, and on that ARN's `/*`.
+- **`TagKeyRingOnCreate`**, behind the prefix: `ssm:AddTagsToResource` on the ring's children,
+  `arn:{partition}:ssm:{region}:{account}:parameter/spa-platform/{cell}/data-protection/*`, alone,
+  conditioned by `StringEquals` on `aws:RequestTag/Platform` = `spa-platform`,
+  `aws:RequestTag/Cell` = the cell and `aws:RequestTag/ManagedBy` = `gateway`, and by
+  `ForAllValues:StringEquals` on `aws:TagKeys` = `Platform`, `Cell`, `ManagedBy`.
+
+In none of the three cases does the role write to the registry: the policy's one S3 action is
+`ReadRegistryAndReleases`'s `s3:GetObject`, unconditional, on the `registry/*` and `apps/*`
+prefixes and not the bucket's own ARN, so P-03's second sentence holds as written. Nor does it
+delete a key: no statement grants `ssm:DeleteParameter` or `ssm:DeleteParameters` (P2-2 decision
+12), and `teardown.sh` deletes the ring as the operator.
+
+The DynamoDB-plus-ring run holds all three grants to the actions, resources and conditions above,
+the absence of a key deletion, and the role's closures (Allow only, no wildcard action, only the
+tunnel's grant on `"*"`, no `NotAction` or `NotResource`). The memory-plus-ring run holds the set of
+statements only; the ring's two are the same `dynamic "statement"` blocks on `local.key_ring_enabled`
+whichever the store, so the DynamoDB run's assertions on them are the ring's in both cases.
+
+Nothing in this request edits P-03. It asks the integrator, deciding the tripwire, to record P-03's
+Phase 2 reading beside it: the sentence on the default inputs, and behind it, per case, the grants
+above, held by the runs named.
+
 ## Why this is a request rather than an edit
 
 `root.tftest.hcl` is under `infra/`, workstream 1's path, but what P-01 proves is a plan-policy
