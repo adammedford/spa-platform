@@ -22,9 +22,8 @@ public sealed class KeyRingTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Mutation: register the decorator after <c>PersistKeysToAWSSystemsManager</c> without removing
-    /// the client descriptor it wraps, or drop it, and the put carries no tags; drop
-    /// <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at all.
+    /// Mutation: drop the decorator and the put carries no tags (so the package adds none of its own);
+    /// drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at all.
     /// </summary>
     [Fact]
     public async Task A_host_with_the_section_writes_one_tagged_SecureString_and_a_second_host_over_the_same_store_reads_it()
@@ -188,7 +187,9 @@ public sealed class KeyRingTests
     /// <summary>
     /// The second fact the ticket asks for: two tasks that both find the prefix empty both mint, and the
     /// framework reconciles them when one meets a payload under the other's key, by reloading the ring
-    /// once (its unknown-key refresh), so each reads the other's payloads. Mutation: keep the store
+    /// once (its unknown-key refresh), so each reads the other's payloads. That refresh runs only in
+    /// the two minutes after a host's key ring provider is created (<c>KeyRingProvider</c>'s
+    /// <c>AutoRefreshWindowEnd</c>), which is where a bootstrap race happens. Mutation: keep the store
     /// hiding writes after the starts and the reload finds no new key, so the unprotect throws.
     /// </summary>
     [Fact]
@@ -210,7 +211,7 @@ public sealed class KeyRingTests
     /// <summary>
     /// The decorator hands a request it does not tag to the inner client as it was given: the same
     /// object, untouched, and the inner client's answer back. Mutation: copy the request in the
-    /// decorator, or tag every <c>PutParameterRequest</c>, and the reference or the tag check fails.
+    /// decorator and the reference check fails; drop the decorator and the client is the stub itself.
     /// </summary>
     [Fact]
     public async Task The_decorator_passes_a_secret_read_through_unchanged()
