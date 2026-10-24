@@ -76,7 +76,7 @@ variables {
         # The longest session contracts/registry.schema.json allows, plus the root's hour of margin.
         refresh_token_validity        = jsondecode(file("../../../../contracts/registry.schema.json"))["$defs"].session.properties.lifetimeMinutes.maximum + 60
         token_validity_units          = { access_token = "minutes", id_token = "minutes", refresh_token = "minutes" }
-        refresh_token_rotation        = { feature = "ENABLED", retry_grace_period_seconds = 10 }
+        refresh_token_rotation        = { feature = "ENABLED", retry_grace_period_seconds = 60 }
         enable_token_revocation       = true
         prevent_user_existence_errors = "ENABLED"
         explicit_auth_flows           = toset(["ALLOW_USER_SRP_AUTH"])
@@ -180,11 +180,23 @@ run "tokens_rotation_and_revocation" {
     error_message = "The refresh token must outlive the longest session contracts/registry.schema.json allows."
   }
 
+  # Rotation on, with a 60-second grace, the most Cognito allows (#332 D1). The predicate is written
+  # once and read twice: against each planned client, which it must accept, and against that same
+  # client with any other grace or with rotation off, which it must refuse. The other graces are 0,
+  # the old 10, and 59 and 61 either side of the value, so a client with any other value fails this
+  # assert, and a predicate loosened to a bound (>= 10, <= 60) fails it too, rather than the assert
+  # passing by construction.
   assert {
-    condition = alltrue([for c in aws_cognito_user_pool_client.app : (
-      c.refresh_token_rotation[0].feature == "ENABLED" && c.refresh_token_rotation[0].retry_grace_period_seconds == 10
-    )])
-    error_message = "Refresh rotation is on, with a 10-second grace."
+    condition = length(aws_cognito_user_pool_client.app) > 0 && alltrue(flatten([
+      for c in aws_cognito_user_pool_client.app : [
+        for probe in concat(
+          [{ rotation = c.refresh_token_rotation[0], accepted = true }],
+          [for g in [0, 10, 59, 61] : { rotation = merge(c.refresh_token_rotation[0], { retry_grace_period_seconds = g }), accepted = false }],
+          [{ rotation = merge(c.refresh_token_rotation[0], { feature = "DISABLED" }), accepted = false }],
+        ) : (probe.rotation.feature == "ENABLED" && probe.rotation.retry_grace_period_seconds == 60) == probe.accepted
+      ]
+    ]))
+    error_message = "Every client's refresh rotation is on with retry_grace_period_seconds = 60 (#332 D1), and the predicate refuses the same client at any other grace or with rotation off."
   }
 
   assert {
