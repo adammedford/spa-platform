@@ -139,4 +139,21 @@ public sealed class PlatformConfigurationTests
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["Store"] = "redis"), "a store the plan does not name");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["MaxSessions"] = 0), "a zero session bound");
     }
+
+    [Fact]
+    public void The_session_table_is_an_optional_DynamoDB_table_name()
+    {
+        // Change request P2-1 Decision 3: optional, flat, DynamoDB's naming rule. The requirement under
+        // Store = dynamodb is the store's FromConfiguration until the next gate.
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c =>
+            {
+                c["Session"]!.AsObject()["Store"] = "dynamodb";
+                c["Session"]!.AsObject()["TableName"] = "spa-platform_dev.sessions";
+            }),
+            "a table name of letters, digits, underscore, dot and hyphen");
+        Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject().Remove("TableName")), "no table name");
+        Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["TableName"] = "ab"), "a two-character table name");
+        Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["TableName"] = "spa-platform/sessions"), "a table name carrying a slash");
+    }
 }

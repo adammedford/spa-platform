@@ -138,6 +138,11 @@
           "type": "integer",
           "minimum": 1,
           "description": "The bound on the in-memory store."
+        },
+        "TableName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{3,255}$",
+          "description": "The session table. Required when `Store` is `dynamodb`; ignored otherwise."
         }
       }
     }
