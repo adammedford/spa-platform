@@ -156,6 +156,23 @@ it recognises and fails on one it does not, so a widened grant cannot pass by be
 unmentioned. The execution role is separate and holds image pull and log writes only;
 neither role can do the other's job.
 
+Those three are the whole role on the default inputs. Two Phase 2 inputs add more, and
+only when set (#338):
+
+| Grant | Behind | Scope |
+| --- | --- | --- |
+| `ReadWriteSessions` | `session_store = "dynamodb"` | `GetItem`, `PutItem`, `DeleteItem`, `Query` and `BatchWriteItem` on `table/spa-platform-{cell}-sessions` and its `index/appId`, the DynamoDB store's operations (change request P2-1) and nothing else of DynamoDB |
+| `ReadWriteKeyRing` | `data_protection_parameter_prefix` | `ssm:PutParameter` and `ssm:GetParametersByPath` on `/spa-platform/{cell}/data-protection` and its children (P2-2 decision 12) |
+| `TagKeyRingOnCreate` | `data_protection_parameter_prefix` | `ssm:AddTagsToResource` on the ring's parameters, conditioned on exactly `Platform`, `Cell` and `ManagedBy = gateway` (#274) |
+
+No statement grants `ssm:DeleteParameter`: nothing in the platform deletes a key, and
+`teardown.sh` deletes the ring as the operator. `session_store = "dynamodb"` with no ring
+prefix is refused at plan, as the gateway refuses it at start (P2-2 decision 16). The
+session table itself is not declared yet: P-01 reads this module's source and refuses a
+DynamoDB table whatever its count, so it waits on
+`contracts/changes/issue-338-p-01-dynamodb-tripwire.md`, and the grant names the table by
+the name the module will give it.
+
 A grant can also arrive through a resource policy: in its own account a role may do
 whatever its own policy or a resource policy allows it. The bucket policy is the cell's
 one resource policy, and a test holds it to its four refusals, so an `Allow` there, to

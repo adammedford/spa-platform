@@ -23,8 +23,9 @@
 #      deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
 #      sample image again.
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
-#      still counts it in use after the listener went; and the cell's inactive task definitions,
-#      which keep their tags until deleted.
+#      still counts it in use after the listener went; the cell's inactive task definitions,
+#      which keep their tags until deleted; and the key ring the gateway wrote under
+#      /spa-platform/<cell>/data-protection/, which no root's state holds (P2-2 decision 17).
 #   4. tools/scripts/verify-teardown.sh, and its exit status is this script's (#308). Its readers
 #      look for Platform = spa-platform exactly (contracts/resource-tags.md): IAM roles and customer
 #      managed policies by their tags, which the tagging API cannot list (#118); the cell's roles by
@@ -291,6 +292,44 @@ for arn in $(tr '\t' ' ' < "$OUT"); do
 done
 flush
 note "deleted ${removed} inactive task definitions of ${FAMILY}"
+
+# The cell's data-protection key ring (P2-2 decision 17). The gateway writes it at run time under
+# /spa-platform/{cell}/data-protection/, the one prefix infra/modules/cell's
+# data_protection_parameter_prefix admits, so no root's state holds it and no destroy removes it; a
+# cell rebuilt under the same name would load the old ring. Deleted here, after the platform root,
+# so that no task is left to write a new key, and before the proof, which would otherwise find the
+# parameters by their platform tag (#274). An empty prefix, a memory cell or a second teardown, is
+# nothing to delete. The task role cannot delete there (infra/modules/cell/iam.tf); the operator can.
+# The path takes no trailing slash, and the CLI pages the listing on its own. Ten names a call, the
+# API's limit; a name already gone is answered under InvalidParameters, not as an error.
+# https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParametersByPath.html
+# https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DeleteParameters.html
+RING_PREFIX="/spa-platform/${CELL}/data-protection/"
+aws_read "the key ring parameters under ${RING_PREFIX}" ssm get-parameters-by-path \
+  --path "${RING_PREFIX%/}" --recursive --query 'Parameters[].Name'
+names=""
+count=0
+ring_deleted=0
+flush_ring() {
+  [ -n "$names" ] || return 0
+  # shellcheck disable=SC2086
+  aws_call ssm delete-parameters --names $names --query 'length(DeletedParameters)'
+  [ "$OUTCOME" = "success" ] || fail "could not delete the key ring parameters under ${RING_PREFIX}: ${OUTCOME}"
+  ring_deleted=$((ring_deleted + count))
+  names=""
+  count=0
+}
+for name in $(tr '\t' ' ' < "$OUT"); do
+  case "$name" in
+    "$RING_PREFIX"*) ;;
+    *) continue ;;
+  esac
+  names="${names} ${name}"
+  count=$((count + 1))
+  [ "$count" -lt 10 ] || flush_ring
+done
+flush_ring
+note "deleted ${ring_deleted} key ring parameters under ${RING_PREFIX}"
 
 # --- 4. the proof ------------------------------------------------------------------------------------
 

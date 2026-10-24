@@ -48,6 +48,10 @@ EC2 = f"arn:aws:ec2:{REGION}:{ACCOUNT}"
 CLUSTER_ARN = f"{ECS}:cluster/{cell.CLUSTER}"
 SERVICE_ARN = f"{ECS}:service/{cell.CLUSTER}/{cell.SERVICE}"
 GROUP = "sg-0123456789abcdef0"
+# The cell's session table under session_store = "dynamodb", by the name infra/modules/cell/iam.tf
+# builds: ${local.name_prefix}-sessions, read from the module rather than typed.
+TABLE = re.search(r'session_table_name\s*=\s*"([^"]+)"', _IAM)[1].replace("${local.name_prefix}", cell.FAMILY)
+TABLE_ARN = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{TABLE}"
 RULES = [f"sgr-0123456789abcde{n}" for n in "0123"]
 
 
@@ -179,6 +183,23 @@ class ATornDownCellPasses(Verify):
         case, _ = self.verify(world)
         self.assertEqual(1, len(case.aws("iam list-roles")))
 
+    def test_a_table_dynamodb_no_longer_knows_passes_and_is_counted(self):
+        # The index lags a DeleteTable as it lags every deletion: a table DescribeTable answers
+        # ResourceNotFoundException for is gone, and the summary says so.
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([TABLE], [call["options"]["table-name"] for call in case.aws("dynamodb describe-table")])
+        self.assertIn("1 DynamoDB tables DynamoDB does not know", result.stdout)
+
+    def test_a_deleting_table_passes_once_it_is_gone(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="DELETING", describe_knows=2))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(case.aws("dynamodb describe-table")))
+
     def test_the_tagging_index_s_own_lag_is_retried(self):
         world = torn_down_world()
         world["tag_lag"] = 2
@@ -241,6 +262,24 @@ class AStandingResourceFails(Verify):
         world["tagged"].append(tagged(f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:/spa-platform/poc/stray", "logs:log-group"))
         _, result = self.failed(world, f"the tag query in {REGION}")
         self.assertIn(f"arn:aws:logs:{REGION}:<account>:log-group:/spa-platform/poc/stray", result.stderr)
+
+    def test_a_surviving_session_table(self):
+        # #338: the table goes with the platform root, and one that survives it fails the verdict by
+        # name, whatever DynamoDB says of its status.
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="ACTIVE"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:dynamodb:{REGION}:<account>:table/{TABLE} (DynamoDB says ACTIVE)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_table_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="ACTIVE"))
+        world["faults"]["dynamodb describe-table"] = ["AccessDeniedException", "DescribeTable"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("AccessDeniedException", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
 
     def test_a_role_carrying_the_platform_tag_under_a_name_the_cell_does_not_declare(self):
         # An orphan from an interrupted apply, or a role added later: the name list cannot see it.

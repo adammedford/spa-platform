@@ -1617,3 +1617,348 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
   }
 
 }
+
+# --- Continuity (#338): the durable store's grants and the shared ring, behind inputs that default to
+# Phase 1 -----------------------------------------------------------------------------------------
+#
+# P2-2 decision 16: Session:Store = dynamodb with no DataProtection section fails the gateway's start,
+# because a durable session protected under a per-task ring is one no other task can read. The cell
+# refuses the same pairing at plan, so the cell never deploys a gateway that would refuse to start.
+run "dynamodb_with_no_ring_prefix_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    session_store = "dynamodb"
+  }
+
+  expect_failures = [var.session_store]
+}
+
+# The refusal names both inputs, so the operator reading it learns which one to set. terraform test
+# cannot read a validation's message, so the message is read from the source: the session_store
+# variable's block, which holds the one validation that names the ring prefix.
+run "the_dynamodb_refusal_names_both_inputs" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for m in regexall("(?s)error_message\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", one(regexall("(?ms)^variable \"session_store\" \\{.*?^\\}", file("${path.module}/variables.tf")))) :
+      strcontains(m[0], "session_store") && strcontains(m[0], "data_protection_parameter_prefix")
+    ])
+    error_message = "The refusal of session_store = \"dynamodb\" with no ring prefix names both session_store and data_protection_parameter_prefix."
+  }
+}
+
+run "dynamodb_with_the_cell_s_ring_prefix_plans" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+}
+
+# Another cell's prefix, and a wider one, are refused: the grant and teardown both follow the cell's
+# own convention (P2-2 decision 8).
+run "another_cell_s_ring_prefix_is_refused" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/other/data-protection/"
+  }
+
+  expect_failures = [var.data_protection_parameter_prefix]
+}
+
+run "a_ring_prefix_wider_than_the_cell_s_is_refused" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/"
+  }
+
+  expect_failures = [var.data_protection_parameter_prefix]
+}
+
+run "a_kms_key_with_no_ring_is_refused" {
+  command = plan
+
+  variables {
+    data_protection_kms_key_id = "alias/spa-platform-poc"
+  }
+
+  expect_failures = [var.data_protection_kms_key_id]
+}
+
+# The task role under the durable store and the ring: exactly the grants #338 names, and the three of
+# Phase 1 unchanged beside them. The expected ARNs are written out for this file's account, Region
+# and cell, so a grant assembled from anything wider fails.
+run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages", "ReadWriteSessions", "ReadWriteKeyRing", "TagKeyRingOnCreate"])
+    )
+    error_message = "Under dynamodb the task role holds Phase 1's three grants and three more: the session table, the key ring, and the ring's tags on create (#338)."
+  }
+
+  # The five the store sends (change request P2-1, item 5's operations table and Decision 7), and
+  # nothing else of DynamoDB: no Scan, no UpdateItem, no table administration.
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).actions
+      == toset(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"])
+    )
+    error_message = "The session grant is GetItem, PutItem, DeleteItem, Query and BatchWriteItem, the operations the DynamoDB store sends (P2-1), and no other DynamoDB action."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources
+      == toset([
+        "arn:aws:dynamodb:us-east-1:111122223333:table/spa-platform-poc-sessions",
+        "arn:aws:dynamodb:us-east-1:111122223333:table/spa-platform-poc-sessions/index/appId",
+      ])
+    )
+    error_message = "The session grant names this cell's table and its appId index, and nothing wider: no other table, no index wildcard."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.task.statement :
+      alltrue([for action in s.actions : !startswith(action, "dynamodb:")]) if s.sid != "ReadWriteSessions"
+    ])
+    error_message = "Only the session grant carries a DynamoDB action."
+  }
+
+  # P2-2 decision 12: PutParameter and GetParametersByPath, the second authorised against the path's
+  # own ARN as well as its children.
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteKeyRing"]).actions
+      == toset(["ssm:PutParameter", "ssm:GetParametersByPath"])
+    )
+    error_message = "The ring grant is PutParameter and GetParametersByPath (P2-2 decision 12), and no read by name, no history and no delete."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteKeyRing"]).resources
+      == toset([
+        "arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection",
+        "arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection/*",
+      ])
+    )
+    error_message = "The ring grant names the prefix's own ARN and its children, under this cell (P2-2 decisions 8 and 12)."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).actions
+      == toset(["ssm:AddTagsToResource"])
+      && one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).resources
+      == toset(["arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection/*"])
+    )
+    error_message = "The tag grant is AddTagsToResource on the ring's parameters alone (#274)."
+  }
+
+  # #274: StringEquals on each of the three tags' values, because ForAllValues on aws:TagKeys alone
+  # passes a call that carries no tags at all; and aws:TagKeys, so that no fourth tag rides along.
+  # The platform tag's value is read from contracts/resource-tags.md; ManagedBy = gateway is #274's.
+  assert {
+    condition = (
+      toset([
+        for c in one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).condition :
+        { test = c.test, variable = c.variable, values = toset(c.values) }
+      ])
+      == toset([
+        { test = "StringEquals", variable = "aws:RequestTag/Platform", values = toset([regex("\\| `Platform` \\| `([^`]+)` \\| Every resource", file("../../../contracts/resource-tags.md"))[0]]) },
+        { test = "StringEquals", variable = "aws:RequestTag/Cell", values = toset(["poc"]) },
+        { test = "StringEquals", variable = "aws:RequestTag/ManagedBy", values = toset(["gateway"]) },
+        { test = "ForAllValues:StringEquals", variable = "aws:TagKeys", values = toset(["Platform", "Cell", "ManagedBy"]) },
+      ])
+    )
+    error_message = "The tag grant is conditioned on exactly Platform = spa-platform, Cell = the cell and ManagedBy = gateway, by aws:RequestTag for each and aws:TagKeys for the set (#274)."
+  }
+
+  # P2-2 decision 12: nothing in the platform deletes a key, so no statement grants a delete.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.task.statement :
+      !contains(s.actions, "ssm:DeleteParameter") && !contains(s.actions, "ssm:DeleteParameters")
+    ])
+    error_message = "No statement grants ssm:DeleteParameter or ssm:DeleteParameters: a role that cannot delete a key cannot lose the ring by accident (P2-2 decision 12)."
+  }
+
+  # The closures of the Phase 1 run hold here too: every grant an Allow, no wildcard action, only the
+  # tunnel's grant on "*", and no NotAction or NotResource.
+  assert {
+    condition = (
+      alltrue([for s in data.aws_iam_policy_document.task.statement : s.effect == "Allow"])
+      && alltrue([for s in data.aws_iam_policy_document.task.statement : !anytrue([for action in s.actions : strcontains(action, "*")])])
+      && toset([for s in data.aws_iam_policy_document.task.statement : s.sid if contains(s.resources, "*")]) == toset(["SessionManagerMessages"])
+      && alltrue([
+        for s in data.aws_iam_policy_document.task.statement :
+        length(coalesce(s.not_actions, toset([]))) == 0 && length(coalesce(s.not_resources, toset([]))) == 0
+      ])
+    )
+    error_message = "The new grants keep the task role's closures: Allow only, no wildcard action, nothing new on \"*\", no NotAction or NotResource."
+  }
+}
+
+run "under_dynamodb_the_task_environment_names_the_table_the_ring_and_its_key" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+    data_protection_kms_key_id       = "alias/spa-platform-poc"
+  }
+
+  assert {
+    condition = alltrue([
+      for key, expected in {
+        "Session__Store"                  = "dynamodb"
+        "Session__TableName"              = "spa-platform-poc-sessions"
+        "DataProtection__ParameterPrefix" = "/spa-platform/poc/data-protection/"
+        "DataProtection__KmsKeyId"        = "alias/spa-platform-poc"
+        } : one([
+          for e in one([
+            for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+          ]).environment : e if e.name == key
+      ]).value == expected
+    ])
+    error_message = "Under dynamodb the gateway's environment carries Session__Store, Session__TableName, DataProtection__ParameterPrefix and DataProtection__KmsKeyId from the inputs (#338)."
+  }
+
+  # The table the environment names is the one the task role may reach: one name, read in two places.
+  assert {
+    condition = contains(
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources,
+      "arn:aws:dynamodb:us-east-1:111122223333:table/${one([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e if e.name == "Session__TableName"
+      ]).value}"
+    )
+    error_message = "Session__TableName names the table the task role's session grant is on."
+  }
+}
+
+# With no key id the account's aws/ssm key holds, and the gateway reads an absent key, never an empty
+# one: the package would read an empty string as no key (P2-2 decision 15).
+run "with_no_kms_key_the_environment_carries_no_key_id" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = !contains([
+      for e in one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).environment : e.name
+    ], "DataProtection__KmsKeyId")
+    error_message = "DataProtection__KmsKeyId is set only when data_protection_kms_key_id is."
+  }
+}
+
+# Phase 1, on the default inputs: no table grant, no ring grant and no new environment variable. The
+# environment's key set is written out as Phase 1's literal, so any key this ticket's inputs add on
+# the default fails here, and so does any key they remove. The resource set needs no run of its own:
+# no resource is added (see contracts/changes/issue-338-p-01-dynamodb-tripwire.md), and
+# the_module_declares_only_the_cell_s_intended_resource_types holds it.
+run "under_memory_the_cell_is_phase_1_s_unchanged" {
+  command = plan
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages"])
+    )
+    error_message = "On the default inputs the task role holds Phase 1's three grants: no table grant and no ring grant."
+  }
+
+  assert {
+    condition = (
+      toset([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ])
+      == toset([
+        "ASPNETCORE_HTTP_PORTS",
+        "Assets__Bucket",
+        "ForwardedHeaders__TrustedNetworks__0",
+        "ForwardedHeaders__TrustedNetworks__1",
+        "Issuers__cognito-poc__Authority",
+        "Issuers__cognito-poc__BrowserOrigin",
+        "Issuers__cognito-poc__Profile",
+        "Platform__Cell",
+        "Policy__AllowedHostSuffixes__0",
+        "Policy__AllowedUpstreams__0",
+        "Policy__AllowedUpstreams__1",
+        "Registry__Bucket",
+        "Registry__Key",
+        "Registry__PollSeconds",
+        "Session__MaxSessions",
+        "Session__Store",
+      ])
+    )
+    error_message = "On the default inputs the gateway's environment is Phase 1's, key for key: no Session__TableName and no DataProtection__ setting."
+  }
+
+  assert {
+    condition = one([
+      for e in one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).environment : e if e.name == "Session__Store"
+    ]).value == "memory"
+    error_message = "On the default inputs Session__Store is memory."
+  }
+}
+
+# The ring is independent of the store, as in the gateway (P2-2 decision 5): a memory cell may share a
+# ring, and then carries the ring's grants and settings but no table.
+run "a_ring_under_memory_carries_the_ring_and_no_table" {
+  command = plan
+
+  variables {
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages", "ReadWriteKeyRing", "TagKeyRingOnCreate"])
+    )
+    error_message = "A ring with the memory store grants the ring and not the table."
+  }
+
+  assert {
+    condition = (
+      contains([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ], "DataProtection__ParameterPrefix")
+      && !contains([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ], "Session__TableName")
+    )
+    error_message = "A ring with the memory store sets DataProtection__ParameterPrefix and no Session__TableName."
+  }
+}
