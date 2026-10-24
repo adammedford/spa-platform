@@ -5,10 +5,10 @@
 //
 // Runs morning.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed where
 // the script reaches it: through its agents, each of which the stub plays faithfully from a served
-// fixture. The Replay agent serves the `Overnight <date>` listing and the issue's body and comments
-// as gh would, and the phase files as they lie on disk; the Verify agent serves the pull request's
-// comments to the real tools/review_record.py and reports what it said; the appliers and the
-// hand-over report what they were asked to do instead of doing it. No agent, gh or network call is
+// fixture. The Replay agent serves the `Overnight <date>` listing and the issue as gh would, and the
+// phase files as they lie on disk; the Apply phase's reader serves the issue's comments (#319); the
+// Verify agent serves the pull request's comments to the real tools/review_record.py and reports
+// what it said; the appliers and the hand-over report what they were asked to do instead of doing it. No agent, gh or network call is
 // made. The main checkout the script is given is a throwaway git repository with this repository's
 // .gitignore, and a stubbed agent writes every PHASE FILE and OUTPUT FILE its prompt names into it,
 // so a rerun reads back what the first run left. Every stub's return is validated against the
@@ -252,15 +252,23 @@ function stub(env, scriptArgs, served) {
       if ((served.nothingFrom || []).includes(label)) return null
       let out
       if (label === 'replay') {
+        // Replay returns the issue's identity and no body or comment (#319): the comments are served
+        // only to the Apply phase's reader below, so a case that reads an answer proves Apply read it.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         out = {
           listing: served.listing || LISTING_ONE,
-          issue: issue ? { number: issue.number, title: issue.title, url: issue.url, state: issue.state, body: issue.body, comments: issue.comments } : { number: 0, title: '', url: '', state: '', body: '', comments: [] },
+          issue: issue ? { number: issue.number, title: issue.title, url: issue.url, state: issue.state } : { number: 0, title: '', url: '', state: '' },
           phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)),
           counts: served.replayCounts || { comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 } },
           pending: '', renamed: '', stoppedAt: 0, reason: '',
           ...(served.replay || {}),
         }
+      } else if (label === 'comments') {
+        // The Apply phase's reader (#319): the Overnight issue's comments, every one, in order, as gh
+        // serves them. served.commentsIssue: the number it reports reading, as a reader that read the
+        // wrong issue would.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: issue ? issue.comments : [] }, error: served.commentsError || '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
         const head = v.head || HEAD
@@ -591,13 +599,14 @@ try {
   }
 
   // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
-  //    file, dispatches at most nine agents, and the return counts what ran.
+  //    file, dispatches at most ten agents (nine before #319 moved the comments read into Apply), and
+  //    the return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
     const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
     if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
-    if (labels.length > 9 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    if (labels.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -893,12 +902,94 @@ try {
       if (result.refusals.length) fail(`${label}: refused ${JSON.stringify(result.refusals)}, expected none`)
       if (result.replay.reason !== '' || result.replay.renamed !== '') fail(`${label}: the run returns reason ${JSON.stringify(result.replay.reason)} and renamed ${JSON.stringify(result.replay.renamed)}, expected both empty`)
       if (replayLine(result.handover.text) !== NOTHING) fail(`${label}: the hand-over's Replay line is ${JSON.stringify(replayLine(result.handover.text))}, expected ${JSON.stringify(NOTHING)}`)
+      if (/stopped/i.test(result.handover.text)) fail(`${label}: the hand-over says "stopped" with no line stopped`)
+    }
+    // A stop is a failed line (#319): the refusal keys on stoppedAt above zero, not on reason. A
+    // reason the agent returned with no line stopped is no refusal and no "stopped" text, and is kept
+    // in the Replay line as the agent's note; a numbered stop with no reason is still a stop.
+    {
+      const noted = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', reason: 'no pending-writes file for 2026-10-21' } })
+      if (noted.result.refusals.length) fail(`a reason with stoppedAt 0: refused ${JSON.stringify(noted.result.refusals)}, expected none`)
+      if (/stopped/i.test(noted.result.handover.text)) fail('a reason with stoppedAt 0: the hand-over says "stopped"')
+      if (!/; the agent noted: no pending-writes file for 2026-10-21/.test(replayLine(noted.result.handover.text))) fail(`a reason with stoppedAt 0: the Replay line ${JSON.stringify(replayLine(noted.result.handover.text))} drops the agent's note`)
+      const bare = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', stoppedAt: 2, reason: '""' } })
+      if (!bare.result.refusals.some((r) => /^Replay stopped at line 2 of .*: no reason given$/.test(r))) fail(`a numbered stop with no reason: refusals ${JSON.stringify(bare.result.refusals)}`)
+      if (!/; stopped at line 2: no reason given/.test(replayLine(bare.result.handover.text))) fail(`a numbered stop with no reason: the Replay line is ${JSON.stringify(replayLine(bare.result.handover.text))}`)
+      // A failed count is a failed line even when the agent leaves stoppedAt at 0, which contradicts
+      // its prompt as 2026-10-22's '""' did: it is still refused, never kept as a note (#319 review;
+      // CODING_STANDARDS.md -> "A check fails closed").
+      const unnumbered = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', counts: { comment: { applied: 1, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, reason: 'HTTP 502: Bad Gateway' } })
+      if (!unnumbered.result.refusals.some((r) => /^Replay stopped at a line it did not number of .*: HTTP 502: Bad Gateway$/.test(r))) fail(`a failed count with stoppedAt 0: refusals ${JSON.stringify(unnumbered.result.refusals)}`)
+      if (!/; stopped at a line it did not number: HTTP 502/.test(replayLine(unnumbered.result.handover.text)) || /the agent noted/.test(unnumbered.result.handover.text)) fail(`a failed count with stoppedAt 0: the Replay line is ${JSON.stringify(replayLine(unnumbered.result.handover.text))}`)
     }
     const PENDING = `/tmp/morning-tests-repo/.scratch/overnight/log/pending-${DATE}.jsonl`
     const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
     const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
     if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
     if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
+  }
+
+  // 19a. Replay carries no comment (#319): its issue read asks for no body or comments, and its
+  //      return has neither. The Apply phase reads the comments itself, after Verify and before the
+  //      classifier, on every path Verify can end, and its read fails closed: a reader that returns
+  //      nothing, reports an error or reads another issue is named, nothing is sorted or applied, and
+  //      the hand-over does not call Apply dry. Every Confirm and override case above reads its
+  //      answers through this reader alone, since the stub serves the comments to nobody else.
+  checks++
+  {
+    const ok = await execute(newRepo(), { date: DATE })
+    const rp = ok.prompt('replay')
+    const reads = [...rp.matchAll(/`([^`]*gh issue view <number>[^`]*)`/g)]
+    if (!reads.length) fail('the Replay prompt names no `gh issue view <number>` command, so its fields were not checked')
+    for (const m of reads) if (/comments|body/.test(m[1])) fail(`the Replay prompt still reads the issue's comments or body: ${m[1]}`)
+    const schema = (ok.calls.find((c) => c.label === 'replay') || {}).schema || {}
+    const issueProps = Object.keys(((schema.properties || {}).issue || {}).properties || {})
+    if (issueProps.includes('comments') || issueProps.includes('body')) fail(`Replay's schema still returns ${issueProps.join(', ')}`)
+    const order = ['verify', 'comments', 'classify'].map((l) => ok.labels.indexOf(l))
+    if (order.some((i) => i < 0) || !(order[0] < order[1] && order[1] < order[2])) fail(`the comments reader does not run after Verify and before the classifier: ${ok.labels.join(', ')}`)
+    if (ok.labels.filter((l) => l === 'comments').length !== 1) fail(`the comments were read ${ok.labels.filter((l) => l === 'comments').length} times`)
+    const cp = ok.prompt('comments')
+    if (!new RegExp(`gh issue view ${ISSUE} --json number,comments`).test(cp)) fail('the comments reader does not read the run\'s issue by number')
+    if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
+    const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
+    if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)
+    for (const [label, served, named] of [
+      ['a reader that returns nothing', { nothingFrom: ['comments'] }, /the comments reader returned nothing/],
+      ['a reader that reports an error', { commentsError: 'HTTP 502' }, /could not read the comments of #226: HTTP 502/],
+      ['a reader that read another issue', { commentsIssue: 98 }, /read the comments of #98, not #226/],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, served)
+      if (!r.result.refusals.some((x) => named.test(x)) || !named.test(r.result.handover.text)) fail(`${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.result.refusals)}`)
+      if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`${label}: Apply ran: ${r.labels.join(', ')}`)
+      if (/Apply: dry, no Confirm comment/.test(r.result.handover.text) || Object.keys(r.result.apply.answers).length) fail(`${label}: the hand-over reads an unread issue as one with no Confirm comment`)
+    }
+  }
+
+  // 19b. Replay checks for the pending-writes file before any replay step (#319). On 2026-10-22 it
+  //      took 7.4 minutes and 108k tokens with no file to replay. The check is its own command, after
+  //      the lookup and before the progress file, the first replay write and the issue read, and with
+  //      no file the prompt sends the agent past every replay step.
+  checks++
+  {
+    const p = (await execute(newRepo(), { date: DATE })).prompt('replay')
+    const at = (re) => p.search(re)
+    const check = at(/`test -e [^`]*\/pending-<date>\.jsonl[^`]*`/)
+    const lookup = at(/Unless exactly one issue[^\n]*stop here/)
+    if (check < 0) fail('the Replay prompt runs no `test -e` on the pending-writes file')
+    else {
+      if (!(lookup > 0 && lookup < check)) fail('the Replay prompt checks for the pending-writes file before the lookup')
+      for (const [what, re] of [
+        ['the progress file', /pending-<date>\.progress/],
+        ['the first replayed comment', /gh issue comment <issue> --body-file/],
+        ['the body comparison', /gh issue view <issue> --json body/],
+        ['the issue read', /gh issue view <number>/],
+      ]) {
+        const w = at(re)
+        if (w < 0) fail(`the Replay prompt names no ${what}, so the order was not checked`)
+        else if (w < check) fail(`the Replay prompt reaches ${what} before it checks for the pending-writes file`)
+      }
+      if (!/If neither exists(?:(?!If only)[^\n])*skip to step 3/.test(p)) fail('the Replay prompt does not send an agent with no pending-writes file past every replay step')
+    }
   }
 
   // 20. A re-run refreshes the description of the pull request an earlier morning opened (#300). The
