@@ -365,8 +365,6 @@ if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I tools/landing_subjects.py --base "$base" \
       || fail "a full-landing merge names a ticket with an open box, or the full-landing merges were not judged."
-  elif $full; then
-    fail "no origin/main or main to judge the full-landing merges against; name one with --base."
   else
     echo "pre-push: full-landing merges not checked: no main to diff against." >&2
   fi

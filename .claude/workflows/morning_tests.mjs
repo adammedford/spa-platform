@@ -988,7 +988,7 @@ try {
         if (w < 0) fail(`the Replay prompt names no ${what}, so the order was not checked`)
         else if (w < check) fail(`the Replay prompt reaches ${what} before it checks for the pending-writes file`)
       }
-      if (!/If neither exists[^\n]*skip to step 3/.test(p)) fail('the Replay prompt does not send an agent with no pending-writes file past every replay step')
+      if (!/If neither exists(?:(?!If only)[^\n])*skip to step 3/.test(p)) fail('the Replay prompt does not send an agent with no pending-writes file past every replay step')
     }
   }
 

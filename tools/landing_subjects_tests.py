@@ -316,6 +316,16 @@ class UncheckedTests(unittest.TestCase):
         done = case.run()
         self.assertEqual(1, done.returncode, done.stdout)
 
+    def test_a_held_ticket_is_not_hidden_by_an_unreadable_one_after_it_in_the_same_merge(self):
+        case = Case(self)
+        case.issue(309, "- [ ] Open.\n")
+        case.commit("Merge tasks issue-309 and issue-999: held then unreadable",
+                    "Ticket: #309", f"Ticket: #{NO_SUCH_ISSUE}")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("held:", done.stdout)
+        self.assertIn("could not be read", done.stdout)
+
 
 class BrokenTests(unittest.TestCase):
     def test_a_base_that_is_no_commit_judges_nothing_and_exits_2(self):
@@ -323,6 +333,18 @@ class BrokenTests(unittest.TestCase):
         done = case.run("--base", "no-such-ref")
         self.assertEqual(2, done.returncode, done.stdout + done.stderr)
         self.assertTrue(last_line(done).startswith("landing-subjects: fail: nothing judged: "), done.stdout)
+        # The Broken handler names the problem; only the catch-all names an exception class.
+        self.assertNotIn("Broken", last_line(done))
+
+    def test_an_error_nothing_names_exits_2_not_pythons_1_which_is_a_held_merge(self):
+        case = Case(self)
+        # git log answers in Latin-1, which the script reads as UTF-8: no handler names that.
+        case.git("config", "i18n.logOutputEncoding", "iso-8859-1")
+        case.commit("Merge task issue-1: \u00ff", "Ticket: #1")
+        done = case.run()
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertTrue(last_line(done).startswith("landing-subjects: fail: nothing judged: UnicodeDecodeError: "),
+                        done.stdout)
 
     def test_no_base_is_a_usage_error(self):
         case = Case(self)
