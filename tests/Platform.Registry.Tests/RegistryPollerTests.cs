@@ -52,7 +52,7 @@ public sealed class RegistryPollerTests
     public async Task With_no_registry_configuration_the_host_starts_and_nothing_goes_live()
     {
         int clients = 0;
-        ListLoggerProvider logs = new();
+        CapturedLog logs = new();
         HostApplicationBuilder builder = Builder(logs, configured: false);
         // The SDK client's constructor throws with no region configured (seen on SDK 4.0.101.6), so the
         // poller must not build one when there is nothing to poll.
@@ -65,7 +65,7 @@ public sealed class RegistryPollerTests
 
         using IHost host = builder.Build();
         await host.StartAsync(Ct);
-        await Eventually(() => logs.Lines.Any(line => line.Contains("Registry:", StringComparison.Ordinal)));
+        await Eventually(() => logs.Lines.Any(line => line.Text.Contains("Registry:", StringComparison.Ordinal)));
         await host.StopAsync(Ct);
 
         Assert.Equal(0, host.Services.GetRequiredService<IRegistry>().Current.Revision);
@@ -77,7 +77,7 @@ public sealed class RegistryPollerTests
     {
         FakeTimeProvider clock = TestClock.New();
         RecordingObjectStore store = await StoreWith(Examples.Text("registry.example.json"));
-        HostApplicationBuilder builder = Builder(new ListLoggerProvider(), configured: true);
+        HostApplicationBuilder builder = Builder(new CapturedLog(), configured: true);
         builder.Services.AddSingleton<TimeProvider>(clock);
         builder.Services.AddSingleton<IObjectStore>(store);
         builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource { [App1Ref] = "s3cret" });
@@ -109,7 +109,7 @@ public sealed class RegistryPollerTests
         FakeTimeProvider clock = TestClock.New();
         RecordingObjectStore store = await StoreWith(Examples.Text("registry.example.json"));
         int attempts = 0;
-        HostApplicationBuilder builder = Builder(new ListLoggerProvider(), configured: true);
+        HostApplicationBuilder builder = Builder(new CapturedLog(), configured: true);
         builder.Services.AddSingleton<TimeProvider>(clock);
         builder.Services.AddSingleton<IObjectStore>(_ =>
             Interlocked.Increment(ref attempts) == 1 ? throw new InvalidOperationException("no region") : store);
@@ -132,10 +132,10 @@ public sealed class RegistryPollerTests
         await host.StopAsync(Ct);
     }
 
-    private static HostApplicationBuilder Builder(ListLoggerProvider logs, bool configured)
+    private static HostApplicationBuilder Builder(CapturedLog logs, bool configured)
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-        builder.Services.AddLogging(logging => logging.AddProvider(logs));
+        builder.Services.AddLogging(logging => logging.AddProvider(logs.Provider));
         if (configured)
         {
             // The contract's own example configuration: Registry:*, Policy:* and Issuers:*.
