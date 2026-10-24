@@ -1021,7 +1021,7 @@ const commentsRefusal = !cr ? `the comments reader returned nothing: no question
     : cr.issue.number !== ISSUE ? `the comments reader read the comments of #${cr.issue.number}, not #${ISSUE}; nothing was sorted or applied`
       : ''
 if (commentsRefusal) refusals.push(commentsRefusal)
-const comments = commentsRefusal ? [] : (cr.issue.comments || []) // empty-ok: a failed read is named in refusals above and skips Apply below
+const comments = commentsRefusal ? [] : (cr.issue.comments || [])
 const read = readQuestions(comments)
 refusals.push(...read.refusals)
 const conf = readConfirmations(comments)
