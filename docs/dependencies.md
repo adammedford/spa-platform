@@ -221,6 +221,10 @@ in both jobs, sharing the doubles in `tools/scripts/cell_doubles.py`: aws, terra
 dotnet, so no case reaches AWS, Docker or NuGet. `tools/scripts/verify-release-immutability.sh` has
 `tools/scripts/verify_release_immutability_tests.py` (#122), in both jobs: doubles for aws,
 terraform and date, so no case reaches AWS.
+`tools/scripts/verify-teardown.sh` has `tools/scripts/verify_teardown_tests.py` (#308), in both
+jobs, against the shared doubles.
+`tools/scripts/certs.sh` has `tools/scripts/certs_tests.py` (#241), in both jobs: an aws double
+and the real openssl, so no case reaches AWS.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because
 3.9.6 is the python3 that macOS's developer tools ship, but CI runs 3.12 on Linux and 3.14 on macOS,

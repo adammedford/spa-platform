@@ -275,14 +275,15 @@ function stub(env, scriptArgs, served) {
         const record = served.agentRecord || readRecord(head, served.recordComments || RECORD_MERGE)
         out = {
           outcome: v.outcome || 'ok', step: v.step || 0, reason: v.reason || '',
-          base: BASE, head, branch: `overnight/${DATE}`,
+          base: BASE, forkPoint: v.forkPoint === undefined ? BASE : v.forkPoint, head, branch: `overnight/${DATE}`,
           pr: { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400' },
           prBodyFile: `${env.repo}/${MORNING_REL}/pr-body.md`, mergeBodyFile: `${env.repo}/${MORNING_REL}/merge-body.md`,
           mergeSubject: jsonAfter(prompt, 'MERGE SUBJECT') || '',
           prReused: !!v.prReused, prBody: v.prBody || '', merges: v.merges || [],
           ci: v.ci || 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/1', failingJobs: v.failingJobs || [],
           pushed: true, mainMoved: false, findings: [],
-          worktrees: [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true }],
+          worktrees: v.worktrees || [{ path: `${WT}/ws1-infra`, branch: 'task/x', tip: sha('e'), clean: true, ancestor: true, lane: 'issue-300', partner: '' }],
+          oldTip: v.oldTip || '',
           lanes: [
             { issue: 300, task: 'issue-300', outcome: 'integrated', complete: true, mergeSha: sha('1'), outstanding: '' },
             { issue: 301, task: 'issue-301', outcome: 'partial', complete: false, mergeSha: sha('2'), outstanding: 'box 3' },
@@ -294,17 +295,34 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'classify') {
         const qs = jsonAfter(prompt, 'QUESTIONS') || []
         const kinds = served.kinds || {}
+        // served.classes: {q: {kind, summary, target, removeBoxes, addBlockedBy, unstated, followUp}},
+        // a classifier's whole return for a question, over the empty fields every other one carries.
+        const classes = served.classes || {}
+        const EMPTY = { target: 0, removeBoxes: [], addBlockedBy: [], unstated: '', followUp: { title: '', touches: [], blockedBy: [], what: '' } }
         out = {
-          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}` })),
+          questions: qs.map((q) => ({ q: q.q, issue: q.issue, task: q.task, answer: q.answer, kind: kinds[q.q] || 'integrator-edit', summary: `apply Q${q.q}`, ...EMPTY, ...(classes[q.q] || {}) })),
           rewrites: (served.rewrite || []).map((n) => ({ issue: n, questions: qs.filter((q) => q.issue === n).map((q) => q.q), why: 'the grill said so' })),
         }
       } else if (label.startsWith('apply:')) {
         const unit = jsonAfter(prompt, 'UNIT') || { tickets: [] }
         const qs = unit.tickets.flatMap((t) => t.questions)
+        // An applier that edits a ticket's body is counted while it runs, so two that edit the same
+        // body at once show as a peak above one.
+        const edits = unit.edits || []
+        const editing = edits.length > 0
+        if (editing) { inFlight.edit = (inFlight.edit || 0) + 1; env.peaks.edit = Math.max(env.peaks.edit || 0, inFlight.edit) }
+        await new Promise((r) => setTimeout(r, 5))
+        if (editing) inFlight.edit--
+        env.units = [...(env.units || []), unit]
         out = {
           unit: unit.key || '',
           commits: qs.filter((q) => q.kind === 'integrator-edit').map((q) => ({ sha: sha('f'), subject: q.summary, questions: [q.q] })),
-          issues: qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+          issues: [
+            ...qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
+            ...(unit.followUps || []).map((f, i) => ({ number: 600 + i, url: URL(600 + i), title: f.title, questions: [f.q] })),
+          ],
+          edits: edits.map((e) => ({ issue: e.target, preserved: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
+          edges: (unit.edges || []).map((e) => ({ issue: e.target, blockedBy: e.addBlockedBy, questions: [e.q] })),
           candidates: qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ url: `${URL(q.issue)}#issuecomment-7`, questions: [q.q] })),
           rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
@@ -623,6 +641,98 @@ try {
     if (second.result.apply.done.join() !== first.result.apply.done.join()) fail('resumption: the rerun\'s hand-over lost what the first run applied')
   }
 
+  // 11b. Follow-ups and edits to other tickets (#320). On 2026-10-22 Apply skipped Q71 and Q174 as
+  //      needing no repository change though each asked for an integrator follow-up, and Q91 and Q92
+  //      because their edit landed on a ticket outside the rewrite list. The cases below are those
+  //      four shapes, as the classifier returns them, plus an edit it cannot state and an answer
+  //      that needs nothing. The companion proves what Apply does with each kind and that the
+  //      classifier is told the kinds; which kind a live answer gets stays the classifier's call.
+  checks++
+  {
+    const BOX2 = '- [ ] The deployed cell\'s runbooks are walked end to end'
+    const BOX3 = '- [ ] Each runbook\'s evidence is posted on the sitting ticket'
+    const q = (n, issue, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+    const answers = [
+      comment(30, `## Questions: ${cite(278)}, issue-278, Coding standards\n\n${q(1, 278, 'File an integrator follow-up to bring the wiz skill\'s sitting C in line?')}\n${q(4, 278, 'Does this ticket stay text-only?')}`, '2026-10-21T06:10:00Z'),
+      comment(31, `## Questions: ${cite(244)}, issue-244, Walk the runbooks\n\n${q(2, 244, 'Have the morning remove boxes 2 and 3 from #62?')}\n${q(3, 244, 'Add #235 and the Q5 follow-up as direct blockers of #244?')}\n${q(5, 244, 'Bring #62\'s acceptance in line with the move?')}`, '2026-10-21T06:10:01Z'),
+    ]
+    const classes = {
+      1: { kind: 'follow-up', summary: 'file the wiz follow-up', followUp: { title: 'The wiz skill\'s sitting C starts from a standing cell and posts on the sitting ticket', touches: ['.claude/skills/wiz/SKILL.md'], blockedBy: [], what: 'Bring sitting C in line: start from a standing or absent cell, add rollback.sh, post the runs on the sitting ticket.' } },
+      2: { kind: 'ticket-edit', summary: 'remove boxes 2 and 3 from #62', target: 62, removeBoxes: [BOX2, BOX3] },
+      3: { kind: 'ticket-edit', summary: 'block #244 on #235', target: 244, addBlockedBy: [235], unstated: 'the Q5 follow-up is not filed yet, so its number cannot be stated' },
+      4: { kind: 'no-repo-change', summary: 'the grilling record already holds it and no ticket, follow-up or edit is asked for' },
+      5: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 },
+    }
+    const night320 = issueWith([...answers, comment(91, 'Confirm Q1 to Q5 as pre-accepted.', '2026-10-21T08:00:00Z')])
+    const env = newRepo()
+    const { result, labels, prompt, calls } = await execute(env, { date: DATE }, { issue: night320, kinds: {}, classes })
+    const done = result.apply.done.join('\n')
+    const units = env.units || []
+    const followUps = units.flatMap((u) => u.followUps || [])
+    const cls = prompt('classify')
+    // The classifier is told both kinds, and that an answer asking for a ticket is not one needing nothing.
+    if (!/^- follow-up: /m.test(cls) || !/^- ticket-edit: /m.test(cls)) fail('#320: the classifier prompt does not define the follow-up and ticket-edit kinds')
+    if (!/^- no-repo-change: [^\n]*(asks for|asking for)[^\n]*follow-up/m.test(cls)) fail('#320: the classifier prompt does not keep an answer asking for a follow-up out of no-repo-change')
+    // Q71's shape: one ticket, raised by its own ticket, shape-checked, neither sub-issue nor blocker.
+    const f1 = followUps.filter((f) => f.q === 1)
+    if (f1.length !== 1) fail(`#320 Q71 shape: ${f1.length} follow-ups for Q1, expected one`)
+    else {
+      if (!f1[0].body.startsWith(`**Raised by:** ${cite(278)}, Q1 of `) || !f1[0].body.includes(cite(ISSUE))) fail(`#320 Q71 shape: the follow-up's Raised-by line does not name its ticket, the question and the Overnight issue: ${f1[0].body.split('\n')[0]}`)
+      if (!/^\*\*Touches:\*\* `\.claude\/skills\/wiz\/SKILL\.md`$/m.test(f1[0].body) || !/^\*\*Owner:\*\* <role>$/m.test(f1[0].body)) fail('#320 Q71 shape: the follow-up body lacks its Touches line or the Owner line the applier derives')
+    }
+    if ((done.match(/^filed #\d+ [^\n]*\(Q1\)/gm) || []).length !== 1) fail(`#320 Q71 shape: the hand-over does not name one filed ticket for Q1:\n${done}`)
+    const fp = calls.filter((c) => c.label.startsWith('apply:') && /FOLLOW-UP TICKETS/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
+    const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
+    if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
+    // Q91's shape: #62's boxes removed, its old body saved first.
+    const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
+    if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
+    if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the old body is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its saved body:\n${done}`)
+    const ep = calls.filter((c) => c.label.startsWith('apply:') && /"edits":\[\{/.test(c.prompt)).map((c) => c.prompt).join('\n')
+    if (!ep.includes(`## Body before ${DATE}`)) fail('#320 Q91 shape: the applier is not told to save the old body as rewrites do')
+    // Q92's shape: the stated edge added, the unstated rest filed as a follow-up naming #244.
+    const e3 = units.flatMap((u) => u.edges || []).filter((e) => e.q === 3)
+    if (e3.length !== 1 || e3[0].target !== 244 || e3[0].addBlockedBy.join() !== '235') fail(`#320 Q92 shape: the edges sent are ${JSON.stringify(e3)}`)
+    if (!/^blocked #244 by #235 \(Q3\)$/m.test(done)) fail(`#320 Q92 shape: the hand-over does not name the edge:\n${done}`)
+    if (!/`[^`]*gh issue edit <target> --add-blocked-by <n>[^`]*`/.test(calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt).join('\n'))) fail('#320 Q92 shape: no applier is told to add an edge with gh issue edit --add-blocked-by')
+    const f3 = followUps.filter((f) => f.q === 3)
+    if (f3.length !== 1 || !/#244\b/.test(f3[0].title) || !f3[0].body.includes('the Q5 follow-up is not filed yet')) fail(`#320 Q92 shape: the part of the answer no edge states was not filed as a follow-up naming #244: ${JSON.stringify(f3)}`)
+    // An edit the answer cannot state is a follow-up naming the ticket, owned by the integrator and writing nothing.
+    const f5 = followUps.filter((f) => f.q === 5)
+    if (f5.length !== 1 || !/#62\b/.test(f5[0].title) || !/^\*\*Owner:\*\* integrator$/m.test(f5[0].body) || !/^\*\*Touches:\*\* none/m.test(f5[0].body)) fail(`#320: an edit stated nowhere was not filed as an integrator follow-up naming #62: ${JSON.stringify(f5)}`)
+    if (units.some((u) => (u.edits || []).some((e) => e.q === 5))) fail('#320: an edit with nothing stated was sent to an applier as an edit')
+    // An answer needing nothing is still skipped with its reason, and no applier is sent it.
+    if (!/^skipped Q4 \(#278\): needs nothing: the grilling record already holds it/m.test(done.replace(cite(278), '#278'))) fail(`#320: Q4, needing nothing, is not skipped with its reason:\n${done}`)
+    if (units.some((u) => u.tickets.some((t) => t.questions.some((x) => x.q === 4 && x.kind !== 'no-repo-change')))) fail('#320: Q4 reached an applier as work')
+    if (!labels.length || result.refusals.some((r) => /Q[1-5]\b/.test(r))) fail(`#320: refusals name the questions: ${JSON.stringify(result.refusals)}`)
+    // Without a Confirm comment, each is on the would-do list and nothing is filed or edited.
+    const dry = await execute(newRepo(), { date: DATE }, { issue: issueWith(answers), kinds: {}, classes })
+    const would = dry.result.apply.wouldDo.join('\n')
+    for (const n of [1, 2, 3, 5]) if (!new RegExp(`^Q${n} \\(`, 'm').test(would)) fail(`#320 dry: Q${n} is not on the would-do list:\n${would}`)
+    if (APPLIERS(dry.labels).length) fail(`#320 dry: appliers ran: ${dry.labels.join(', ')}`)
+    // Two answers on different tickets that both edit #62's body never run at once.
+    const two = issueWith([
+      comment(40, `## Questions: ${cite(310)}, issue-310, One\n\n${q(1, 310, 'Remove box 2 from #62?')}`, '2026-10-21T06:20:00Z'),
+      comment(41, `## Questions: ${cite(311)}, issue-311, Two\n\n${q(2, 311, 'Remove box 3 from #62?')}`, '2026-10-21T06:20:01Z'),
+      comment(42, `## Questions: ${cite(312)}, issue-312, Three\n\n${q(3, 312, 'File a follow-up?')}`, '2026-10-21T06:20:02Z'),
+      comment(92, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const raceEnv = newRepo()
+    const race = await execute(raceEnv, { date: DATE }, { issue: two, kinds: {}, classes: { 1: { ...classes[2], removeBoxes: [BOX2] }, 2: { ...classes[2], removeBoxes: [BOX3] }, 3: classes[1] } })
+    if (raceEnv.peaks.edit !== 1) fail(`#320: two appliers edited #62's body at once (${raceEnv.peaks.edit} in flight)`)
+    if (!/^edited #62: removed 1 box\(es\)[^\n]*\(Q1\)$/m.test(race.result.apply.done.join('\n')) || !/^edited #62: removed 1 box\(es\)[^\n]*\(Q2\)$/m.test(race.result.apply.done.join('\n'))) fail(`#320: the two edits of #62 were not both applied:\n${race.result.apply.done.join('\n')}`)
+    // A follow-up planOf refuses (it names no path, so no owner) is a refusal, and its ticket, with
+    // nothing else to do, is sent no applier.
+    const bare = issueWith([
+      comment(43, `## Questions: ${cite(313)}, issue-313, Bare\n\n${q(1, 313, 'File a follow-up?')}`, '2026-10-21T06:30:00Z'),
+      comment(93, 'Confirm Q1 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const refusedRun = await execute(newRepo(), { date: DATE }, { issue: bare, kinds: {}, classes: { 1: { ...classes[1], followUp: { ...classes[1].followUp, touches: [] } } } })
+    if (!refusedRun.result.refusals.some((r) => /^Q1 asks for a follow-up that names no path/.test(r))) fail(`#320: a follow-up naming no path is not refused: ${JSON.stringify(refusedRun.result.refusals)}`)
+    if (APPLIERS(refusedRun.labels).length) fail(`#320: a ticket whose only follow-up was refused was sent an applier: ${refusedRun.labels.join(', ')}`)
+  }
+
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
   //     every mocked run above none is the landing script, --admin, --no-verify, a force-push, a tag
   //     or a branch deletion. The span count shows the search read the commands it judges.
@@ -784,6 +894,7 @@ try {
     const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; nothing was replayed'
     for (const [label, replay] of [
       ['2026-10-22\'s Replay result', OCT22],
+      ['an empty reason', { ...OCT22, pending: '', renamed: '', reason: '' }],
       ['a reason of whitespace', { ...OCT22, pending: '', renamed: ' ', reason: ' \n ' }],
       ['a quoted empty reason padded with whitespace', { ...OCT22, reason: ' "" ' }],
     ]) {
@@ -1078,6 +1189,88 @@ try {
     const applyRed = applyCase(await execute(newRepo(), { date: DATE }, {}, mutant))
     const checkRed = checkCase(await draftRun(HEADED, {}, mutant))
     if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
+  }
+
+  // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
+  //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
+  //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
+  //     says the gate is those tips and not the body, and, when every such tip has a partner, gives
+  //     tools/remap_rebuild.py's command (#318) with the old and new tips. A failed lane's tip is off
+  //     the branch by design and neither stops the run nor withholds the command.
+  checks++
+  {
+    const OLD_TIP = sha('a')
+    const lane = (name, task, tip, partner) => ({ path: `${WT}/${name}`, branch: `task/${task}-x`, tip, clean: true, ancestor: false, lane: task, partner })
+    const REBUILT = [
+      lane('ws1-infra', 'issue-300', sha('3'), sha('5')),
+      lane('ws2-hosting', 'issue-301', sha('4'), sha('6')),
+      lane('ws3-identity', 'issue-302', sha('7'), ''),
+    ]
+    const stop3 = (worktrees, oldTip = OLD_TIP, outcome = 'stop') => ({ verify: { outcome, step: outcome === 'stop' ? 3 : 0, reason: 'two lane tips are not ancestors of the integration tip', worktrees, oldTip } })
+    // The command's flags, read from tools/remap_rebuild.py's own usage line, so the copy in the
+    // stop cannot drift from the tool it names.
+    const usage = (/^ {4}python3 -I tools\/remap_rebuild\.py ([\s\S]*?)\n\n/m.exec(fs.readFileSync(path.join(top, 'tools', 'remap_rebuild.py'), 'utf8')) || [])[1] || ''
+    const flags = [...usage.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]).filter((f) => f !== '--apply')
+    if (!['--old', '--new', '--issue', '--worktree-root', '--session'].every((f) => flags.includes(f))) fail(`step 3: tools/remap_rebuild.py's usage line was not read (flags ${JSON.stringify(flags)})`)
+    const GATE = /the gate is the lane worktree tips, not the issue body/i
+
+    const rebuilt = await execute(newRepo(), { date: DATE }, stop3(REBUILT))
+    const rs = rebuilt.result.stop || ''
+    const command = (/`(cd \S+ && python3 -I tools\/remap_rebuild\.py [^`]*)`/.exec(rs) || [])[1] || ''
+    if (!command) fail(`step 3, rebuilt: the stop gives no remap command:\n${rs}`)
+    if (!command.includes(`--old ${OLD_TIP}`) || !command.includes(`--new ${HEAD}`)) fail(`step 3, rebuilt: the remap command lacks the old and new tips: ${command}`)
+    if (!command.includes(`--issue ${ISSUE}`) || !command.includes(`--worktree-root ${WT}`)) fail(`step 3, rebuilt: the remap command lacks the issue or the worktree root: ${command}`)
+    for (const f of flags) if (!command.includes(f)) fail(`step 3, rebuilt: the remap command lacks ${f}, which tools/remap_rebuild.py's usage gives`)
+    for (const w of REBUILT.slice(0, 2)) if (!rs.includes(w.path) || !rs.includes(w.tip) || !rs.includes(w.partner)) fail(`step 3, rebuilt: the stop does not name ${w.path}, its tip and its partner:\n${rs}`)
+    if (/not merged/.test(rs)) fail(`step 3, rebuilt: a lane is named as not merged:\n${rs}`)
+    if (rs.includes(`${WT}/ws3-identity`)) fail(`step 3, rebuilt: the failed lane's worktree is named in the stop:\n${rs}`)
+    if (!GATE.test(rs)) fail(`step 3, rebuilt: the stop does not say the gate is the lane worktree tips:\n${rs}`)
+    if (!rebuilt.result.handover.text.includes(command)) fail('step 3, rebuilt: the hand-over does not carry the remap command')
+    if (rebuilt.labels.some((l) => l === 'classify' || l.startsWith('apply:'))) fail(`step 3, rebuilt: Apply ran: ${rebuilt.labels.join(', ')}`)
+
+    const ONE_UNMERGED = [REBUILT[0], { ...REBUILT[1], partner: '' }, REBUILT[2]]
+    const unmerged = await execute(newRepo(), { date: DATE }, stop3(ONE_UNMERGED))
+    const us = unmerged.result.stop || ''
+    if (/remap_rebuild/.test(us)) fail(`step 3, one lane unmerged: the stop still gives the remap command:\n${us}`)
+    if (!new RegExp(`${REBUILT[1].path.replace(/[/.]/g, '\\$&')}[^\\n]*${REBUILT[1].tip}[^\\n]*not merged`).test(us)) fail(`step 3, one lane unmerged: the stop does not name ${REBUILT[1].path} at its tip as not merged:\n${us}`)
+    if (!us.includes(REBUILT[0].partner)) fail(`step 3, one lane unmerged: the rebuilt lane's partner is not named:\n${us}`)
+    if (!GATE.test(us)) fail(`step 3, one lane unmerged: the stop does not say the gate is the lane worktree tips:\n${us}`)
+
+    // Every tip has a partner but the old tip was not found: no half-filled command, and the stop says what is missing.
+    const noOld = (await execute(newRepo(), { date: DATE }, stop3(REBUILT, ''))).result.stop || ''
+    if (/remap_rebuild\.py --old/.test(noOld) || !/old tip/.test(noOld)) fail(`step 3, no old tip: ${noOld}`)
+
+    // A Verify that reports ok over an integrated lane's off-branch tip is held to its own worktrees: the script stops.
+    const lax = await execute(newRepo(), { date: DATE }, stop3(REBUILT, OLD_TIP, 'ok'))
+    if (lax.result.ok || !/step 3/.test(lax.result.stop || '') || !GATE.test(lax.result.stop || '')) fail(`step 3, reported ok over off-branch lane tips: ${JSON.stringify(lax.result.stop)}`)
+
+    // The dirty-worktree stop keeps the agent's own reason, with no remedy added.
+    const dirty = (await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'the worktree ws1-infra is dirty: stray.txt' } })).result.stop || ''
+    if (!/dirty: stray\.txt/.test(dirty) || GATE.test(dirty)) fail(`step 3, dirty: ${dirty}`)
+
+    // The prompt asks for what the stop is built from.
+    const vp = rebuilt.prompt('verify')
+    if (!/\^\{tree\}/.test(vp) || !/oldTip/.test(vp) || !/partner/.test(vp)) fail('step 3: the Verify prompt does not ask for each tip\'s tree-equal partner and the old tip')
+  }
+
+  // 24. The hand-over names the fork point, the integration head's merge base with origin/main
+  //     (#326). On 2026-10-23 main was merged into the branch (6fc1e3a), so the pull request's merge
+  //     base was 65220c4, and the hand-over named the night's start, ca17e9f, as its base. The first
+  //     case is that night's shape; the second, a branch main was never merged into, names one sha.
+  checks++
+  {
+    const FORK = sha('f')
+    const firstLine = (t) => t.split('\n')[2] || ''
+    const merged = (await execute(newRepo(), { date: DATE }, { verify: { forkPoint: FORK } })).result.handover.text
+    const want = `Overnight ${cite(ISSUE)}; integration branch overnight/${DATE} at ${HEAD}, fork point ${FORK} (its merge base with origin/main); the night's base ${BASE}.`
+    if (!firstLine(merged).startsWith(want)) fail(`main merged into the branch: the hand-over's first line is ${JSON.stringify(firstLine(merged))}, expected it to start ${JSON.stringify(want)}`)
+    const same = (await execute(newRepo(), { date: DATE }, {})).result.handover.text
+    const one = `Overnight ${cite(ISSUE)}; integration branch overnight/${DATE} at ${HEAD}, fork point ${BASE} (its merge base with origin/main, the night's base). Apply:`
+    if (!firstLine(same).startsWith(one)) fail(`main never merged in: the hand-over's first line is ${JSON.stringify(firstLine(same))}, expected it to start ${JSON.stringify(one)}`)
+    const unread = (await execute(newRepo(), { date: DATE }, { verify: { forkPoint: '' } })).result.handover.text
+    if (!firstLine(unread).includes(`fork point not read; the night's base ${BASE}.`)) fail(`no fork point returned: the hand-over's first line is ${JSON.stringify(firstLine(unread))}`)
+    const vp = (await execute(newRepo(), { date: DATE }, {})).prompt('verify')
+    if (!/forkPoint/.test(vp) || !/merge-base origin\/main overnight\//.test(vp)) fail('the Verify prompt does not ask for the fork point, the merge base of origin/main and the integration branch')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

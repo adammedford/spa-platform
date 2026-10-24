@@ -134,7 +134,14 @@ function stub(env, scriptArgs, served) {
             // same file from this checkout runs in its place, and the case checks the path it named.
             const ran = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_refusals.py'), '--date', m[2], '--root', served.refusalsRoot], { encoding: 'utf8' })
             const lines = ran.stdout.split('\n').filter(Boolean)
-            out.refusals = { lines: lines.filter((l) => !/: missing: /.test(l)), missing: lines.filter((l) => /: missing: /.test(l)).join('\n') }
+            // Sorted as step 9 says, and no further: a line that counted a run, or one carrying a word
+            // it quotes for the missing bucket, read off the prompt. A line that is neither is dropped,
+            // as a literal reading of the two buckets would drop it.
+            const said = /missing is every line that says ((?:"[a-z]+:"(?:,? or |, )?)+)/.exec(prompt)
+            const markers = said ? [...said[1].matchAll(/"([a-z]+):"/g)].map((w) => `: ${w[1]}: `) : []
+            const isMissing = (l) => markers.some((w) => l.includes(w))
+            const counted = (l) => !isMissing(l) && / Edit and Write calls \(/.test(l)
+            out.refusals = { lines: lines.filter(counted), missing: lines.filter(isMissing).join('\n') }
             env.refusalsRun = { status: ran.status, script: m[1], lines }
           }
         }
@@ -443,7 +450,8 @@ try {
   // 20. The refusal count (#315): Gather runs tools/retro_refusals.py for the night, its line reaches
   //     the File prompt verbatim for the parent issue and the return, the parent's "cannot see"
   //     paragraph no longer counts tool-call counts among what it cannot see, and a transcripts root
-  //     with no match reaches the parent as missing, never as a zero.
+  //     with no match, or a transcript that does not parse, reaches the parent as missing or
+  //     unreadable, never as a zero.
   checks++
   {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-tests-transcripts-'))
@@ -498,6 +506,18 @@ try {
       if (!fpSome.includes(`\nretro-refusals: ${id}: missing: no subagent transcripts for this run under ${root}\n`)) fail(`a launch with no transcripts (${id}): its missing line does not reach the File prompt`)
     }
     if (!fpSome.includes(`\n${LINE}\n`)) fail('beside missing launches, the counted run\'s line does not reach the File prompt')
+    // A launch whose transcript has a line that does not parse: its unreadable line reaches the
+    // parent beside the counted run's, and no count is made of it.
+    const BROKEN = 'wf_3b77ab2e-217'
+    fs.writeFileSync(path.join(base, 's1', 'workflows', `${BROKEN}.json`), JSON.stringify({ runId: BROKEN, timestamp: `${DATE}T23:30:00.000Z`, workflowName: 'overnight', args: { date: DATE } }))
+    fs.mkdirSync(path.join(base, 's1', 'subagents', 'workflows', BROKEN), { recursive: true })
+    fs.writeFileSync(path.join(base, 's1', 'subagents', 'workflows', BROKEN, 'agent-b1.jsonl'), JSON.stringify(lines[0]) + '\n{"type": "user", "message": {"role": "us\n')
+    env = newRepo()
+    const broken = await execute(env, { date: DATE }, { index: indexFor(THREE), refusalsRoot: root })
+    const fpBroken = filePromptOf(broken)
+    if (!fpBroken.includes(`\nretro-refusals: ${BROKEN}: unreadable: lines that do not parse in agent-b1.jsonl (1); no count is given\n`)) fail('a launch with a transcript line that does not parse: its unreadable line does not reach the File prompt')
+    if (!fpBroken.includes(`\n${LINE}\n`)) fail('beside an unreadable launch, the counted run\'s line does not reach the File prompt')
+    if ((broken.result.refusals || []).filter((l) => l.includes(`${BROKEN}: unreadable:`)).length !== 1) fail(`the return does not carry the unreadable line once: ${JSON.stringify(broken.result.refusals)}`)
   }
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)

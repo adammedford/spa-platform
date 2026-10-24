@@ -97,6 +97,24 @@ public sealed class WaitAndRollbackTests : IDisposable
         Assert.Contains("bbbb", spactl.Out.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An instance once seen at the revision stays counted: aaaa answers 2 on the first read and 1 on
+    /// the third, and the wait still ends on the fourth, when bbbb reaches 2. Without the rule the wait
+    /// would need a fifth read, where the script goes round again to aaaa at 2.
+    /// </summary>
+    [Fact]
+    public async Task Wait_with_instances_keeps_an_instance_counted_once_it_has_answered_at_the_revision()
+    {
+        spactl.Readyz.Script.AddRange([
+            ReadyzAnswer.At("aaaa", 2), ReadyzAnswer.At("bbbb", 1),
+            ReadyzAnswer.At("aaaa", 1), ReadyzAnswer.At("bbbb", 2),
+        ]);
+
+        Assert.Equal(0, await spactl.RunRaw("wait", "--url", Gateway, "--revision", "2", "--instances", "aaaa,bbbb"));
+
+        Assert.Equal(4, spactl.Readyz.Requests.Count);
+    }
+
     [Fact]
     public async Task Wait_with_instances_counts_a_later_revision_and_ignores_the_order_of_the_list()
     {

@@ -183,9 +183,10 @@ INACTIVE=0
 DELETED=0
 UNKNOWN=0
 
-# An ECS describe's status: INACTIVE is dropped (#118 step 2), and so is nothing, which is how
-# DescribeClusters and DescribeServices answer for one they do not know (a failure with reason
-# MISSING, not an error). $1 the ARN.
+# An ECS describe's status, or its failure's reason: INACTIVE is dropped (#118 step 2), and so is
+# MISSING, which is how DescribeClusters and DescribeServices answer for one they do not know (a
+# failure, not an error). Any other reason, or an answer with neither, stands: only MISSING says the
+# resource is gone (CODING_STANDARDS.md, "A check fails closed"). $1 the ARN.
 # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeClusters.html
 # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeServices.html
 ecs_status() {
@@ -193,7 +194,8 @@ ecs_status() {
   status="$(printed)"
   case "$status" in
     INACTIVE) INACTIVE=$((INACTIVE + 1)) ;;
-    "") DELETED=$((DELETED + 1)) ;;
+    MISSING) DELETED=$((DELETED + 1)) ;;
+    "") stands "${arn} (ECS answered neither a status nor a failure reason)" ;;
     # A task definition teardown.sh deleted, which ECS removes once no task uses it.
     # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteTaskDefinitions.html
     DELETE_IN_PROGRESS) DELETED=$((DELETED + 1)) ;;
@@ -231,14 +233,14 @@ judge() {
   resource="${rest#*:}"
   case "${service}:${resource}" in
     ecs:cluster/*)
-      aws_call ecs describe-clusters --clusters "$arn" --query 'clusters[].status'
+      aws_call ecs describe-clusters --clusters "$arn" --query '[clusters[].status, failures[].reason][]'
       [ "$OUTCOME" = "success" ] || fail "describing $(redact "$arn"): ${OUTCOME}"
       ecs_status "$arn"
       ;;
     ecs:service/*/*)
       cluster="${resource#service/}"
       cluster="${cluster%%/*}"
-      aws_call ecs describe-services --cluster "$cluster" --services "$arn" --query 'services[].status'
+      aws_call ecs describe-services --cluster "$cluster" --services "$arn" --query '[services[].status, failures[].reason][]'
       case "$OUTCOME" in
         success) ecs_status "$arn" ;;
         # The service's cluster is gone, and the service with it.

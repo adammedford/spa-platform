@@ -1,6 +1,8 @@
 # ADR-0013: Name the platform tag `Platform = spa-platform`, and exempt the bootstrap root
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-23 by
+  [ADR-0029](0029-prove-teardown-through-every-reader-of-the-platform-tag.md): teardown is proved
+  through every reader of the platform tag, not the tagging query alone; the decision stands.**
 - **Date:** 2026-10-12
 - **Deciders:** integrator
 - **Plan ref:** No decision row. The plan names "the platform tag" in three places without defining

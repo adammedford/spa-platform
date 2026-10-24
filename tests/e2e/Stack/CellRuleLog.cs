@@ -20,33 +20,31 @@ public sealed class CellRuleLog(CellAws aws, TimeSpan arrival)
     /// <summary>
     /// Waits up to the arrival time for a request line from <paramref name="after"/> on that carries
     /// <paramref name="rule"/> (for <paramref name="appId"/>, when given) and that no earlier assertion
-    /// matched, and claims it. Fails naming the rule and app if none comes.
+    /// matched, and claims it. The check and the claim are one step under one lock, so two assertions
+    /// of the same rule at once cannot both take one line. Fails naming the rule and app if none comes.
     /// </summary>
     public async Task AssertLoggedAsync(DateTimeOffset after, string rule, string? appId, CancellationToken ct)
     {
-        JsonElement line = await aws.WaitForGatewayLineAsync(
+        await aws.WaitForGatewayLineAsync(
             after,
             line => line.TryGetProperty("msg", out JsonElement msg) && msg.GetString() == "request"
                 && line.TryGetProperty("rule", out JsonElement value) && value.GetString() == rule
                 && (appId is null || (line.TryGetProperty("app_id", out JsonElement app) && app.GetString() == appId))
-                && !IsClaimed(line),
+                && TryClaim(line),
             arrival,
             $"a request line with rule {rule}{(appId is null ? "" : " for " + appId)} that no earlier assertion matched",
             ct);
-        lock (Claimed)
-        {
-            Claimed.Add(ClaimOf(line));
-        }
     }
 
     private static string ClaimOf(JsonElement line) =>
         $"{(line.TryGetProperty("trace_id", out JsonElement trace) ? trace.GetString() : "")}/{(line.TryGetProperty("span_id", out JsonElement span) ? span.GetString() : "")}";
 
-    private static bool IsClaimed(JsonElement line)
+    /// <summary>Claims the line unless an assertion already has; the wait returns the first line this accepts.</summary>
+    private static bool TryClaim(JsonElement line)
     {
         lock (Claimed)
         {
-            return Claimed.Contains(ClaimOf(line));
+            return Claimed.Add(ClaimOf(line));
         }
     }
 }

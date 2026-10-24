@@ -84,9 +84,12 @@ public sealed class GatewayInstance
         }
 
         // A value that is not an absolute http URI is refused here, before HttpClient sees it: HttpClient
-        // throws InvalidOperationException for a relative URI (verified by this file's tests) and
-        // SocketsHttpHandler refuses a scheme other than http or https, neither of which the catches below take, and a faulted id would fail every ready
-        // /readyz for the host's lifetime (P2-5, decision 2: never failing the start).
+        // throws InvalidOperationException for a relative URI and NotSupportedException for a scheme
+        // other than http or https ("The 'ftp' scheme is not supported.", both seen on .NET 10;
+        // https://learn.microsoft.com/dotnet/api/system.net.http.httpclient.getasync lists the first),
+        // neither of which the catches below take, and a faulted id would fail every /readyz for the
+        // host's lifetime (P2-5, decision 2: never failing the start). The tests hold the guard: a
+        // metadata variable that is not an http URI falls back to a generated id and makes no request.
         if (!Uri.TryCreate(metadataUri.TrimEnd('/') + "/task", UriKind.Absolute, out Uri? taskUri)
             || (taskUri.Scheme != Uri.UriSchemeHttp && taskUri.Scheme != Uri.UriSchemeHttps))
         {

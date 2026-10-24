@@ -153,6 +153,16 @@ class ATornDownCellPasses(Verify):
         self.assertEqual(0, result.status, result.output)
         self.assertIn("1 ECS records deleted", result.stdout)
 
+    def test_a_cluster_and_a_service_ecs_answers_missing_for_pass(self):
+        # The index still lists a cluster and a service ECS no longer knows: a failure with reason
+        # MISSING, which is the one answer that says they are gone.
+        world = torn_down_world()
+        for entry in world["tagged"][1:3]:
+            entry["describe_failure"] = "MISSING"
+        _, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("2 ECS records deleted", result.stdout)
+
     def test_an_ec2_id_describe_still_knows_passes_once_it_lets_go(self):
         # The index lags a deletion, and so does EC2's describe for a moment: retried within the
         # plan's few minutes (docs/plan/05-infrastructure-and-cost.md, Teardown).
@@ -200,6 +210,18 @@ class AStandingResourceFails(Verify):
         world = torn_down_world()
         world["tagged"][1]["status"] = "ACTIVE"
         self.failed(world, f"the tag query in {REGION}")
+
+    def test_an_ecs_failure_other_than_missing(self):
+        world = torn_down_world()
+        world["tagged"][1]["describe_failure"] = "ACCESS_DENIED"
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn("ECS says ACCESS_DENIED", result.stderr)
+
+    def test_an_ecs_describe_with_neither_a_status_nor_a_failure(self):
+        world = torn_down_world()
+        world["tagged"][2]["describe_failure"] = ""
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn("neither a status nor a failure reason", result.stderr)
 
     def test_an_active_task_definition(self):
         world = torn_down_world()
