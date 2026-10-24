@@ -25,10 +25,15 @@ public static class PlatformHostingExtensions
     /// 2). Health and host resolution otherwise need only <see cref="IRegistry"/>, which
     /// <c>AddPlatformRegistry</c> registers before this runs (contracts/pipeline.md, Service
     /// registration).
+    ///
+    /// Also registers the cell's key ring when a <c>DataProtection</c> section is present, and refuses a
+    /// configuration the ring cannot honour (plan row P2-2; ADR-0025; see <see cref="KeyRing"/>).
     /// </summary>
     public static IHostApplicationBuilder AddPlatformHosting(this IHostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        KeyRing.Register(builder);
 
         // Read from the process environment, not configuration: the ECS agent sets the variable, and
         // P2-5 (decision 2) rules out a configuration key for the instance.
