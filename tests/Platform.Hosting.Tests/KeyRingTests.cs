@@ -78,7 +78,8 @@ public sealed class KeyRingTests
     /// needs. Mutation: delete the log line and the count is zero; hand both hosts one repository and
     /// the second reads the first's payload. The empty store is decision 5's "nothing is registered"
     /// as Parameter Store sees it; the test's own repository would mask a ring registered here, so the
-    /// refusal tests and the log line are what pin the absent-section branch.
+    /// client check pins it instead. Mutation: register the ring with no section and the client
+    /// resolved is the decorator, not the stub.
     /// </summary>
     [Fact]
     public async Task Without_the_section_nothing_reaches_the_store_two_hosts_share_nothing_and_one_line_says_so()
@@ -92,6 +93,7 @@ public sealed class KeyRingTests
 
         Assert.ThrowsAny<CryptographicException>(() => RingHost.Unprotect(second, fromFirst));
         Assert.Empty(store.Requests);
+        Assert.Same(store, first.Services.GetRequiredService<IAmazonSimpleSystemsManagement>());
         CapturedLine line = Assert.Single(first.Log.Lines, l => l.Category == "Platform.Hosting.KeyRing");
         Assert.Equal(LogLevel.Information, line.Level);
         Assert.Contains("DataProtection", line.Message, StringComparison.Ordinal);
@@ -137,6 +139,22 @@ public sealed class KeyRingTests
         Assert.Empty(store.Requests);
     }
 
+    /// <summary>
+    /// The implementer's fourth refusal: a section with no Parameter Store client registered fails the
+    /// start naming <c>AddPlatformRegistry</c>, rather than letting the package build a client of its
+    /// own with a second credential chain (change request P2-2, decision 3). Mutation: delete the
+    /// empty-registration check and the start fails on something else, or not at all.
+    /// </summary>
+    [Fact]
+    public async Task A_section_with_no_client_registered_fails_the_start_naming_AddPlatformRegistry()
+    {
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RingHost.StartAsync(RingHost.WithSection(), client: null, Ct));
+
+        Assert.Contains("AddPlatformRegistry", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("IAmazonSimpleSystemsManagement", refused.Message, StringComparison.Ordinal);
+    }
+
     public static TheoryData<string> ReadFailures => ["access-denied", "network"];
 
     /// <summary>
@@ -150,19 +168,26 @@ public sealed class KeyRingTests
     [MemberData(nameof(ReadFailures))]
     public async Task A_first_read_that_throws_fails_the_start_and_mints_nothing(string failure)
     {
-        StubRingStore store = new()
+        Exception planted = failure == "access-denied"
+            ? new AmazonSimpleSystemsManagementException("User is not authorized to perform: ssm:GetParametersByPath")
+            {
+                ErrorCode = "AccessDeniedException",
+                StatusCode = HttpStatusCode.BadRequest,
+            }
+            : new HttpRequestException("Connection refused");
+        StubRingStore store = new() { ReadFailure = () => planted };
+
+        Exception thrown = await Assert.ThrowsAnyAsync<Exception>(() => RingHost.StartAsync(RingHost.WithSection(), store, Ct));
+
+        // The start fails on the read itself, not on anything else that could throw at start (the
+        // refusals included): the planted exception is the one thrown, or one it wraps.
+        List<Exception> chain = [];
+        for (Exception? e = thrown; e is not null; e = e.InnerException)
         {
-            ReadFailure = failure == "access-denied"
-                ? () => new AmazonSimpleSystemsManagementException("User is not authorized to perform: ssm:GetParametersByPath")
-                {
-                    ErrorCode = "AccessDeniedException",
-                    StatusCode = HttpStatusCode.BadRequest,
-                }
-                : () => new HttpRequestException("Connection refused"),
-        };
+            chain.Add(e);
+        }
 
-        await Assert.ThrowsAnyAsync<Exception>(() => RingHost.StartAsync(RingHost.WithSection(), store, Ct));
-
+        Assert.Contains(planted, chain);
         Assert.Contains(store.Requests, r => r is GetParametersByPathRequest);
         Assert.Empty(store.Puts);
     }
