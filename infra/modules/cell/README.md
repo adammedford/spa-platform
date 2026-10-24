@@ -168,10 +168,9 @@ only when set (#338):
 No statement grants `ssm:DeleteParameter`: nothing in the platform deletes a key, and
 `teardown.sh` deletes the ring as the operator. `session_store = "dynamodb"` with no ring
 prefix is refused at plan, as the gateway refuses it at start (P2-2 decision 16). The
-session table itself is not declared yet: P-01 reads this module's source and refuses a
-DynamoDB table whatever its count, so it waits on
-`contracts/changes/issue-338-p-01-dynamodb-tripwire.md`, and the grant names the table by
-the name the module will give it.
+module declares no session table, because P-01 reads this module's source and refuses a
+DynamoDB table whatever its count (`contracts/changes/issue-338-p-01-dynamodb-tripwire.md`),
+so the grant names the table by its name, `spa-platform-{cell}-sessions`.
 
 A grant can also arrive through a resource policy: in its own account a role may do
 whatever its own policy or a resource policy allows it. The bucket policy is the cell's

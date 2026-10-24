@@ -342,6 +342,18 @@ class TeardownFails(cell.CompanionTestCase):
         self.assertEqual([], case.aws("iam list-roles"))
         self.assertNoUnexpectedCall(case)
 
+    def test_a_ring_listing_refused_fails_before_the_proof(self):
+        # A refused listing is not an empty ring: it stops before any delete and before the proof.
+        world = deployed_world()
+        world["faults"]["ssm get-parameters-by-path"] = ["AccessDeniedException", "GetParametersByPath"]
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("the key ring parameters under " + RING_PREFIX + ": AccessDeniedException", result.stderr)
+        self.assertEqual([], case.aws("ssm delete-parameters"))
+        self.assertEqual([], case.aws("iam list-roles"))
+        self.assertNoUnexpectedCall(case)
+
     def test_a_version_left_in_the_bucket_stops_before_any_destroy(self):
         # A version written after the listing is not deleted, and the count after the deletes says
         # so: the platform root is never destroyed with the bucket still holding it (#192). Without
