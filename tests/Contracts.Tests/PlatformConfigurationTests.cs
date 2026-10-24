@@ -143,8 +143,9 @@ public sealed class PlatformConfigurationTests
     [Fact]
     public void The_session_table_is_an_optional_DynamoDB_table_name()
     {
-        // Change request P2-1 Decision 3: optional, flat, DynamoDB's naming rule. The requirement under
-        // Store = dynamodb is the store's FromConfiguration until the next gate.
+        // Change request P2-1 Decision 3: optional, flat, DynamoDB's naming rule
+        // (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html).
+        // The requirement under Store = dynamodb is the store's FromConfiguration until the next gate.
         Schemas.AcceptsPlatformConfig(
             Documents.PlatformConfig(c =>
             {
