@@ -627,6 +627,14 @@ try {
     env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', answered: false, how: 'nothing in the range touches it' }] } })
     result = await execute(env)
     if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 with the earlier hold unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
+    // A follow-up the held record carried without holding on it does not hold when the range leaves it.
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', held: true, answered: true, how: 'fixed' }, { finding: 'an ADR index row', held: false, answered: false, how: 'the range touches no ADR' }] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'merge') fail(`PR 207 with only a carried follow-up unanswered: verdict ${resultOf(207, result).verdict}, expected merge`)
+    if (!/held true when that record held on it/.test(env.prompts['verdict:207'] || '')) fail('PR 207 after a hold: the verdict is not told to mark which earlier findings held')
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [{ finding: 'the cap is off by one', held: true, answered: false, how: 'untouched' }] } })
+    result = await execute(env)
+    if (resultOf(207, result).verdict !== 'hold') fail(`PR 207 with a held finding unanswered: verdict ${resultOf(207, result).verdict}, expected hold`)
     // A verdict that lists none of the held record's findings has checked none of them: it holds.
     env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: [] } })
     result = await execute(env)
