@@ -104,6 +104,13 @@ locals {
     # the range are allocated.
     { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
+    # Continuity (#338). Each is present only behind its input, so the default inputs add no key and
+    # a Phase 1 task definition is unchanged. Session:TableName is change request P2-1's key, and the
+    # DataProtection section is P2-2's; with no prefix the gateway registers no ring (P2-2 decision 5)
+    # and the key id is absent rather than empty, which the package would read as no key.
+    local.session_store_is_dynamodb ? { "Session__TableName" = local.session_table_name } : {},
+    local.key_ring_enabled ? { "DataProtection__ParameterPrefix" = var.data_protection_parameter_prefix } : {},
+    var.data_protection_kms_key_id != "" ? { "DataProtection__KmsKeyId" = var.data_protection_kms_key_id } : {},
   )
 
   # Assumption A4 is one issuer per environment, and the mock API validates against one issuer

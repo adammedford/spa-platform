@@ -26,7 +26,8 @@
 #   4. The tag query in the selected Region. An ECS cluster, service or task definition whose
 #      describe says INACTIVE is dropped, and so is a task definition teardown.sh deleted
 #      (DELETE_IN_PROGRESS) or one ECS no longer knows; an EC2 id is dropped when EC2's describe does
-#      not know it. Anything else listed stands.
+#      not know it, and the cell's session table when DynamoDB's does not (#338). Anything else
+#      listed stands: the key ring's parameters among them, which teardown.sh deletes first.
 # A reader that finds something is asked again, every SPA_TEARDOWN_TAG_POLL seconds, until it finds
 # nothing or SPA_TEARDOWN_TAG_WAIT runs out: the tagging API can lag a deletion, so the query retries
 # for a few minutes first (docs/plan/05-infrastructure-and-cost.md, Teardown). A reader that has
@@ -182,6 +183,7 @@ read_role_names() {
 INACTIVE=0
 DELETED=0
 UNKNOWN=0
+TABLES=0
 
 # An ECS describe's status, or its failure's reason: INACTIVE is dropped (#118 step 2), and so is
 # MISSING, which is how DescribeClusters and DescribeServices answer for one they do not know (a
@@ -280,6 +282,19 @@ judge() {
         'InternetGateways[].InternetGatewayId' InvalidInternetGatewayID.NotFound
       ;;
     ec2:route-table/*) ec2_describe "$arn" describe-route-tables --route-table-ids 'RouteTables[].RouteTableId' InvalidRouteTableID.NotFound ;;
+    # The cell's session table under session_store = "dynamodb" (#338), which goes with the platform
+    # root. The index lags its deletion as it lags every other, so a table DescribeTable no longer
+    # knows is dropped; one it still describes stands with its status, DELETING included, and is
+    # asked again within the wait.
+    # https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html
+    dynamodb:table/*)
+      aws_call dynamodb describe-table --table-name "${resource#table/}" --query Table.TableStatus
+      case "$OUTCOME" in
+        success) stands "${arn} (DynamoDB says $(printed))" ;;
+        ResourceNotFoundException) TABLES=$((TABLES + 1)) ;;
+        *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
+      esac
+      ;;
     # Every other type the index lists stands: the index lists a resource that carries the tag.
     *) stands "$arn" ;;
   esac
@@ -290,6 +305,7 @@ read_tag_index() {
   INACTIVE=0
   DELETED=0
   UNKNOWN=0
+  TABLES=0
   # --tag-filters matches a value exactly: no prefix, no wildcard (contracts/resource-tags.md).
   # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_TagFilter.html
   aws_read "the platform tag query" resourcegroupstaggingapi get-resources \
@@ -303,6 +319,7 @@ read_tag_index() {
   [ "$INACTIVE" -eq 0 ] || dropped="${dropped}, ${INACTIVE} ECS records INACTIVE"
   [ "$DELETED" -eq 0 ] || dropped="${dropped}, ${DELETED} ECS records deleted"
   [ "$UNKNOWN" -eq 0 ] || dropped="${dropped}, ${UNKNOWN} EC2 ids describe does not know"
+  [ "$TABLES" -eq 0 ] || dropped="${dropped}, ${TABLES} DynamoDB tables DynamoDB does not know"
   SUMMARY="${count} listed, none standing${dropped:+:}${dropped#,}"
 }
 
