@@ -30,6 +30,17 @@
          Core this solution resolves (SimpleSystemsManagement's floor), from the same 8 October 2026
          SDK drop, so it moves no other version. Confirmed on nuget.org on 21 October 2026. -->
     <PackageVersion Include="AWSSDK.Signin" Version="4.0.101.13" />
+    <!-- P2-1 (#221): the Phase 2 session store. 4.0.108 is the version #216's trial restore built, not
+         the newest: 4.0.109.1 asks for a higher Core. Its AWSSDK.Core floor is [4.0.102.12, 5.0.0),
+         which lifts Core from 4.0.102.9 in the graphs that carry it, Platform.Identity and the gateway.
+         Confirmed on nuget.org on 19 October 2026. -->
+    <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.108" />
+    <!-- P2-2 (#222): the cell's shared data-protection key ring in Parameter Store. 4.0.3 is the newest.
+         It reaches AWSSDK.Core only through AWSSDK.SimpleSystemsManagement, whose 4.0.7.3 floor asks
+         for Core [4.0.3.17, 5.0.0). A graph that also references SimpleSystemsManagement directly
+         takes the 4.0.104.2 pin above and with it Core 4.0.102.9, which is why P2-2 Decision 3 gives
+         Platform.Hosting that reference. Confirmed on nuget.org on 21 October 2026. -->
+    <PackageVersion Include="Amazon.AspNetCore.DataProtection.SSM" Version="4.0.3" />
   </ItemGroup>
 
   <ItemGroup Label="Telemetry">

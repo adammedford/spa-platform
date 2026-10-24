@@ -85,7 +85,8 @@ EVIDENCE_PREFIXES = ("docs/adr/",)
 # The families of #82 -> "Families", with each member's aliases: the words prose uses for it beside a
 # version ("the handler 10.0.12"). The trial scope is not typed here: it is derived from the
 # reference map, the test projects that reach a member. frameworkWide families trial the whole
-# solution and the smoke test. AWSSDK.Signin joined the AWS family under #206, after #82 was written.
+# solution and the smoke test. AWSSDK.Signin joined the AWS family under #206, and AWSSDK.DynamoDBv2 and
+# Amazon.AspNetCore.DataProtection.SSM under #336, after #82 was written.
 FAMILIES = [
     {"id": "aspnetcore", "name": "ASP.NET Core and IdentityModel", "frameworkWide": True, "reportOnly": False,
      "members": {"Microsoft.AspNetCore.Authentication.OpenIdConnect": ["OpenIdConnect", "OpenID Connect", "ASP.NET Core", ".NET", "the handler"],
@@ -97,7 +98,8 @@ FAMILIES = [
     {"id": "yarp", "name": "YARP", "frameworkWide": False, "reportOnly": False,
      "members": {"Yarp.ReverseProxy": ["YARP"]}},
     {"id": "aws-sdk", "name": "AWS SDK", "frameworkWide": False, "reportOnly": False,
-     "members": {"AWSSDK.S3": [], "AWSSDK.SimpleSystemsManagement": [], "AWSSDK.Signin": []}},
+     "members": {"AWSSDK.S3": [], "AWSSDK.SimpleSystemsManagement": [], "AWSSDK.Signin": [], "AWSSDK.DynamoDBv2": [],
+                 "Amazon.AspNetCore.DataProtection.SSM": []}},
     {"id": "opentelemetry", "name": "OpenTelemetry", "frameworkWide": False, "reportOnly": False,
      "members": {"OpenTelemetry.Extensions.Hosting": [], "OpenTelemetry.Instrumentation.AspNetCore": [],
                  "OpenTelemetry.Instrumentation.Http": [], "OpenTelemetry.Exporter.OpenTelemetryProtocol": [],
