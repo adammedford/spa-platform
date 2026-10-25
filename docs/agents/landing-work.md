@@ -24,12 +24,15 @@ changes its files or index: its own branch lives in its own worktree, made as ab
 exception is a fast-forward of a clean `main` to what has landed, which leaves the checkout no
 longer behind origin/main after a landing: `git fetch origin`, then exactly
 `git merge --ff-only origin/main`, while HEAD is `main` and no tracked file has changes (untracked
-files are allowed). `git pull` is not that fast-forward. In a Claude Code session started in a
+files are allowed). `git pull` is not that fast-forward. While HEAD is `main`, a tracked file whose
+changes equal its origin/main content, with nothing staged, may first be restored with
+`git restore <path>` or `git checkout -- <path>`, as a call of its own, since once `main` is
+fast-forwarded that restore has changed nothing (#376). In a Claude Code session started in a
 checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
 before each Bash call, and in the main checkout it refuses the branch-moving git commands and those
 that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and
-`git checkout -- <path>`), admits that one fast-forward, and names this route (#114, #200). A
-person's terminal runs no such hook.
+`git checkout -- <path>`), admits that one fast-forward and that one restore, and names this route
+(#114, #200). A person's terminal runs no such hook.
 
 The same file sets `CLAUDE_CODE_SHELL=/bin/bash`, which a Claude Code process reads when it starts:
 after a change to `.claude/settings.json` or after trusting a checkout, restart Claude Code (the
