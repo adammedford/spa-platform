@@ -31,9 +31,10 @@ locals {
   ])
 
   # Continuity (#338). The session table and its appId index, behind session_store = "dynamodb".
-  # The ARN is built from the table's name rather than read from aws_dynamodb_table: the table's own
-  # declaration waits on contracts/changes/issue-338-p-01-dynamodb-tripwire.md, because P-01's
-  # tripwire reads this module's source and refuses the type whatever its count.
+  # The ARN is built from the table's name rather than read from aws_dynamodb_table because this
+  # module declares no table: P-01's tripwire reads the module's source and refuses the type whatever
+  # its count, and contracts/changes/issue-338-p-01-dynamodb-tripwire.md records the exemption that
+  # admits the gated table and has this grant read the table's ARN when it is declared.
   session_store_is_dynamodb = var.session_store == "dynamodb"
   session_table_name        = "${local.name_prefix}-sessions"
   session_table_index_name  = "appId"
@@ -286,9 +287,10 @@ data "aws_iam_policy_document" "task" {
   # A PutParameter carrying Tags is authorised as ssm:AddTagsToResource as well (#274), and the
   # gateway tags each ring parameter it creates. The Service Authorization Reference gives the
   # operation both actions, each taking aws:RequestTag/${TagKey} and aws:TagKeys:
-  # https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html#list_ssm-operation-PutParameter StringEquals on each tag's value refuses a call that
-  # carries none of them, which ForAllValues on aws:TagKeys alone would pass; aws:TagKeys refuses a
-  # fourth tag. So the role can tag a ring parameter with the platform's tags and nothing else.
+  # https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html#list_ssm-operation-PutParameter
+  # StringEquals on each tag's value refuses a call that carries none of them, which ForAllValues on
+  # aws:TagKeys alone would pass; aws:TagKeys refuses a fourth tag. So the role can tag a ring
+  # parameter with the platform's tags and nothing else.
   dynamic "statement" {
     for_each = local.key_ring_enabled ? [1] : []
 
