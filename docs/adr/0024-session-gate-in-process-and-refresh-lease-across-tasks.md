@@ -1,6 +1,8 @@
 # ADR-0024: One refresh per session across tasks: a session gate in process and a refresh lease across tasks
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-24 by change request P2-3's amendment to item 3:**
+  decision 4's margin is `2 × StoreDeadline + 1 s`, so "10 s + 5 s today" is 10 s + 11 s, and
+  the margin covers taking the lease as well as the versioned write and clock skew.
 - **Date:** 2026-10-20
 - **Deciders:** integrator, on Adam's answers to
   https://github.com/adammedford/spa-platform/issues/218 (wayfinder map #215)

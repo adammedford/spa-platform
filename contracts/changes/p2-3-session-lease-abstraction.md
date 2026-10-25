@@ -5,7 +5,8 @@
 - **Tasks:** P2-3; P2-1, whose store carries the lease when it sits on the item; 6.2 and 6.3, whose
   composed suites prove it again (#60)
 - **Date:** 2026-10-19
-- **Status:** decided, 2026-10-20. See the Decision section below.
+- **Status:** decided, 2026-10-20. See the Decision section below. Item 3's margin amended
+  2026-10-24, on https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562.
 
 ## The gap
 
@@ -187,7 +188,10 @@ https://github.com/adammedford/spa-platform/issues/218 (all accepted as recommen
    AccessTokenSourceOptions.LeaseMargin`, 10 s + 5 s today. The margin covers the versioned write
    after the refresh returns and clock skew between tasks, since the acquiring task's clock is
    compared with the holder's. A holder that dies mid-refresh frees the session after at most
-   15 s, under T-D10's caveat that the refresh it gave up on may still have run.
+   15 s, under T-D10's caveat that the refresh it gave up on may still have run. **Amended
+   2026-10-24:** the margin is `2 × StoreDeadline + 1 s` and covers taking the lease as well, so the
+   time to live is 10 s + 11 s and a dead holder frees the session after at most 21 s; see the
+   amendment below.
 4. **The loser's loop.** A caller that cannot take the lease re-reads the record every 250 ms,
    under `CancellationToken.None` like every store call on this path (T-B15, T-B16), until the
    version moves or the lease expires. A record that vanishes mid-loop answers
@@ -232,3 +236,25 @@ https://github.com/adammedford/spa-platform/issues/218 (all accepted as recommen
 
 Two citations in the request are corrected by this record: `ProviderDeadline` is
 `AccessTokenSource.cs:298`, and `SessionEnd` ends the session under the gate at lines 33-48.
+
+### Amendment, 2026-10-24: item 3's margin
+
+On Adam's answer G1 on #332, confirmed in https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. Item 3's "10 s + 5 s today" no longer holds.
+#332's D2 has the holder check, just before the provider call, that `ProviderDeadline +
+StoreDeadline + 1 s` (16 s) remains on its lease, so at 15 s no refresh could ever pass, however fast
+its acquisition (#341's validation, https://github.com/adammedford/spa-platform/issues/341#issuecomment-6379673480).
+Taking the lease is itself a store operation bounded by `StoreDeadline`, so the margin covers it as
+well:
+
+- `LeaseMargin` is `2 × StoreDeadline + 1 s`, stated as that formula: 11 s, and the time to live
+  21 s, today. The time to live is still the one derived value `ProviderDeadline + LeaseMargin`.
+- A holder that dies frees the session after at most 21 s. F3's recovery window is (21 s, r + G)
+  after acquisition: open at the 60 s grace the cell runs since #339, empty at 10 s, which is
+  accepted.
+- The worst-case refresh, acquisition included, is 21 s, inside F1's `ShutdownTimeout` of 25 s.
+- D2's check passes when "at least" its reserve remains, so the boundary passes: an acquisition
+  that takes its whole 5 s leaves 21 s - 5 s = 16 s, which is the reserve.
+
+So the margin covers taking the lease, the versioned write after the refresh returns, and clock
+skew between tasks. Item 3 carries an inline pointer to this amendment, and ADR-0024 a status-line
+one; decision 4's body is unchanged, as G1 asked.

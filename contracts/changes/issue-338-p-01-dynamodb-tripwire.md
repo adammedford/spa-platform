@@ -4,7 +4,7 @@
 - **Tasks:** #338; #332's G6 (S8) spec, whose T9 row says "P-01's `aws_dynamodb_table` tripwire
   becomes conditional on the variable"; #347 (T10), which builds on the same cell; P2-1
 - **Date:** 2026-10-24
-- **Status:** open
+- **Status:** decided, 2026-10-24, on https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. See the Decision section below.
 
 ## The gap
 
@@ -179,7 +179,8 @@ as the store and the ring are in the gateway (P2-2 decision 5):
 
 So a memory-store cell with a ring prefix changes P-03 as surely as a `dynamodb` one. The fourth
 combination does not plan: `var.session_store`'s validation refuses `dynamodb` with no prefix
-(`dynamodb_with_no_ring_prefix_is_refused_at_plan`). That leaves three cases:
+(`dynamodb_with_no_ring_prefix_is_refused_at_plan`). The three cases are held by runs in
+`infra/modules/cell/tests/module.tftest.hcl`:
 
 | Case | Inputs | The task role's statements | The run that holds the set |
 | --- | --- | --- | --- |
@@ -208,7 +209,8 @@ In none of the three cases does the role write to the registry: the policy's one
 `ReadRegistryAndReleases`'s `s3:GetObject`, unconditional, on the `registry/*` and `apps/*`
 prefixes and not the bucket's own ARN, so P-03's second sentence holds as written. Nor does it
 delete a key: no statement grants `ssm:DeleteParameter` or `ssm:DeleteParameters` (P2-2 decision
-12), and `teardown.sh` deletes the ring as the operator.
+12), and `teardown.sh` deletes the ring as the operator. The module grants no KMS permission;
+`data_protection_kms_key_id` documents that limit.
 
 The DynamoDB-plus-ring run holds all three grants to the actions, resources and conditions above,
 the absence of a key deletion, and the role's closures (Allow only, no wildcard action, only the
@@ -232,3 +234,26 @@ entry; the decision is whether P-01 may read a gated declaration as no database.
 no index" under `memory` as a plan fact rather than a source fact) wait on this request. Nothing else
 of #338 does. #344's store can be built and proved against its fake without the table; the deployed
 G6 run (#348) cannot.
+
+## Decision
+
+Integrator, 2026-10-24, on Adam's answer G4 on #332, confirmed in https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. **Accepted as
+written.**
+
+1. **The tripwire admits exactly the gated session table.** The forbidden-type list keeps
+   `dynamodb_.+`. The one `aws_dynamodb_table.sessions` declaration whose body carries exactly
+   `count = local.session_store_is_dynamodb ? 1 : 0` is exempt, a plan assertion holds that on the
+   default inputs it plans no instance, the count closure and the type-count map name it, and a
+   second run on `dynamodb` with the cell's prefix expects exactly one table and every other count
+   unchanged. What P-01 stops proving is that the module's source names no DynamoDB table; what it
+   goes on proving is P-01's own sentence, that the Phase 1 plan holds no database.
+2. **The edits land with the table, in one workstream 1 commit**, under #338: `sessions.tf` as given
+   above, the three assertions in `infra/envs/poc/platform/tests/root.tftest.hcl`, the module's
+   resource-type allowlist and its two runs, and `ReadWriteSessions` reading the table's ARN in place
+   of the name-built one. It lands under #338.
+3. **P-03's reading is the section above**, recorded here and not by an edit to the frozen export:
+   the store and the ring prefix are independent conditions, and the three named cases, with each
+   grant's exact actions and resources, are what P-03 means from G6. #353 closes on it.
+4. **#347 (T10) amends this request** with its NAT gateway, Elastic IP and endpoint exemptions, under
+   the switch input its grill named, as a new section with its own decision when it is written
+   (#349 Q1). This decision covers the session table alone.
