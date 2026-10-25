@@ -122,6 +122,11 @@ Green means the last line of ${log} starts "check: pass:". Run the command exact
 // How a lane ticks or unticks acceptance boxes: the body is the spec and must otherwise stay byte-identical.
 const TICK = (t, verb) => `To ${verb} acceptance boxes, edit the issue body and nothing else in it: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body > ${LOG}/${t.id}-body.md\`, change only the \`- [ ]\` / \`- [x]\` markers of the lines concerned (no other byte of the file), then \`cd ${REPO} && gh issue edit ${t.issue} --body-file ${LOG}/${t.id}-body.md\`.`
 
+// Why a ticket with every acceptance box ticked gets no lane (#129, #379): the collect prompt gives it, the run records
+// it as the ticket's result, and the report prompt names it, so the three say it alike. tools/overnight_collect.py's
+// CLOSE_IN_MORNING is the same sentence.
+const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
+
 // ---------------------------------------------------------------- schemas
 const TICKET = {
   type: 'object',
@@ -270,7 +275,7 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
   * label needs-triage -> "needs-triage";
   * label ready-for-agent last applied by an account other than the one docs/agents/issue-tracker.md names (the repository's owner while it names none) -> "needs-triage", "why" naming who applied it (#316): an authorisation is read from its author (CODING_STANDARDS.md), so whoever can label an issue cannot send a lane at it. Only tools/overnight_collect.py reads who applied it, from the issue's timeline; FORECAST below gives you its answer;
   * label ready-for-agent with an assignee, or whose plan row is CLAIMED by a branch -> "claimed";
-  * label ready-for-agent with openBoxes 0 (every acceptance box ticked), whatever it waits on -> "close-in-morning", "why" "every acceptance box is ticked; close it in the morning" (#379): it gets no lane, and the report lists it with the issues to close;
+  * label ready-for-agent with openBoxes 0 (every acceptance box ticked), whatever it waits on -> "close-in-morning", "why" "${CLOSE_WHY}" (#379): it gets no lane, and the report lists it with the issues to close;
   * label ready-for-agent whose every open blocker is itself a ticket in tonight's set that resolves to "ready-for-agent" or "close-in-morning" by these rules -> "ready-for-agent", with blockedBy naming those blockers' ids: the lane runs it after they integrate, which is how the G2 chain landed on 2026-10-17;
   * label ready-for-agent with any other open blocker (a human row, a claimed row, a blocked row, an issue outside tonight's set) -> "blocked", blockedBy naming them;
   * label ready-for-agent otherwise -> "ready-for-agent".
@@ -484,7 +489,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
    - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept" or "re-run failed, reset"; "none" under the section's own heading when the list is empty;
-   - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "every acceptance box is ticked; close it in the morning": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
+   - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
    - Pending tracker writes: if ${PENDING} exists, how many lines it holds and that the morning session replays them (a comment, label change or close that GitHub refused tonight); otherwise "none";
@@ -541,9 +546,9 @@ log(`collected ${tickets.length}: ` + ['ready-for-agent', 'ready-for-human', 'ne
 
 phase('Route')
 const triage = tickets.filter((t) => t.status === 'needs-triage' && inScope(t))
-const byIdAtCollect = Object.fromEntries(tickets.map((t) => [t.id, t]))
+const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 // Read from collect's statuses before any route returns, so the batch routes on the labels collect read (#379).
-const held = triage.map((t) => heldBy(t, byIdAtCollect))
+const held = triage.map((t) => heldBy(t, byId))
 const routed = await parallel(triage.map((t, i) => () =>
   agent(held[i].length ? heldRoutePrompt(t, held[i]) : routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })))
 // A ticket routed to a human stopped at route, with the router's reason (#280). One held by a ready-for-human blocker
@@ -554,14 +559,13 @@ triage.forEach((t, i) => {
   t.status = !held[i].length && r && r.flow === 'agent' ? 'ready-for-agent' : 'ready-for-human'
   if (t.status === 'ready-for-human') {
     humanStage[t.id] = 'route'
-    humanWhy[t.id] = held[i].length ? `routed human: its open blocker ${heldNames(held[i])} is labelled ready-for-human (#379)`
+    humanWhy[t.id] = held[i].length ? `routed human: its open blocker${held[i].length > 1 ? 's' : ''} ${heldNames(held[i])} ${held[i].length > 1 ? 'are' : 'is'} labelled ready-for-human (#379)`
       : r ? `routed ${r.flow}: ${r.reason}` : 'the route agent died, so it went to a human'
   }
 })
 
 const agentT = tickets.filter((t) => t.status === 'ready-for-agent' && inScope(t))
 const humanT = tickets.filter((t) => t.status === 'ready-for-human' && inScope(t))
-const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 
 const results = {}      // id -> {stage, outcome, ...}
 const grillQueue = []   // grill promises
@@ -608,11 +612,10 @@ const ready = (t) => laneBlockers(t).every((b) => b in settled)
 // gets no lane. It counts as met for the tickets it blocks, settled before any lane starts so a dependant in another
 // lane sees it at once, in scope or not, since nothing is left to build. A ready-for-agent ticket with openBoxes 0 is
 // one too, should collect's status not say so. -1 (no checkbox in the body) still gets a lane.
-const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
-const closeT = tickets.filter((t) => t.status === 'close-in-morning' || (agentT.includes(t) && t.openBoxes === 0))
+const closeT =tickets.filter((t) => t.status === 'close-in-morning' || (agentT.includes(t) && t.openBoxes === 0))
 closeT.forEach((t) => {
   results[t.id] = { stage: 'collect', outcome: 'skipped', why: CLOSE_WHY }
-  log(`${t.id}: no lane, every acceptance box is ticked; close it in the morning`)
+  log(`${t.id}: no lane, ${CLOSE_WHY}`)
   if (lanes[t.owner] && lanes[t.owner].includes(t)) lanes[t.owner].splice(lanes[t.owner].indexOf(t), 1)
   if (!done[t.id]) done[t.id] = Promise.resolve(true)
   else resolveDone[t.id](true)
