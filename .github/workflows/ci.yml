@@ -357,6 +357,15 @@ jobs:
         # reads the task branches, local and on origin, from real git in a throwaway clone.
         run: python3 -I tools/overnight_collect_tests.py
 
+      - name: The integrate step's reach tool names which failed test projects a change could reach
+        # A red overnight integration gate re-runs a failed test project alone only when
+        # tools/test_reach.py finds no changed file that reaches it (#375). A rule that reaches too
+        # little keeps a merge whose change broke the project under a re-run that happened to pass.
+        # Its companion builds a throwaway repository in this one's project shape, replays #305's
+        # Spactl.Tests failure, and checks this repository's test sources name no top-level path the
+        # tool does not cover.
+        run: python3 -I tools/test_reach_tests.py
+
       - name: The wiz skill's redaction leaves no account id, code or secret in a post, and stops on AccessDenied
         # Every post the wiz skill makes to a ticket goes through tools/wiz_redact.py (#259), and a rule
         # that stops matching would leak into a public comment without a word. Its companion starts the

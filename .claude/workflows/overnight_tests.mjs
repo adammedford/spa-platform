@@ -15,7 +15,10 @@
 // Each mocked review reports the files its branch changed, and every integrated ticket but the second shares
 // one, so the run must integrate those one after the other (#279). One more ticket nobody waits on stops at its
 // implement on a question for Adam, and the run's return value must give every failed, skipped and needs-human
-// ticket its stage and a one-line reason (#280). It also checks that each ticket has its own worktree, that a
+// ticket its stage and a one-line reason (#280). Five more meet a red integration gate (#375): one on test
+// projects its change cannot reach, which pass alone, so the merge stays and the flake is recorded; one whose change
+// reaches a failed project, one whose re-run fails again, one red on something other than a test project, and one
+// whose reach line does not parse, all reset. It also checks that each ticket has its own worktree, that a
 // lane implements while its last ticket is in review or integrating, and that no two merges run at once. No
 // agent, gh or git call is made.
 import fs from 'node:fs'
@@ -46,6 +49,26 @@ const QUESTION = 'Which store holds the rotated keys: the parameter store or the
 // The files each mocked review says its branch changed (#279): a file of its own, and SHARED_FILE for every ticket
 // the fixture integrates except CONFLICT_ALWAYS, so those tickets share a file with no planned group in common,
 // and CONFLICT_ALWAYS shares none, so other tickets may integrate while it is back in its lane.
+// Four more tickets nobody waits on meet a red integration gate (#375), one per outcome the re-run rule has:
+// FLAKE_KEPT failed only on projects its change cannot reach, which pass alone, so its merge stays; FLAKE_REACHED
+// failed on a project its change reaches, so it resets with no re-run; FLAKE_AGAIN's unreachable project fails again
+// alone, so it resets and says so; FLAKE_OTHER's gate failed on the smoke test, not a test project, so it resets.
+// FLAKE_GARBLED's reach line does not parse, so it resets too: a rule that cannot read its input does not re-run.
+const [FLAKE_KEPT, FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED] = free.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN)
+const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED]
+const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
+const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
+const TESTS_FAILED = 'check: fail: the tests failed.'
+const reachLine = {
+  [FLAKE_KEPT]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: UNREACHED.map((project) => ({ project, reachedBy: [] })), changed: ['tools/bench/report.py'] }),
+  [FLAKE_REACHED]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }, { project: 'tests/Platform.Registry.Tests', reachedBy: ['src/Platform.Registry/RegistrySchemas.cs (project)'] }], changed: ['src/Platform.Registry/RegistrySchemas.cs'] }),
+  [FLAKE_AGAIN]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
+  // The tool names no project for a failure that is not the tests; this one does, so the rule's own test of
+  // failedAt is what holds it back.
+  [FLAKE_OTHER]: JSON.stringify({ failedAt: 'other', verdict: 'check: fail: the smoke test failed.', projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
+  [FLAKE_GARBLED]: 'test-reach: fail: cannot read the log',
+}
+const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
 const SHARED_FILE = '.gitignore'
 const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
@@ -82,9 +105,15 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
-    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '' }
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '', old: '', redHead: '', reach: '' }
+    if (id in reachLine) return { ok: false, mergeSha: '', notes: 'check: fail: the tests failed.', conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach: reachLine[id] }
     greens.push({ at: tick, head: `verified-${id}` })
-    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}` }
+    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+  }
+  if (kind === 'rerun') {
+    const projects = JSON.parse(reachLine[id]).projects.map((p) => ({ project: p.project, log: `log-${p.project}`, passed: id === FLAKE_KEPT }))
+    if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects } }
+    return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
   }
   throw new Error(`unexpected agent label ${opts.label}`)
 }
@@ -131,7 +160,7 @@ const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id
 const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN))
+const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)))
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -219,7 +248,8 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 //    lock since #279, in the ticket's own lane, so it is not counted here; check 13 holds what it may overlap.
 {
   const spans = []
-  for (const s of events.filter((x) => x.kind === 'integrate' && x.edge === 'start')) {
+  // A re-run holds the lock its red integrate held (#375), so it is counted with the integrates.
+  for (const s of events.filter((x) => (x.kind === 'integrate' || x.kind === 'rerun') && x.edge === 'start')) {
     const e = events.find((x) => x.kind === s.kind && x.id === s.id && x.edge === 'end' && x.at >= s.at && x.n === s.n)
     spans.push({ label: `${s.kind}:${s.id}#${s.n}`, from: s.at, to: e ? e.at : Infinity })
   }
@@ -467,6 +497,79 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   for (const c of collects) {
     if (!c.prompt.includes(COPIED)) fail('the collect prompt does not take each ticket\'s status from tools/overnight_collect.py (#316)')
     if (!c.prompt.includes(UNREAD)) fail('the collect prompt lets a ticket stay ready-for-agent when tools/overnight_collect.py did not run (#316)')
+  }
+}
+
+// 17. A red integration gate on test projects the change cannot reach is re-run once, alone (#375). On 2026-10-24
+//     #305 changed Python under tools/bench/ alone and was reset because 30 Spactl.Tests tests failed (#373).
+{
+  if (!FLAKE_GARBLED) fail('the fixture has too few free tickets for the five re-run cases, so the flake checks read nothing')
+  const reruns = (id) => allPrompts.filter((c) => c.label === `rerun:${id}`)
+  const flakes = result.flakes || []
+  const flakeOf = (id) => flakes.filter((f) => f.id === id)
+  const reasonOf = (id) => ((result.reasons || []).find((r) => r.id === id) || {}).reason || ''
+  // Outcome 1: every failed project lies outside the closure. One re-run, of exactly those projects, each once and
+  // alone, then the rest of the check with --skip-tests; it passed, so the merge stays and the flake is recorded.
+  {
+    const id = FLAKE_KEPT, rs = reruns(id)
+    if (rs.length !== 1) fail(`${id}'s gate failed only on unreachable projects and ran ${rs.length} re-runs, not 1`)
+    else {
+      const p = rs[0].prompt
+      for (const project of UNREACHED) {
+        const runs = p.split(`dotnet test --project ${project} `).length - 1
+        if (runs !== 1) fail(`the re-run of ${id} runs ${project} ${runs} times, not once`)
+      }
+      if (/dotnet test --solution/.test(p)) fail(`the re-run of ${id} runs the whole suite, not the failed projects alone`)
+      if (/dotnet test --project tests\/(?!Spactl\.Tests |e2e |<X>\.Tests`)/.test(p)) fail(`the re-run of ${id} runs a project that did not fail`)
+      if (!p.includes(`tools/check.sh --full --base a${'a'.repeat(39)} --port `) || !p.includes(' --skip-tests; }')) fail(`the re-run of ${id} does not run the rest of the check with --skip-tests, against the run's base`)
+      if (!p.includes(`reset --hard ${RED}`) || !p.includes(`reset --hard ${OLD}`)) fail(`the re-run of ${id} does not move the run branch to the gate's head and back to the old head on red`)
+      if (!p.includes('"## Flake at integrate"')) fail(`the re-run of ${id} records no "## Flake at integrate" comment on its ticket`)
+    }
+    if (!(result.integrated || []).includes(id)) fail(`${id}'s projects passed alone and the check passed, yet it did not integrate`)
+    const [f] = flakeOf(id)
+    if (flakeOf(id).length !== 1) fail(`the run's result holds ${flakeOf(id).length} flakes for ${id}, not 1`)
+    else {
+      if (f.kept !== true) fail(`${id}'s flake does not say the merge was kept`)
+      if (JSON.stringify(f.projects.map((x) => x.project)) !== JSON.stringify(UNREACHED)) fail(`${id}'s flake names ${JSON.stringify(f.projects)}, not each failed project`)
+      for (const x of f.projects) if (!x.log || !x.log.includes(x.project.replace('/', '_')) || x.passed !== true) fail(`${id}'s flake does not name ${x.project}'s re-run log and its pass: ${JSON.stringify(x)}`)
+    }
+    const report = allPrompts.find((x) => x.label === 'report')
+    const summary = report ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report.prompt) || [, 'null'])[1]) : null
+    const kept = summary && summary.results[id]
+    if (!kept || !kept.flake || kept.flake.kept !== true) fail(`${id}'s integrate record does not name its flake`)
+  }
+  // Outcome 2: a failed project inside the closure resets at once, with no re-run.
+  // Outcome 4: a gate red on something other than a test project resets as before, and so does a reach line the
+  // rule cannot read.
+  for (const id of [FLAKE_REACHED, FLAKE_OTHER, FLAKE_GARBLED]) {
+    if (reruns(id).length) fail(`${id} re-ran its tests although the rule forbids it`)
+    if (flakeOf(id).length) fail(`${id} recorded a flake although nothing was re-run`)
+    if (!(result.failed || []).includes(id)) fail(`${id}'s gate was red with no re-run, yet it is not reported failed`)
+    if (merges[id] !== 1) fail(`${id} was merged ${merges[id] || 0} times; a red gate with no re-run merges once`)
+  }
+  if (!logs.some((l) => l.text.startsWith(`${FLAKE_REACHED}: integration gate red; no re-run: the change reaches tests/Platform.Registry.Tests`))) fail(`no log line says ${FLAKE_REACHED} was not re-run because its change reaches the failed project`)
+  if (!logs.some((l) => l.text.startsWith(`${FLAKE_OTHER}: integration gate red; no re-run: the gate failed on something other than the tests`))) fail(`no log line says ${FLAKE_OTHER} was not re-run because its gate failed on something other than the tests`)
+  // Outcome 3: the re-run fails again: reset, and the record says the re-run failed.
+  {
+    const id = FLAKE_AGAIN
+    if (reruns(id).length !== 1) fail(`${id} ran ${reruns(id).length} re-runs, not 1`)
+    if (!(result.failed || []).includes(id)) fail(`${id}'s re-run failed, yet it is not reported failed`)
+    if (!reasonOf(id).startsWith('re-run failed: ') || !reasonOf(id).includes('tests/Spactl.Tests failed again')) fail(`${id}'s reason does not say the re-run failed: ${reasonOf(id)}`)
+    const [f] = flakeOf(id)
+    if (!f || f.kept !== false || f.projects.some((x) => x.passed)) fail(`${id}'s flake record does not say the re-run failed: ${JSON.stringify(f)}`)
+  }
+  if (flakes.length !== 2) fail(`the run's result holds ${flakes.length} re-runs, not 2`)
+  if (!logs.some((l) => l.text === `flake: ${FLAKE_KEPT} ${UNREACHED.join(', ')} -> passed alone, merge kept`)) fail(`no "flake: ... -> passed alone, merge kept" log line for ${FLAKE_KEPT}`)
+  // Outcome 5: the report lists each flake under a heading of its own, the project's path, the same every night.
+  const HEADING = 'Give each project its own heading, `### Flake: <project>`'
+  for (const c of allPrompts.filter((x) => x.label === 'report')) {
+    if (!c.prompt.includes(HEADING)) fail('the report prompt does not give each flake a heading of its own (#375)')
+    if (!c.prompt.includes('"flakes":[')) fail('the report prompt\'s results carry no flakes')
+  }
+  // The red path records the facts the rule reads and decides nothing itself.
+  for (const c of allPrompts.filter((x) => x.label.startsWith('integrate:'))) {
+    if (!c.prompt.includes('python3 -I tools/test_reach.py --log ')) fail(`the ${c.label} prompt does not run tools/test_reach.py on a red gate`)
+    if (!c.prompt.includes("whether the failed projects are re-run is the script's decision")) fail(`the ${c.label} prompt lets the agent decide the re-run`)
   }
 }
 

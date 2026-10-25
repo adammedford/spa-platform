@@ -590,6 +590,23 @@ class FullModeTests(CheckTestCase):
         self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         self.assertIn("image double ran: ", result.stdout)
 
+    def test_skip_tests_runs_all_but_the_suite_and_names_the_skip(self):
+        # #375: the overnight integrate step's re-run after a gate red on projects the change cannot
+        # reach. Everything after the suite still runs, and the verdict says the suite did not.
+        case = Case(self, change="src/App/App.cs")
+        result = self.full(case, "--skip-tests")
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, not the tests (--skip-tests), "
+                                      "the smoke test, the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE + IMAGE, case.calls())
+        self.assertIn("check: the tests skipped: --skip-tests says they were run another way (#375).",
+                      result.stdout)
+
+    def test_skip_tests_still_fails_on_what_follows_the_suite(self):
+        case = Case(self, change="src/App/App.cs", fails_on={"smoke": "Debug"})
+        result = self.full(case, "--skip-tests")
+        self.assertVerdict(result, 1, "check: fail: the smoke test failed.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE, case.calls())
+
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
         result = self.full(case)
@@ -740,6 +757,7 @@ class FullModeTests(CheckTestCase):
             (("--full", "--port"), "--port needs a value"),
             (("--full", "--port", "eighty"), "--port takes a number, not eighty"),
             (("--port", PORT), "--port is for --full"),
+            (("--skip-tests",), "--skip-tests is for --full"),
             (("--base",), "--base needs a value"),
             (("--fast",), "unknown argument --fast"),
         ):
