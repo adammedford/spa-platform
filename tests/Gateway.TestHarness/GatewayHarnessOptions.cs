@@ -50,4 +50,24 @@ public sealed record GatewayHarnessOptions
 
     /// <summary>More service replacements, applied after the harness's own.</summary>
     public Action<IServiceCollection>? ConfigureServices { get; init; }
+
+    /// <summary>
+    /// How many gateway hosts start with the harness (#345). More than one needs a
+    /// <see cref="KeyRing"/> other than <see cref="KeyRingSharing.FrameworkDefault"/>: two hosts on the
+    /// framework's default ring would share or not share it by accident of the machine.
+    /// </summary>
+    public int Hosts { get; init; } = 1;
+
+    /// <summary>
+    /// The key ring. Anything but <see cref="KeyRingSharing.FrameworkDefault"/> also gives every host the
+    /// harness's one <see cref="SwitchableSessionStore"/> and one <c>InMemoryRefreshLeases</c>, and a
+    /// deterministic instance id (<see cref="InstanceIds"/>), which is the cell as P2-5 proves it.
+    /// </summary>
+    public KeyRingSharing KeyRing { get; init; } = KeyRingSharing.FrameworkDefault;
+
+    /// <summary>The instance ids the hosts get, in the order they start, when <see cref="KeyRing"/> is set.</summary>
+    public IReadOnlyList<string> InstanceIds { get; init; } = ["host-a", "host-b", "host-c", "host-d"];
+
+    /// <summary>Two hosts over one ring, one session store and one lease table: the cell of plan row P2-5.</summary>
+    public static GatewayHarnessOptions TwoHosts => new() { Hosts = 2, KeyRing = KeyRingSharing.OneParameterStore };
 }

@@ -6,7 +6,9 @@ using MockApi;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Amazon.SimpleSystemsManagement;
 using Platform.Abstractions;
+using Platform.Hosting;
 using Platform.Registry;
 using Platform.Testing;
 using TestIdp;
@@ -42,6 +44,12 @@ namespace Gateway.TestHarness;
 /// adds nothing to either and has no switch to serve without a session, so a test signs a browser in
 /// with <see cref="SignInAsync"/>, and a row about a request without a session asserts the refusal that
 /// request gets (task 6.3c).</para>
+///
+/// <para>One host by default, as every Phase 1 suite runs. <see cref="GatewayHarnessOptions.TwoHosts"/>
+/// starts two (plan row P2-5, #345): the real key ring over one Parameter Store stub, one session store,
+/// one lease table and a deterministic instance id each, behind a balancer that alternates between them.
+/// Every registry write polls the first host only, so a test leaves the others behind until it polls
+/// them itself (<see cref="GatewayHost.RefreshRegistryAsync"/>).</para>
 /// </summary>
 public sealed class GatewayHarness : IAsyncDisposable
 {
@@ -54,7 +62,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// </summary>
     public const int PollSeconds = 3600;
 
-    private readonly GatewayFactory factory;
+    private readonly List<GatewayHost> hosts = [];
     private readonly EchoUpstreamListener echoListener;
     private readonly Dictionary<string, HarnessApp> apps = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim registryWrites = new(1, 1);
@@ -69,7 +77,6 @@ public sealed class GatewayHarness : IAsyncDisposable
         InMemoryObjectStore store,
         FakeClientSecretSource secrets,
         CapturedLog log,
-        GatewayFactory factory,
         JsonObject document)
     {
         Options = options;
@@ -80,9 +87,13 @@ public sealed class GatewayHarness : IAsyncDisposable
         Store = store;
         Secrets = secrets;
         Log = log;
-        this.factory = factory;
         this.document = document;
     }
+
+    /// <summary>Builds the next host's factory over the harness's shared parts; set once in <see cref="StartAsync"/>.</summary>
+    private Func<int, (GatewayFactory Factory, string? Instance, ParameterStoreStub? Store)> newHost = null!;
+
+    private int nextTarget = -1;
 
     public GatewayHarnessOptions Options { get; }
 
@@ -104,16 +115,28 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The client secrets the gateway reads. Set a new reference here before publishing it (F-09).</summary>
     public FakeClientSecretSource Secrets { get; }
 
-    /// <summary>Every line the gateway logged, as its formatter wrote it.</summary>
+    /// <summary>Every line any gateway host logged, as its formatter wrote it.</summary>
     public CapturedLog Log { get; }
 
-    /// <summary>The gateway's services.</summary>
-    public IServiceProvider Services => factory.Services;
+    /// <summary>
+    /// The gateway hosts, in the order they started (#345). The first is the one every single-host member
+    /// below names, and the only one <see cref="UpdateRegistryAsync"/> and its siblings poll.
+    /// </summary>
+    public IReadOnlyList<GatewayHost> Hosts => hosts;
 
-    /// <summary>The gateway's own listener, e.g. <c>http://127.0.0.1:54321/</c>, for <see cref="RawHttp"/>.</summary>
-    public Uri GatewayAddress => factory.Address;
+    /// <summary>The cell's one session store, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
+    public SwitchableSessionStore? SessionStore { get; private set; }
 
-    /// <summary>The live registry, as host resolution reads it.</summary>
+    /// <summary>The cell's one refresh-lease table, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
+    public IRefreshLeases? RefreshLeases { get; private set; }
+
+    /// <summary>The first gateway host's services.</summary>
+    public IServiceProvider Services => hosts[0].Services;
+
+    /// <summary>The first gateway host's own listener, e.g. <c>http://127.0.0.1:54321/</c>, for <see cref="RawHttp"/>.</summary>
+    public Uri GatewayAddress => hosts[0].Address;
+
+    /// <summary>The first gateway host's live registry, as its host resolution reads it.</summary>
     public IRegistry Registry => Services.GetRequiredService<IRegistry>();
 
     /// <summary>Every app the harness has registered with the provider, by appId, whether or not it is in the registry now.</summary>
@@ -186,8 +209,60 @@ public sealed class GatewayHarness : IAsyncDisposable
             settings[key] = value;
         }
 
-        GatewayFactory factory = new(settings, services =>
+        bool cell = options.KeyRing != KeyRingSharing.FrameworkDefault;
+        if (options.Hosts < 1 || (options.Hosts > 1 && !cell))
         {
+            throw new ArgumentException(
+                "a harness has at least one host, and more than one only over a key ring it sets (GatewayHarnessOptions.KeyRing).",
+                nameof(options));
+        }
+
+        if (cell)
+        {
+            // The real ring's section (plan row P2-2): the prefix only, so the package uses the account's
+            // default key, which the stub never checks.
+            settings["DataProtection:ParameterPrefix"] = "/spa-platform/harness/data-protection/";
+        }
+
+        SwitchableSessionStore? sessionStore = cell ? new SwitchableSessionStore() : null;
+        IRefreshLeases? leases = cell ? new InMemoryRefreshLeases(options.Clock ?? TimeProvider.System) : null;
+        ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
+
+        (GatewayFactory, string?, ParameterStoreStub?) NewHost(int index)
+        {
+            string? instance = cell ? options.InstanceIds[index] : null;
+            ParameterStoreStub? parameterStore = options.KeyRing switch
+            {
+                KeyRingSharing.OneParameterStore => sharedParameterStore,
+                KeyRingSharing.ParameterStorePerHost => new ParameterStoreStub(),
+                _ => null,
+            };
+
+            GatewayFactory hostFactory = new(settings, services => ConfigureHost(services, instance, parameterStore));
+            return (hostFactory, instance, parameterStore);
+        }
+
+        void ConfigureHost(IServiceCollection services, string? instance, ParameterStoreStub? parameterStore)
+        {
+            if (parameterStore is not null)
+            {
+                StubUnderTheRing(services, parameterStore);
+            }
+
+            // The harness runs every registry poll itself (RefreshRegistryAsync). With more than one host a
+            // background poll is the one thing that could move a host the test left behind: the poller's
+            // first read is not awaited by the start (RegistryPoller.ExecuteAsync yields first), so on a
+            // loaded machine it can land after the harness's next write. Seen in the check run of #345.
+            if (cell)
+            {
+                foreach (ServiceDescriptor poller in services
+                    .Where(d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) && d.ImplementationType == typeof(RegistryPoller))
+                    .ToList())
+                {
+                    services.Remove(poller);
+                }
+            }
+
             services.RemoveAll<IObjectStore>();
             services.AddSingleton<IObjectStore>(store);
             services.RemoveAll<IClientSecretSource>();
@@ -198,18 +273,35 @@ public sealed class GatewayHarness : IAsyncDisposable
                 services.AddSingleton(clock);
             }
 
+            if (instance is not null)
+            {
+                // The cell's shared parts, replacing what the entry points registered with TryAdd: one
+                // session store and one lease table for every host, as every task reads the one table
+                // (plan rows P2-1 and P2-3), and the instance id /readyz names (change request P2-5,
+                // decision 2: the harness injects a deterministic id through test services).
+                services.RemoveAll<ISessionStore>();
+                services.AddSingleton<ISessionStore>(sessionStore!);
+                services.RemoveAll<IRefreshLeases>();
+                services.AddSingleton(leases!);
+                services.RemoveAll<GatewayInstance>();
+                services.AddSingleton(new GatewayInstance(instance));
+            }
+
             options.ConfigureServices?.Invoke(services);
 
             // Beside the console logger, rendering with the formatter the gateway configured for it by
             // name. Last, as a stage host registers its capture, so a test's hook that clears the
             // providers cannot take the capture with them.
             services.AddSingleton<ILoggerProvider>(provider => log.ProviderFor(provider));
-        });
+        }
 
         GatewayHarness harness = new(
-            options, idp, mockApi, echo, echoListener, store, secrets, log, factory,
+            options, idp, mockApi, echo, echoListener, store, secrets, log,
             new JsonObject { ["schemaVersion"] = 1, ["revision"] = 0, ["apps"] = new JsonArray() });
         harness.upstreamsByApi = upstreams;
+        harness.newHost = NewHost;
+        harness.SessionStore = sessionStore;
+        harness.RefreshLeases = leases;
 
         try
         {
@@ -231,16 +323,9 @@ public sealed class GatewayHarness : IAsyncDisposable
 
             harness.document = first;
 
-            factory.StartServer();
-
-            // The poller's first read may still be in flight. One more poll waits for it (the source
-            // runs one poll at a time) and settles the outcome either way.
-            await harness.RefreshRegistryAsync(ct);
-            if (harness.Registry.Current.Revision != 1)
+            for (int i = 0; i < options.Hosts; i++)
             {
-                throw new InvalidOperationException(
-                    "the first registry revision did not go live. The gateway log says why:" + Environment.NewLine
-                    + string.Join(Environment.NewLine, log.Rendered.TakeLast(20)));
+                await harness.StartHostCoreAsync(ct);
             }
         }
         catch
@@ -252,8 +337,91 @@ public sealed class GatewayHarness : IAsyncDisposable
         return harness;
     }
 
-    /// <summary>A browser whose network reaches the gateway through the stand-in load balancer.</summary>
-    public TestBrowser CreateBrowser() => new(new LoadBalancerTransport(GatewayAddress));
+    /// <summary>
+    /// Starts one more gateway host over the same bucket, secrets, provider, session store, lease table
+    /// and, under <see cref="KeyRingSharing.OneParameterStore"/>, the same ring: a replacement task
+    /// starting in the cell (#332, F2). It reads the registry when it starts, as a task does, and is then
+    /// polled only when a test says so.
+    /// </summary>
+    public Task<GatewayHost> StartHostAsync(CancellationToken ct = default) =>
+        Options.KeyRing == KeyRingSharing.FrameworkDefault
+            ? throw new InvalidOperationException(
+                "a second host needs a key ring the harness sets (GatewayHarnessOptions.KeyRing); the framework's default ring is per machine.")
+            : StartHostCoreAsync(ct);
+
+    private async Task<GatewayHost> StartHostCoreAsync(CancellationToken ct)
+    {
+        if (hosts.Count >= Math.Max(1, Options.InstanceIds.Count) && Options.KeyRing != KeyRingSharing.FrameworkDefault)
+        {
+            throw new InvalidOperationException($"the harness has instance ids for {Options.InstanceIds.Count} hosts.");
+        }
+
+        (GatewayFactory factory, string? instance, ParameterStoreStub? parameterStore) = newHost(hosts.Count);
+        GatewayHost host = new(instance, factory, parameterStore);
+        hosts.Add(host);
+        host.StartServer();
+
+        // In a one-host harness the poller's first read may still be in flight. One more poll waits for it
+        // (the source runs one poll at a time) and settles the outcome either way. A cell-mode host has no
+        // poller (ConfigureHost), so this is its first read of the registry, as a starting task's is.
+        await host.RefreshRegistryAsync(ct);
+        long expected = long.Parse(document["revision"]!.ToJsonString(), CultureInfo.InvariantCulture);
+        if (host.Registry.Current.Revision != expected)
+        {
+            throw new InvalidOperationException(
+                $"registry revision {expected} did not go live on {host}. The gateway log says why:" + Environment.NewLine
+                + string.Join(Environment.NewLine, Log.Rendered.TakeLast(20)));
+        }
+
+        return host;
+    }
+
+    /// <summary>
+    /// A browser whose network reaches the gateway through the stand-in load balancer. With one host every
+    /// request goes to it; with more, the balancer alternates between them as the ALB spreads requests over
+    /// its healthy targets.
+    /// </summary>
+    public TestBrowser CreateBrowser() => new(CreateLoadBalancer());
+
+    /// <summary>
+    /// A browser whose every request to a gateway name goes to the host <paramref name="route"/> names at
+    /// the moment it is sent, so a test can start a login on one host and finish it on another (#345).
+    /// </summary>
+    public TestBrowser CreateBrowser(Func<GatewayHost> route)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        return new(new LoadBalancerTransport(() => route().Address));
+    }
+
+    /// <summary>
+    /// Puts the stub where a Parameter Store client registered before <c>Program.cs</c> would be: under the
+    /// ring. <c>AddPlatformHosting</c> moves the client <c>AddPlatformRegistry</c> registered to a keyed
+    /// registration of its own and puts its shield in the unkeyed place (<c>KeyRing.DecorateClient</c>,
+    /// #216). A test service runs after <c>Program.cs</c> ("The test app's <c>builder.ConfigureServices</c>
+    /// callback is executed after the app's <c>Program.cs</c> code is executed",
+    /// https://learn.microsoft.com/aspnet/core/test/integration-tests#customize-webapplicationfactory),
+    /// so a plain registration would be handed out bare, past the shield.
+    /// Replacing the keyed registration keeps the shield over the stub, as in a cell. Fails loudly when the
+    /// ring registered no keyed client, so a change to that shape is seen here rather than passing.
+    /// </summary>
+    private static void StubUnderTheRing(IServiceCollection services, ParameterStoreStub stub)
+    {
+        Type type = typeof(IAmazonSimpleSystemsManagement);
+        ServiceDescriptor[] inner = [.. services.Where(d => d.ServiceType == type && d.IsKeyedService)];
+        if (inner.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"AddPlatformHosting registered {inner.Length} keyed Parameter Store clients for the key ring, not one; "
+                + "the harness puts its stub under the ring there.");
+        }
+
+        services.Remove(inner[0]);
+        services.Add(new ServiceDescriptor(type, inner[0].ServiceKey, stub));
+    }
+
+    /// <summary>The stand-in load balancer on its own, alternating between the hosts in the order they started.</summary>
+    public LoadBalancerTransport CreateLoadBalancer() =>
+        new(() => hosts[(int)((uint)Interlocked.Increment(ref nextTarget) % (uint)hosts.Count)].Address);
 
     /// <summary>
     /// Signs <paramref name="browser"/> in to an app the way a user does: a navigation to <c>/bff/login</c>,
@@ -404,6 +572,45 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     /// <summary>
+    /// Rotates an app onto a new client while the gateway runs (#332, F7 and F9): a new client at the
+    /// provider with its own secret where the gateway reads it, and the app's entry naming it in a new
+    /// registry revision. The old client stays registered at the provider, as it does until an operator
+    /// deletes it, so what refuses a login under it is the gateway and not the provider's client list.
+    /// <see cref="App"/> names the new client afterwards. Polls the first host only, like every write.
+    /// </summary>
+    public async Task<(HarnessApp Before, HarnessApp After, RefreshOutcome Outcome)> RotateClientAsync(string appId, CancellationToken ct = default)
+    {
+        HarnessApp before = App(appId);
+        int rotation = rotations.TryGetValue(appId, out int done) ? done + 1 : 1;
+        rotations[appId] = rotation;
+
+        HarnessApp after = before with
+        {
+            ClientId = ClientIdFor(appId) + "-r" + rotation.ToString(CultureInfo.InvariantCulture),
+            ClientSecret = "secret-" + appId + "-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
+            SecretRef = $"ssm:/spa-platform/harness/apps/{appId}/client-secret:{rotation + 1}",
+        };
+        Idp.AddClient(
+            after.ClientId,
+            after.ClientSecret,
+            after.Url("/signin-oidc").ToString(),
+            [after.Url("/signout-callback-oidc").ToString(), after.Url("/").ToString()]);
+        Secrets[after.SecretRef] = after.ClientSecret;
+        apps[appId] = after;
+
+        RefreshOutcome outcome = await UpdateRegistryAsync(next =>
+        {
+            JsonArray entries = next["apps"]!.AsArray();
+            int index = entries.Select((entry, i) => (entry, i))
+                .Single(pair => pair.entry?["appId"]?.GetValue<string>() == appId).i;
+            entries[index] = EntryFor(after, entries[index]!["release"]!.GetValue<string>());
+        }, ct);
+        return (before, after, outcome);
+    }
+
+    private readonly Dictionary<string, int> rotations = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// The registry entry for an app: its fixture definition, with what onboarding fills in (the release,
     /// the client id and the secret reference), the issuer named as the harness configures it, and each
     /// mock API upstream pointed at the listener the harness started.
@@ -439,7 +646,11 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await factory.DisposeAsync();
+        foreach (GatewayHost host in hosts)
+        {
+            await host.DisposeAsync();
+        }
+
         await MockApi.DisposeAsync();
         await echoListener.DisposeAsync();
         await Idp.DisposeAsync();
