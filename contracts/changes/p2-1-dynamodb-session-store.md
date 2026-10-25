@@ -305,7 +305,8 @@ issue. Workstream 3's store ticket is blocked by it, because nothing compiles wi
    stays unconditional, and no read rule is added. On the session item, a `PutItem` would erase a
    held lease, a `DeleteItem` would free it, and a lease on a key with no record would create a
    ticketless item. Each lease write is one write unit. The fake's evaluator gains `OR`, `<` on `N`,
-   and the `DeleteItem` condition.
+   and the `DeleteItem` condition. **Amended 2026-10-24:** the lease is 21 s since P2-3's amendment
+   to its item 3, and the reason for milliseconds holds at that figure.
 8. **Item 6 is recorded, not decided.** It is the layout workstream 3 builds against, except its
    `leaseUntil`/`leaseToken` row, which item 7 moves to the lease item: `pk`, `leaseUntil` (N,
    milliseconds), `leaseToken` (S) and `expiresAt` (N). The `expiresAt <= now` read rule and the
@@ -318,7 +319,8 @@ issue. Workstream 3's store ticket is blocked by it, because nothing compiles wi
    is rewritten then. The store does not implement the session index at G6.
 9. **No ADR and no glossary entry.** The pin, the optional key and the assertion fix are routine.
    The lease placement is internal to the store and cheap to change, because a lease lives 15 s and
-   moving it migrates no data; the contract it implements already has ADR-0024. Session record,
+   moving it migrates no data (21 s since P2-3's amendment of 2026-10-24, which changes neither
+   reason); the contract it implements already has ADR-0024. Session record,
    Session key, session_ref and Refresh lease already read true against the layout.
 
 Corrections this record makes to the request, against `main` at `b313c14`:
