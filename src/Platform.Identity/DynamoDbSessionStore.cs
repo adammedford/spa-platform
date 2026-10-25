@@ -375,7 +375,7 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
         }
         catch (CryptographicException)
         {
-            // A ticket protected under a key ring this task does not share (P2-2 not yet in place, or a
+            // A ticket protected under a key ring this task does not share (no shared ring, P2-2, or a
             // ring that was replaced). Absent, as an unknown format is, rather than a 500 on every request
             // that presents the cookie; said once, and naming no key.
             if (Interlocked.Exchange(ref unprotectLogged, 1) == 0)

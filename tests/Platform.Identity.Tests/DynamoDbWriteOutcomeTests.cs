@@ -174,6 +174,22 @@ public sealed class DynamoDbWriteOutcomeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_client_with_the_SDKs_own_retries_reads_its_resend_of_a_committed_replace_as_success()
+    {
+        // The implementer's Decision 2, for replace: the SDK's resend of a replace whose response was lost
+        // fails "version = :expected" against the replace's own commit, and the store re-reads and finds its
+        // own ciphertext. Mutation: read a first-send condition failure as refused without re-reading, and
+        // this is false while the table holds version 2.
+        DynamoDbSessionStore store = new(DynamoDbTables.Over(fake, TestClock.New(), maxErrorRetry: null));
+        string key = await store.CreateAsync(Record, Ct);
+        fake.Next("PutItem", Fault.CommitThenDrop);
+
+        Assert.True(await store.ReplaceAsync(key, Record with { Version = 2 }, expectedVersion: 1, Ct));
+        Assert.Equal(["PutItem", "PutItem", "PutItem", "GetItem"], fake.Operations);
+        Assert.Equal(2, (await store.GetAsync(key, Ct))!.Version);
+    }
+
+    [Fact]
     public async Task A_lease_acquire_whose_success_is_lost_reacquires_with_the_same_token_and_leaseUntil()
     {
         // F12, inside one TryAcquireAsync (G3). Mutation: build a fresh token for the retry, and the retry is

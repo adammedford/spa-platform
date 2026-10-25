@@ -11,8 +11,7 @@ namespace Platform.Identity.Tests;
 /// F17 (#332): the session table unreachable. The identity chain runs behind a real Kestrel host
 /// (<see cref="StageHost"/>) over the DynamoDB store, so what the request ends on is what the server itself
 /// answers when the chain throws: the gateway's generic 500, with no cookie set or cleared, and one Error
-/// line, the server's, naming the store's operation. A <c>503 session_store_unavailable</c> row is a
-/// next-gate contract item, so this pins today's 500.
+/// line, the server's, naming the store's operation: the 500 F17's row has T4 pin.
 /// </summary>
 public sealed class DynamoDbStoreUnavailableTests
 {

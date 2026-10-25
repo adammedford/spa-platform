@@ -78,8 +78,8 @@ public sealed class SessionStoreRegistrationTests
     [InlineData(" ")]
     public void The_dynamodb_store_without_a_table_name_is_refused_as_the_memory_store_refuses_a_missing_bound(string? table)
     {
-        // Change request P2-1, Decision 3: until the schema requires Session:TableName, this is the one
-        // place the rule lives. Mutation: default the table's name, and the store is built.
+        // Change request P2-1, Decision 3: the store refuses a missing table name whatever the schema says
+        // of it. Mutation: default the table's name, and the store is built.
         using IHost host = Build(
             new() { ["Session:Store"] = "dynamodb", ["Session:TableName"] = table },
             services => services.AddSingleton<IAmazonDynamoDB>(new AmazonDynamoDBClient(new AnonymousAWSCredentials(), new AmazonDynamoDBConfig { ServiceURL = "http://127.0.0.1:9/" })));

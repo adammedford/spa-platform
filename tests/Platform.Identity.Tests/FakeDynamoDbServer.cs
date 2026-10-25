@@ -505,7 +505,9 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
                 return false;
             }
 
-            int order = Compare(stored, value);
+            // An unordered pair (two types) satisfies no comparison, so a leaseUntil written as a string is
+            // never "< :now" and a free-for-all lease cannot hide behind the fake.
+            int? order = Compare(stored, value);
             return op switch
             {
                 "=" => order == 0,
@@ -515,7 +517,7 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
             };
         }
 
-        private static int Compare(JsonObject stored, JsonObject value)
+        private static int? Compare(JsonObject stored, JsonObject value)
         {
             if (stored["N"] is JsonNode n && value["N"] is JsonNode m)
             {
@@ -528,8 +530,9 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
                 return string.CompareOrdinal(s.GetValue<string>(), t.GetValue<string>());
             }
 
-            // Different types never compare equal, and the fake does not order them.
-            return stored.ToJsonString() == value.ToJsonString() ? 0 : int.MinValue;
+            // Different types never compare equal, and the fake does not order them: null, which no
+            // operator above accepts.
+            return stored.ToJsonString() == value.ToJsonString() ? 0 : null;
         }
 
         private string Name(string token) =>

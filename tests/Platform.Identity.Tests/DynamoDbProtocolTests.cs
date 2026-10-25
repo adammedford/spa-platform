@@ -257,6 +257,41 @@ public sealed class DynamoDbProtocolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_item_with_no_format_reads_as_absent_as_an_unknown_one_does()
+    {
+        // The implementer's Decision 5: a missing format is not taken to be format 1. Mutation: default a
+        // missing format to "1", and the record comes back.
+        CapturedLog log = new();
+        DynamoDbSessionStore store = new(DynamoDbTables.Over(fake, TestClock.New(), log.CreateLogger<DynamoDbSessionStore>()));
+        string key = await store.CreateAsync(Record, Ct);
+        JsonObject item = fake.Items[DynamoDbSessionTable.HashOf(key)];
+        item.Remove("format");
+        fake.Plant(item);
+
+        Assert.Null(await store.GetAsync(key, Ct));
+        Assert.Contains("format (none)", Assert.Single(log.Lines).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_leases_time_to_live_is_its_expiry_rounded_up_so_the_sweep_never_takes_a_held_lease()
+    {
+        // The implementer's Decision 4: expiresAt is whole seconds and leaseUntil milliseconds, so expiresAt
+        // rounds up. Half a second off the shared clock's whole second makes the rounding show. Mutation:
+        // round expiresAt down, and it falls before leaseUntil.
+        FakeTimeProvider clock = TestClock.New();
+        clock.Advance(TimeSpan.FromMilliseconds(500));
+        DynamoDbRefreshLeases leases = new(DynamoDbTables.Over(fake, clock));
+
+        await leases.TryAcquireAsync("session-a", TimeSpan.FromSeconds(21), Ct);
+
+        JsonObject item = fake.Requests[0].Body["Item"]!.AsObject();
+        long until = long.Parse(N(item, "leaseUntil"), System.Globalization.CultureInfo.InvariantCulture);
+        long sweep = long.Parse(N(item, "expiresAt"), System.Globalization.CultureInfo.InvariantCulture) * 1000;
+        Assert.NotEqual(0, until % 1000);
+        Assert.InRange(sweep - until, 0, 999);
+    }
+
+    [Fact]
     public async Task The_table_holds_no_session_key_no_plaintext_ticket_and_no_token()
     {
         // The ticket is the serialised ticket with its saved tokens; a canary stands in for a token.

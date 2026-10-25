@@ -89,9 +89,9 @@ internal sealed class DynamoDbSessionTable
 
     /// <summary>
     /// The table <c>Session:TableName</c> names, with the client from the container. Refused without a
-    /// name, as the memory store refuses a missing bound: the schema's <c>Store = dynamodb</c> requires
-    /// <c>TableName</c> only from the next gate (change request P2-1, Decision 3), so until then this is
-    /// the one place the rule lives.
+    /// name, as the memory store refuses a missing bound. The rule is enforced here whatever the schema
+    /// also says of it (change request P2-1, Decision 3), so a document that names no table cannot reach
+    /// the table.
     /// </summary>
     internal static DynamoDbSessionTable FromConfiguration(IServiceProvider services)
     {
@@ -204,8 +204,7 @@ internal sealed class DynamoDbSessionTable
 /// <see cref="DynamoDbSessionTable.StoreDeadline"/> ran out (D4). It names the operation and nothing
 /// else: no key, no <c>pk</c>, no record (N-16). Nothing in the identity chain catches it, so the request
 /// ends on the gateway's generic 500, where the server writes the one Error line with this message,
-/// and no cookie is set or cleared on the way (F17; a <c>503 session_store_unavailable</c> row waits for
-/// the next gate).
+/// and no cookie is set or cleared on the way (F17 on #332).
 /// </summary>
 internal sealed class SessionStoreUnavailableException(string operation, TimeSpan deadline, Exception? inner)
     : Exception(
