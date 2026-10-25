@@ -256,9 +256,24 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// Makes <paramref name="app"/> the pinned app of the current request, without sending one. The
     /// request is pinned to <paramref name="snapshot"/>, or to the live snapshot when it names none.
     /// </summary>
-    public HttpContext Pin(AppDefinition app, RegistrySnapshot? snapshot = null)
+    public HttpContext Pin(AppDefinition app, RegistrySnapshot? snapshot = null) => PinOnto(new DefaultHttpContext(), app, snapshot);
+
+    /// <summary>
+    /// Runs this gateway's pipeline on a request a real server handed in, pinned to <paramref name="app"/>
+    /// on the live snapshot, in its own scope: how a test puts the identity chain behind Kestrel
+    /// (<see cref="StageHost"/>) to see what the server itself answers when the chain throws, its generic
+    /// 500 and its one Error line (F17), rather than an exception escaping <see cref="SendAsync"/>.
+    /// </summary>
+    public async Task ServeAsync(HttpContext context, AppDefinition app)
     {
-        DefaultHttpContext context = new();
+        using IServiceScope scope = Services.CreateScope();
+        context.RequestServices = scope.ServiceProvider;
+        PinOnto(context, app, null);
+        await pipeline(context);
+    }
+
+    private HttpContext PinOnto(HttpContext context, AppDefinition app, RegistrySnapshot? snapshot)
+    {
         context.Request.Scheme = "https";
         context.Request.Host = new HostString(app.Host);
         context.Features.Set<IAppFeature>(new SettableAppFeature(app, snapshot ?? Snapshot));

@@ -1,3 +1,4 @@
+using Amazon.DynamoDBv2;
 using Duende.AccessTokenManagement;
 using Duende.AccessTokenManagement.OpenIdConnect;
 using Microsoft.AspNetCore.Authentication;
@@ -88,10 +89,16 @@ public static class PlatformIdentityExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IIdpProfile, StandardIdpProfile>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IIdpProfile, CognitoIdpProfile>());
 
-        // The session store of task 3.4, unless the host brought its own. Built on first use, not at
+        // The session store of task 3.4 or of P2-1, as Session:Store names it, unless the host brought its
+        // own, and over the same table the refresh lease of P2-1 Decision 7. Built on first use, not at
         // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
-        // no session settings.
-        services.TryAddSingleton<ISessionStore>(MemorySessionStore.FromConfiguration);
+        // no session settings. The DynamoDB client comes from the container, so a host that registers its
+        // own first wins, as AddPlatformRegistry registers IAmazonS3 (change request P2-1, Decision 3); the
+        // default reads its Region and credentials from the environment, the task role in a cell.
+        services.TryAddSingleton<ISessionStore>(SessionStores.FromConfiguration);
+        services.TryAddSingleton<IRefreshLeases>(SessionStores.LeasesFromConfiguration);
+        services.TryAddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient());
+        services.TryAddSingleton(DynamoDbSessionTable.FromConfiguration);
 
         // The token source of task 3.8, over the token library (ADR-0005). The library's options hook gets
         // the sentinel as its default challenge scheme, so it binds to no app (T-B1, T-B2); the source
