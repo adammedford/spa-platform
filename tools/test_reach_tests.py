@@ -238,6 +238,23 @@ class TestReach(unittest.TestCase):
         self.assertEqual({"tests/Spactl.Tests": [], "tests/e2e": ["src/Gateway/Program.cs (project)"]},
                          reached(result))
 
+    def test_a_started_project_with_no_passed_line_is_named_failed(self):
+        # #375 review: Spactl.Tests failed, unreached; e2e started and never said "passed" (a crash, a
+        # cut-off run, a result word not seen before). Naming only Spactl.Tests would re-run it alone,
+        # skip e2e under --skip-tests and keep the merge with e2e unverified.
+        case = Case(self)
+        case.change("tools/bench/report.py")
+        started = lambda project, dll: f"Running tests from {case.repo}/{project}/bin/Debug/net10.0/{dll}.dll (net10.0|arm64)"
+        result = case.judge([
+            started("tests/Spactl.Tests", "Spactl.Tests"),
+            started("tests/e2e", "Gateway.E2ETests"),
+            started("tests/Platform.Registry.Tests", "Platform.Registry.Tests"),
+            passed_line(case.repo, "tests/Platform.Registry.Tests", "Platform.Registry.Tests"),
+            failed_line(case.repo, "tests/Spactl.Tests", "Spactl.Tests"),
+            f"  {case.repo}/tests/e2e/bin/Debug/net10.0/Gateway.E2ETests.dll (net10.0|arm64) crashed (1s 001ms)",
+            TESTS_FAILED])
+        self.assertEqual(["tests/Spactl.Tests", "tests/e2e"], [p["project"] for p in result["projects"]])
+
     def test_an_unresolvable_include_reaches_everything(self):
         case = Case(self)
         case.change("tools/bench/report.py")

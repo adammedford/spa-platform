@@ -14,10 +14,16 @@ It reads two things:
 - The log's verdict, its last non-empty line. "check: fail: the tests failed." is a test failure
   (tools/check.sh writes it when `dotnet test --solution` fails); any other line is not, and its
   failed projects are not read.
-- The failed test projects: every line of the log's test run naming an assembly under
-  `<project>/bin/` that "failed", as Microsoft Testing Platform prints one per project and again in
-  its "Test run summary". The project is the directory before /bin/, so tests/e2e (whose assembly is
+- The failed test projects: every assembly under `<project>/bin/` whose result line says "failed",
+  and every assembly the run started ("Running tests from <dll>") that has no result line saying
+  "passed". The project is the directory before /bin/, so tests/e2e (whose assembly is
   Gateway.E2ETests.dll) and fixtures/Fixtures.Tests are named by where they live.
+  Microsoft Testing Platform documents no format for these lines; the shapes here are the ones its
+  terminal output left in .scratch/overnight/log/issue-150-integrate.txt and issue-305-integrate.txt,
+  where every result word in 451 logs was "passed" or "failed with". So a project is cleared only by
+  a "passed" line: one that crashed, was cut off, or ended on a word not seen before is named as
+  failed (#375 review), never left out. Left out, it would go unre-run, `--skip-tests` would skip it,
+  and the merge would stay with that project unverified.
 
 And it judges, for each failed project, the files `git diff --no-renames --name-only <base> <head>`
 lists: the change the integrate step merged. A file reaches the project when any of these holds,
@@ -63,6 +69,10 @@ TESTS_FAILED = "check: fail: the tests failed."
 # One project's line in Microsoft Testing Platform's output, as tools/check.sh's log holds it:
 #   /<checkout>/tests/Spactl.Tests/bin/Debug/net10.0/Spactl.Tests.dll (net10.0|arm64) failed with 30 error(s) (7s 652ms)
 FAILED_ASSEMBLY = re.compile(r"(?P<path>/\S+?)/bin/\S+\.dll \([^)]*\) failed\b")
+#   Running tests from /<checkout>/tests/Spactl.Tests/bin/Debug/net10.0/Spactl.Tests.dll (net10.0|arm64)
+#   /<checkout>/tests/Spactl.Tests/bin/Debug/net10.0/Spactl.Tests.dll (net10.0|arm64) passed (1s 082ms)
+STARTED_ASSEMBLY = re.compile(r"Running tests from (?P<path>/\S+?)/bin/\S+\.dll \(")
+PASSED_ASSEMBLY = re.compile(r"(?P<path>/\S+?)/bin/\S+\.dll \([^)]*\) passed\b")
 
 # Paths the test sources read by name from the repository root, found by the string literals that
 # name a top-level entry (tests/Platform.Abstractions.Tests reads contracts/*.md, tests/e2e reads
@@ -207,16 +217,21 @@ def main(argv: list[str] | None = None) -> int:
     projects = []
     if failed_at == "tests":
         prefix = os.path.realpath(top).rstrip("/") + "/"
-        names = []
-        for line in lines:
-            match = FAILED_ASSEMBLY.search(line)
-            if not match:
-                continue
-            path = match["path"]
+
+        def project_of(path: str) -> str:
             real = os.path.realpath(path)
-            name = real[len(prefix):] if real.startswith(prefix) else (path[len(top) + 1:] if path.startswith(top.rstrip("/") + "/") else path)
-            if name not in names:
-                names.append(name)
+            return real[len(prefix):] if real.startswith(prefix) else (path[len(top) + 1:] if path.startswith(top.rstrip("/") + "/") else path)
+
+        names, started, passed = [], [], set()
+        for line in lines:
+            for pattern, into in ((FAILED_ASSEMBLY, names), (STARTED_ASSEMBLY, started)):
+                match = pattern.search(line)
+                if match and project_of(match["path"]) not in into:
+                    into.append(project_of(match["path"]))
+            match = PASSED_ASSEMBLY.search(line)
+            if match:
+                passed.add(project_of(match["path"]))
+        names += [n for n in started if n not in passed and n not in names]
         projects = [{"project": n, "reachedBy": reach(top, n, changed, all_projects)} for n in names]
     print(json.dumps({"failedAt": failed_at, "verdict": verdict, "projects": projects, "changed": changed}))
     return 0
