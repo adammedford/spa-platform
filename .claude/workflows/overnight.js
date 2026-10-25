@@ -675,7 +675,7 @@ const finish = async (t, impl, at) => {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
         const rr = await agent(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
         const kept = !!(rr && rr.ok && rr.headSha)
-        const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p]))
+        const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr leaves kept false and the notes 'the re-run agent died', so each project reads not passed and the merge resets
         const flake = { id: t.id, issue: t.issue, kept, gateLog: `${LOG}/${t.id}-integrate.txt`, rerunLog: `${LOG}/${t.id}-rerun.txt`,
           projects: rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) })),
           notes: rr ? String(rr.notes || '') : 'the re-run agent died' }
