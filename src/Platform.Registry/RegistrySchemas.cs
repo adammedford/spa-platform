@@ -30,15 +30,32 @@ internal static class RegistrySchemas
         [Registry, AppDefinition, PlatformConfiguration, InfraOutputs];
 
     /// <summary>
-    /// The one schema registry. Declared before <see cref="Loaded"/>, because static initializers run in
-    /// textual order and <see cref="Load"/> registers into it.
+    /// The one schema registry, this class's own rather than the engine's <c>SchemaRegistry.Global</c>,
+    /// which <c>BuildOptions</c> uses by default and any other code in the process may build into.
+    /// Declared before <see cref="Loaded"/>, because static initializers run in textual order and
+    /// <see cref="Load"/> registers into it.
+    ///
+    /// Written only while this type initializes, which the runtime runs once on one thread, and only
+    /// read after it (issue #373). The engine's registry is a plain <c>Dictionary</c> with no lock
+    /// (https://raw.githubusercontent.com/json-everything/json-everything/3520d7ac43e5c6c9b91abeac5af992eb82ffbf63/src/JsonSchema/SchemaRegistry.cs,
+    /// the commit JsonSchema.Net 8.0.5's SourceLink names), and every <c>JsonSchema.Build</c> registers
+    /// the schema it builds before it resolves that schema's <c>$ref</c>s through the same registry
+    /// (.../src/JsonSchema/JsonSchema.cs, <c>Build</c>). A <c>Dictionary</c> "can support multiple
+    /// readers concurrently, as long as the collection is not modified"
+    /// (https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2#thread-safety),
+    /// so a build after initialization, racing another, corrupts it.
     /// </summary>
-    private static readonly BuildOptions Build = new();
+    private static readonly BuildOptions Build = new() { SchemaRegistry = new SchemaRegistry() };
 
     private static readonly Dictionary<string, JsonSchema> Loaded = Load();
 
-    /// <summary>The <c>$defs</c> evaluated on their own, built on first use and kept.</summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonSchema> Definitions = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Every one of <c>registry.schema.json</c>'s <c>$defs</c>, each as a <c>$ref</c> to it, built here
+    /// with the rest rather than on first use: two first uses at once were two builds at once, which is
+    /// how <c>Spactl.Tests</c> failed under the full run (issue #373). Declared after
+    /// <see cref="Loaded"/>, whose registration the <c>$ref</c>s resolve through.
+    /// </summary>
+    private static readonly Dictionary<string, JsonSchema> Definitions = BuildDefinitions();
 
     private static readonly EvaluationOptions Options = new() { OutputFormat = OutputFormat.Hierarchical };
 
@@ -82,12 +99,10 @@ internal static class RegistrySchemas
     /// Whether a value satisfies one of <c>registry.schema.json</c>'s <c>$defs</c>, such as <c>appId</c>.
     /// The definition is reached by <c>$ref</c> through the same registry, so the rule exists once.
     /// </summary>
-    public static bool SatisfiesRegistryDefinition(string definition, JsonElement instance)
-    {
-        JsonSchema schema = Definitions.GetOrAdd(definition, name =>
-            JsonSchema.FromText($"{{\"$ref\":\"{IdBase}{Registry}#/$defs/{name}\"}}", Build));
-        return schema.Evaluate(instance, Options).IsValid;
-    }
+    public static bool SatisfiesRegistryDefinition(string definition, JsonElement instance) =>
+        Definitions.TryGetValue(definition, out JsonSchema? schema)
+            ? schema.Evaluate(instance, Options).IsValid
+            : throw new ArgumentOutOfRangeException(nameof(definition), definition, $"contracts/{Registry} has no $defs/{definition}.");
 
     private static ImmutableArray<RegistryIssue> Issues(EvaluationResults results)
     {
@@ -157,6 +172,19 @@ internal static class RegistrySchemas
         }
 
         return schemas;
+    }
+
+    private static Dictionary<string, JsonSchema> BuildDefinitions()
+    {
+        using JsonDocument schema = JsonDocument.Parse(Text(Registry));
+        Dictionary<string, JsonSchema> definitions = new(StringComparer.Ordinal);
+        foreach (JsonProperty definition in schema.RootElement.GetProperty("$defs").EnumerateObject())
+        {
+            string reference = JsonSerializer.Serialize($"{IdBase}{Registry}#/$defs/{definition.Name}");
+            definitions.Add(definition.Name, JsonSchema.FromText($"{{\"$ref\":{reference}}}", Build));
+        }
+
+        return definitions;
     }
 
     /// <summary>The integer <c>maximum</c> of the subschema at <paramref name="pointer"/> in a contract schema.</summary>
