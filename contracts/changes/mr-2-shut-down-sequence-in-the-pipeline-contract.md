@@ -68,7 +68,10 @@ A section in `contracts/pipeline.md` after "Health endpoints", headed "Start-up 
 > request the gateway makes on its own account, a token refresh with the acquisition of its lease,
 > which is bounded by the 21-second lease; the shutdown timeout is at least that lease too, so a
 > refresh in flight when the process is told to stop still finishes; and the stop timeout is at
-> least the shutdown timeout. A request the proxy is forwarding is bounded by the entry's
+> least the shutdown timeout. A code exchange on the identity backchannel is inside that bound only
+> once the handler's backchannel timeout is `ProviderDeadline`; until then it can take the
+> backchannel's own 60 seconds, and one that runs past the shutdown timeout is aborted and its
+> login fails. A request the proxy is forwarding is bounded by the entry's
 > `timeoutSeconds` (`contracts/upstream-contract.md`), which can exceed the window; such a request
 > can be cut by a deployment, and the browser sees its connection close.
 >
