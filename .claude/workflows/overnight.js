@@ -7,7 +7,7 @@ export const meta = {
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
     { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
-    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279)' },
+    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue' },
     { title: 'Report', detail: 'one issue, Overnight <date>: the report, then the questions Q1..Qn' },
   ],
@@ -112,9 +112,11 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 
 // The check is tools/check.sh, run as written (#68): the same file the pre-push hook runs, so a lane
 // never repairs a pasted command again. --base is the fork point a lane is judged against; --port is
-// the lane's own, for the smoke test. Its last line is its verdict.
-const GATE = ({ dir, log, kind, fork, port }) => `THE CHECK (${kind}). Run it as ONE Bash call with a 600000 ms timeout, output to ${log}:
-  cd ${dir} && { echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}; } > ${log} 2>&1; tail -25 ${log}
+// the lane's own, for the smoke test. Its last line is its verdict. skipTests is the re-run's after a gate red on
+// test projects the ticket cannot reach (#375): those projects have just passed alone, and the rest of the check,
+// which stopped at the suite, still has to run.
+const GATE = ({ dir, log, kind, fork, port, skipTests }) => `THE CHECK (${kind}). Run it as ONE Bash call with a 600000 ms timeout, output to ${log}:
+  cd ${dir} && { echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}${skipTests ? ' --skip-tests' : ''}; } > ${log} 2>&1; tail -25 ${log}
 Green means the last line of ${log} starts "check: pass:". Run the command exactly as written; if the check itself fails to run, report that, do not repair it. This is the only full build-and-suite run: do not run \`dotnet build\` or the full suite any other way. Per-project runs (\`dotnet test --project tests/<X>.Tests\`) are fine while working. To learn what the check does, read its header only, \`sed -n 1,60p tools/check.sh\`, not the whole file.`
 
 // How a lane ticks or unticks acceptance boxes: the body is the spec and must otherwise stay byte-identical.
@@ -195,8 +197,23 @@ const INT = {
     headSha: { type: 'string' },
     // the files a content conflict stopped the merge on, [] when the merge did not conflict (#136)
     conflictFiles: { type: 'array', items: { type: 'string' } },
+    // On a red gate (#375): the run branch's head before the merge, which the red path reset it to; the head the
+    // gate ran on; and tools/test_reach.py's one line of output, unchanged, "" when it did not run or failed. The
+    // script reads these to decide whether the failed test projects are re-run; "" everywhere else.
+    old: { type: 'string' }, redHead: { type: 'string' }, reach: { type: 'string' },
   },
-  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha'],
+  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha', 'old', 'redHead', 'reach'],
+}
+// The re-run of a gate red on test projects the ticket's change cannot reach (#375).
+const RERUN = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' },
+    projects: { type: 'array', items: { type: 'object', properties: {
+      project: { type: 'string' }, log: { type: 'string' }, passed: { type: 'boolean' },
+    }, required: ['project', 'log', 'passed'] } },
+  },
+  required: ['ok', 'mergeSha', 'headSha', 'notes', 'projects'],
 }
 const RESOLVE = {
   type: 'object',
@@ -368,7 +385,7 @@ The reviewer's summary: ${rev.summary}
 Findings the review fixed: ${(rev.findingsFixed || []).join(' | ') || 'none'}.
 These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0=="## Acceptance")} p'\`; an unticked box naming a test id is outstanding.`}
 
-STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in: if the last line of ${LOG}/${t.id}-integrate.txt starts "check: pass:" and its first line is "HEAD=" the current HEAD, return ok with that merge's sha; otherwise skip to the gate.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in: if the last line of ${LOG}/${t.id}-integrate.txt starts "check: pass:" and its first line is "HEAD=" the current HEAD, return ok with that merge's sha; otherwise old is that merge's first parent (\`git -C ${INT_WT} rev-parse "$(git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD)^1"\`), and skip to the gate.
 
 STEP 1 — merge. Record old=\`git -C ${INT_WT} rev-parse HEAD\`. The merge message is the one docs/agents/landing-work.md "Land it" gives:
 - subject "${impl.complete ? `Merge task ${t.id}: <what landed>` : `Merge part of task ${t.id}: <what landed>`}"
@@ -379,9 +396,33 @@ Then run \`python3 -I tools/roadmap.py\` in ${INT_WT}; if it changed README.md o
 
 STEP 2 — the integration gate:
 ${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: BASE, port: PORT(t.n) })}
-Red: \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines. Do not fix code here.
+Red: first record what the script's re-run rule reads (#375), before anything moves: redHead is the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, and <merge> is STEP 1's merge commit (\`git -C ${INT_WT} rev-list --merges --first-parent -n 1 <redHead>\`). Run \`cd ${INT_WT} && python3 -I tools/test_reach.py --log ${LOG}/${t.id}-integrate.txt --base <old> --head <merge>\` and return the one line it prints on standard output, unchanged, as reach; when it exits non-zero, reach is "" and notes quote its last line of standard error. It judges which failed test projects the ticket's merge could reach; you judge nothing from it. Then \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines, old and redHead. Do not fix code here, and re-run nothing: whether the failed projects are re-run is the script's decision, made after you return.
 
-Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise).`
+Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise), old (<old> of STEP 1; "" when the merge was not made), redHead and reach (as the red path says; "" when the gate was green or never ran).`
+
+// A gate red on test projects the ticket's change cannot reach (#375). On 2026-10-24 #305 changed Python under
+// tools/bench/ alone and was reset because 30 Spactl.Tests tests failed with #373's RefResolutionException, as #150
+// was the night before. The script re-runs such projects once, alone, here, under the integration lock the red
+// integrate held, so nothing merges between them. tools/check.sh stops at its first failure, so a gate red on the
+// suite never ran the smoke test, the image, Terraform or the companions: after the projects pass, the check runs
+// again with --skip-tests, and the gate counts as passed only when that is green too.
+const rerunLog = (t, project) => `${LOG}/${t.id}-rerun-${project.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`
+const rerunPrompt = (t, impl, red, projects) => `Re-run, once and alone, the test projects that failed the integration gate of ticket ${t.n} (task ${t.id}, issue #${t.issue}) on ${INT_BRANCH}. You are the only integrator running: the integration lock the gate held is held for you (#375).
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). Task branch ${impl.branch}. Its merge's gate, ${LOG}/${t.id}-integrate.txt, failed on the tests, and the integrate step reset ${INT_BRANCH} to ${red.old}. tools/test_reach.py judged every failed project to lie outside the reference closure of the files the merge changed: ${projects.join(', ')}. So each is re-run once, alone, on the head the gate ran, ${red.redHead}. The merge stays only when each passes and the rest of the check, which never ran after the suite failed, passes too.
+
+STEP 0 — durable state. Read HEAD=\`git -C ${INT_WT} rev-parse HEAD\`. If it is ${red.redHead}, the first line of ${LOG}/${t.id}-rerun.txt is "HEAD=${red.redHead}" and its last line starts "check: pass:", the re-run is done: go to STEP 4. If it is ${red.redHead} otherwise, go to STEP 2. If it is neither ${red.old} nor ${red.redHead}, the run branch moved under the lock: change nothing and return ok=false with notes "re-run failed: ${INT_BRANCH} is at <HEAD>, not ${red.old}".
+STEP 1 — \`git -C ${INT_WT} reset --hard ${red.redHead}\`: the merge, and the roadmap commit if one followed it, back as the gate ran them.
+STEP 2 — each project alone, once: one Bash call per line, each with a 600000 ms timeout, in this order:
+  ${projects.map((p) => `cd ${INT_WT} && dotnet test --project ${p} --ignore-exit-code 8 > ${rerunLog(t, p)} 2>&1; echo "exit=$?"`).join('\n  ')}
+A project passed when its exit is 0. Run no other project, and never run a project a second time: a project that fails again is the answer.
+STEP 3 — only when every project passed, the rest of the check:
+${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-rerun.txt`, kind: 'integration, the suite skipped', fork: BASE, port: PORT(t.n), skipTests: true })}
+STEP 4 — the verdict. Green, every project passed and the check's last line starts "check: pass:": the merge stays; mergeSha is \`git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD\`. Red, any project failed again or the check is red: \`git -C ${INT_WT} reset --hard ${red.old}\`, and notes begin "re-run failed: " and name each project that failed again with its log, or quote the check's last line. Do not fix code here.
+STEP 5 — record it on the issue: one comment headed "## Flake at integrate" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): each project, its re-run log and whether it passed alone; the first gate's log ${LOG}/${t.id}-integrate.txt; the skip-tests log ${LOG}/${t.id}-rerun.txt and its last line, or that it did not run; and whether the merge stayed or the re-run failed and ${INT_BRANCH} was reset to ${red.old}.
+
+Return ok, mergeSha ("" when red), headSha (${red.redHead} when green, "" otherwise), notes, projects (one per project above: project, log, passed).`
 
 // A conflict at integrate (#136): the ticket goes back to its lane (#279), where its branch back-merges the run
 // branch in its own worktree and resolves it there, so the integration worktree never holds a half-resolved merge.
@@ -432,6 +473,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty and "forecastFailed" is "". When "forecastFailed" is not empty, the section says the forecast did not run and quotes it, never "none". This section comes before Integrated, so the forecast reads as made before the lanes ran;
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
+   - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept" or "re-run failed, reset"; "none" under the section's own heading when the list is empty;
    - Close in the morning: every ticket whose result's "why" is "every acceptance box is ticked; close it in the morning": no lane ran, because collect found no open acceptance box on its issue (#129); cite each as #<issue> so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
@@ -510,6 +552,7 @@ let failures = 0
 // this, since outside the integration lock the branch's tip may be a merge still under its gate.
 let verifiedTip = ''
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
+const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes}, one per re-run (#375)
 let halted = null
 
 const grill = (t, context) => {
@@ -591,6 +634,28 @@ const implement = async (t) => {
     return impl
 }
 
+// The re-run rule (#375): a red integrate is re-run only when its gate failed on the tests, tools/test_reach.py named
+// at least one failed project, and no changed file reaches any of them. Anything else resets as before #375,
+// including what the rule cannot read (a missing sha, a reach line that does not parse, a project with no
+// reachedBy list), since a check fails closed (CODING_STANDARDS.md). Returns {projects} to re-run, or {why} not.
+const SHA = /^[0-9a-f]{40}$/
+const rerunRule = (out) => {
+  if (!out || out.ok) return { why: out ? 'the gate passed' : 'the integrate agent died' }
+  if ((out.conflictFiles || []).length) return { why: 'the merge conflicted' }
+  let reach
+  try { reach = JSON.parse(out.reach) } catch (e) { return { why: 'tools/test_reach.py gave no judgement' } }
+  if (!reach || typeof reach !== 'object') return { why: 'tools/test_reach.py gave no judgement' }
+  if (reach.failedAt !== 'tests') return { why: `the gate failed on something other than the tests: ${reach.verdict || 'no verdict line'}` }
+  const ps = Array.isArray(reach.projects) ? reach.projects : []
+  if (!ps.length) return { why: 'the tests failed, but no failed test project was named' }
+  const bad = ps.filter((p) => !p || typeof p.project !== 'string' || !p.project || !Array.isArray(p.reachedBy))
+  if (bad.length) return { why: 'tools/test_reach.py named a project without its reach' }
+  const reached = ps.filter((p) => p.reachedBy.length)
+  if (reached.length) return { why: 'the change reaches ' + reached.map((p) => `${p.project} (${p.reachedBy.join(', ')})`).join('; ') }
+  if (!SHA.test(out.old || '') || !SHA.test(out.redHead || '')) return { why: 'the red integrate gave no old head or gate head to re-run from' }
+  return { projects: [...new Set(ps.map((p) => p.project))] }
+}
+
 // Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
 // names the stage it is in, so a throw from the tail is reported against that stage, not always review.
 const finish = async (t, impl, at) => {
@@ -602,8 +667,24 @@ const finish = async (t, impl, at) => {
     at.stage = 'integrate'
     // One merge at a time (#136): the integration lock covers each merge and its gate, not a conflict's resolve.
     // A green merge's head becomes the verified tip as the agent returns, before its slot is released (#279).
+    // A red gate on test projects the change cannot reach is re-run inside the same lock and slot (#375).
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
-      const out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      let out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      const rule = rerunRule(out)
+      if (rule.projects) {
+        log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
+        const rr = await agent(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
+        const kept = !!(rr && rr.ok && rr.headSha)
+        const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr leaves kept false and the notes 'the re-run agent died', so each project reads not passed and the merge resets
+        const flake = { id: t.id, issue: t.issue, kept, gateLog: `${LOG}/${t.id}-integrate.txt`, rerunLog: `${LOG}/${t.id}-rerun.txt`,
+          projects: rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) })),
+          notes: rr ? String(rr.notes || '') : 'the re-run agent died' }
+        flakes.push(flake)
+        log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
+        out = kept
+          ? { ...out, ok: true, mergeSha: rr.mergeSha, headSha: rr.headSha, notes: `the gate's tests failed only in ${rule.projects.join(', ')}, which the change cannot reach; they passed alone and the rest of the check passed (#375). ${flake.notes}`, flake }
+          : { ...out, ok: false, notes: `re-run failed: ${flake.notes.replace(/^re-run failed:\s*/, '') || 'no notes'}. ${out.notes}`, flake }
+      } else if (out && !out.ok && !(out.conflictFiles || []).length) log(`${t.id}: integration gate red; no re-run: ${rule.why}`)
       if (out && out.ok && out.headSha) verifiedTip = out.headSha
       return out
     }))
@@ -644,11 +725,11 @@ const finish = async (t, impl, at) => {
         log(`conflict: ${t.id} ${conflict.files.join(', ')} -> ${conflict.resolved ? 'resolved' : 'unresolved'}`)
       }
     }
-    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, impl, rev: rev2 || rev })
+    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, flake: integ ? integ.flake : undefined, impl, rev: rev2 || rev })
 
     const last = rev2 || rev
     results[t.id] = { stage: 'integrated', outcome: impl.complete ? 'integrated' : 'partial', mergeSha: integ.mergeSha, outstanding: impl.outstanding,
-      summary: impl.summary, findingsFixed: [...rev.findingsFixed, ...(rev2 ? rev2.findingsFixed : [])], delegatedDecisions: impl.delegatedDecisions, conflict,
+      summary: impl.summary, findingsFixed: [...rev.findingsFixed, ...(rev2 ? rev2.findingsFixed : [])], delegatedDecisions: impl.delegatedDecisions, conflict, flake: integ.flake,
       proposedSteering: { implement: impl.proposedSteering || [], review: [...(rev.proposedSteering || []), ...(rev2 ? rev2.proposedSteering || [] : [])] } }
     log(`${t.id}: integrated ${integ.mergeSha}${last === rev2 ? ' after a second review' : ''}`)
     return true
@@ -694,7 +775,7 @@ const summary = {
   claimed: tickets.filter((t) => t.status === 'claimed').map((t) => t.id),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
-  conflicts,
+  conflicts, flakes,
   results,
 }
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
@@ -734,6 +815,7 @@ return {
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   conflicts,
+  flakes,
   reasons,
   reportIssue: rep ? rep.issue : null,
   reportUrl: rep ? rep.url : null,

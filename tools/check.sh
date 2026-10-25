@@ -71,6 +71,15 @@
 # green on main, and only this makes that run test anything. The hook never passes it, and a lane
 # does not need it: its diff earns its skips.
 #
+# --skip-tests, with --full only, runs everything the full check runs except `dotnet test --solution`:
+# the build, the smoke test, the gateway image, Terraform and its tests and the companions still
+# run. The overnight integrate step passes it once, after a gate that failed on test projects the
+# ticket's change cannot reach has had those projects re-run alone and pass (#375): the check stops
+# at its first failure, so a gate red on the tests never ran what comes after them, and counting it
+# passed on the re-run alone would be a green verdict that skipped a check. The suite's verdict is
+# then the first log's, every other project passed, plus each re-run's. The verdict line names the
+# skip, "the build, not the tests (--skip-tests), ...", so the log never reads as a whole pass.
+#
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
 # branch adds to main. An overnight lane names its fork point instead, so its own commits are
@@ -104,19 +113,21 @@ set -euo pipefail
 
 usage() {
   echo "usage: tools/check.sh [--base <ref>] [--both-halves]" >&2
-  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves]" >&2
+  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves] [--skip-tests]" >&2
   echo "check: fail: $1." >&2
   exit 2
 }
 
 full=false
 both=false
+skip_tests=false
 port=""
 named_base=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --full) full=true ;;
     --both-halves) both=true ;;
+    --skip-tests) skip_tests=true ;;
     --port)
       [ "$#" -ge 2 ] || usage "--port needs a value"
       port="$2"
@@ -140,6 +151,7 @@ if $full; then
   me="check"
 else
   [ -z "$port" ] || usage "--port is for --full"
+  ! $skip_tests || usage "--skip-tests is for --full"
   me="pre-push"
 fi
 
@@ -472,10 +484,16 @@ if touches build; then
   quietly dotnet build --nologo --verbosity quiet || fail "the solution does not build."
   ran="$ran, the build"
   if $full; then
-    dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+    if $skip_tests; then
+      echo "check: the tests skipped: --skip-tests says they were run another way (#375)."
+      tests_ran="not the tests (--skip-tests)"
+    else
+      dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+      tests_ran="the tests"
+    fi
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
     tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
-    ran="$ran, the tests, the smoke test, the gateway image"
+    ran="$ran, $tests_ran, the smoke test, the gateway image"
   fi
 elif $full; then
   echo "check: build, tests, smoke test and gateway image skipped: no .NET source changed."
