@@ -14,6 +14,13 @@ Each rule has a case that would pass if the rule were gone: a planted newest bes
 one, a swapped pair of version lists, an advisory and its removal, a document naming the pinned
 version beside one naming another, the decision comment and its removal.
 
+The copies are of the checkout, so a change to one of them can turn a case red with no change
+here: on #336 a new pin did. The line below names them for tools/check.sh, whose full mode runs
+this companion when a change touches one (#354), as CI's Documents job runs it on every change. A
+file Repo starts copying joins the line; tools/check_tests.py fails while one is missing.
+
+Checkout inputs: Directory.Packages.props global.json SpaPlatform.slnx Directory.Build.props *.csproj
+
 Run: python3 -I tools/pins_inventory_tests.py
 """
 
