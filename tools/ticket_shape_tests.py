@@ -865,6 +865,59 @@ class BlockerEdge(unittest.TestCase):
         self.assertNotIn("blocker-edge", rules_broken(100))
 
 
+class AnotherTicketsWait(unittest.TestCase):
+    """A "Blocked by" list that names the body's own ticket describes another ticket's wait, since
+    no ticket waits on itself (#371). #178's body of 2026-10-22 says it twice, of the follow-up that
+    carries the deployed column into #177's ADR, and also waits for #242 for real. Each case gives
+    #177 no state, so refuse_gh proves the check never asks about it."""
+
+    LINES = ("- **To the ADR** (Q147): the deployed column reaches #177's ADR through a follow-up "
+             "integrator ticket blocked by #177 and this ticket; no edge from this ticket to #177.\n"
+             "- **When** (Q143): one run, in the G3 sitting, after #242's sitting has put the "
+             "gateway image on the cell.\n"
+             "- [ ] The follow-up integrator ticket that carries the deployed column into #177's ADR "
+             "filed, blocked by #177 and this ticket\n")
+
+    def body(self, lines: str) -> str:
+        return FILED[209].body.replace("None (can start immediately).", lines)
+
+    def test_178s_follow_up_sentence_is_not_its_own_wait(self):
+        failures, notes = judged(209, self.body(self.LINES), states=((242, "OPEN"),))
+        details = [f.detail for f in failures if f.rule == "blocker-edge"]
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("#242", details[0])
+        self.assertNotIn("#177", details[0])
+        self.assertEqual(notes, [])
+
+    def test_the_body_named_by_its_own_number_is_the_same(self):
+        lines = self.LINES.replace("and this ticket", "and #209")
+        failures, _ = judged(209, self.body(lines), states=((242, "OPEN"),))
+        details = [f.detail for f in failures if f.rule == "blocker-edge"]
+        self.assertEqual(len(details), 1, details)
+        self.assertNotIn("#177", details[0])
+
+    def test_this_issue_and_this_one_are_the_same(self):
+        for name in ("this issue", "This one", "this ticket"):
+            with self.subTest(name):
+                body = self.body(f"Blocked by: #177, {name}.")
+                self.assertNotIn("blocker-edge", rules_broken(209, body))
+
+    def test_a_list_of_two_other_tickets_still_fails_on_both(self):
+        # The control: the same sentence with another ticket in place of this one is a wait.
+        lines = self.LINES.replace("and this ticket", "and #305")
+        failures, _ = judged(209, self.body(lines),
+                             states=((177, "OPEN"), (242, "OPEN"), (305, "OPEN")))
+        details = [f.detail for f in failures if f.rule == "blocker-edge"]
+        self.assertEqual(len(details), 1, details)
+        for number in ("#177", "#242", "#305"):
+            self.assertIn(number, details[0])
+
+    def test_this_tickets_possessive_is_no_self_reference(self):
+        # "this ticket's sibling" names another ticket, so the list is still the body's own wait.
+        body = self.body("Blocked by #177 and this ticket's sibling.")
+        self.assertIn("blocker-edge", rules_broken(209, body, states=((177, "OPEN"),)))
+
+
 class LookUp(unittest.TestCase):
     """The numbers the prose names with no edge are asked of GitHub in one GraphQL query."""
 
