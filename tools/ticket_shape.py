@@ -33,7 +33,9 @@ partial instead of never starting. This reads one issue and fails it, naming the
 - blocker-edge: a "Blocked by #N", "after #N" or "once #N lands" where #N is an open issue with no
   native blocked-by edge, so the scheduler cannot see the wait the prose states (ADR-0020). A #N
   that is a closed issue, a pull request or no issue at all states no wait any more (#284): each is
-  printed as a note, `ticket-shape: note: stale-prose: <what>`, and fails nothing. The state of a
+  printed as a note, `ticket-shape: note: stale-prose: <what>`, and fails nothing. A "Blocked by"
+  list that names the body's own ticket ("blocked by #177 and this ticket", or its own #N) describes
+  another ticket's wait, since no ticket waits on itself, and is not read (#371). The state of a
   #N with no edge is asked of GitHub in one GraphQL query; a #N with an edge has its state in it;
 - foreground: under `ready-for-agent`, a `**Session:** foreground` line, which no lane can honour;
 - spec: under `ready-for-agent`, any sub-issue, since an issue with sub-issues is a spec and never a
@@ -129,10 +131,14 @@ SHARED_COMMIT = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
 OPEN_BOX = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
 
 # The three ways a body states a wait, each giving the issue numbers it waits for. "Blocked by"
-# takes a list, as the tracker guide's fallback line `Blocked by: #<n>, #<n>` writes one.
+# takes a list, as the tracker guide's fallback line `Blocked by: #<n>, #<n>` writes one. An item of
+# the list may also be the body's own ticket, as SELF names it: "a follow-up ticket blocked by #177
+# and this ticket" (#178) describes another ticket's wait, since no ticket waits on itself (#371).
+SELF = re.compile(r"this[ \t]+(?:ticket|issue|one)\b(?!['\u2019]s)", re.IGNORECASE)
+_ITEM = r"(?:#\d+|" + SELF.pattern + r")"
 BLOCKER_PHRASES = (
-    re.compile(r"\bblocked by:?[ \t]*(?P<numbers>#\d+(?:(?:[ \t]*,[ \t]*|[ \t]+and[ \t]+)#\d+)*)",
-               re.IGNORECASE),
+    re.compile(r"\bblocked by:?[ \t]*(?P<numbers>" + _ITEM
+               + r"(?:(?:[ \t]*,[ \t]*|[ \t]+and[ \t]+)" + _ITEM + r")*)", re.IGNORECASE),
     re.compile(r"\bafter (?P<numbers>#\d+)", re.IGNORECASE),
     re.compile(r"\bonce (?P<numbers>#\d+) lands\b", re.IGNORECASE),
 )
@@ -259,11 +265,17 @@ def writes_nothing(body: str) -> bool:
     return bool(line and WRITES_NOTHING.match(line.group("value")))
 
 
-def stated(body: str) -> list[int]:
-    """The numbers the body's prose waits for, by BLOCKER_PHRASES, ascending."""
-    return sorted({int(number) for phrase in BLOCKER_PHRASES
-                   for found in phrase.finditer(body)
-                   for number in NUMBER.findall(found.group("numbers"))})
+def stated(body: str, number: int | None = None) -> list[int]:
+    """The numbers the body's prose waits for, by BLOCKER_PHRASES, ascending. A list naming the
+    body's own ticket, by SELF or as #number, is another ticket's wait and gives none (#371)."""
+    found_numbers: set[int] = set()
+    for phrase in BLOCKER_PHRASES:
+        for found in phrase.finditer(body):
+            listed = {int(n) for n in NUMBER.findall(found.group("numbers"))}
+            if SELF.search(found.group("numbers")) or number in listed:
+                continue
+            found_numbers |= listed
+    return sorted(found_numbers)
 
 
 def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> dict[int, str]:
@@ -271,7 +283,8 @@ def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> di
     edge says it is a closed issue; known gives others; the rest are asked of GitHub at once."""
     states = {number: "CLOSED" for number in issue.closed_blockers}
     states.update(known or {})
-    missing = [n for n in stated(issue.body) if n not in issue.blockers and n not in states]
+    missing = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and n not in states]
     if missing:
         states.update(look_up(missing))
     return states
@@ -327,7 +340,7 @@ def stale_prose(issue: Issue, states: typing.Mapping[int, str] | None = None) ->
     or no issue. The scheduler has nothing to see; the prose is to be reworded, not edged."""
     states = states_of(issue, states)
     return [f"the body waits for #{n}, which is {STALE[states[n]]}, so no wait is left to edge; "
-            "the line is stale prose" for n in stated(issue.body)
+            "the line is stale prose" for n in stated(issue.body, issue.number)
             if n not in issue.blockers and states[n] in STALE]
 
 
@@ -381,7 +394,8 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
                                         f"integrates this ticket alone cannot have: {text[:160]}"))
 
     states = states_of(issue, states)
-    unedged = [n for n in stated(issue.body) if n not in issue.blockers and states[n] == "OPEN"]
+    unedged = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and states[n] == "OPEN"]
     if unedged:
         failures.append(Failure("blocker-edge", "the body waits for " + ", ".join(
             f"#{number}" for number in unedged) + " with no blocked-by edge to it open"))
