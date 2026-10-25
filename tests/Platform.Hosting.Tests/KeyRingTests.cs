@@ -160,8 +160,10 @@ public sealed class KeyRingTests
     /// Parameter Store encrypts under the account's default key, as it does with the key absent.
     /// Mutation: drop the normalisation in <c>KeyRing.Register</c> and the blank row's put carries the
     /// spaces as its key id. The empty row stays green under that mutation, because the package itself
-    /// leaves an empty id off the put (tried on 4.0.3); it pins the outcome, and the blank row is the
-    /// one only the normalisation catches.
+    /// sets <c>KeyId</c> only when <c>!string.IsNullOrEmpty(KMSKeyId)</c> (tried on 4.0.3; the package's
+    /// <c>SSMXmlRepository.StoreElementAsync</c>,
+    /// https://github.com/aws/aws-ssm-data-protection-provider-for-aspnet/blob/master/src/Amazon.AspNetCore.DataProtection.SSM/SSMXmlRepository.cs);
+    /// it pins the outcome, and the blank row is the one only the normalisation catches.
     /// </summary>
     [Theory]
     [InlineData("empty", "")]
