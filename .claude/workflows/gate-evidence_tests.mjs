@@ -562,6 +562,23 @@ try {
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allCalls) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
   }
+  // The plan policy's place in CI (#367, Q43 of #349): the Locate prompt says what ci.yml says, that
+  // P-01 to P-03 and P-07 are mock-provider assertions the Terraform job's test step runs, so a
+  // plan-policy test is in CI by the Terraform discovery leg and has no deployed clause to run.
+  checks++
+  {
+    const located = allCalls.filter((c) => /^locate-/.test(c.label))
+    if (!located.length) fail('no Locate prompt was dispatched, so the plan-policy search read nothing')
+    for (const c of located) {
+      const p = c.prompt
+      if (/plan-policy check for P-01 to P-03 is not in CI while it is a notice/.test(p)) fail(`the ${c.label} prompt still calls the plan policy a notice outside CI`)
+      if (/for P-01 to P-03, the plan policy of row 1\.9\)/.test(p)) fail(`the ${c.label} prompt still lists P-01 to P-03 as a deployed clause's wouldRun`)
+      const inCi = (p.match(/^inCi, leg by leg[^\n]*/m) || [''])[0]
+      if (!/P-01 to P-03 and P-07/.test(inCi) || !/Terraform job's test step/.test(inCi)) fail(`the ${c.label} prompt's inCi legs do not place P-01 to P-03 and P-07 under the Terraform job's test step: ${inCi.slice(-300)}`)
+      const would = (p.match(/wouldRun:[^\n]*/) || [''])[0]
+      if (!/"" for P-01 to P-03 and P-07/.test(would)) fail(`the ${c.label} prompt's wouldRun does not leave P-01 to P-03 and P-07 empty: ${would}`)
+    }
+  }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
   console.log('gate-evidence_tests: ERROR')
