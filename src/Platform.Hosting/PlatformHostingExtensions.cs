@@ -28,10 +28,15 @@ public static class PlatformHostingExtensions
     ///
     /// Also registers the cell's key ring when a <c>DataProtection</c> section is present, and refuses a
     /// configuration the ring cannot honour (plan row P2-2; ADR-0025; see <see cref="KeyRing"/>).
+    ///
+    /// Sets the host's shutdown timeout to <see cref="PlatformHostingLimits.ShutdownTimeout"/> (#363).
     /// </summary>
     public static IHostApplicationBuilder AddPlatformHosting(this IHostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        // PostConfigure, so it runs after the host binds HostOptions from its own configuration.
+        builder.Services.PostConfigure<HostOptions>(PlatformHostingLimits.Apply);
 
         KeyRing.Register(builder);
 
