@@ -298,7 +298,7 @@ issue. Workstream 3's store ticket is blocked by it, because nothing compiles wi
    session key's SHA-256 hex, which no 64-character session `pk` can equal. Acquire is a `PutItem`
    under `attribute_not_exists(pk) OR leaseUntil < :now`. Release is a `DeleteItem` under
    `leaseToken = :token`, where a failed condition is the stale release P2-3's Decision item 5
-   swallows. `leaseUntil` is in epoch milliseconds, because a 15 s lease compared in seconds loses up
+   swallows. `leaseUntil` is in epoch milliseconds, because a 21 s lease compared in seconds loses up
    to a second. `expiresAt` is set to the lease's expiry in seconds, so the table's time to live
    sweeps a lease whose holder died. The item carries no `appId`, so the `appId` index never projects
    it and `RemoveAppAsync` never sees it. `ReplaceAsync` therefore stays `PutItem`, `RemoveAsync`
