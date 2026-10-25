@@ -41,6 +41,7 @@ internal static class ContractFiles
         "s3-layout.md",
         "telemetry.md",
         "resource-tags.md",
+        "test-ids.md",
     ];
 
     /// <summary>

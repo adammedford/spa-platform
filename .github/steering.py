@@ -201,6 +201,10 @@ UNCOMPARED = {
         "raw sender when #145 lands",
     ): "each double freezes with its own interface, the stage host's modules when they land, and "
     "the code carries no header",
+    (
+        "Test id register",
+        "Never; a row is added on the integrator's decision (#322)",
+    ): "the register never freezes, so there is no gate to compare its header against (#322)",
 }
 
 # The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON
