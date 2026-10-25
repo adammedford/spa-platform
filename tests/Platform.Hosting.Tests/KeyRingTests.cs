@@ -22,8 +22,11 @@ public sealed class KeyRingTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Mutation: drop the decorator and the put carries no tags (so the package adds none of its own);
-    /// drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at all.
+    /// The key's put carries exactly the three tags, set through <c>PersistOptions.Tags</c> (#349 Q47);
+    /// <see cref="The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix"/> shows the decorator adds
+    /// none. Mutation: drop the three <c>PersistOptions.Tags</c> entries in <c>KeyRing.Register</c> and
+    /// the put carries no tags; drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at
+    /// all.
     /// </summary>
     [Fact]
     public async Task A_host_with_the_section_writes_one_tagged_SecureString_and_a_second_host_over_the_same_store_reads_it()
@@ -234,8 +237,8 @@ public sealed class KeyRingTests
     }
 
     /// <summary>
-    /// The decorator hands a request it does not tag to the inner client as it was given: the same
-    /// object, untouched, and the inner client's answer back. Mutation: copy the request in the
+    /// The decorator hands every request to the inner client as it was given: the same object,
+    /// untouched, and the inner client's answer back. Mutation: copy the request in the
     /// decorator and the reference check fails; drop the decorator and the client is the stub itself.
     /// </summary>
     [Fact]
@@ -257,25 +260,29 @@ public sealed class KeyRingTests
     }
 
     /// <summary>
-    /// Tags go only on a put under the ring's prefix, and the prefix is a path: a sibling whose name
-    /// merely begins with the same characters is not under it. Mutation: compare against the prefix
-    /// without its trailing slash, or drop the prefix check, and the sibling or the secret is tagged.
+    /// The ring's tags ride <c>PersistOptions.Tags</c> (#349 Q47), so the decorator adds none: a put
+    /// under the ring's prefix, as a key write's name is, reaches the inner client as the same object
+    /// with no tags. Mutation: put back the decorator's tagging of a put under the prefix and the put
+    /// carries three tags.
     /// </summary>
-    [Theory]
-    [InlineData("/spa-platform/test/data-protection/key-1", true)]
-    [InlineData("/spa-platform/test/apps/app1/client-secret", false)]
-    [InlineData("/spa-platform/test/data-protection-old/key-1", false)]
-    public async Task The_decorator_tags_a_put_only_under_the_ring_prefix(string name, bool tagged)
+    [Fact]
+    public async Task The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix()
     {
         StubRingStore store = new();
         await using StageHost host = await RingHost.StartAsync(RingHost.WithSection(), store, Ct);
         IAmazonSimpleSystemsManagement client = host.Services.GetRequiredService<IAmazonSimpleSystemsManagement>();
+        Assert.NotSame(store, client);
 
-        await client.PutParameterAsync(new PutParameterRequest { Name = name, Value = "v", Type = ParameterType.String }, Ct);
+        PutParameterRequest put = new()
+        {
+            Name = RingHost.Prefix + "key-1",
+            Value = "v",
+            Type = ParameterType.String,
+        };
+        await client.PutParameterAsync(put, Ct);
 
-        PutParameterRequest seen = store.Puts[^1];
-        Assert.Equal(name, seen.Name);
-        Assert.Equal(tagged ? 3 : 0, seen.Tags?.Count ?? 0);
+        Assert.Same(put, store.Puts[^1]);
+        Assert.Null(put.Tags);
     }
 
     /// <summary>

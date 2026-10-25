@@ -14,8 +14,10 @@ namespace Platform.Hosting;
 ///
 /// The ring is the package's: keys under <c>DataProtection:ParameterPrefix</c> in Parameter Store, as
 /// <c>SecureString</c>s under <c>DataProtection:KmsKeyId</c> or the account's default key, in the
-/// standard tier (decision 13: no key encryptor, so no configuration key for the tier). It writes
-/// through <see cref="RingTaggingClient"/> over the client <c>AddPlatformRegistry</c> registered.
+/// standard tier (decision 13: no key encryptor, so no configuration key for the tier), each tagged on
+/// create with the three resource tags (contracts/resource-tags.md; #274) through the package's
+/// <c>PersistOptions.Tags</c> (#349 Q47). It writes through <see cref="RingTaggingClient"/>, the
+/// Dispose shield, over the client <c>AddPlatformRegistry</c> registered.
 /// </summary>
 internal static class KeyRing
 {
@@ -85,11 +87,20 @@ internal static class KeyRing
 
         // Before the package's call, so its TryAddAWSService finds the decorator and adds no client of its
         // own (#216).
-        DecorateClient(services, prefix, cell);
+        DecorateClient(services);
 
         services.AddDataProtection()
             .SetApplicationName(ApplicationName(cell))
-            .PersistKeysToAWSSystemsManager(prefix, options => options.KMSKeyId = keyId);
+            .PersistKeysToAWSSystemsManager(prefix, options =>
+            {
+                options.KMSKeyId = keyId;
+
+                // The package copies these onto every key's put (#349 Q47), so the ring's parameters are
+                // found by teardown's and P-05's query on the platform tag (#274).
+                options.Tags["Platform"] = PlatformTag;
+                options.Tags["Cell"] = cell;
+                options.Tags["ManagedBy"] = ManagedByTag;
+            });
 
         services.AddHostedService(provider => new KeyRingStartup(
             provider.GetRequiredService<ILoggerFactory>().CreateLogger(LogCategory), provider, prefix));
@@ -98,9 +109,10 @@ internal static class KeyRing
     /// <summary>
     /// Moves the client registration <c>AddPlatformRegistry</c> made to a key of this class's, where the
     /// container still owns and disposes what it builds, and registers the decorator in its place, so
-    /// the package and the registry's secret source both resolve the decorator.
+    /// the package and the registry's secret source both resolve the decorator. The decorator is there
+    /// so the package's disposal of its client does not reach the registry's (#216); it tags nothing.
     /// </summary>
-    private static void DecorateClient(IServiceCollection services, string prefix, string cell)
+    private static void DecorateClient(IServiceCollection services)
     {
         Type type = typeof(IAmazonSimpleSystemsManagement);
         ServiceDescriptor[] registered = [.. services.Where(d => d.ServiceType == type && !d.IsKeyedService)];
@@ -128,7 +140,7 @@ internal static class KeyRing
         });
 
         services.AddSingleton(provider => RingTaggingClient.Create(
-            provider.GetRequiredKeyedService<IAmazonSimpleSystemsManagement>(InnerClientKey), prefix, cell));
+            provider.GetRequiredKeyedService<IAmazonSimpleSystemsManagement>(InnerClientKey)));
     }
 }
 
