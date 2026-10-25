@@ -575,8 +575,13 @@ try {
       if (/for P-01 to P-03, the plan policy of row 1\.9\)/.test(p)) fail(`the ${c.label} prompt still lists P-01 to P-03 as a deployed clause's wouldRun`)
       const inCi = (p.match(/^inCi, leg by leg[^\n]*/m) || [''])[0]
       if (!/P-01 to P-03 and P-07/.test(inCi) || !/Terraform job's test step/.test(inCi)) fail(`the ${c.label} prompt's inCi legs do not place P-01 to P-03 and P-07 under the Terraform job's test step: ${inCi.slice(-300)}`)
+      // Any wording of "not in CI" in the legs, not only the sentence #367 removed (its brief's second box).
+      if (/not in CI/i.test(inCi)) fail(`the ${c.label} prompt's inCi legs say something is not in CI: ${inCi.slice(-300)}`)
       const would = (p.match(/wouldRun:[^\n]*/) || [''])[0]
       if (!/"" for P-01 to P-03 and P-07/.test(would)) fail(`the ${c.label} prompt's wouldRun does not leave P-01 to P-03 and P-07 empty: ${would}`)
+      // The deployed clause, up to its '"" otherwise', names what runs a deployed clause; no plan-policy id belongs in it.
+      const deployed = would.split('"" otherwise')[0]
+      if (/P-0[1237]\b/.test(deployed)) fail(`the ${c.label} prompt's wouldRun lists a plan-policy id as a deployed clause: ${deployed}`)
     }
   }
 } catch (e) {
