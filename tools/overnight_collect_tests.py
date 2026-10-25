@@ -244,7 +244,7 @@ def resolved(agent=(), human=(), triage=(), branches=(), road=None, states=None,
                            guide=guide)
 
 
-def refuse_gh(numbers):
+def refuse_gh(numbers, cwd=None):
     raise AssertionError(f"a test asked GitHub for {sorted(numbers)}; give the case its states")
 
 
@@ -516,8 +516,8 @@ class WillEndPartial(unittest.TestCase):
         asked = []
         shape = collect.ticket_shape()
 
-        def look_up(numbers):
-            asked.append(sorted(numbers))
+        def look_up(numbers, cwd=None):
+            asked.append((sorted(numbers), cwd))
             return {n: "CLOSED" for n in numbers}
 
         shape.look_up = look_up
@@ -527,13 +527,14 @@ class WillEndPartial(unittest.TestCase):
             answer = by_issue(resolved(agent=listed))
         finally:
             shape.look_up = refuse_gh
-        self.assertEqual([[100, 101]], asked)
+        # Run in this checkout, where the tool lives, since no --repo named another (#377).
+        self.assertEqual([([100, 101], collect.ROOT)], asked)
         self.assertEqual(([], []), (answer[7]["willEndPartial"], answer[8]["willEndPartial"]))
 
     def test_a_failed_lookup_refuses_the_answer(self):
         shape = collect.ticket_shape()
 
-        def look_up(numbers):
+        def look_up(numbers, cwd=None):
             raise shape.Unreadable("gh could not reach GitHub")
 
         shape.look_up = look_up
@@ -964,6 +965,163 @@ class BranchesThroughGit(unittest.TestCase):
         # And the name it gives is one the claim rule reads.
         answer = by_issue(resolved(agent=[issue(1, body("1.6b"))], branches=found))
         self.assertEqual("claimed", answer[1]["status"])
+
+
+# The fake gh as the real one behaves (#349): it finds the repository from the directory it runs
+# in, so outside a checkout it fails; it logs that directory before each call's arguments, and
+# answers the prose look-up's graphql query with GH_FIXTURES/graphql.json.
+GH_IN_A_CHECKOUT = GH_DOUBLE.replace(
+    'printf \'%s\\n\' "$*" >> "$GH_LOG"\n',
+    'printf \'%s\\t%s\\n\' "$PWD" "$*" >> "$GH_LOG"\n'
+    'git rev-parse --git-dir >/dev/null 2>&1 || '
+    '{ echo "failed to run git: fatal: not a git repository" >&2; exit 1; }\n'
+    'if [ "$1 $2" = "api graphql" ]; then cat "$GH_FIXTURES/graphql.json"; exit $?; fi\n', 1)
+
+
+class RepoFlag(unittest.TestCase):
+    """--repo DIR (#377): the checkout whose git, gh, roadmap and tracker guide the tool reads, so
+    origin/main's copy of the tool, kept outside any checkout, forecasts against the main checkout.
+
+    Everything here runs against a throwaway checkout that differs from this one in each thing it
+    is read for: a task branch that claims 1.6b, a tracker guide naming @someone, the only account
+    whose label counts, and a tools/roadmap.py of its own whose closed gate no real roadmap has. A
+    tool that read any of the three from anywhere else would print other tickets."""
+
+    PARTS = ForecastFailsClosed.PARTS
+    ROAD = {**ROAD, "closed_gates": [{"gate": "G-test", "tag": "from-the-named-checkout"}]}
+
+    def setUp(self):
+        self.assertIn("$PWD", GH_IN_A_CHECKOUT, "the fake gh's log line was not replaced")
+        scratch = tempfile.TemporaryDirectory(prefix="overnight-collect-repo-")
+        self.addCleanup(scratch.cleanup)
+        base = pathlib.Path(scratch.name).resolve()
+        found = shutil.which("git")
+        self.assertIsNotNone(found, "git is not on PATH, and the tool reads it")
+        tools = base / "bin"
+        tools.mkdir()
+        (tools / "git").symlink_to(found)
+        gh = tools / "gh"
+        gh.write_text(GH_IN_A_CHECKOUT)
+        gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+        (base / "home").mkdir()
+        config = base / "gitconfig"
+        config.write_text("[user]\n\tname = Case\n\temail = case@example.invalid\n"
+                          "[init]\n\tdefaultBranch = main\n"
+                          "[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
+        self.fixtures, self.log = base / "fixtures", base / "gh.log"
+        self.fixtures.mkdir()
+        self.env = {"PATH": f"{tools}:/bin", "HOME": str(base / "home"),
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config), "LC_ALL": "C",
+                    "GH_FIXTURES": str(self.fixtures), "GH_LOG": str(self.log)}
+
+        # The main checkout, with the tool in it as the in-repo copy.
+        self.checkout = base / "checkout"
+        self.checkout.mkdir()
+        self.git("init", "-q")
+        self.git("commit", "-q", "--allow-empty", "-m", "The first commit")
+        self.git("branch", "task/1.6b-claimed-here")
+        self.copy_parts(self.checkout)
+        guide = self.checkout / collect.GUIDE
+        guide.parent.mkdir(parents=True)
+        guide.write_text("- **The human's account is `@someone`.** Only its label counts.\n")
+        (self.checkout / "tools" / "roadmap.py").write_text(
+            f"import json\nprint(json.dumps({self.ROAD!r}))\n")
+
+        # The copy outside any checkout, and a directory outside any checkout to run it from.
+        self.outside = base / "outside"
+        self.copy_parts(self.outside)
+        self.elsewhere = base / "elsewhere"
+        self.elsewhere.mkdir()
+
+        # #1 claimed by the checkout's branch; #2 ready, labelled by the account its guide names;
+        # #3 waits in prose on #100, which only the graphql look-up says is open.
+        agent = [issue(1, body("1.6b")), issue(2, body("1.7")),
+                 issue(3, body() + "\nBlocked by #100.\n")]
+        (self.fixtures / "ready-for-agent.json").write_text(json.dumps(agent))
+        (self.fixtures / "ready-for-human.json").write_text("[]")
+        (self.fixtures / "needs-triage.json").write_text("[]")
+        for raw in agent:
+            (self.fixtures / f"timeline-{raw['number']}.txt").write_text(
+                json.dumps(labeled("ready-for-agent", "someone")) + "\n")
+        (self.fixtures / "graphql.json").write_text(json.dumps(
+            {"data": {"repository": {"n100": {"__typename": "Issue", "state": "OPEN"}}}}))
+
+    def git(self, *args: str) -> str:
+        done = subprocess.run(["git", *args], cwd=self.checkout, env=self.env,
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(0, done.returncode, f"git {' '.join(args)}: {done.stderr}")
+        return done.stdout.strip()
+
+    def copy_parts(self, tree: pathlib.Path) -> None:
+        for part in self.PARTS:
+            (tree / part).parent.mkdir(parents=True, exist_ok=True)
+            (tree / part).write_bytes((ROOT / part).read_bytes())
+
+    def collect_from(self, tree: pathlib.Path, *argv: str) -> subprocess.CompletedProcess:
+        """The copy of the tool in tree, run from a directory outside any checkout."""
+        if self.log.exists():
+            self.log.unlink()
+        return subprocess.run(
+            [sys.executable, "-I", str(tree / self.PARTS[0]), "--json", *argv],
+            capture_output=True, text=True, cwd=self.elsewhere, check=False, env=self.env)
+
+    def gh_directories(self) -> set[str]:
+        return {line.split("\t", 1)[0] for line in self.log.read_text().splitlines()}
+
+    def assert_the_checkouts_tickets(self, done: subprocess.CompletedProcess) -> None:
+        self.assertEqual(0, done.returncode, done.stderr)
+        answer = json.loads(done.stdout)
+        self.assertEqual(self.ROAD["closed_gates"], answer["closedGates"], "roadmap read elsewhere")
+        found = {t["issue"]: (t["status"], [f["rule"] for f in t["willEndPartial"]])
+                 for t in answer["tickets"]}
+        self.assertEqual({1: ("claimed", []), 2: ("ready-for-agent", []),
+                          3: ("ready-for-agent", ["blocker-edge"])}, found)
+        self.assertEqual({str(self.checkout)}, self.gh_directories(), "gh ran elsewhere")
+
+    def test_repo_sends_every_read_to_the_checkout_it_names(self):
+        """git's branches, every gh call (the listings, the timelines and the prose look-up), the
+        roadmap and the tracker guide all come from DIR, though the tool and its caller are both
+        outside it."""
+        self.assert_the_checkouts_tickets(
+            self.collect_from(self.outside, "--repo", str(self.checkout)))
+        calls = [line.split("\t", 1)[1] for line in self.log.read_text().splitlines()]
+        self.assertEqual(3, sum(call.startswith("issue list") for call in calls))
+        self.assertEqual(3, sum("/timeline" in call for call in calls))
+        self.assertEqual(1, sum(call.startswith("api graphql") for call in calls))
+
+    def test_without_repo_the_tool_reads_its_own_checkout_as_before(self):
+        """The in-repo copy, run with no --repo from outside its checkout, reads that checkout, and
+        prints what naming the checkout prints."""
+        plain = self.collect_from(self.checkout)
+        self.assert_the_checkouts_tickets(plain)
+        named = self.collect_from(self.checkout, "--repo", str(self.checkout))
+        self.assertEqual(plain.stdout, named.stdout)
+
+    def test_a_copy_outside_any_checkout_prints_what_the_in_repo_copy_prints(self):
+        """The #349 launch: origin/main's copy, run from outside, against the main checkout."""
+        inside = self.collect_from(self.checkout)
+        outside = self.collect_from(self.outside, "--repo", str(self.checkout))
+        self.assert_the_checkouts_tickets(outside)
+        self.assertEqual(inside.stdout, outside.stdout)
+
+    def test_a_directory_inside_the_checkout_names_the_checkout(self):
+        """git finds the checkout from any directory in it, so the tool does as well."""
+        done = self.collect_from(self.outside, "--repo", str(self.checkout / "docs" / "agents"))
+        self.assert_the_checkouts_tickets(done)
+
+    def test_a_repo_that_is_not_a_checkout_exits_1_naming_it(self):
+        missing = self.elsewhere / "no-such-directory"
+        # A path that is no directory is refused before git runs, naming why; a directory git
+        # finds no working tree in is refused with git's own reason.
+        for given, why in ((self.elsewhere, "not a git repository"),
+                           (missing, "not a directory"),
+                           (self.checkout / collect.GUIDE, "not a directory")):
+            with self.subTest(given=given.name):
+                done = self.collect_from(self.outside, "--repo", str(given))
+                self.assertEqual((1, ""), (done.returncode, done.stdout))
+                self.assertIn(f"--repo {given} is not a git checkout: ", done.stderr)
+                self.assertIn(why, done.stderr)
+                self.assertFalse(self.log.exists(), "gh was asked although --repo was refused")
 
 
 if __name__ == "__main__":

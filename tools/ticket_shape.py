@@ -290,14 +290,16 @@ def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> di
     return states
 
 
-def look_up(numbers: list[int]) -> dict[int, str]:
+def look_up(numbers: list[int], cwd: str | os.PathLike | None = None) -> dict[int, str]:
     """Each number's kind, from one GraphQL query of the repository gh resolves (GH_REPO in the
     Action, the checkout's remote elsewhere). gh exits 1 when a number is no issue or pull request
     and still prints the data with a NOT_FOUND error for it, so the answer is read whatever the
     exit; any other error, or an answer that does not parse, is Unreadable. gh fills the
     `{owner}` and `{repo}` field values from that repository (https://cli.github.com/manual/gh_api),
     and `issueOrPullRequest` is the repository field that answers for either kind
-    (https://docs.github.com/en/graphql/reference/objects#repository)."""
+    (https://docs.github.com/en/graphql/reference/objects#repository). cwd is the checkout gh
+    resolves from, this process's directory when None; tools/overnight_collect.py names its
+    --repo checkout there (#377)."""
     fields = " ".join(f"n{n}: issueOrPullRequest(number: {n}) "
                       "{ __typename ... on Issue { state } ... on PullRequest { state } }"
                       for n in numbers)
@@ -306,7 +308,7 @@ def look_up(numbers: list[int]) -> dict[int, str]:
     try:
         done = subprocess.run(["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                                "-f", f"query={query}"],
-                              capture_output=True, text=True, check=False)
+                              cwd=cwd, capture_output=True, text=True, check=False)
     except OSError as error:
         raise Unreadable(f"gh could not run: {error}") from error
     why = f"gh api graphql exited {done.returncode}: {done.stderr.strip()}"
