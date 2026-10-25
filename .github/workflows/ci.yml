@@ -357,6 +357,17 @@ jobs:
         # reads the task branches, local and on origin, from real git in a throwaway clone.
         run: python3 -I tools/overnight_collect_tests.py
 
+      - name: The overnight preflight gives one verdict per launch precondition, then arguments the workflow accepts
+        # tools/overnight_preflight.sh is what a launch reads before it starts the overnight run
+        # (#378), so a line that passes on a stale main, a dirty checkout, an existing run branch or
+        # a shell that is not bash sends a night at the wrong tree. Its companion runs the real
+        # script against real git in a throwaway origin and main checkout, with origin/main's own
+        # collect stub and a strict gh double, so no case reaches GitHub; it checks the checkout,
+        # its refs and the tracker are left as they were, and runs the printed arguments through
+        # the workflow's own launch validation under node. Under bash 5 here; the job below runs it
+        # under 3.2.
+        run: python3 -I tools/overnight_preflight_tests.py
+
       - name: The integrate step's reach tool names which failed test projects a change could reach
         # A red overnight integration gate re-runs a failed test project alone only when
         # tools/test_reach.py finds no changed file that reaches it (#375). A rule that reaches too
@@ -488,6 +499,12 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/prune_branches_tests.py
+
+      - name: tools/overnight_preflight.sh, under the bash 3.2 macOS ships
+        # The launch runs it on this Mac, from the session that starts the run, under 3.2.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/overnight_preflight_tests.py
 
       - name: tunnel.sh and verify-tunnel.sh, under the bash 3.2 macOS ships
         # A sitting runs the tunnel from this Mac, under 3.2 (change request 1.6b).
