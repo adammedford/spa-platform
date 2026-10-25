@@ -32,9 +32,9 @@ locals {
 
   # Continuity (#338). The session table and its appId index, behind session_store = "dynamodb".
   # The ARN is built from the table's name rather than read from aws_dynamodb_table because this
-  # module declares no table: P-01's tripwire reads the module's source and refuses the type whatever
-  # its count, and contracts/changes/issue-338-p-01-dynamodb-tripwire.md records the exemption that
-  # admits the gated table and has this grant read the table's ARN when it is declared.
+  # module declares no table: P-01's tripwire reads the module's source and refuses the type
+  # whatever its count. contracts/changes/issue-338-p-01-dynamodb-tripwire.md records the decided
+  # exemption that admits the gated table.
   session_store_is_dynamodb = var.session_store == "dynamodb"
   session_table_name        = "${local.name_prefix}-sessions"
   session_table_index_name  = "appId"
