@@ -46,6 +46,7 @@ Run: python3 -I tools/check_tests.py
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import os
 import pathlib
@@ -1412,6 +1413,108 @@ class LibraryTests(CheckTestCase):
         expected = [".github/gizmo_tests.py", ".github/named-tests.py", ".github/two_words_tests.py",
                     "tools/other_tests.py", "tools/scripts/deep_tests.py", "tools/thing_tests.py"]
         self.assertEqual([companion(path) for path in expected], companions_run(case))
+
+
+# A companion that reads files of the checkout outside tools/ and .github/, for InputTests, in the
+# shape of tools/pins_inventory_tests.py, which copies the live pins file, SDK pin file, solution,
+# build properties and project files and asserts on what they hold (#354). Its declaration is a
+# line of its own starting "Checkout inputs:"; the fixture writes it with escapes, so no line of this
+# file starts that way. Root.csproj sits at the top level so a pattern the check let the shell expand
+# would turn into that file's name and miss every other project.
+INPUTS = {
+    "tools/reader.py": "# reads the checkout\n",
+    "tools/reader_tests.py": '"""Copies the checkout.\n\nCheckout inputs: Directory.Packages.props global.json *.csproj\n"""\n',
+    "Directory.Packages.props": "<Project />\n",
+    "global.json": "{}\n",
+    "Root.csproj": "<Project />\n",
+    "src/App/App.csproj": "<Project />\n",
+    "spikes/g0/global.json": "{}\n",
+}
+PINS_COMPANION = "tools/pins_inventory_tests.py"
+
+
+def declared_inputs(text: str) -> list[str]:
+    """The patterns a companion's "Checkout inputs:" line names."""
+    lines = [line for line in text.splitlines() if line.startswith("Checkout inputs:")]
+    return lines[0].split(":", 1)[1].split() if lines else []
+
+
+class InputTests(CheckTestCase):
+    """#354: under --full, a change to a file of the checkout that a companion declares on its
+    "Checkout inputs:" line runs that companion. On #336 a new pin in Directory.Packages.props passed
+    the full check with "test companions skipped", and tools/pins_inventory_tests.py, which copies
+    that file and counts its pins, failed three cases in CI's Documents job."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def scripts(self) -> dict[str, str]:
+        return {**SCRIPTS, **INPUTS}
+
+    def test_a_declared_input_runs_the_companion_that_declares_it_and_no_other(self):
+        for change in ("Directory.Packages.props", "global.json", "src/App/App.csproj", "src/New/New.csproj"):
+            with self.subTest(change=change):
+                case = Case(self, extra=self.scripts(), change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                # These are .NET source to the classifier, so the build half runs as well.
+                self.assertEqual([companion("tools/reader_tests.py")], companions_run(case))
+                self.assertTrue(result.last_line(result.stdout).endswith(
+                    ", the test companion tools/reader_tests.py."), result.stdout)
+
+    def test_a_file_no_companion_declares_runs_none(self):
+        # A pattern with no slash in it and no wildcard names the top-level file alone: the spike's
+        # own global.json is not the solution's SDK pin.
+        for change in ("src/App/App.cs", "README.md", "spikes/g0/global.json", "docs/notes.md"):
+            with self.subTest(change=change):
+                case = Case(self, extra=self.scripts(), change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], companions_run(case))
+
+    def test_a_declared_input_and_a_touched_script_run_each_companion_once(self):
+        case = Case(self, extra=self.scripts(),
+                    change=("Directory.Packages.props", "tools/reader.py", "tools/thing.sh"))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/reader_tests.py"), companion("tools/thing_tests.py")],
+                         companions_run(case))
+
+    def test_a_failing_companion_an_input_earns_fails_the_verdict(self):
+        case = Case(self, extra=self.scripts(), change="global.json",
+                    fails_on={"python3": "tools/reader_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the test companion tools/reader_tests.py failed.",
+                         result.last_line(result.stderr))
+
+    def test_the_hook_runs_no_companion_for_an_input(self):
+        case = Case(self, extra=self.scripts(), change="Directory.Packages.props")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], companions_run(case))
+
+    def test_a_new_pin_runs_the_pins_inventory_companion(self):
+        # #354's own shape: the real companion's text, and a change to the pins file alone.
+        text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
+        case = Case(self, extra={PINS_COMPANION: text, "Directory.Packages.props": "<Project />\n"},
+                    change="Directory.Packages.props")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion(PINS_COMPANION)], companions_run(case))
+
+    def test_the_pins_companion_declares_every_file_it_copies_from_the_checkout(self):
+        # Its Repo copies these from this checkout and asserts on them; a file it copies that the
+        # line leaves out is a change the full check would pass and CI's Documents job would fail.
+        text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
+        patterns = declared_inputs(text)
+        self.assertNotEqual([], patterns, f"{PINS_COMPANION} has no Checkout inputs line")
+        slnx = (ROOT / "SpaPlatform.slnx").read_text(encoding="utf-8")
+        copied = ["Directory.Packages.props", "global.json", "SpaPlatform.slnx", "Directory.Build.props",
+                  *re.findall(r'<Project Path="([^"]+)"', slnx)]
+        self.assertIn("src/Gateway/Gateway.csproj", copied)
+        self.assertEqual([], [path for path in copied
+                              if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)])
 
 
 # Workflow scripts and their test companions, for WorkflowCompanionTests: a script's companion is

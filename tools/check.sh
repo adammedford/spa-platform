@@ -23,7 +23,8 @@
 # port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
 # tests, and the test companions the change earns: that of each script in tools/ or .github/ it
 # touches (#134), and that of each script or companion naming a library it touches, followed through
-# the libraries that name that one (#237). CI runs the companions .github/workflows/ci.yml lists,
+# the libraries that name that one (#237), and that of each companion declaring, on its
+# `Checkout inputs:` line, a file of the checkout the change touches (#354). CI runs the companions .github/workflows/ci.yml lists,
 # one step each, whatever the diff, so that file says which run there; this check runs only those
 # the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
 # when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
@@ -672,10 +673,50 @@ $user"
   done
 }
 
-# Whether the companion $1 runs: the diff names it, or --both-halves asks for every one. grep -Fx
-# rather than -q: -q would close the pipe at a match and fail printf under pipefail.
+# Whether the diff changes a file of the checkout the companion $1 declares it reads. A companion can
+# read files outside tools/ and .github/, which no rule above reaches: tools/pins_inventory_tests.py
+# copies the live pins file, SDK pin file, solution, build properties and project files and counts
+# what they hold, so on #336 a new pin passed this check with its companions skipped and failed
+# three cases in CI's Documents job (#354). Such a companion says which on a line of its own,
+#
+#     Checkout inputs: Directory.Packages.props global.json *.csproj
+#
+# and a changed path matching one of the patterns earns it. A pattern is a shell `case` pattern
+# held to the whole path from the top level, so `global.json` is the top-level file alone and
+# `*.csproj` is a project file at any depth. The list lives in the companion, beside the copies that
+# depend on it, and not here, so a companion that starts reading another file changes one file. The
+# patterns are split with pathname expansion off, or `*.csproj` would become the names of the
+# project files in the working directory. grep exits 1 on no such line; any other status is a
+# companion that was not read, and fails the check rather than run less.
+declares_a_changed_input() {
+  local line pattern path status
+  status=0
+  line="$(grep -h -e '^Checkout inputs:' -- "$1")" || status=$?
+  [ "$status" -le 1 ] || fail "could not read the checkout inputs $1 declares."
+  [ -n "$line" ] || return 1
+  line="${line//Checkout inputs:/ }"
+  set -f
+  for pattern in $line; do
+    for path in ${changed:-}; do
+      case "$path" in
+        $pattern)
+          set +f
+          return 0
+          ;;
+      esac
+    done
+  done
+  set +f
+  return 1
+}
+
+# Whether the companion $1 runs: the diff names it, or a file of the checkout it declares, or
+# --both-halves asks for every one. grep -Fx rather than -q: -q would close the pipe at a match and
+# fail printf under pipefail.
 earned() {
-  $both || printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null
+  $both && return 0
+  printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null && return 0
+  declares_a_changed_input "$1"
 }
 
 # What the verdict adds when it ran no check of the check itself.
