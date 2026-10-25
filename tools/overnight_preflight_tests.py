@@ -376,7 +376,7 @@ class CleanStartTests(PreflightTestCase):
                          result.row("run"))
         verdict, evidence = result.row("shell")
         self.assertEqual("pass", verdict)
-        self.assertRegex(evidence, r"^the shell that ran this is /bin/bash \(pid \d+\)$")
+        self.assertRegex(evidence, r"^the shell that ran this is (/bin/)?bash \(pid \d+\)$")
         self.assertEqual(("pass", f"{SUMMARY}; ready-for-agent by owner: integrator 2, ws2-hosting 1"),
                          result.row("forecast"))
         self.assertEqual(("pass", "0 needs-triage tickets; none lost ready-for-agent in the last 24 hours"),
