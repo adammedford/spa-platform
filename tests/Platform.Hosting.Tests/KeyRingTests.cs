@@ -25,8 +25,8 @@ public sealed class KeyRingTests
     /// The key's put carries exactly the three tags, set through <c>PersistOptions.Tags</c> (#349 Q47);
     /// <see cref="The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix"/> shows the decorator adds
     /// none. Mutation: drop the three <c>PersistOptions.Tags</c> entries in <c>KeyRing.Register</c> and
-    /// the put carries no tags (failed 1 of 179); drop <c>PersistKeysToAWSSystemsManager</c> and the
-    /// stub sees no put at all.
+    /// the put carries no tags; drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at
+    /// all.
     /// </summary>
     [Fact]
     public async Task A_host_with_the_section_writes_one_tagged_SecureString_and_a_second_host_over_the_same_store_reads_it()
@@ -263,7 +263,7 @@ public sealed class KeyRingTests
     /// The ring's tags ride <c>PersistOptions.Tags</c> (#349 Q47), so the decorator adds none: a put
     /// under the ring's prefix, as a key write's name is, reaches the inner client as the same object
     /// with no tags. Mutation: put back the decorator's tagging of a put under the prefix and the put
-    /// carries three tags (failed 1 of 179).
+    /// carries three tags.
     /// </summary>
     [Fact]
     public async Task The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix()
