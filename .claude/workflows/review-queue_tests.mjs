@@ -444,6 +444,7 @@ try {
     [206, { Said: row('could-not-run', 0, 0) }, 'hold', 'a stated mutation that could not run'],
     [206, { Said: row('reproduced', 4, 153) }, 'merge', 'a stated mutation reproduced with its counts'],
     [206, { Said: { result: 'went-red-ish', failed: 4, total: 153 } }, 'hold', 'a result that is none of the three', 'could-not-run'],
+    [206, { Said: row('removed', 0, 0) }, 'hold', 'removed on a stated mutation, which only a held mutation may report', 'could-not-run'],
   ]
   for (const [n, mutate, want, what, rowWant] of cases) {
     env = run({ prs: [n] }, HOLDS, { mutate })
@@ -798,6 +799,19 @@ try {
       result = await execute(env)
       if (resultOf(287, result).verdict !== 'hold') fail(`PR 287's shape with the held ${LIB2} ${res}: verdict ${resultOf(287, result).verdict}, expected hold`)
     }
+    // removed (#334): a held test whose break the branch deleted holds nothing in the script, so the
+    // verdict is the agent's, and the agent is told to hold unless the deletion is shown sound.
+    env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('removed', 0, 0), why: 'commit abc1234 removed the unreachable fail branch' } } })
+    result = await execute(env)
+    {
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (held.result !== 'removed') fail(`PR 287's shape with the held ${LIB2} removed: its row is ${JSON.stringify(held.result)}, expected removed`)
+      if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} removed: verdict ${c.verdict}; the script must not hold on a removed row`)
+      const verdictPrompt = env.prompts['verdict:287'] || ''
+      if (!/A removed row is a held break whose target the range deleted/.test(verdictPrompt) || !/otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold/.test(verdictPrompt)) fail('the verdict prompt does not tell the agent to hold on a removed row whose deletion is not shown sound')
+      if (!new RegExp(`${LIB2}[^\\n]*removed`).test(commentOf(env, 287))) fail('the comment\'s table does not show the removed row')
+    }
     // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
     // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.
     env = run({ prs: [287], maxMutationsPerPr: 1 }, SHAPE, { range })
@@ -854,6 +868,14 @@ try {
     await execute(env)
     const kinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
     if (kinds[LIB1] !== 'other' || kinds[LIB2] !== 'held') fail(`a held test a later record reproduced: kinds ${JSON.stringify(kinds)}, expected ${LIB2} held and ${LIB1} not`)
+    // A later record's removed row answers the held test as a reproduced one does (#334).
+    const REMOVED = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-4', '2026-10-22T09:00:00Z', H2, 'hold', [
+      [LIB1, 'the same break', '0 of 0', 'removed: commit abc1234 deleted the unreachable branch'],
+    ])] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, REMOVED, { range })
+    await execute(env)
+    const removedKinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    if (removedKinds[LIB1] !== 'other') fail(`a held test a later record found removed: kinds ${JSON.stringify(removedKinds)}, expected ${LIB1} answered`)
     // A range that read no changed file at all clears nothing: an empty list is no evidence.
     env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: { ...range[287], changedFiles: [], since: [{ head: H1, changedFiles: [], error: '' }] } } })
     result = await execute(env)

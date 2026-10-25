@@ -25,7 +25,7 @@ public sealed class RegistrySourceTests
 
     private readonly RecordingObjectStore store = new(new InMemoryObjectStore());
     private readonly FakeClientSecretSource secrets = new() { [App1Ref] = App1Secret };
-    private readonly ListLoggerProvider logs = new();
+    private readonly CapturedLog logs = new();
     private readonly LiveRegistry registry;
     private readonly RegistrySource source;
 
@@ -85,7 +85,7 @@ public sealed class RegistrySourceTests
         Assert.Equal(RefreshOutcome.Missing, await source.RefreshAsync(Ct));
 
         Assert.Same(LiveRegistry.NoSnapshot, registry.Current);
-        Assert.Contains(logs.Lines, line => line.Contains(Key, StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains(Key, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class RegistrySourceTests
 
         Assert.Same(live, registry.Current);
         Assert.Equal(0, swaps);
-        Assert.Contains(logs.Lines, line => line.Contains(RegistryRules.NotJson, StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains(RegistryRules.NotJson, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class RegistrySourceTests
 
         Assert.Same(live, registry.Current);
         Assert.Equal(0, swaps);
-        Assert.Contains(logs.Lines, line => line.Contains(RegistryRules.DuplicateHost, StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains(RegistryRules.DuplicateHost, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -208,8 +208,8 @@ public sealed class RegistrySourceTests
         Assert.Equal(["app1.spa-poc.test:8443"], registry.Current.ByHost.Keys);
         Assert.Equal(["app2"], source.LeftOut);
         // Reported by app and by reference, never by value.
-        Assert.Contains(logs.Lines, line => line.Contains("app2", StringComparison.Ordinal) && line.Contains(App2Ref, StringComparison.Ordinal));
-        Assert.DoesNotContain(logs.Lines, line => line.Contains(App1Secret, StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains("app2", StringComparison.Ordinal) && line.Text.Contains(App2Ref, StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Lines, line => line.Text.Contains(App1Secret, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public sealed class RegistrySourceTests
         Assert.Empty(source.LeftOut);
         Assert.Same(partial, Assert.Single(seen).Old);
         // The only test where app2's secret has a value: it must not reach a log line either (N-16).
-        Assert.DoesNotContain(logs.Lines, line => line.Contains(App2Secret, StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Lines, line => line.Text.Contains(App2Secret, StringComparison.Ordinal));
 
         // Complete now, so the next unchanged poll is a plain 304 again.
         Assert.Equal(RefreshOutcome.NotModified, await source.RefreshAsync(Ct));
@@ -292,7 +292,7 @@ public sealed class RegistrySourceTests
 
         Assert.Same(live, registry.Current);
         Assert.Equal(0, swaps);
-        Assert.Contains(logs.Lines, line => line.Contains(App2Ref, StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains(App2Ref, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -321,7 +321,7 @@ public sealed class RegistrySourceTests
 
         Assert.True(second);
         Assert.Equal(42, registry.Current.Revision);
-        Assert.Contains(logs.Lines, line => line.Contains("evictor failed", StringComparison.Ordinal));
+        Assert.Contains(logs.Lines, line => line.Text.Contains("evictor failed", StringComparison.Ordinal));
     }
 
     [Fact]

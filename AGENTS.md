@@ -14,7 +14,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | Architecture, gates, decisions, assumptions | `docs/plan/01-plan.md` |
 | Interfaces, schemas, the request pipeline order | `docs/plan/02-contracts.md`, and `contracts/` once task I-2 has landed |
 | Your task: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
-| Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md` |
+| Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, and `contracts/test-ids.md` for ids named after the export |
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |

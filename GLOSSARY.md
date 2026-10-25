@@ -396,6 +396,14 @@ task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP clien
 **Test ids** — `F-` functional, `N-` negative security, `P-` infrastructure and architecture
 properties, `A-` architecture reference rules. A test id in a task names a behaviour: the owning
 workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
+The ids in the frozen export are listed there; an id named after it continues its prefix's
+sequence and is listed in the test id register.
+
+**Test id register** — the live list of test ids named after the frozen export, each with its
+tier and the decision that named it, and the tiers of the export's rows that carry none, and the
+checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
+the workstream that needs it. Holds no evidence ids and no rule ids. _Avoid_: post-export ids,
+test catalogue.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.

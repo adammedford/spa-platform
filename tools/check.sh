@@ -81,6 +81,16 @@
 # A "Merge task" commit is held to neither. On #287 row 6.7's merge 340fd07 carried neither line,
 # and fixing it then would have rewritten every later commit.
 #
+# Both modes hold a full-landing merge whose ticket is unfinished (#296): tools/landing_subjects.py
+# reads every commit over the same range whose subject starts "Merge task" or "Merge tasks", takes
+# each issue a `Ticket: #<n>` line of its message names, and fails when that issue's body holds an
+# open `- [ ]` box, naming the commit, the issue and each open box. A "Merge part of task" commit,
+# and a commit with no Ticket line, is never judged by it. On 2026-10-22 the overnight integrate step
+# wrote "Merge task 6.7" over #62 with two boxes open, and tools/roadmap.py, which reads such a
+# subject as landed for good, said S7 owed nothing. Without gh, a login or GitHub it says the merges
+# went unchecked and fails nothing, as the steering check does offline; only python3 is a tool it
+# needs.
+#
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
 # Written for the bash 3.2 macOS ships, whatever shell calls it: no associative arrays, no
@@ -335,10 +345,29 @@ $part_rows
 EOF
   [ "$part_rows_missing" -eq 0 ] \
     || fail "a part-row merge lacks a line docs/agents/landing-work.md requires of a row that stays unfinished."
-elif $full; then
-  fail "no origin/main or main to judge the part-row merges against; name one with --base."
 else
   echo "pre-push: part-row merges not checked: no main to diff against." >&2
+fi
+
+# --- the full-landing merges ------------------------------------------------------------------
+#
+# A "Merge task" subject says the row landed whole, and tools/roadmap.py reads it so anywhere in the
+# history and never takes it back. On 2026-10-22 the 6.7 lane reported itself complete while #62
+# held two open boxes, the overnight integrate step wrote "Merge task 6.7", and correcting it took
+# two review rounds, two rebuilds of the run branch and a force-push; on main it could not have been
+# corrected at all (#296). tools/landing_subjects.py says what it judges and what it leaves; this
+# hands it the same range as the part-row merges, and, the same way, no base is no check: the
+# hook says so, and the full check has already failed at A-05. Its own exit 2, a range it could not
+# read, fails here as surely as a held merge.
+if command -v python3 > /dev/null; then
+  if [ -n "$base" ]; then
+    python3 -I tools/landing_subjects.py --base "$base" \
+      || fail "a full-landing merge names a ticket with an open box, or the full-landing merges were not judged."
+  else
+    echo "pre-push: full-landing merges not checked: no main to diff against." >&2
+  fi
+else
+  missing python3 "the full-landing merges"
 fi
 
 # --- the roadmap ------------------------------------------------------------------------------
@@ -434,7 +463,7 @@ fi
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the roadmap, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
