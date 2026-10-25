@@ -56,6 +56,21 @@ const QUESTION = 'Which store holds the rotated keys: the parameter store or the
 // FLAKE_GARBLED's reach line does not parse, so it resets too: a rule that cannot read its input does not re-run.
 const [FLAKE_KEPT, FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED] = free.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN)
 const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED]
+// Four tickets the 2026-10-20 fixture lacks, added after every ticket above is chosen from it so none of those
+// choices moves (#379). CLOSE has every acceptance box ticked, so collect gives it the status close-in-morning: no
+// lane, listed with the issues to close, and met for AFTER_CLOSE, which waits on it. HELD is needs-triage with an open
+// blocker labelled ready-for-human, so it routes to a human whatever its route agent says, and its routing names the
+// blocker; TRIAGED is needs-triage with a ready-for-agent blocker, so it routes as before and integrates after it.
+const synthetic = (n, id, status, blockedBy, openBoxes) => ({ n, id, slug: id, issue: Number(id.slice(6)), url: `https://example.invalid/${id}`,
+  title: `Synthetic ${id}`, status, owner: 'integrator', blockedBy, why: `companion ${status}`, openBoxes, willEndPartial: [] })
+const HELD_BY = 'issue-135', TRIAGED_AFTER = 'issue-144'
+if (byId[HELD_BY].status !== 'ready-for-human' || byId[TRIAGED_AFTER].status !== 'ready-for-agent') throw new Error('the fixture no longer has issue-135 ready-for-human and issue-144 ready-for-agent')
+const [CLOSE, AFTER_CLOSE, HELD, TRIAGED] = [
+  synthetic(901, 'issue-901', 'close-in-morning', [], 0), synthetic(902, 'issue-902', 'ready-for-agent', ['issue-901'], 2),
+  synthetic(903, 'issue-903', 'needs-triage', [HELD_BY], 3), synthetic(904, 'issue-904', 'needs-triage', [TRIAGED_AFTER], 3),
+]
+for (const t of [CLOSE, AFTER_CLOSE, HELD, TRIAGED]) { tickets.push(t); byId[t.id] = t }
+const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
 const TESTS_FAILED = 'check: fail: the tests failed.'
@@ -91,7 +106,8 @@ let calls = 0              // each mocked agent call's ordinal, so an agent's st
 globalThis.agent = async (prompt, opts) => {
   allPrompts.push({ label: opts.label, prompt })
   const [kind, id] = opts.label.split(':')
-  if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets, landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+  // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
+  if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
   if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'companion' }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
@@ -160,7 +176,7 @@ const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id
 const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set(fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)))
+const want = new Set([...fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)), AFTER_CLOSE.id, TRIAGED.id])
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -571,6 +587,46 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     if (!c.prompt.includes('python3 -I tools/test_reach.py --log ')) fail(`the ${c.label} prompt does not run tools/test_reach.py on a red gate`)
     if (!c.prompt.includes("whether the failed projects are re-run is the script's decision")) fail(`the ${c.label} prompt lets the agent decide the re-run`)
   }
+}
+
+// 18. A ticket with nothing to do gets no lane (#379). On 2026-10-24 lanes were forecast empty for 1.7 (#58), every
+//     box ticked, and #329, whose one open blocker #322 was labelled ready-for-human; each returned skipped.
+{
+  const reasonOf = (id) => (result.reasons || []).find((r) => r.id === id)
+  const report = allPrompts.find((x) => x.label === 'report')
+  const summary = report ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report.prompt) || [, 'null'])[1]) : null
+  // close-in-morning, collect's status for it, and a ready-for-agent ticket with openBoxes 0 (the fixture's 1.4),
+  // should collect's status not say so: no lane, listed with the issues to close, met for its dependants.
+  const zero = tickets.filter((t) => t.status === 'ready-for-agent' && t.openBoxes === 0 && !fixture.args.skip.includes(t.id))
+  if (!zero.length) fail('the fixture has no ready-for-agent ticket with every box ticked, so the backstop check read nothing')
+  for (const t of [CLOSE, ...zero]) {
+    if (started(t.id)) fail(`${t.id} has every box ticked, yet a lane started its implement`)
+    if (!(result.closeInMorning || []).includes(t.id)) fail(`${t.id} is not in the run's closeInMorning`)
+    const r = reasonOf(t.id)
+    if (!r || r.stage !== 'collect' || r.reason !== CLOSE_WHY) fail(`${t.id}'s reason is ${JSON.stringify(r)}, not stage collect with "${CLOSE_WHY}"`)
+    if (!summary || !(summary.closeInMorning || []).some((c) => c.id === t.id && c.issue === t.issue)) fail(`the report's results do not list ${t.id} (#${t.issue}) to close in the morning`)
+  }
+  if (!report || !report.prompt.includes('every entry of the run results\' "closeInMorning"') || !report.prompt.includes('list them with the issues to close')) fail('the report prompt does not list the closeInMorning tickets with the issues to close')
+  if (!started(AFTER_CLOSE.id)) fail(`${AFTER_CLOSE.id} waits only on ${CLOSE.id}, which has nothing left to build, yet it never started`)
+  const COLLECT_RULE = 'label ready-for-agent with openBoxes 0 (every acceptance box ticked), whatever it waits on -> "close-in-morning"'
+  for (const c of allPrompts.filter((x) => x.label === 'collect')) if (!c.prompt.includes(COLLECT_RULE)) fail('the collect prompt does not give a ticket with every box ticked the status close-in-morning')
+  // Route: a needs-triage ticket with an open ready-for-human blocker goes to a human, naming the blocker, though the
+  // mocked route agent answers "agent"; one whose blockers are ready-for-agent tickets routes as before.
+  const routeOf = (t) => (allPrompts.find((x) => x.label === `route:${t.id}`) || {}).prompt || ''
+  const blocker = byId[HELD_BY]
+  const heldPrompt = routeOf(HELD)
+  if (!heldPrompt) fail(`${HELD.id} is needs-triage and was not routed`)
+  else {
+    if (!heldPrompt.includes(`#${blocker.issue} (${blocker.id})`) || !heldPrompt.includes('"## Routing"')) fail(`${HELD.id}'s routing comment does not name its ready-for-human blocker #${blocker.issue}`)
+    if (!heldPrompt.includes(`gh issue edit ${HELD.issue} --remove-label needs-triage --add-label ready-for-human`) || heldPrompt.includes('--add-label ready-for-agent')) fail(`${HELD.id}'s route prompt does not swap its label to ready-for-human alone`)
+  }
+  if (started(HELD.id)) fail(`${HELD.id} waits on the ready-for-human ${HELD_BY}, yet a lane started its implement`)
+  if (!(result.needsHuman || []).includes(HELD.id)) fail(`${HELD.id} is not reported needs-human`)
+  const hr = reasonOf(HELD.id)
+  if (!hr || hr.stage !== 'route' || !hr.reason.includes(`#${blocker.issue}`)) fail(`${HELD.id}'s reason is ${JSON.stringify(hr)}, not stage route naming #${blocker.issue}`)
+  const triaged = routeOf(TRIAGED)
+  if (!triaged.includes('Decide the flow') || triaged.includes('Its flow is already decided')) fail(`${TRIAGED.id}, whose blocker is ready-for-agent, did not route as before`)
+  if ((result.needsHuman || []).includes(TRIAGED.id)) fail(`${TRIAGED.id} went to a human although its blocker is ready-for-agent`)
 }
 
 if (failures.length) {
