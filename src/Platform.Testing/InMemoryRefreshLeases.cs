@@ -24,19 +24,35 @@ public sealed class InMemoryRefreshLeases(TimeProvider clock) : IRefreshLeases
         DateTimeOffset now = clock.GetUtcNow();
         RefreshLease fresh = new(Guid.NewGuid().ToString("n"), now + ttl);
 
-        if (leases.TryAdd(sessionKey, fresh))
+        // One acquire answers as one conditional write would: null only when it saw a lease that had
+        // not expired. A key released between the add and the read, or a lapsed lease another caller
+        // changed first, is looked at again rather than answered null, because a caller given null
+        // waits as a loser (ADR-0024 decision 4) and a free key must not send it there. Each pass
+        // either answers or saw another writer's change, so the loop ends.
+        while (true)
         {
-            return Task.FromResult<RefreshLease?>(fresh);
+            if (leases.TryAdd(sessionKey, fresh))
+            {
+                return Task.FromResult<RefreshLease?>(fresh);
+            }
+
+            if (!leases.TryGetValue(sessionKey, out RefreshLease? current))
+            {
+                continue;
+            }
+
+            if (current.ExpiresAt >= now)
+            {
+                return Task.FromResult<RefreshLease?>(null);
+            }
+
+            // Compare-and-swap on the expired lease just read, so two callers taking over one lapsed
+            // lease cannot both succeed.
+            if (leases.TryUpdate(sessionKey, fresh, current))
+            {
+                return Task.FromResult<RefreshLease?>(fresh);
+            }
         }
-
-        // Compare-and-swap on the expired lease we read, so two callers taking over one lapsed lease
-        // cannot both succeed. A key released in between is retried as free by the caller's next try.
-        bool takenOver =
-            leases.TryGetValue(sessionKey, out RefreshLease? current) &&
-            current.ExpiresAt < now &&
-            leases.TryUpdate(sessionKey, fresh, current);
-
-        return Task.FromResult(takenOver ? fresh : null);
     }
 
     public Task ReleaseAsync(string sessionKey, RefreshLease lease, CancellationToken ct)

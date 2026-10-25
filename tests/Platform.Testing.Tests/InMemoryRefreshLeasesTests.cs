@@ -4,8 +4,8 @@ using Platform.Testing;
 namespace Platform.Testing.Tests;
 
 /// <summary>
-/// The double against the shared <see cref="RefreshLeasesContract"/>. The DynamoDB lease item in
-/// <c>Platform.Identity</c> subclasses the same suite (#344).
+/// The double against the shared <see cref="RefreshLeasesContract"/>, the suite every
+/// <see cref="IRefreshLeases"/> passes (change request P2-3 Decision item 6).
 /// </summary>
 public sealed class InMemoryRefreshLeasesTests : RefreshLeasesContract
 {

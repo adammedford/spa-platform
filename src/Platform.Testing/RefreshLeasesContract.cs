@@ -6,7 +6,8 @@ namespace Platform.Testing;
 /// <summary>
 /// The behaviour every <see cref="IRefreshLeases"/> must have (change request P2-3 Decision item 6;
 /// ADR-0024). Subclass it once per implementation and override <see cref="CreateLeases"/>: the
-/// in-memory double here, and the DynamoDB store's lease item in workstream 3 (#344).
+/// in-memory double here, and the DynamoDB lease, which change request P2-3 Decision item 7 proves in
+/// workstream 3's project.
 ///
 /// The suite hands the implementation the clock it then moves, so expiry is tested without waiting.
 /// Every lease here lives a whole number of seconds and no case asserts the instant of expiry itself,
@@ -15,7 +16,7 @@ namespace Platform.Testing;
 ///
 /// What is deliberately not here: a same-token re-acquire. <see cref="IRefreshLeases.TryAcquireAsync"/>
 /// takes no token, and a caller whose success response was lost never held one; that retry is
-/// internal to the DynamoDB adapter, and #344 proves it over its protocol fake (G3 on #332). No case
+/// internal to the DynamoDB adapter and proved over its protocol fake, not here (G3 on #332). No case
 /// needs a session store: the lease is independent of the record (ADR-0024 decision 3).
 ///
 /// Each case names the mutation of an implementation that turns it red.
