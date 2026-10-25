@@ -1,6 +1,8 @@
 using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +37,13 @@ namespace Platform.Identity.Tests;
 /// <c>services.AddSingleton(log.Provider)</c>, so a never-logged search (N-16) sees every line a
 /// logger could write, the OpenID Connect handler's Trace line with the callback's authorization code
 /// among them (<see cref="IdentityGatewayLogTests"/> pins it).
+///
+/// Its key ring, which protects the session cookie and the login state, lives in <see cref="Keys"/>: a
+/// repository of this gateway's own unless the test passes one, never the framework's default under
+/// the user's profile, which every host in the process would share by accident (change request P2-2,
+/// decision 7). A gateway started <c>beside</c> another asks the other's provider and reads the other's
+/// session store, as two tasks of one cell do, so the repository is all that decides whether one
+/// gateway reads what the other issued.
 /// </summary>
 internal sealed class IdentityGateway : IAsyncDisposable
 {
@@ -75,21 +84,26 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     private readonly IHost host;
     private readonly RequestDelegate pipeline;
+    private readonly bool ownsIdp;
 
     private IdentityGateway(
         TestIdentityProvider idp,
+        bool ownsIdp,
         IHost host,
         InMemoryRegistry registry,
         FakeClientSecretSource secrets,
         StubIdpProfile profile,
-        RecordingSessionStore sessions)
+        RecordingSessionStore sessions,
+        IXmlRepository keys)
     {
         Idp = idp;
+        this.ownsIdp = ownsIdp;
         Sessions = sessions;
         this.host = host;
         Registry = registry;
         Secrets = secrets;
         Profile = profile;
+        Keys = keys;
 
         ApplicationBuilder app = new(host.Services);
         app.UseRouting();
@@ -138,6 +152,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// <summary>Every session the gateway stored, keyed by session key.</summary>
     public RecordingSessionStore Sessions { get; }
 
+    /// <summary>The repository the gateway's key ring is kept in.</summary>
+    public IXmlRepository Keys { get; }
+
     public IServiceProvider Services => host.Services;
 
     /// <summary>
@@ -184,16 +201,30 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// The clock the provider runs its delays on: <see cref="HeldClock"/> for a test that acts while the
     /// provider holds a request. The system clock when null.
     /// </param>
+    /// <param name="keys">
+    /// The repository the key ring is kept in: a fresh <see cref="ListXmlRepository"/> when null, so no
+    /// two gateways share a ring unless a test hands both one instance.
+    /// </param>
+    /// <param name="beside">
+    /// A gateway already started whose provider and session store this one uses, as a second task of
+    /// the same cell would; its provider stays its own to dispose, and <paramref name="idpClock"/> is
+    /// not used. A new provider and store when null.
+    /// </param>
     public static async Task<IdentityGateway> StartAsync(
         IEnumerable<AppDefinition> apps,
         Action<IServiceCollection>? services = null,
         string issuerProfile = "standard",
         bool stubProfile = true,
-        TimeProvider? idpClock = null)
+        TimeProvider? idpClock = null,
+        IXmlRepository? keys = null,
+        IdentityGateway? beside = null)
     {
         AppDefinition[] entries = [.. apps];
-        TestIdentityProvider idp = new(idpClock);
-        await idp.StartAsync(TestContext.Current.CancellationToken);
+        TestIdentityProvider idp = beside?.Idp ?? new(idpClock);
+        if (beside is null)
+        {
+            await idp.StartAsync(TestContext.Current.CancellationToken);
+        }
 
         FakeClientSecretSource secrets = new();
         foreach (AppDefinition app in entries)
@@ -218,8 +249,10 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<IRegistry>(registry);
         builder.Services.AddSingleton<IClientSecretSource>(secrets);
         builder.Services.AddSingleton<IIdpProfile>(profile);
-        RecordingSessionStore sessions = new(new InMemorySessionStore());
+        RecordingSessionStore sessions = beside?.Sessions ?? new(new InMemorySessionStore());
         builder.Services.AddSingleton<ISessionStore>(sessions);
+        IXmlRepository ring = keys ?? new ListXmlRepository();
+        builder.Services.Configure<KeyManagementOptions>(o => o.XmlRepository = ring);
         // What a web host registers and an empty host does not: routing's middleware needs both.
         builder.Services.AddRouting();
         builder.Services.AddSingleton(new System.Diagnostics.DiagnosticListener("Platform.Identity.Tests"));
@@ -229,7 +262,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.AddPlatformIdentity();
         services?.Invoke(builder.Services);
 
-        return new IdentityGateway(idp, builder.Build(), registry, secrets, profile, sessions);
+        return new IdentityGateway(idp, beside is null, builder.Build(), registry, secrets, profile, sessions, ring);
     }
 
     /// <summary>
@@ -397,7 +430,10 @@ internal sealed class IdentityGateway : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         host.Dispose();
-        await Idp.DisposeAsync();
+        if (ownsIdp)
+        {
+            await Idp.DisposeAsync();
+        }
     }
 
     /// <summary>

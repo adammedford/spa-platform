@@ -1,8 +1,10 @@
 using Amazon.DynamoDBv2;
 using Amazon.Runtime;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Platform.Abstractions;
 using Platform.Testing;
@@ -109,6 +111,10 @@ public sealed class SessionStoreRegistrationTests
         Assert.NotNull(await store.GetAsync(key, Ct));
         Assert.NotNull(await leases.TryAcquireAsync(key, TimeSpan.FromSeconds(21), Ct));
         Assert.Equal(["PutItem", "GetItem", "PutItem"], fake.Operations);
+        // The record was protected under the host's own ring, not the profile's (#342). Mutation that
+        // turns it red: drop the KeyManagementOptions line from Build.
+        Assert.Single(Assert.IsType<ListXmlRepository>(
+            host.Services.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository).GetAllElements());
     }
 
     [Fact]
@@ -128,6 +134,9 @@ public sealed class SessionStoreRegistrationTests
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Configuration.AddInMemoryCollection(settings);
+        // The DynamoDB store protects each record it writes, so without a ring of the host's own the
+        // framework would keep one under the user's profile (#342; change request P2-2, decision 7).
+        builder.Services.Configure<KeyManagementOptions>(o => o.XmlRepository = new ListXmlRepository());
         if (before)
         {
             services?.Invoke(builder.Services);
