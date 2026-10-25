@@ -11,7 +11,11 @@ a linked worktree of it, a symbolic link to it, a second repository, and a direc
 The main worktree holds an untracked file and is otherwise a clean `main`; six more repositories,
 each with its own guard, are a `main` with a changed, a staged and a deleted tracked file, a `main`
 whose index git cannot read, a detached HEAD and another branch, for the fast-forward's refusals
-(#200).
+(#200). Each has an origin/main at its commit. For the restore (#376), three are a `main` one
+commit behind origin/main with README.md holding origin/main's content, as on 2026-10-23: one with
+an untracked file besides, one with README.md staged, and one with another tracked file changed;
+one has no origin/main at all; and one holds a symbolic link where origin/main has a file, and a
+file where it has a link.
 The throwaway directory keeps the path the system gives it, which on macOS runs through a symbolic
 link (/var is /private/var). HOME is that directory, so `~` names it; PWD is the main checkout, as a
 hook started by a session there inherits it; and git reads the fixture's own configuration and no
@@ -101,7 +105,6 @@ FILE_WORK = (
     "git add README.md",
     "git add -n .",
     "git add --dry-run -A",
-    "git restore README.md",
     "git restore --staged --worktree README.md",
     "git clean -fdx",
     "git clean -n",
@@ -115,11 +118,59 @@ FILE_WORK = (
 
 # `git checkout` with a path after `--` overwrites that path in the working tree and the index, as
 # `git restore --staged --worktree` does, so #200 refuses it too, reversing #114's pass (#226 Q17).
+# Its source-less form, `git checkout -- <path>`, is in RESTORES below: #376 admits it when it would
+# change no content.
 PATH_CHECKOUTS = (
-    "git checkout -- README.md",
     "git checkout HEAD -- README.md",
     "git checkout origin/main -- docs/agents/landing-work.md",
 )
+
+# The one restore the main checkout admits (#376): the working tree only, from the index, with no
+# option but `--`, of paths whose working-tree content already equals their blob at origin/main.
+RESTORES = (
+    "git restore README.md",
+    "git restore -- README.md",
+    "git checkout -- README.md",
+)
+
+# Every other restore, refused with the plain message whatever the files hold (#376's fourth and fifth
+# boxes): a source, the index, an option, no pathspec, and a directory, glob or magic pathspec.
+OTHER_RESTORES = (
+    "git restore --staged README.md",
+    "git restore -S README.md",
+    "git restore --source=origin/main README.md",
+    "git restore --source origin/main README.md",
+    "git restore -s origin/main README.md",
+    "git restore --worktree --staged README.md",
+    "git restore -W README.md",
+    "git restore -p README.md",
+    "git restore README.md --staged",
+    "git checkout origin/main -- README.md",
+    "git checkout -p -- README.md",
+    "git restore",
+    "git restore --",
+    "git restore .",
+    "git restore tools",
+    "git restore tools/",
+    "git restore '*.md'",
+    "git restore 'READ?E.md'",
+    "git restore '[R]EADME.md'",
+    "git restore ':(glob)*.md'",
+    "git restore ':/README.md'",
+    "git restore ':!tools'",
+    'git restore "$UNSET_IN_THE_HOOK"',
+    "git checkout -- tools",
+    "git checkout -- '*.md'",
+    "git -c core.autocrlf=true restore README.md",
+)
+
+# The line a refused restore adds, naming the path that failed (#376's second box).
+NOT_LANDED = "does not match its blob at origin/main"
+ABSENT = "is not a file at origin/main"
+STAGED = "has a staged change"
+
+# What the landed commit of the `behind` fixture gives README.md, which that checkout's HEAD lacks.
+LANDED = "landed\n"
 
 # The one merge the main checkout admits, on a clean `main` (#226 Q15, Q20): exactly the arguments
 # `--ff-only` and `origin/main`, in either order, after the `git fetch origin` that makes it current.
@@ -242,8 +293,49 @@ class Fixture:
                         "a detached HEAD": (self.detached, NOT_MAIN),
                         "another branch": (self.branch, NOT_MAIN)}
 
+        # The checkout #376 was raised on: origin/main a commit ahead of HEAD, and README.md already
+        # holding the landed content, so it shows as changed though a restore and the fast-forward
+        # would leave it as it is. The second also stages that content, and the third holds a changed
+        # file of its own beside it.
+        self.behind = self.behind_checkout("behind")
+        (self.behind / "draft.md").write_text("not on origin/main\n")
+        self.behind_staged = self.behind_checkout("behind-staged")
+        git(self.behind_staged, "add", "README.md", env=self.env)
+        self.behind_edited = self.behind_checkout("behind-edited")
+        (self.behind_edited / "NOTES.md").write_text("an edit in hand\n")
+        # A checkout that has never fetched: no origin/main to compare a restore with.
+        self.no_remote = self.checkout("no-remote")
+        git(self.no_remote, "update-ref", "-d", "refs/remotes/origin/main", env=self.env)
+        # Bytes that equal a blob, held by something that is not a regular file on one side: pointer
+        # is a symbolic link at origin/main and on disk a file holding its target's name, which is
+        # that link's blob; copy.md is a file at origin/main and on disk a link to a file holding
+        # its bytes. A restore of either would change what the path is, so each is refused.
+        self.links = self.top / "links"
+        self.links.mkdir()
+        (self.links / "copy.md").write_text("fixture\n")
+        os.symlink("README.md", self.links / "pointer")
+        self.checkout("links")
+        (self.links / "pointer").unlink()
+        (self.links / "pointer").write_text("README.md")
+        (self.links / "copy.md").unlink()
+        os.symlink("README.md", self.links / "copy.md")
+
+    def behind_checkout(self, name):
+        """A `main` one commit behind its origin/main, whose README.md holds origin/main's content."""
+        path = self.checkout(name)
+        (path / "NOTES.md").write_text("notes\n")
+        git(path, "add", "NOTES.md", env=self.env)
+        git(path, "commit", "-qm", "notes", env=self.env)
+        (path / "README.md").write_text(LANDED)
+        git(path, "commit", "-qam", "landed", env=self.env)
+        git(path, "update-ref", "refs/remotes/origin/main", "HEAD", env=self.env)
+        git(path, "reset", "-q", "--hard", "HEAD~1", env=self.env)
+        (path / "README.md").write_text(LANDED)
+        return path
+
     def checkout(self, name):
-        """A repository on `main` whose first commit holds the guard, the settings and a README."""
+        """A repository on `main` whose first commit holds the guard, the settings and a README, with
+        an origin/main at that commit, as the real checkout has once it is current."""
         path = self.top / name
         for tracked in (GUARD, SETTINGS):
             target = path / tracked
@@ -253,6 +345,7 @@ class Fixture:
         git(path, "init", "-q", env=self.env)
         git(path, "add", ".", env=self.env)
         git(path, "commit", "-qm", "fixture", env=self.env)
+        git(path, "update-ref", "refs/remotes/origin/main", "HEAD", env=self.env)
         return path
 
     def event(self, command, cwd):
@@ -520,6 +613,101 @@ class FileWork(GuardCase):
                 self.assertPasses(command, self.fx.linked)
             with self.subTest(command=command, route="-C into linked, from the main checkout"):
                 self.assertPasses(command.replace("git ", f"git -C {self.fx.linked} ", 1), self.fx.main)
+
+
+class Restore(GuardCase):
+    """#376: the one restore the main checkout admits, a restore that changes no content once `main`
+    is fast-forwarded, and its refusals."""
+
+    def test_a_restore_whose_every_path_equals_origin_main_passes(self):
+        behind = self.fx.behind
+        for command, cwd in [(command, behind) for command in RESTORES] + [
+            ("git restore README.md NOTES.md", behind),
+            ("git checkout -- README.md NOTES.md tools/main_checkout_guard.py", behind),
+            (f"git -C {behind} restore README.md", self.fx.plain),
+            (f"cd {behind} && git checkout -- README.md", self.fx.plain),
+            # A path is read from the directory git runs in, as git reads it.
+            ("git restore main_checkout_guard.py ../README.md", behind / "tools"),
+            (f"git -C {behind}/tools checkout -- ../README.md", self.fx.plain),
+            (f"git restore {behind}/README.md", behind),
+        ]:
+            with self.subTest(command=command, cwd=str(cwd)):
+                self.assertPasses(command, cwd, behind)
+        with self.subTest(state="a clean, current main"):
+            for command in RESTORES:
+                self.assertPasses(command, self.fx.main)
+
+    def test_a_restore_with_one_path_that_differs_is_refused_naming_it(self):
+        edited = self.fx.behind_edited
+        for command, cwd, repository, path in (
+            ("git restore README.md NOTES.md", edited, edited, "NOTES.md"),
+            ("git checkout -- NOTES.md README.md", edited, edited, "NOTES.md"),
+            (f"git -C {edited} restore -- README.md NOTES.md", self.fx.plain, edited, "NOTES.md"),
+            ("git restore ../NOTES.md", edited / "tools", edited, "../NOTES.md"),
+            ("git restore README.md", self.fx.dirty, self.fx.dirty, "README.md"),
+            # A deleted file holds no content, so restoring it would change the checkout.
+            ("git restore README.md", self.fx.deleted, self.fx.deleted, "README.md"),
+        ):
+            with self.subTest(command=command, cwd=str(cwd)):
+                stderr = self.assertRefused(command, cwd, repository)
+                self.assertIn(f"`{path}` {NOT_LANDED}", stderr)
+                if path != "README.md":
+                    # The path that matches is not named as the reason.
+                    self.assertNotIn("`README.md`", stderr)
+
+    def test_a_restore_naming_a_path_absent_on_origin_main_is_refused(self):
+        for command, cwd, path in (
+            ("git restore draft.md", self.fx.behind, "draft.md"),
+            ("git restore README.md draft.md", self.fx.behind, "draft.md"),
+            ("git checkout -- nothing.md", self.fx.behind, "nothing.md"),
+            ("git restore untracked.txt", self.fx.main, "untracked.txt"),
+        ):
+            with self.subTest(command=command):
+                stderr = self.assertRefused(command, cwd, cwd)
+                self.assertIn(f"`{path}` {ABSENT}", stderr)
+
+    def test_a_restore_of_a_path_with_a_staged_change_is_refused(self):
+        for command in RESTORES:
+            with self.subTest(command=command, state="staged content equal to origin/main"):
+                stderr = self.assertRefused(command, self.fx.behind_staged, self.fx.behind_staged)
+                self.assertIn(f"`README.md` {STAGED}", stderr)
+            with self.subTest(command=command, state="staged content that differs"):
+                self.assertRefused(command, self.fx.staged, self.fx.staged)
+            with self.subTest(command=command, state="an index git cannot read"):
+                self.assertRefused(command, self.fx.unreadable, self.fx.unreadable)
+
+    def test_a_restore_with_a_source_the_index_an_option_or_no_plain_file_pathspec_is_refused(self):
+        for command in OTHER_RESTORES:
+            with self.subTest(command=command):
+                stderr = self.assertRefused(command, self.fx.behind, self.fx.behind)
+                # Not the admitted spelling, so today's message, with no line naming a path between
+                # its first line and the next.
+                self.assertTrue(stderr.splitlines()[1].startswith("That is this repository's main checkout."),
+                                stderr)
+
+    def test_a_restore_off_main_is_refused(self):
+        # No fast-forward follows off `main`, so the restore would change the file it restores.
+        for cwd in (self.fx.detached, self.fx.branch):
+            for command in RESTORES:
+                with self.subTest(command=command, cwd=str(cwd)):
+                    stderr = self.assertRefused(command, cwd, cwd)
+                    self.assertIn("The restore was refused because HEAD is not `main`.", stderr)
+
+    def test_a_restore_of_a_link_on_either_side_is_refused(self):
+        for command, path, line in (("git restore pointer", "pointer", ABSENT),
+                                    ("git checkout -- copy.md", "copy.md", NOT_LANDED)):
+            with self.subTest(command=command):
+                stderr = self.assertRefused(command, self.fx.links, self.fx.links)
+                self.assertIn(f"`{path}` {line}", stderr)
+
+    def test_without_an_origin_main_every_restore_is_refused(self):
+        stderr = self.assertRefused("git restore README.md", self.fx.no_remote, self.fx.no_remote)
+        self.assertIn(f"`README.md` {ABSENT}", stderr)
+
+    def test_the_restores_pass_in_a_linked_worktree(self):
+        for command in RESTORES + OTHER_RESTORES:
+            with self.subTest(command=command):
+                self.assertPasses(command, self.fx.linked)
 
 
 class FastForward(GuardCase):

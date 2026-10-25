@@ -63,10 +63,17 @@ A section in `contracts/pipeline.md` after "Health endpoints", headed "Start-up 
 > waits `HostOptions.ShutdownTimeout`, a constant in `Platform.Hosting`, for anything still in
 > flight, then aborts it. Last the task is killed: the container's `stopTimeout`, which workstream
 > 1 sets longer than the process's own timeout, so the process always finishes on its own terms.
-> The three numbers are a deregistration delay of 120 seconds, a shutdown timeout of 90 seconds
-> and a stop timeout of 120 seconds. A request the proxy is forwarding is bounded by the entry's
-> `timeoutSeconds` (`contracts/upstream-contract.md`), which can exceed every number here; such a
-> request is aborted at the shutdown timeout and the browser sees its connection close.
+> The three numbers are a deregistration delay of 30 seconds, a shutdown timeout of 25 seconds
+> and a stop timeout of 30 seconds, and they act in that order. The drain covers the longest
+> request the gateway makes on its own account, a token refresh with the acquisition of its lease,
+> which is bounded by the 21-second lease; the shutdown timeout is at least that lease too, so a
+> refresh in flight when the process is told to stop still finishes; and the stop timeout is at
+> least the shutdown timeout. A code exchange on the identity backchannel is inside that bound only
+> once the handler's backchannel timeout is `ProviderDeadline`; until then it can take the
+> backchannel's own 60 seconds, and one that runs past the shutdown timeout is aborted and its
+> login fails. A request the proxy is forwarding is bounded by the entry's
+> `timeoutSeconds` (`contracts/upstream-contract.md`), which can exceed the window; such a request
+> can be cut by a deployment, and the browser sees its connection close.
 >
 > A login is in flight from the redirect to the provider until the callback. Until P2-2 gives a
 > cell one key ring, a callback that lands on a task other than the one that began the login is
@@ -75,19 +82,25 @@ A section in `contracts/pipeline.md` after "Health endpoints", headed "Start-up 
 >
 > Until P2-1, a stopped task takes every session it holds with it. From P2-1 on, it takes none.
 
-The three numbers are proposals, each with its reason. 120 is the Fargate maximum for
-`stopTimeout`, which is why the process's own timeout sits under it. 90 covers a code exchange on
-the identity backchannel, whose own timeout is 60 seconds
-(`src/Platform.Identity/IssuerDirectory.cs`). 120 for draining is shorter than the 300-second
-default because an asset or `/bff` request takes
-milliseconds and only a proxied call runs longer, where the entry's own timeout governs. The
-integrator decides the numbers; the request is that they are written down together.
+The three numbers are #332's row F1, each with its reason (amended 2026-10-25; see the amendment
+below). 30 for draining is shorter than the 300-second default because an asset or `/bff` request
+takes milliseconds, and the longest request the gateway makes for itself, a refresh with its
+acquisition, is bounded by the 21-second lease (`ProviderDeadline` 10 s + `LeaseMargin` 11 s,
+`contracts/changes/p2-3-session-lease-abstraction.md`, the amendment of 2026-10-24). 25 for the
+shutdown timeout is at least that lease, so a refresh that started before SIGTERM finishes. 30 for
+`stopTimeout` is at least 25, so the process finishes on its own terms, and is also Fargate's
+default. The 25 seconds cover a code exchange on the identity backchannel only once F1's
+`BackchannelTimeout` = `ProviderDeadline` holds; until then the backchannel's own timeout is 60
+seconds (`src/Platform.Identity/IssuerDirectory.cs`), and a code exchange that runs past the
+shutdown timeout is aborted and its login fails. The integrator decides the numbers; the request is
+that they are written down together.
 
 Whether the numbers belong in platform configuration instead, as a `Platform:ShutdownSeconds` the
-task definition sets beside `stopTimeout` from one Terraform variable, is the one open question. It
+task definition sets beside `stopTimeout` from one Terraform variable, was the one open question. It
 would keep the two values from drifting, at the cost of a key in a closed section of
 `contracts/platform-config.schema.json` that the smoke test and the harness would then need too.
-The constant is proposed because the Kestrel limits set the precedent.
+The constant is proposed because the Kestrel limits set the precedent, and #347's Q6 took it: a
+`Platform.Hosting` constant registered by `AddPlatformHosting`.
 
 ## Why each part lands when it does
 
@@ -99,9 +112,10 @@ does once the three owners set their values. It lands on the integrator's decisi
 
 - Workstream 2, in `tests/Platform.Hosting.Tests`: a host whose `ShutdownTimeout` is the constant
   finishes a request in flight that takes less than it, and aborts one that takes more.
-- Workstream 1, as `terraform test` assertions on the cell module: the task definition's
-  `stopTimeout` exceeds the constant, and the target group's deregistration delay is the stated
-  value.
+- Workstream 1, as `terraform test` assertions on the cell module: the gateway container's
+  `stopTimeout` is 30 and the target group's deregistration delay is 30, each pinned to its exact
+  value; the test names 25 as F1's shutdown timeout in a comment and reads nothing across the
+  boundary (#347 Q5 and Q6, ADR-0015).
 - Workstream 6: P2-4's acceptance, a rolling deployment and a killed task with live sessions,
   which needs P2-1 and P2-2 and runs with the deployed gate runs (#63). Hermetically, a second host
   in the harness that is stopped mid-request while the first keeps serving.
@@ -109,3 +123,34 @@ does once the three owners set their values. It lands on the integrator's decisi
 ## Why this is a request rather than an edit
 
 `contracts/pipeline.md` is the integrator's and froze at G1a.
+
+## Amendment, 2026-10-25: #332 F1's numbers
+
+On Adam's answer to Q5 of Overnight 2026-10-24 (#349), confirmed at
+https://github.com/adammedford/spa-platform/issues/349#issuecomment-6385117829, which takes #347's
+Q5, and for #359. The three numbers first proposed here, a deregistration delay of 120 seconds, a
+shutdown timeout of 90 seconds and a stop timeout of 120 seconds, are replaced by #332's row F1:
+deregistration delay 30 s, `ShutdownTimeout` 25 s and `stopTimeout` 30 s. The change above and the
+paragraph of reasons under it carry the new numbers; the request is otherwise unchanged and still
+open.
+
+- **The relations, which are what the contract states.** The three act in the order drain,
+  `ShutdownTimeout`, `stopTimeout`. The drain and the shutdown timeout each cover the 21 s lease,
+  which bounds a refresh with its acquisition (#332 G1, confirmed at
+  https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562; #347's note "the
+  refresh budget is 21 s, not 16 s"). Where #347 Q5 and #359 say the 16 s budget, read 21 s; every
+  relation holds with either. `stopTimeout` is at least `ShutdownTimeout`.
+- **The consequence the contract names.** An `/api` call whose entry's `timeoutSeconds` runs past
+  the window can be cut by a deployment. The 120-second drain made that rarer and did not remove
+  it, since `timeoutSeconds` can exceed any of the three.
+- **The open question.** Platform configuration or a constant: #347's Q6 took the constant in
+  `Platform.Hosting`, registered by `AddPlatformHosting`.
+- **What waits on F1 beyond these numbers.** The 25 s cover a code exchange only once the
+  handler's `BackchannelTimeout` equals `ProviderDeadline`, as F1 states; until then the
+  backchannel's own timeout is 60 s.
+- **Where the numbers are set.** `deregistration_delay` and the gateway container's `stopTimeout`
+  by #347's T10 in `infra/modules/cell`, citing F1; `ShutdownTimeout` by workstream 2 in
+  `Platform.Hosting`.
+
+Deciding the request, writing the section into `contracts/pipeline.md`, is still the integrator's
+separate act under `contracts/README.md` -> What may land between gates.

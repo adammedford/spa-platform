@@ -22,8 +22,11 @@ public sealed class KeyRingTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// Mutation: drop the decorator and the put carries no tags (so the package adds none of its own);
-    /// drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at all.
+    /// The key's put carries exactly the three tags, set through <c>PersistOptions.Tags</c> (#349 Q47);
+    /// <see cref="The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix"/> shows the decorator adds
+    /// none. Mutation: drop the three <c>PersistOptions.Tags</c> entries in <c>KeyRing.Register</c> and
+    /// the put carries no tags; drop <c>PersistKeysToAWSSystemsManager</c> and the stub sees no put at
+    /// all.
     /// </summary>
     [Fact]
     public async Task A_host_with_the_section_writes_one_tagged_SecureString_and_a_second_host_over_the_same_store_reads_it()
@@ -155,6 +158,40 @@ public sealed class KeyRingTests
         Assert.Contains("IAmazonSimpleSystemsManagement", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An empty or blank <c>DataProtection:KmsKeyId</c> is no key id (#357): the put carries none, so
+    /// Parameter Store encrypts under the account's default key, as it does with the key absent.
+    /// Mutation: drop the normalisation in <c>KeyRing.Register</c> and the blank row's put carries the
+    /// spaces as its key id. The empty row stays green under that mutation, because the package itself
+    /// sets <c>KeyId</c> only when <c>!string.IsNullOrEmpty(KMSKeyId)</c> (tried on 4.0.3; the package's
+    /// <c>SSMXmlRepository.StoreElementAsync</c>,
+    /// https://github.com/aws/aws-ssm-data-protection-provider-for-aspnet/blob/master/src/Amazon.AspNetCore.DataProtection.SSM/SSMXmlRepository.cs);
+    /// it pins the outcome, and the blank row is the one only the normalisation catches.
+    /// </summary>
+    [Theory]
+    [InlineData("empty", "")]
+    [InlineData("blank", "   ")]
+    [InlineData("absent", null)]
+    public async Task A_key_id_that_is_empty_blank_or_absent_puts_with_no_key_id(string shape, string? keyId)
+    {
+        Dictionary<string, string?> configuration = RingHost.WithSection();
+        if (keyId is null)
+        {
+            configuration.Remove("DataProtection:KmsKeyId");
+        }
+        else
+        {
+            configuration["DataProtection:KmsKeyId"] = keyId;
+        }
+
+        StubRingStore store = new();
+        await using StageHost host = await RingHost.StartAsync(configuration, store, Ct);
+
+        PutParameterRequest put = Assert.Single(store.Puts);
+        Assert.Equal(ParameterType.SecureString, put.Type);
+        Assert.True(put.KeyId is null, $"The {shape} key id was put as '{put.KeyId}'.");
+    }
+
     public static TheoryData<string> ReadFailures => ["access-denied", "network"];
 
     /// <summary>
@@ -234,8 +271,8 @@ public sealed class KeyRingTests
     }
 
     /// <summary>
-    /// The decorator hands a request it does not tag to the inner client as it was given: the same
-    /// object, untouched, and the inner client's answer back. Mutation: copy the request in the
+    /// The decorator hands every request to the inner client as it was given: the same object,
+    /// untouched, and the inner client's answer back. Mutation: copy the request in the
     /// decorator and the reference check fails; drop the decorator and the client is the stub itself.
     /// </summary>
     [Fact]
@@ -257,25 +294,29 @@ public sealed class KeyRingTests
     }
 
     /// <summary>
-    /// Tags go only on a put under the ring's prefix, and the prefix is a path: a sibling whose name
-    /// merely begins with the same characters is not under it. Mutation: compare against the prefix
-    /// without its trailing slash, or drop the prefix check, and the sibling or the secret is tagged.
+    /// The ring's tags ride <c>PersistOptions.Tags</c> (#349 Q47), so the decorator adds none: a put
+    /// under the ring's prefix, as a key write's name is, reaches the inner client as the same object
+    /// with no tags. Mutation: put back the decorator's tagging of a put under the prefix and the put
+    /// carries three tags.
     /// </summary>
-    [Theory]
-    [InlineData("/spa-platform/test/data-protection/key-1", true)]
-    [InlineData("/spa-platform/test/apps/app1/client-secret", false)]
-    [InlineData("/spa-platform/test/data-protection-old/key-1", false)]
-    public async Task The_decorator_tags_a_put_only_under_the_ring_prefix(string name, bool tagged)
+    [Fact]
+    public async Task The_decorator_adds_no_tags_to_a_put_under_the_ring_prefix()
     {
         StubRingStore store = new();
         await using StageHost host = await RingHost.StartAsync(RingHost.WithSection(), store, Ct);
         IAmazonSimpleSystemsManagement client = host.Services.GetRequiredService<IAmazonSimpleSystemsManagement>();
+        Assert.NotSame(store, client);
 
-        await client.PutParameterAsync(new PutParameterRequest { Name = name, Value = "v", Type = ParameterType.String }, Ct);
+        PutParameterRequest put = new()
+        {
+            Name = RingHost.Prefix + "key-1",
+            Value = "v",
+            Type = ParameterType.String,
+        };
+        await client.PutParameterAsync(put, Ct);
 
-        PutParameterRequest seen = store.Puts[^1];
-        Assert.Equal(name, seen.Name);
-        Assert.Equal(tagged ? 3 : 0, seen.Tags?.Count ?? 0);
+        Assert.Same(put, store.Puts[^1]);
+        Assert.Null(put.Tags);
     }
 
     /// <summary>

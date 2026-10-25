@@ -23,7 +23,9 @@
 # port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
 # tests, and the test companions the change earns: that of each script in tools/ or .github/ it
 # touches (#134), and that of each script or companion naming a library it touches, followed through
-# the libraries that name that one (#237). CI runs the companions .github/workflows/ci.yml lists,
+# the libraries that name that one (#237), and that of each companion declaring, on its
+# `Checkout inputs:` line, a file of the checkout the change touches (#354), so a new pin runs the
+# pins inventory's companion. CI runs the companions .github/workflows/ci.yml lists,
 # one step each, whatever the diff, so that file says which run there; this check runs only those
 # the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
 # when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
@@ -69,6 +71,15 @@
 # green on main, and only this makes that run test anything. The hook never passes it, and a lane
 # does not need it: its diff earns its skips.
 #
+# --skip-tests, with --full only, runs everything the full check runs except `dotnet test --solution`:
+# the build, the smoke test, the gateway image, Terraform and its tests and the companions still
+# run. The overnight integrate step passes it once, after a gate that failed on test projects the
+# ticket's change cannot reach has had those projects re-run alone and pass (#375): the check stops
+# at its first failure, so a gate red on the tests never ran what comes after them, and counting it
+# passed on the re-run alone would be a green verdict that skipped a check. The suite's verdict is
+# then the first log's, every other project passed, plus each re-run's. The verdict line names the
+# skip, "the build, not the tests (--skip-tests), ...", so the log never reads as a whole pass.
+#
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
 # branch adds to main. An overnight lane names its fork point instead, so its own commits are
@@ -102,19 +113,21 @@ set -euo pipefail
 
 usage() {
   echo "usage: tools/check.sh [--base <ref>] [--both-halves]" >&2
-  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves]" >&2
+  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves] [--skip-tests]" >&2
   echo "check: fail: $1." >&2
   exit 2
 }
 
 full=false
 both=false
+skip_tests=false
 port=""
 named_base=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --full) full=true ;;
     --both-halves) both=true ;;
+    --skip-tests) skip_tests=true ;;
     --port)
       [ "$#" -ge 2 ] || usage "--port needs a value"
       port="$2"
@@ -138,6 +151,7 @@ if $full; then
   me="check"
 else
   [ -z "$port" ] || usage "--port is for --full"
+  ! $skip_tests || usage "--skip-tests is for --full"
   me="pre-push"
 fi
 
@@ -470,10 +484,16 @@ if touches build; then
   quietly dotnet build --nologo --verbosity quiet || fail "the solution does not build."
   ran="$ran, the build"
   if $full; then
-    dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+    if $skip_tests; then
+      echo "check: the tests skipped: --skip-tests says they were run another way (#375)."
+      tests_ran="not the tests (--skip-tests)"
+    else
+      dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+      tests_ran="the tests"
+    fi
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
     tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
-    ran="$ran, the tests, the smoke test, the gateway image"
+    ran="$ran, $tests_ran, the smoke test, the gateway image"
   fi
 elif $full; then
   echo "check: build, tests, smoke test and gateway image skipped: no .NET source changed."
@@ -672,10 +692,50 @@ $user"
   done
 }
 
-# Whether the companion $1 runs: the diff names it, or --both-halves asks for every one. grep -Fx
-# rather than -q: -q would close the pipe at a match and fail printf under pipefail.
+# Whether the diff changes a file of the checkout the companion $1 declares it reads. A companion can
+# read files outside tools/ and .github/, which no rule above reaches: tools/pins_inventory_tests.py
+# copies the live pins file, SDK pin file, solution, build properties and project files and counts
+# what they hold, so on #336 a new pin passed this check with its companions skipped and failed
+# three cases in CI's Documents job (#354). Such a companion says which on a line of its own,
+#
+#     Checkout inputs: Directory.Packages.props global.json *.csproj
+#
+# and a changed path matching one of the patterns earns it. A pattern is a shell `case` pattern
+# held to the whole path from the top level, so `global.json` is the top-level file alone and
+# `*.csproj` is a project file at any depth. The list lives in the companion, beside the copies that
+# depend on it, and not here, so a companion that starts reading another file changes one file. The
+# patterns are split with pathname expansion off, or `*.csproj` would become the names of the
+# project files in the working directory. grep exits 1 on no such line; any other status is a
+# companion that was not read, and fails the check rather than run less.
+declares_a_changed_input() {
+  local line pattern path status
+  status=0
+  line="$(grep -h -e '^Checkout inputs:' -- "$1")" || status=$?
+  [ "$status" -le 1 ] || fail "could not read the checkout inputs $1 declares."
+  [ -n "$line" ] || return 1
+  line="${line//Checkout inputs:/ }"
+  set -f
+  for pattern in $line; do
+    for path in ${changed:-}; do
+      case "$path" in
+        $pattern)
+          set +f
+          return 0
+          ;;
+      esac
+    done
+  done
+  set +f
+  return 1
+}
+
+# Whether the companion $1 runs: the diff names it, or a file of the checkout it declares, or
+# --both-halves asks for every one. grep -Fx rather than -q: -q would close the pipe at a match and
+# fail printf under pipefail.
 earned() {
-  $both || printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null
+  $both && return 0
+  printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null && return 0
+  declares_a_changed_input "$1"
 }
 
 # What the verdict adds when it ran no check of the check itself.

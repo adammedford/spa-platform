@@ -34,6 +34,7 @@ public sealed class PublicSurfaceTests
         "ICsrfTokens",
         "IIdpProfile",
         "IObjectStore",
+        "IRefreshLeases",
         "IRegistry",
         "IRequestTelemetryFeature",
         "ISessionStore",
@@ -41,6 +42,7 @@ public sealed class PublicSurfaceTests
         "OAuthDefinition",
         "PlatformPolicy",
         "Problems",
+        "RefreshLease",
         "RegistrySnapshot",
         "Rejection",
         "RuleIds",
@@ -60,6 +62,7 @@ public sealed class PublicSurfaceTests
     public void The_public_surface_is_exactly_what_the_contract_names()
     {
         // Mutation (#160): drop "Problems" or "Rejection" from Contracted, and this fails, 1 of 108 each.
+        // Mutation (#337): drop "IRefreshLeases" or "RefreshLease" from Contracted, and this fails.
         Assert.Equal(Contracted, PublicTypes().Select(Name).Order().ToArray());
     }
 

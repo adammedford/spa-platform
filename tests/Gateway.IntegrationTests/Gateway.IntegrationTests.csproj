@@ -4,6 +4,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../Gateway.TestHarness/Gateway.TestHarness.csproj" />
+    <!-- The continuity rows run spactl wait, with its instances option, in process against the two-host harness (#345). -->
+    <ProjectReference Include="../../tools/spactl/spactl.csproj" />
   </ItemGroup>
 
 </Project>
