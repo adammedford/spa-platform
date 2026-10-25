@@ -451,7 +451,11 @@ def restore_paths(subcommand, args, options):
     """The paths of a restore in the one form admitted (#376), or None: `git restore` with no option but
     `--`, or `git checkout --`, each followed by one or more paths, every one a plain path to a file and
     none a pattern or magic. With no `--source` or `--staged` both restore the working tree from the
-    index, which a path with no staged change holds as HEAD has it."""
+    index, which a path with no staged change holds as HEAD has it: with no --source, restore reads
+    "from HEAD if --staged is given, otherwise from the index"
+    (https://git-scm.com/docs/git-restore#_options), and checkout's `[--] <pathspec>` form, with no
+    tree-ish, overwrites the working tree "with the contents in the index"
+    (https://git-scm.com/docs/git-checkout#_description)."""
     if options or any(arg is None for arg in args):
         return None
     if subcommand == "checkout":
@@ -506,7 +510,11 @@ def unrestorable(directory, paths):
     is read from directory, as git reads it. Each path must be a regular file at origin/main whose
     working-tree bytes are that blob's, and must have no staged change, so the index the restore copies
     from holds HEAD's blob; once `main` is fast-forwarded the file holds the same bytes it holds now.
-    Any git that fails refuses, as a failing status read does in unclean()."""
+    Any git that fails refuses, as a failing status read does in unclean(). `--no-filters` hashes the
+    bytes as they are, with no clean filter or line-ending conversion
+    (https://git-scm.com/docs/git-hash-object#Documentation/git-hash-object.txt---no-filters), and
+    `diff --quiet` implies --exit-code, so it exits 1 on a difference
+    (https://git-scm.com/docs/git-diff#Documentation/git-diff.txt---quiet)."""
     for path in paths:
         target = within(directory, path)
         if os.path.isdir(target):

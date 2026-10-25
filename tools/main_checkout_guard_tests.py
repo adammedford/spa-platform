@@ -14,7 +14,8 @@ whose index git cannot read, a detached HEAD and another branch, for the fast-fo
 (#200). Each has an origin/main at its commit. For the restore (#376), three are a `main` one
 commit behind origin/main with README.md holding origin/main's content, as on 2026-10-23: one with
 an untracked file besides, one with README.md staged, and one with another tracked file changed;
-and one has no origin/main at all.
+one has no origin/main at all; and one holds a symbolic link where origin/main has a file, and a
+file where it has a link.
 The throwaway directory keeps the path the system gives it, which on macOS runs through a symbolic
 link (/var is /private/var). HOME is that directory, so `~` names it; PWD is the main checkout, as a
 hook started by a session there inherits it; and git reads the fixture's own configuration and no
@@ -305,6 +306,19 @@ class Fixture:
         # A checkout that has never fetched: no origin/main to compare a restore with.
         self.no_remote = self.checkout("no-remote")
         git(self.no_remote, "update-ref", "-d", "refs/remotes/origin/main", env=self.env)
+        # Bytes that equal a blob, held by something that is not a regular file on one side: pointer
+        # is a symbolic link at origin/main and on disk a file holding its target's name, which is
+        # that link's blob; copy.md is a file at origin/main and on disk a link to a file holding
+        # its bytes. A restore of either would change what the path is, so each is refused.
+        self.links = self.top / "links"
+        self.links.mkdir()
+        (self.links / "copy.md").write_text("fixture\n")
+        os.symlink("README.md", self.links / "pointer")
+        self.checkout("links")
+        (self.links / "pointer").unlink()
+        (self.links / "pointer").write_text("README.md")
+        (self.links / "copy.md").unlink()
+        os.symlink("README.md", self.links / "copy.md")
 
     def behind_checkout(self, name):
         """A `main` one commit behind its origin/main, whose README.md holds origin/main's content."""
@@ -670,6 +684,13 @@ class Restore(GuardCase):
                 # its first line and the next.
                 self.assertTrue(stderr.splitlines()[1].startswith("That is this repository's main checkout."),
                                 stderr)
+
+    def test_a_restore_of_a_link_on_either_side_is_refused(self):
+        for command, path, line in (("git restore pointer", "pointer", ABSENT),
+                                    ("git checkout -- copy.md", "copy.md", NOT_LANDED)):
+            with self.subTest(command=command):
+                stderr = self.assertRefused(command, self.fx.links, self.fx.links)
+                self.assertIn(f"`{path}` {line}", stderr)
 
     def test_without_an_origin_main_every_restore_is_refused(self):
         stderr = self.assertRefused("git restore README.md", self.fx.no_remote, self.fx.no_remote)
