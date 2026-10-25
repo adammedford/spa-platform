@@ -218,7 +218,7 @@ def checkout(given: str) -> pathlib.Path:
     forecast every row unclaimed."""
     where = pathlib.Path(given)
     if not where.is_dir():
-        raise Refused(f"--repo {given} is not a git checkout: no such directory")
+        raise Refused(f"--repo {given} is not a git checkout: not a directory")
     try:
         top = run(["git", "rev-parse", "--show-toplevel"], where).strip()
     except Refused as refusal:

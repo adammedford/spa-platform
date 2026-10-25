@@ -1111,11 +1111,16 @@ class RepoFlag(unittest.TestCase):
 
     def test_a_repo_that_is_not_a_checkout_exits_1_naming_it(self):
         missing = self.elsewhere / "no-such-directory"
-        for given in (self.elsewhere, missing, self.checkout / collect.GUIDE):
+        # A path that is no directory is refused before git runs, naming why; a directory git
+        # finds no working tree in is refused with git's own reason.
+        for given, why in ((self.elsewhere, "not a git repository"),
+                           (missing, "not a directory"),
+                           (self.checkout / collect.GUIDE, "not a directory")):
             with self.subTest(given=given.name):
                 done = self.collect_from(self.outside, "--repo", str(given))
                 self.assertEqual((1, ""), (done.returncode, done.stdout))
-                self.assertIn(f"--repo {given} is not a git checkout", done.stderr)
+                self.assertIn(f"--repo {given} is not a git checkout: ", done.stderr)
+                self.assertIn(why, done.stderr)
                 self.assertFalse(self.log.exists(), "gh was asked although --repo was refused")
 
 
