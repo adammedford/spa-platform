@@ -28,9 +28,10 @@ merge settings rather than one named ref; a session runs `git fetch origin` and 
 on 2026-10-23 the checkout was behind with two tracked files changed to exactly origin/main's
 content, and the guard refused the restore that would have let the fast-forward run. It admits
 `git restore <paths>` with no option but `--`, and `git checkout -- <paths>`, which restore the
-working tree from the index, when each path, read from the directory git runs in, is a regular file
-at origin/main whose working-tree bytes are that blob's (`git hash-object --no-filters`) and has no
-staged change, so the index holds HEAD's blob. A restore with `--staged`, `--source` or any other
+working tree from the index, when HEAD is `main` (off it no fast-forward follows) and each path,
+read from the directory git runs in, is a regular file at origin/main whose working-tree bytes are
+that blob's (`git hash-object --no-filters`) and has no staged change, so the index holds HEAD's
+blob. A restore with `--staged`, `--source` or any other
 option, `git checkout <source> -- <paths>`, no path, a directory, a glob or a pathspec with magic
 is refused as before, and so is one whose paths fail the test, with a line naming the first path
 that does. The guard reads the files before the call runs, so a restore and the fast-forward after
@@ -112,6 +113,7 @@ CHANGED = "The fast-forward was refused because tracked files have changes, or g
 NOT_LANDED = "The restore was refused because `{path}` does not match its blob at origin/main.\n"
 ABSENT = "The restore was refused because `{path}` is not a file at origin/main, or git could not read it.\n"
 STAGED = "The restore was refused because `{path}` has a staged change, or git could not read the index.\n"
+RESTORE_NOT_MAIN = "The restore was refused because HEAD is not `main`.\n"
 
 # The subcommands refused whatever follows them. Most forms of #114's move the branch or rewrite
 # history, and that ticket refused the few that do not, such as `git reset -- <path>`, with the rest;
@@ -507,9 +509,10 @@ def unclean(directory):
 def unrestorable(directory, paths):
     """The line saying why a restore of paths in directory would change content, "" when it would
     change none, or None when it is not the admitted form after all, a path naming a directory. A path
-    is read from directory, as git reads it. Each path must be a regular file at origin/main whose
-    working-tree bytes are that blob's, and must have no staged change, so the index the restore copies
-    from holds HEAD's blob; once `main` is fast-forwarded the file holds the same bytes it holds now.
+    is read from directory, as git reads it. HEAD must be `main`, as for the fast-forward, and each
+    path must be a regular file at origin/main whose working-tree bytes are that blob's, and must have
+    no staged change, so the index the restore copies from holds HEAD's blob; once `main` is
+    fast-forwarded the file holds the same bytes it holds now.
     Any git that fails refuses, as a failing status read does in unclean(). `--no-filters` hashes the
     bytes as they are, with no clean filter or line-ending conversion
     (https://git-scm.com/docs/git-hash-object#Documentation/git-hash-object.txt---no-filters), and
@@ -519,6 +522,11 @@ def unrestorable(directory, paths):
         target = within(directory, path)
         if os.path.isdir(target):
             return None
+    # Off `main` no fast-forward follows, so the restore would leave HEAD's blob where origin/main's
+    # bytes were: it changes content, which is what #376 admits a restore for not doing.
+    head = run_git(directory, "symbolic-ref", "-q", "HEAD")
+    if head.returncode != 0 or head.stdout.strip() != "refs/heads/main":
+        return RESTORE_NOT_MAIN
     for path in paths:
         target = within(directory, path)
         listing = run_git(directory, "ls-tree", "origin/main", "--", path)

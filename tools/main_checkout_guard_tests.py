@@ -685,6 +685,14 @@ class Restore(GuardCase):
                 self.assertTrue(stderr.splitlines()[1].startswith("That is this repository's main checkout."),
                                 stderr)
 
+    def test_a_restore_off_main_is_refused(self):
+        # No fast-forward follows off `main`, so the restore would change the file it restores.
+        for cwd in (self.fx.detached, self.fx.branch):
+            for command in RESTORES:
+                with self.subTest(command=command, cwd=str(cwd)):
+                    stderr = self.assertRefused(command, cwd, cwd)
+                    self.assertIn("The restore was refused because HEAD is not `main`.", stderr)
+
     def test_a_restore_of_a_link_on_either_side_is_refused(self):
         for command, path, line in (("git restore pointer", "pointer", ABSENT),
                                     ("git checkout -- copy.md", "copy.md", NOT_LANDED)):
