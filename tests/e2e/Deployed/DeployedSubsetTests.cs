@@ -17,13 +17,23 @@ public sealed partial class DeployedSubsetTests
     [Fact]
     public void Every_negative_row_the_tests_tab_marks_d_has_a_test_and_every_negative_test_starts_the_chosen_stack()
     {
-        string[] rows = DeployedRows(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "docs", "plan", "04-tests.md")));
-        Assert.Contains("N-26", rows); // The row only a real browser can decide (R-D3), and the reason for the tier.
+        string page = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "docs", "plan", "04-tests.md"));
+        Assert.Contains("N-26", DeployedRows(page)); // The row only a real browser can decide (R-D3), and the reason for the tier.
 
         Dictionary<string, string> sources = Directory.GetFiles(NegativeDirectory, "*.cs").ToDictionary(path => Path.GetFileName(path), File.ReadAllText);
+        AssertEveryDRowHasATest(page, File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "contracts", "test-ids.md")), sources);
+        Assert.Empty(LocalOnly(sources));
+    }
+
+    /// <summary>
+    /// Fails, naming each id, when a D row of the export's negative table or of the register's (#322) has
+    /// no <c>Task N</c><i>nn</i><c>_</c> test in the sources.
+    /// </summary>
+    internal static void AssertEveryDRowHasATest(string page, string register, Dictionary<string, string> sources)
+    {
+        string[] rows = [.. DeployedRows(page), .. RegisterDeployedRows(register)];
         string[] untested = [.. rows.Where(row => !sources.Values.Any(source => source.Contains($"Task N{row[2..]}_", StringComparison.Ordinal)))];
         Assert.Empty(untested);
-        Assert.Empty(LocalOnly(sources));
     }
 
     [Fact]
@@ -76,6 +86,79 @@ public sealed partial class DeployedSubsetTests
     }
 
     [Fact]
+    public void The_registers_d_rows_are_read_from_its_tier_column_not_the_last_one()
+    {
+        // contracts/test-ids.md (#322) adds Recorded by after Tier, so Tier is not the row's last cell there.
+        const string register = """
+            ## Functional (F)
+
+            | ID | Test | Expect | Tier | Criterion | Recorded by |
+            | --- | --- | --- | --- | --- | --- |
+            | F-12 | a | b | D | c | #322 |
+
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            | N-28 | Plant a D cookie | Refused | D | #322 Q8 |
+            | N-29 | Forge one | 401 | H | D |
+            | N-100 | Replay it | Rejected | H, D | #324 Q22 |
+
+            ## Infrastructure and architecture properties (P)
+
+            | N-99 | not in the table | x | D | #322 |
+            """;
+
+        Assert.Equal(["N-28", "N-100"], RegisterDeployedRows(register));
+    }
+
+    /// <summary>An export page whose one D row, N-01, the sources below cover.</summary>
+    private const string ExportPage = """
+        ## Negative security tests
+
+        | ID | Attempt | Expect | Tier |
+        | --- | --- | --- | --- |
+        | N-01 | Present app 1's session cookie to app 2 | 401 | H, D |
+        """;
+
+    [Theory]
+    [InlineData("None yet.")]
+    [InlineData("| N-28 | Forge one | 401 | H | #322 Q8 |")]
+    public void A_register_with_no_n_rows_or_none_marked_d_adds_no_row_and_the_subset_passes(string body)
+    {
+        string register = $"""
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            {body}
+
+            ## Infrastructure and architecture properties (P)
+            """;
+        Dictionary<string, string> sources = new() { ["CookieTests.cs"] = "public async Task N01_a_cookie_of_app_1_is_refused_on_app_2()" };
+
+        Assert.Empty(RegisterDeployedRows(register));
+        AssertEveryDRowHasATest(ExportPage, register, sources);
+    }
+
+    [Fact]
+    public void A_register_d_row_with_no_test_fails_the_subset_naming_its_id()
+    {
+        const string register = """
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            | N-28 | Plant a D cookie | Refused | H, D | #322 Q8 |
+            """;
+        Dictionary<string, string> sources = new() { ["CookieTests.cs"] = "public async Task N01_a_cookie_of_app_1_is_refused_on_app_2()" };
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertEveryDRowHasATest(ExportPage, register, sources));
+        Assert.Contains("N-28", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("N-01", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_second_assertion_of_the_same_rule_needs_a_line_of_its_own()
     {
         // Rows that refuse twice with one rule (N-06 four times, N-07 three) must see each refusal,
@@ -101,10 +184,38 @@ public sealed partial class DeployedSubsetTests
             .Select(match => match.Groups["id"].Value)];
     }
 
+    /// <summary>
+    /// The ids of the rows in <c>contracts/test-ids.md</c>'s negative table whose Tier cell names D. The
+    /// register's Tier is found by its header, since Recorded by follows it, and counted from the row's
+    /// end so a pipe inside an earlier cell cannot move it.
+    /// </summary>
+    internal static string[] RegisterDeployedRows(string register)
+    {
+        int start = register.IndexOf("## Negative security (N)", StringComparison.Ordinal);
+        Assert.True(start >= 0, "contracts/test-ids.md has no negative table.");
+        int end = register.IndexOf("\n## ", start + 1, StringComparison.Ordinal);
+        string[] lines = (end < 0 ? register[start..] : register[start..end]).Split('\n').Select(line => line.Trim()).ToArray();
+
+        string[] header = Cells(lines.First(line => line.StartsWith("| ID |", StringComparison.Ordinal)));
+        int fromEnd = header.Length - Array.IndexOf(header, "Tier");
+        Assert.True(fromEnd <= header.Length, "contracts/test-ids.md's negative table has no Tier column.");
+
+        return [.. lines
+            .Where(line => RegisterId().IsMatch(line))
+            .Select(Cells)
+            .Where(cells => cells.Length >= fromEnd && cells[^fromEnd].Split(',').Select(tier => tier.Trim()).Contains("D"))
+            .Select(cells => cells[0])];
+
+        static string[] Cells(string line) => [.. line.Trim().Trim('|').Split('|').Select(cell => cell.Trim())];
+    }
+
     /// <summary>The files that start a stack of their own choosing rather than the one the switch chooses.</summary>
     internal static string[] LocalOnly(Dictionary<string, string> sources) =>
         [.. sources.Where(source => source.Value.Contains("LocalStack.StartAsync(", StringComparison.Ordinal)).Select(source => source.Key).Order(StringComparer.Ordinal)];
 
     [GeneratedRegex(@"^\| (?<id>N-\d\d) \|.*\| (?<tier>[^|]+) \|\s*$", RegexOptions.Multiline)]
     private static partial Regex Row();
+
+    [GeneratedRegex(@"^\| N-\d+ \|")]
+    private static partial Regex RegisterId();
 }
