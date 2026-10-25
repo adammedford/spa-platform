@@ -158,6 +158,23 @@ public sealed partial class DeployedSubsetTests
         Assert.DoesNotContain("N-01", failure.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("| N-28 | Plant a D cookie | Refused | D |")] // Recorded by left out: Expect would sit under Tier.
+    [InlineData("| N-28 | Plant | D | #322 Q8 |")] // A cell short: D would be counted by accident.
+    public void A_register_row_short_of_its_headers_cells_fails_naming_its_id(string row)
+    {
+        string register = $"""
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            {row}
+            """;
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => RegisterDeployedRows(register));
+        Assert.Contains("N-28", failure.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_second_assertion_of_the_same_rule_needs_a_line_of_its_own()
     {
@@ -196,14 +213,20 @@ public sealed partial class DeployedSubsetTests
         int end = register.IndexOf("\n## ", start + 1, StringComparison.Ordinal);
         string[] lines = (end < 0 ? register[start..] : register[start..end]).Split('\n').Select(line => line.Trim()).ToArray();
 
-        string[] header = Cells(lines.First(line => line.StartsWith("| ID |", StringComparison.Ordinal)));
+        string? headerLine = lines.FirstOrDefault(line => line.StartsWith("| ID |", StringComparison.Ordinal));
+        Assert.True(headerLine is not null, "contracts/test-ids.md's negative table has no header row.");
+        string[] header = Cells(headerLine);
         int fromEnd = header.Length - Array.IndexOf(header, "Tier");
         Assert.True(fromEnd <= header.Length, "contracts/test-ids.md's negative table has no Tier column.");
 
-        return [.. lines
-            .Where(line => RegisterId().IsMatch(line))
-            .Select(Cells)
-            .Where(cells => cells.Length >= fromEnd && cells[^fromEnd].Split(',').Select(tier => tier.Trim()).Contains("D"))
+        string[][] rows = [.. lines.Where(line => RegisterId().IsMatch(line)).Select(Cells)];
+        // A row short of the header's cells would put another column under Tier from the end, and a D row
+        // missing its Recorded by would drop out unread: fail closed and name it (CODING_STANDARDS.md).
+        string[] shortRows = [.. rows.Where(cells => cells.Length < header.Length).Select(cells => cells[0])];
+        Assert.True(shortRows.Length == 0, $"contracts/test-ids.md's negative table has rows short of its header's cells: {string.Join(", ", shortRows)}.");
+
+        return [.. rows
+            .Where(cells => cells[^fromEnd].Split(',').Select(tier => tier.Trim()).Contains("D"))
             .Select(cells => cells[0])];
 
         static string[] Cells(string line) => [.. line.Trim().Trim('|').Split('|').Select(cell => cell.Trim())];
