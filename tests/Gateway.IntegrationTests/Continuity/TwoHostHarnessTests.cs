@@ -14,12 +14,6 @@ public sealed class TwoHostHarnessTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    /// <summary>
-    /// Mutation that turns it red: dropping the harness's <c>GatewayInstance</c> registration (each host
-    /// then names a generated id), or registering the Parameter Store stub as a plain test service in
-    /// place of <c>StubUnderTheRing</c> (<c>RemoveAll</c> then <c>AddSingleton</c>): the container then
-    /// hands out the bare stub, past the shield <c>AddPlatformHosting</c> puts over the client it finds.
-    /// </summary>
     [Fact]
     public async Task P2_5_two_hosts_start_over_the_shared_doubles_and_the_real_ring_and_each_readyz_names_its_own_instance()
     {
@@ -29,6 +23,10 @@ public sealed class TwoHostHarnessTests
         var readyA = await a.ReadyzAsync(Ct);
         var readyB = await b.ReadyzAsync(Ct);
 
+        // Mutation that turns it red: dropping the harness's GatewayInstance registration (each host then
+        // names a generated id), or registering the Parameter Store stub as a plain test service in place
+        // of StubUnderTheRing (RemoveAll then AddSingleton): the container then hands out the bare stub,
+        // past the shield AddPlatformHosting puts over the client it finds.
         Assert.Equal((HttpStatusCode.OK, 1L, "host-a"), readyA);
         Assert.Equal((HttpStatusCode.OK, 1L, "host-b"), readyB);
         Assert.NotEqual(a.Address, b.Address);
@@ -56,10 +54,6 @@ public sealed class TwoHostHarnessTests
         Assert.Same(harness.RefreshLeases, b.Services.GetService(typeof(IRefreshLeases)));
     }
 
-    /// <summary>
-    /// Mutation that turns it red: a balancer that always picks the first host (<c>CreateLoadBalancer</c>
-    /// returning <c>hosts[0]</c>) answers host-a four times.
-    /// </summary>
     [Fact]
     public async Task P2_5_the_stand_in_load_balancer_alternates_between_the_hosts()
     {
@@ -73,6 +67,8 @@ public sealed class TwoHostHarnessTests
             answered.Add(Readyz.Instance(ready));
         }
 
+        // Mutation that turns it red: a balancer that always picks the first host (CreateLoadBalancer
+        // returning hosts[0]) answers host-a four times.
         Assert.Equal(["host-a", "host-b", "host-a", "host-b"], answered);
     }
 }

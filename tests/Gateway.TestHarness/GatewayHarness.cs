@@ -361,8 +361,9 @@ public sealed class GatewayHarness : IAsyncDisposable
         hosts.Add(host);
         host.StartServer();
 
-        // The poller's first read may still be in flight. One more poll waits for it (the source
-        // runs one poll at a time) and settles the outcome either way.
+        // In a one-host harness the poller's first read may still be in flight. One more poll waits for it
+        // (the source runs one poll at a time) and settles the outcome either way. A cell-mode host has no
+        // poller (ConfigureHost), so this is its first read of the registry, as a starting task's is.
         await host.RefreshRegistryAsync(ct);
         long expected = long.Parse(document["revision"]!.ToJsonString(), CultureInfo.InvariantCulture);
         if (host.Registry.Current.Revision != expected)
@@ -396,8 +397,10 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// Puts the stub where a Parameter Store client registered before <c>Program.cs</c> would be: under the
     /// ring. <c>AddPlatformHosting</c> moves the client <c>AddPlatformRegistry</c> registered to a keyed
     /// registration of its own and puts its shield in the unkeyed place (<c>KeyRing.DecorateClient</c>,
-    /// #216). A test service runs after <c>Program.cs</c> (minimal hosting applies the factory's service
-    /// hooks when the builder builds), so a plain registration would be handed out bare, past the shield.
+    /// #216). A test service runs after <c>Program.cs</c> ("The test app's <c>builder.ConfigureServices</c>
+    /// callback is executed after the app's <c>Program.cs</c> code is executed",
+    /// https://learn.microsoft.com/aspnet/core/test/integration-tests#customize-webapplicationfactory),
+    /// so a plain registration would be handed out bare, past the shield.
     /// Replacing the keyed registration keeps the shield over the stub, as in a cell. Fails loudly when the
     /// ring registered no keyed client, so a change to that shape is seen here rather than passing.
     /// </summary>

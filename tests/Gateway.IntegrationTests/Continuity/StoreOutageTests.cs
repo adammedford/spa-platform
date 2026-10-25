@@ -33,12 +33,17 @@ public sealed class StoreOutageTests
 
         List<(HttpStatusCode, long?, string?)> ready = [];
         List<HttpStatusCode> live = [];
-        using TestBrowser probe = harness.CreateBrowser();
         foreach (GatewayHost host in harness.Hosts)
         {
             ready.Add(await host.ReadyzAsync(Ct));
+
+            // Each host's /healthz through its own route, so "on both hosts" does not rest on the
+            // balancer's alternation.
+            using TestBrowser probe = harness.CreateBrowser(() => host);
             live.Add((await probe.NavigateAsync("https://cell.spa-poc.test:8443/healthz", ct: Ct)).StatusCode);
         }
+
+        Assert.Equal(harness.Hosts.Count, live.Count);
 
         int refused = harness.SessionStore.Refused;
         harness.SessionStore.Failing = false;
