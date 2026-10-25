@@ -119,6 +119,9 @@ public sealed class AcrossHostsTests
         BrowserResponse callbackOnB = await login.NavigateAsync(callback, SignedIn.Manual, Suite.Ct);
         string? callbackRule = await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct);
 
+        // Mutation that turns it red: GatewayHarnessOptions.TwoHosts without the `with`, one stub for both
+        // hosts: B then accepts all three, and every assertion below fails.
+
         // B cannot unprotect the session cookie: 401 unauthenticated, as a cookie naming no session is.
         Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, session.StatusCode);
 
