@@ -15,6 +15,15 @@ A pre-launch audit is the same command.
 
     python3 -I tools/overnight_collect.py --json               read GitHub, git and the roadmap
     python3 -I tools/overnight_collect.py --json --from DIR    read saved listings instead of GitHub
+    python3 -I COPY/tools/overnight_collect.py --json --repo CHECKOUT
+                                                               forecast with another copy's rules
+
+--repo names the checkout whose git, gh repository (every gh call runs in it), tools/roadmap.py and
+docs/agents/issue-tracker.md are read, from any directory in it; without it, the checkout this
+script is in. It is for a forecast by origin/main's rules before the main checkout has moved (#377):
+a copy of the tool kept outside any checkout, read against the main checkout. The rules themselves,
+tools/ticket_shape.py, .github/path-ownership.py and OWNERSHIP.md, are the copy's own, read beside
+it. A --repo that is not a git checkout exits 1 naming it.
 
 The rules, as the collect step states them:
 - A ticket is an open issue carrying `ready-for-agent`, `ready-for-human` or `needs-triage`. An issue
@@ -203,6 +212,22 @@ def roadmap(root: pathlib.Path) -> dict:
     return json.loads(run([sys.executable, "-I", script, "--json"], root))
 
 
+def checkout(given: str) -> pathlib.Path:
+    """The top of the git checkout --repo names (#377), from any directory in it, as git finds it.
+    Anything else is refused naming it: read as no branches, no roadmap and no guide, it would
+    forecast every row unclaimed."""
+    where = pathlib.Path(given)
+    if not where.is_dir():
+        raise Refused(f"--repo {given} is not a git checkout: no such directory")
+    try:
+        top = run(["git", "rev-parse", "--show-toplevel"], where).strip()
+    except Refused as refusal:
+        raise Refused(f"--repo {given} is not a git checkout: {refusal}") from refusal
+    if not top:
+        raise Refused(f"--repo {given} is not a git checkout: git names no working tree")
+    return pathlib.Path(top)
+
+
 def tracker_guide(root: pathlib.Path) -> str | None:
     """docs/agents/issue-tracker.md, which names the account that may apply ready-for-agent, or None
     when the checkout has no guide."""
@@ -352,10 +377,12 @@ def judged_issue(issue: Issue):
 
 
 def prose_states(listed: list[Issue], tickets: list[Issue],
-                 known: dict[int, str] | None = None) -> dict[int, str]:
+                 known: dict[int, str] | None = None,
+                 root: pathlib.Path = ROOT) -> dict[int, str]:
     """What each number the tickets' prose waits for is (ticket_shape.KINDS), so that a closed
     issue or a pull request named in prose is stale prose and not a forecast partial (#284). A
-    listed issue is open; known gives others; the rest are asked of GitHub in one query."""
+    listed issue is open; known gives others; the rest are asked of GitHub in one query, run in
+    root so that gh resolves the checkout's repository."""
     try:
         shape = ticket_shape()
         states = {issue.number: "OPEN" for issue in listed}
@@ -364,7 +391,7 @@ def prose_states(listed: list[Issue], tickets: list[Issue],
                           if n not in issue.blockers and n not in issue.closed_blockers
                           and n not in states})
         if missing:
-            states.update(shape.look_up(missing))
+            states.update(shape.look_up(missing, cwd=root))
         return states
     except (Exception, SystemExit) as error:
         raise Refused(f"the ticket-shape check could not read the issues the prose names: "
@@ -406,13 +433,14 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             rules: list[tuple[str, str]] | None = None,
             states: dict[int, str] | None = None,
             timelines: dict[int, list[dict]] | None = None,
-            guide: str | None = None) -> dict:
+            guide: str | None = None, root: pathlib.Path = ROOT) -> dict:
     """The answer, from what was read. Raises Refused when two tickets share an id, or when the
     ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
     with the rest of the input; None reads it here. states gives what a number the prose names is,
     beyond the listed issues; prose_states() asks GitHub for the rest. timelines gives each
     ready-for-agent ticket's timeline events, and timeline() asks GitHub for any it lacks; guide is
-    the text of docs/agents/issue-tracker.md, which names the account that may apply the label."""
+    the text of docs/agents/issue-tracker.md, which names the account that may apply the label.
+    root is the checkout those two asks of GitHub run in."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
     parents, tickets = [], []
@@ -435,7 +463,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "own **Plan row:** (none, for an issue that is not a plan row) and run again.")
 
     rules = ownership_rules() if rules is None else rules
-    states = prose_states(issues_of(listings), tickets, states)
+    states = prose_states(issues_of(listings), tickets, states, root)
     by_number = {issue.number: issue for issue in tickets}
     id_of = {issue.number: ticket_id(issue) for issue in tickets}
 
@@ -450,7 +478,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         tid = id_of[issue.number]
         claim = next((name for name in branch_names if name.startswith(f"task/{tid}-")), None)
         if issue.label == "ready-for-agent" and issue.number not in timelines:
-            timelines[issue.number] = timeline(ROOT, issue.number)
+            timelines[issue.number] = timeline(root, issue.number)
         unlabelled = (unauthorised_label(issue, timelines[issue.number], named)
                       if issue.label == "ready-for-agent" else None)
         if issue.label == "ready-for-human":
@@ -527,6 +555,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="read saved gh listings, timelines/<n>.json for each ready-for-agent "
                              "ticket, and optionally branches.txt and roadmap.json from DIR "
                              "instead of asking GitHub")
+    parser.add_argument("--repo", metavar="DIR",
+                        help="the checkout whose git, gh repository, roadmap and tracker guide "
+                             "are read, for a copy of this tool kept outside it; default: the "
+                             "checkout this script is in")
     arguments = parser.parse_args(argv)
     root = ROOT
     saved = pathlib.Path(arguments.saved) if arguments.saved else None
@@ -538,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
         return (saved / name).read_text()
 
     try:
+        if arguments.repo is not None:
+            root = checkout(arguments.repo)
         listings = {}
         for label in LABELS:
             text = kept(f"{label}.json")
@@ -558,7 +592,7 @@ def main(argv: list[str] | None = None) -> int:
                                   f"applied ready-for-agent to #{number} is unread")
                 timelines[number] = json.loads(text)
         answer = resolve(listings, branch_names, road, ownership_rules(), timelines=timelines,
-                         guide=tracker_guide(root))
+                         guide=tracker_guide(root), root=root)
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1
