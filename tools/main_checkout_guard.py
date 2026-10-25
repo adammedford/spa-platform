@@ -10,10 +10,10 @@ session ran `git rebase origin/main` there, taking it for its own branch, after 
 it to `ws1/certs-domain-tag` and committed on it; the rebase did nothing only because that branch
 already held origin/main. On 2026-10-20 a smoke test ran `git rm` there and deleted a tracked test
 file (#187, #200). So in that checkout this refuses a Bash call that runs `git rebase`, `switch`,
-`checkout` in every form, `reset`, `commit`, `merge`, `pull`, `cherry-pick`, `revert`, `am` or
-`stash`, which move its branch or rewrite its history, and `git rm`, `mv`, `add`, `restore`, `clean`
-or `apply`, which change its files or index, dry runs and `apply --check` and `--stat` included
-(#226 Q16 to Q18). It names the route instead: a worktree of the session's own, as
+`checkout` in every form but one, `reset`, `commit`, `merge`, `pull`, `cherry-pick`, `revert`, `am`
+or `stash`, which move its branch or rewrite its history, and `git rm`, `mv`, `add`, `restore`,
+`clean` or `apply`, which change its files or index, dry runs and `apply --check` and `--stat`
+included (#226 Q16 to Q18). It names the route instead: a worktree of the session's own, as
 docs/agents/landing-work.md -> "Take a task" says.
 
 **The one merge it admits** is the fast-forward of a clean `main` to what has landed (#226 Q15,
@@ -23,6 +23,19 @@ with no git option before the subcommand but `-C`, while `git symbolic-ref -q HE
 are allowed: they are Adam's, and `--ff-only` will not overwrite one. Every other merge, ref or
 extra option is refused as before, and so is `git pull`, which reads the configured upstream and
 merge settings rather than one named ref; a session runs `git fetch origin` and then the merge.
+
+**The one restore it admits** is one that changes no content once `main` is fast-forwarded (#376):
+on 2026-10-23 the checkout was behind with two tracked files changed to exactly origin/main's
+content, and the guard refused the restore that would have let the fast-forward run. It admits
+`git restore <paths>` with no option but `--`, and `git checkout -- <paths>`, which restore the
+working tree from the index, when each path, read from the directory git runs in, is a regular file
+at origin/main whose working-tree bytes are that blob's (`git hash-object --no-filters`) and has no
+staged change, so the index holds HEAD's blob. A restore with `--staged`, `--source` or any other
+option, `git checkout <source> -- <paths>`, no path, a directory, a glob or a pathspec with magic
+is refused as before, and so is one whose paths fail the test, with a line naming the first path
+that does. The guard reads the files before the call runs, so a restore and the fast-forward after
+it are two calls: in one, the merge is refused while the file still shows as changed. What it reads
+can change before the restore runs, as for the fast-forward below.
 
 **What passes.** The same commands in a linked worktree; git that reads, `git stash list` and
 `git stash show` among it; `git fetch`; `git worktree add`; and every other command, file edits
@@ -49,8 +62,8 @@ own and not a sandbox: a command run through another layer -- `sh -c`, `eval`, a
 git alias -- a directory only the running shell knows, such as `"$(pwd)"`, and a repository named by
 `--git-dir`, `--work-tree` or `GIT_DIR`. What it cannot read it lets through. It reads the main
 checkout's HEAD and tracked files when the hook runs, with no lock, so they can change before the
-fast-forward does: another session can switch the checkout, or the same call can edit a file before
-its merge (#226 Q21). `--ff-only` still refuses a branch that has diverged and a change it would
+fast-forward or the restore does: another session can switch the checkout, or the same call can edit
+a file before its merge or restore (#226 Q21). `--ff-only` still refuses a branch that has diverged and a change it would
 overwrite, so the merge cannot take a commit. It binds Claude Code sessions, a sub-agent's Bash calls
 included, and never a person's terminal.
 
@@ -95,6 +108,11 @@ Here, read-only git, `git worktree add`, file edits, and `git fetch origin` foll
 NOT_MAIN = "The fast-forward was refused because HEAD is not `main`.\n"
 CHANGED = "The fast-forward was refused because tracked files have changes, or git could not list them.\n"
 
+# The lines a refused restore of the admitted form adds, naming the path that failed (#376).
+NOT_LANDED = "The restore was refused because `{path}` does not match its blob at origin/main.\n"
+ABSENT = "The restore was refused because `{path}` is not a file at origin/main, or git could not read it.\n"
+STAGED = "The restore was refused because `{path}` has a staged change, or git could not read the index.\n"
+
 # The subcommands refused whatever follows them. Most forms of #114's move the branch or rewrite
 # history, and that ticket refused the few that do not, such as `git reset -- <path>`, with the rest;
 # `am` commits on the branch as `commit` does (#226 Q18). `checkout` joins them because its path form
@@ -108,6 +126,13 @@ CHANGES = {"rm", "mv", "add", "restore", "clean", "apply"}
 
 # The one merge admitted, as its arguments in either order (#226 Q20).
 FAST_FORWARD = ["--ff-only", "origin/main"]
+
+# What a pathspec holding one of these means is git's pattern or magic, not one file: the glob
+# characters and their escape, and a leading colon (https://git-scm.com/docs/gitglossary#def_pathspec).
+PATTERN = re.compile(r"[*?\[\\]|^:")
+
+# The modes of a regular file in a tree, plain and executable; a symbolic link or a submodule is not one.
+FILE_MODES = {"100644", "100755"}
 
 # git's options before the subcommand that take the next word as their value, so that word is not
 # the subcommand (https://git-scm.com/docs/git#_options; git 2.54 takes each in this separate form).
@@ -422,11 +447,37 @@ def git_call(directory, args):
     return directory, subcommand, args[i + 1:], other
 
 
+def restore_paths(subcommand, args, options):
+    """The paths of a restore in the one form admitted (#376), or None: `git restore` with no option but
+    `--`, or `git checkout --`, each followed by one or more paths, every one a plain path to a file and
+    none a pattern or magic. With no `--source` or `--staged` both restore the working tree from the
+    index, which a path with no staged change holds as HEAD has it."""
+    if options or any(arg is None for arg in args):
+        return None
+    if subcommand == "checkout":
+        if not args or args[0] != "--":
+            return None
+        paths = args[1:]
+    elif subcommand == "restore":
+        split = args.index("--") if "--" in args else len(args)
+        if any(arg.startswith("-") for arg in args[:split]):
+            return None
+        paths = args[:split] + args[split + 1:]
+    else:
+        return None
+    if not paths or any(not path or path.endswith("/") or PATTERN.search(path) for path in paths):
+        return None
+    return paths
+
+
 def refusal(subcommand, args, options):
-    """Whether the main checkout refuses the call: False, True, or "fast-forward" when it is the one
-    merge admitted, which is refused only on a `main` that is not clean."""
+    """Whether the main checkout refuses the call: False, True, "fast-forward" when it is the one
+    merge admitted, which is refused only on a `main` that is not clean, or "restore" when it is the
+    one restore admitted, which is refused unless it would change no content."""
     if subcommand == "merge" and not options and sorted(arg or "" for arg in args) == FAST_FORWARD:
         return "fast-forward"
+    if restore_paths(subcommand, args, options) is not None:
+        return "restore"
     if subcommand in MOVES or subcommand in CHANGES:
         return True
     if subcommand == "stash":
@@ -447,6 +498,41 @@ def unclean(directory):
     if status.returncode != 0 or status.stdout.strip():
         return CHANGED
     return ""
+
+
+def unrestorable(directory, paths):
+    """The line saying why a restore of paths in directory would change content, "" when it would
+    change none, or None when it is not the admitted form after all, a path naming a directory. A path
+    is read from directory, as git reads it. Each path must be a regular file at origin/main whose
+    working-tree bytes are that blob's, and must have no staged change, so the index the restore copies
+    from holds HEAD's blob; once `main` is fast-forwarded the file holds the same bytes it holds now.
+    Any git that fails refuses, as a failing status read does in unclean()."""
+    for path in paths:
+        target = within(directory, path)
+        if os.path.isdir(target):
+            return None
+    for path in paths:
+        target = within(directory, path)
+        listing = run_git(directory, "ls-tree", "origin/main", "--", path)
+        entry = listing.stdout.split("\t", 1)[0].split() if listing.returncode == 0 else []
+        if len(listing.stdout.splitlines()) != 1 or len(entry) != 3 or entry[0] not in FILE_MODES:
+            return ABSENT.format(path=path)
+        landed = entry[2]
+        if os.path.islink(target) or not os.path.isfile(target):
+            return NOT_LANDED.format(path=path)
+        held = run_git(directory, "hash-object", "--no-filters", "--", path)
+        if held.returncode != 0 or held.stdout.strip() != landed:
+            return NOT_LANDED.format(path=path)
+        staged = run_git(directory, "diff", "--cached", "--quiet", "HEAD", "--", path)
+        if staged.returncode != 0:
+            return STAGED.format(path=path)
+    return ""
+
+
+def run_git(directory, *args):
+    """git in directory, reading pathspecs as literal paths and taking no optional lock."""
+    return subprocess.run(["git", "--no-optional-locks", "--literal-pathspecs", "-C", directory, *args],
+                          capture_output=True, text=True)
 
 
 def git_dirs(directory):
@@ -484,9 +570,17 @@ def main():
             guarded = own[1]
         found = git_dirs(directory)
         if found and found[0] == found[1] == guarded:
-            reason = unclean(directory) if refused == "fast-forward" else ""
-            if refused == "fast-forward" and not reason:
-                continue
+            reason = ""
+            if refused == "fast-forward":
+                reason = unclean(directory)
+                if not reason:
+                    continue
+            elif refused == "restore":
+                reason = unrestorable(directory, restore_paths(subcommand, args, options))
+                if reason == "":
+                    continue
+                # A directory is not the admitted form, so its refusal is the plain one.
+                reason = reason or ""
             print(REFUSAL.format(subcommand=subcommand, directory=directory, reason=reason, route=ROUTE),
                   end="", file=sys.stderr)
             return 2
