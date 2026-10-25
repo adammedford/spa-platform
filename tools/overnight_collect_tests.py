@@ -405,6 +405,50 @@ class Rules(unittest.TestCase):
         ]))
         self.assertEqual([2, 0, -1], [answer[n]["openBoxes"] for n in (40, 41, 42)])
 
+    def test_a_ready_for_agent_ticket_with_every_box_ticked_is_close_in_morning(self):
+        """#379: a lane started for 1.7 (#58) on 2026-10-24 with nothing left to build. A ticket
+        with every box ticked gets no lane; no checkbox at all (-1) still does."""
+        answer = by_issue(resolved(agent=[
+            issue(41, body(boxes="- [x] a\n- [X] b")),
+            issue(42, "**Owner:** integrator\n\nNo checkbox here."),
+            issue(43, body(boxes="- [x] a\n- [ ] b")),
+        ]))
+        self.assertEqual(("close-in-morning", "every acceptance box is ticked; close it in the "
+                          "morning"), (answer[41]["status"], answer[41]["why"]))
+        self.assertEqual("ready-for-agent", answer[42]["status"])
+        self.assertEqual("ready-for-agent", answer[43]["status"])
+
+    def test_every_box_ticked_wins_over_an_open_blocker_but_not_over_the_earlier_rules(self):
+        """Nothing is left to build whatever it waits on; a human's label, a triage label, an
+        outsider's label and a claim still come first."""
+        ticked = body(boxes="- [x] a")
+        answer = by_issue(resolved(
+            agent=[issue(50, ticked, blockers=((99, "OPEN"),)),
+                   issue(51, ticked, assignees=("adam",)),
+                   issue(52, ticked),
+                   issue(53, body("1.7", boxes="- [x] a"))],
+            human=[issue(54, ticked)],
+            triage=[issue(55, ticked)],
+            branches=["task/1.7-scripts"],
+            timelines={52: by("mallory")},
+        ))
+        self.assertEqual("close-in-morning", answer[50]["status"])
+        self.assertEqual(["issue-99"], answer[50]["blockedBy"])
+        self.assertEqual("claimed", answer[51]["status"])
+        self.assertEqual("needs-triage", answer[52]["status"])
+        self.assertEqual("claimed", answer[53]["status"])
+        self.assertEqual("ready-for-human", answer[54]["status"])
+        self.assertEqual("needs-triage", answer[55]["status"])
+
+    def test_a_close_in_morning_blocker_counts_as_met(self):
+        """The workflow settles a close-in-morning ticket as met before any lane starts, so its
+        dependant stays ready-for-agent here, with the blocker named."""
+        answer = by_issue(resolved(agent=[issue(60, body(), blockers=((61, "OPEN"),)),
+                                          issue(61, body("1.7", boxes="- [x] a"))]))
+        self.assertEqual("close-in-morning", answer[61]["status"])
+        self.assertEqual(("ready-for-agent", ["1.7"]),
+                         (answer[60]["status"], answer[60]["blockedBy"]))
+
     def test_an_issue_with_sub_issues_is_a_parent_and_never_a_ticket(self):
         """#139 to #142 on 2026-10-20: specs labelled ready-for-agent, with no checkbox."""
         answer = resolved(agent=[issue(139, "## Problem Statement\n", subs=2), issue(153, body())])
@@ -780,6 +824,15 @@ class ThroughGh(unittest.TestCase):
         self.assertEqual([], found[198])
         self.assertEqual(["owner-line"], [flag["rule"] for flag in found[204]])
         self.assertIn("1 will end partial", err)
+
+    def test_a_ticket_with_every_box_ticked_prints_close_in_morning(self):
+        """#379: 1.7 (#58) on 2026-10-24, ready-for-agent with every box ticked."""
+        self.listings(agent=[issue(58, body("1.7", boxes="- [x] a\n- [x] b"))])
+        code, out, err = self.run_main("--json")
+        self.assertEqual(0, code, err)
+        [ticket] = json.loads(out)["tickets"]
+        self.assertEqual(("close-in-morning", 0), (ticket["status"], ticket["openBoxes"]))
+        self.assertIn("1 close-in-morning", err)
 
     def test_a_shared_id_exits_1_with_nothing_on_stdout(self):
         self.listings(agent=[issue(56, body("1.4")), issue(180, body("1.4"))])

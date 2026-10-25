@@ -35,9 +35,11 @@ The rules, as the collect step states them:
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
 - status, in this order: ready-for-human; needs-triage; needs-triage again for a ready-for-agent
   label some other account applied (#316); claimed (an assignee, or a `task/<id>-` branch on a row
-  not landed); ready-for-agent when every open blocker is itself a ready-for-agent ticket tonight;
-  blocked otherwise. The last two depend on each other, so they are settled by repeating until
-  nothing changes. An issue carrying two of the labels is one ticket, under the label this order
+  not landed); close-in-morning (#379) when every acceptance box is ticked (openBoxes 0), so the
+  ticket gets no lane and the report lists it with the issues to close, whatever it waits on;
+  ready-for-agent when every open blocker is itself a ready-for-agent or close-in-morning ticket
+  tonight; blocked otherwise. The last two depend on each other, so they are settled by repeating
+  until nothing changes. An issue carrying two of the labels is one ticket, under the label this order
   puts first.
 - Who labelled it (#316): `ready-for-agent` is a lane's promise (docs/agents/triage-labels.md), and
   CODING_STANDARDS.md -> "An authorisation is read from its author" says it counts only when the
@@ -118,6 +120,13 @@ GH_TIMELINE = (
     "gh", "api", "--paginate", "repos/{owner}/{repo}/issues/{number}/timeline?per_page=100",
     "--jq", '.[] | select(.event == "labeled") | tojson',
 )
+
+# Why a ticket with every acceptance box ticked gets no lane (#379). overnight.js's report prompt
+# finds those tickets by this sentence, so the two say it alike.
+CLOSE_IN_MORNING = "every acceptance box is ticked; close it in the morning"
+# The statuses a dependant may wait on and still be ready: a ticket a lane runs first tonight, and
+# one with nothing left to build, which the workflow settles as met before any lane starts.
+MET_TONIGHT = ("ready-for-agent", "close-in-morning")
 
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
@@ -492,11 +501,14 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         elif claim and tid not in landed:
             status[issue.number] = "claimed"
             why[issue.number] = f"its row is claimed by the branch {claim}, not landed"
+        elif open_boxes(issue.body) == 0:
+            status[issue.number], why[issue.number] = "close-in-morning", CLOSE_IN_MORNING
         else:
             status[issue.number] = "ready-for-agent"
 
-    # A ready-for-agent ticket stays ready only while every open blocker is a ready-for-agent
-    # ticket tonight; demoting one can demote another, so repeat until nothing moves.
+    # A ready-for-agent ticket stays ready only while every open blocker is a ready-for-agent or a
+    # close-in-morning ticket tonight; demoting one can demote another, so repeat until nothing
+    # moves.
     moved = True
     while moved:
         moved = False
@@ -504,7 +516,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             if status[issue.number] != "ready-for-agent":
                 continue
             waits = [n for n in issue.blockers
-                     if n not in by_number or status[n] != "ready-for-agent"]
+                     if n not in by_number or status[n] not in MET_TONIGHT]
             if waits:
                 status[issue.number] = "blocked"
                 why[issue.number] = ("ready-for-agent, but waits on "
