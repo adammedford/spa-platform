@@ -1494,25 +1494,48 @@ class InputTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual([], companions_run(case))
 
-    def test_a_new_pin_runs_the_pins_inventory_companion(self):
+    def test_a_companion_whose_inputs_cannot_be_read_fails_the_check(self):
+        # A tracked companion missing from the working tree: grep exits 2, and the check fails
+        # rather than reading that as "declares nothing" and running less (CODING_STANDARDS.md, "A
+        # check fails closed").
+        case = Case(self, extra=self.scripts(), change="global.json")
+        (case.work / "tools" / "reader_tests.py").unlink()
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: could not read the checkout inputs tools/reader_tests.py declares.",
+                         result.last_line(result.stderr))
+
+    def test_a_new_pin_runs_the_pins_inventory_companion_and_its_failure_fails_the_check(self):
         # #354's own shape: the real companion's text, and a change to the pins file alone.
         text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
-        case = Case(self, extra={PINS_COMPANION: text, "Directory.Packages.props": "<Project />\n"},
-                    change="Directory.Packages.props")
-        result = self.full(case)
-        self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual([companion(PINS_COMPANION)], companions_run(case))
+        for fails_on in ({}, {"python3": PINS_COMPANION}):
+            with self.subTest(fails_on=fails_on):
+                case = Case(self, extra={PINS_COMPANION: text, "Directory.Packages.props": "<Project />\n"},
+                            change="Directory.Packages.props", fails_on=fails_on)
+                result = self.full(case)
+                self.assertEqual([companion(PINS_COMPANION)], companions_run(case))
+                if fails_on:
+                    self.assertEqual(1, result.status, result.stdout)
+                    self.assertEqual(f"check: fail: the test companion {PINS_COMPANION} failed.",
+                                     result.last_line(result.stderr))
+                else:
+                    self.assertEqual(0, result.status, result.stderr)
 
     def test_the_pins_companion_declares_every_file_it_copies_from_the_checkout(self):
-        # Its Repo copies these from this checkout and asserts on them; a file it copies that the
-        # line leaves out is a change the full check would pass and CI's Documents job would fail.
+        # The files are read from the companion's own Repo, built as its cases build it, not from a
+        # list kept here: a file Repo starts copying that the line leaves out is a change the full
+        # check would pass and CI's Documents job would fail.
         text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
         patterns = declared_inputs(text)
         self.assertNotEqual([], patterns, f"{PINS_COMPANION} has no Checkout inputs line")
-        slnx = (ROOT / "SpaPlatform.slnx").read_text(encoding="utf-8")
-        copied = ["Directory.Packages.props", "global.json", "SpaPlatform.slnx", "Directory.Build.props",
-                  *re.findall(r'<Project Path="([^"]+)"', slnx)]
+        spec = importlib.util.spec_from_file_location("pins_inventory_tests", ROOT / PINS_COMPANION)
+        pins = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pins)
+        repo = pins.Repo(self)
+        copied = sorted(path.relative_to(repo.dir).as_posix() for path in repo.dir.rglob("*")
+                        if path.is_file() and ".git" not in path.relative_to(repo.dir).parts)
         self.assertIn("src/Gateway/Gateway.csproj", copied)
+        self.assertIn("Directory.Packages.props", copied)
         self.assertEqual([], [path for path in copied
                               if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)])
 

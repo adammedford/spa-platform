@@ -24,7 +24,8 @@
 # tests, and the test companions the change earns: that of each script in tools/ or .github/ it
 # touches (#134), and that of each script or companion naming a library it touches, followed through
 # the libraries that name that one (#237), and that of each companion declaring, on its
-# `Checkout inputs:` line, a file of the checkout the change touches (#354). CI runs the companions .github/workflows/ci.yml lists,
+# `Checkout inputs:` line, a file of the checkout the change touches (#354), so a new pin runs the
+# pins inventory's companion. CI runs the companions .github/workflows/ci.yml lists,
 # one step each, whatever the diff, so that file says which run there; this check runs only those
 # the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
 # when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
