@@ -656,14 +656,22 @@ class WritesNothingTests(PreflightTestCase):
                     (case.checkout / "README.md").write_text("Origin's.\n")
                     (case.checkout / "NEW.md").write_text("staged\n")
                     case.git("add", "NEW.md", cwd=case.checkout)
-                    # Touched after the index was written, so a status that refreshed the index's
-                    # stat cache would rewrite it.
-                    os.utime(case.checkout / "tools" / "overnight_collect.py")
+                    # Its mtime moved a minute back after the index was written, so a status that
+                    # refreshed the index's stat cache would rewrite it. A touch to "now" can land in
+                    # the second the clone wrote the index, which git's stat check, comparing whole
+                    # seconds, does not see: a `git status` in the script then went uncaught.
+                    collect = case.checkout / "tools" / "overnight_collect.py"
+                    moved = collect.stat().st_mtime - 60
+                    os.utime(collect, (moved, moved))
                 if setup == "demoted":
                     case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
                 before = case.snapshot()
                 result = case.run()
                 self.assertEqual(before, case.snapshot(), result.stdout)
+                if setup == "stale and dirty":
+                    # The file whose mtime alone moved is no tracked change: its content is HEAD's.
+                    self.assertIn("2 tracked changes", result.row("tracked")[1])
+                    self.assertNotIn("overnight_collect.py", result.row("tracked")[1])
                 # Every gh call is one of the two reads: a write, or any other call, would be
                 # recorded here and exit 97.
                 for call in case.gh():

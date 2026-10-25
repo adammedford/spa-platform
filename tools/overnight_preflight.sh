@@ -51,8 +51,9 @@
 # Exit status: 0 when every line passes, 1 when any fails, 2 for a bad invocation.
 #
 # What it writes. Nothing in the main checkout's files, index, HEAD, branches or worktrees, and
-# nothing on the tracker: git reads run with --no-optional-locks, so not even the index's stat cache
-# is refreshed, and gh is only asked to list. The one exception is line 1's fetch, which moves the
+# nothing on the tracker: git reads run with --no-optional-locks, and the tracked changes are listed
+# by status, which honours it, rather than the porcelain diff, which rewrites the index even under it,
+# so not even the index's stat cache is refreshed; gh is only asked to list. The one exception is line 1's fetch, which moves the
 # remote-tracking refs and adds origin's tags: that is the read AGENTS.md -> "Where the work stands"
 # asks for before any work is chosen, and every other line is judged against what it brought. The
 # forecast's copy of origin/main goes to a temporary directory outside the checkout, removed on exit.
@@ -147,13 +148,22 @@ checkout_blob() {
   if [ -f "$repo/$1" ] || [ -L "$repo/$1" ]; then g hash-object -- "$1" 2>/dev/null || echo unreadable
   fi
 }
-if ! g diff --name-only --no-renames -z HEAD -- > "$scratch/changed" 2> "$scratch/changed.err"; then
+# The listing is the one collect's dirty-start guard reads, `status --porcelain --untracked-files=no`
+# (.claude/workflows/overnight.js, Collect), so this line fails exactly when that guard would refuse.
+# It is status, not `git diff HEAD`: the porcelain diff refreshes the index's stat cache and writes it
+# back even under --no-optional-locks (seen with git 2.54), so a tracked file whose mtime alone moved
+# would rewrite the main checkout's index. status honours the flag and leaves the index unwritten:
+# https://git-scm.com/docs/git#Documentation/git.txt-GITOPTIONALLOCKS
+# Each -z record is "XY <path>"; with --no-renames no record carries a second path
+# (https://git-scm.com/docs/git-status#_porcelain_format_version_1).
+if ! g status --porcelain=v1 -z --untracked-files=no --no-renames > "$scratch/changed" 2> "$scratch/changed.err"; then
   row fail tracked "git could not list the tracked changes against HEAD, so none were judged"
 else
   count=0
   same=""
   differ=""
-  while IFS= read -r -d '' path; do
+  while IFS= read -r -d '' record; do
+    path="${record:3}"
     count=$((count + 1))
     if [ "$(checkout_blob "$path")" = "$(origin_blob "$path")" ]; then
       same="$same $path"
