@@ -45,6 +45,14 @@ public sealed class ConcurrentFirstUseTests
         {
             Type documents = context.LoadFromAssemblyName(typeof(ContractDocuments).Assembly.GetName())
                 .GetType(typeof(ContractDocuments).FullName!, throwOnError: true)!;
+
+            // The test checks something only while both copies are fresh: a fall-through to the default
+            // context would hit this process's warm statics and pass having raced nothing.
+            Assert.Same(context, AssemblyLoadContext.GetLoadContext(documents.Assembly));
+            Assembly engine = context.LoadFromAssemblyName(typeof(Json.Schema.JsonSchema).Assembly.GetName());
+            Assert.Same(context, AssemblyLoadContext.GetLoadContext(engine));
+            Assert.Contains(documents.Assembly.GetReferencedAssemblies(), name => name.Name == engine.GetName().Name);
+
             List<string> failures = [];
             using Barrier start = new(Threads);
             Thread[] threads = new Thread[Threads];
