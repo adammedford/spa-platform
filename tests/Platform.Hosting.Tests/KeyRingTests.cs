@@ -158,6 +158,40 @@ public sealed class KeyRingTests
         Assert.Contains("IAmazonSimpleSystemsManagement", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An empty or blank <c>DataProtection:KmsKeyId</c> is no key id (#357): the put carries none, so
+    /// Parameter Store encrypts under the account's default key, as it does with the key absent.
+    /// Mutation: drop the normalisation in <c>KeyRing.Register</c> and the blank row's put carries the
+    /// spaces as its key id. The empty row stays green under that mutation, because the package itself
+    /// sets <c>KeyId</c> only when <c>!string.IsNullOrEmpty(KMSKeyId)</c> (tried on 4.0.3; the package's
+    /// <c>SSMXmlRepository.StoreElementAsync</c>,
+    /// https://github.com/aws/aws-ssm-data-protection-provider-for-aspnet/blob/master/src/Amazon.AspNetCore.DataProtection.SSM/SSMXmlRepository.cs);
+    /// it pins the outcome, and the blank row is the one only the normalisation catches.
+    /// </summary>
+    [Theory]
+    [InlineData("empty", "")]
+    [InlineData("blank", "   ")]
+    [InlineData("absent", null)]
+    public async Task A_key_id_that_is_empty_blank_or_absent_puts_with_no_key_id(string shape, string? keyId)
+    {
+        Dictionary<string, string?> configuration = RingHost.WithSection();
+        if (keyId is null)
+        {
+            configuration.Remove("DataProtection:KmsKeyId");
+        }
+        else
+        {
+            configuration["DataProtection:KmsKeyId"] = keyId;
+        }
+
+        StubRingStore store = new();
+        await using StageHost host = await RingHost.StartAsync(configuration, store, Ct);
+
+        PutParameterRequest put = Assert.Single(store.Puts);
+        Assert.Equal(ParameterType.SecureString, put.Type);
+        Assert.True(put.KeyId is null, $"The {shape} key id was put as '{put.KeyId}'.");
+    }
+
     public static TheoryData<string> ReadFailures => ["access-denied", "network"];
 
     /// <summary>
