@@ -41,20 +41,13 @@ internal sealed class MemorySessionStore : ISessionStore, IDisposable
     }
 
     /// <summary>
-    /// The store <c>Session:Store</c> and <c>Session:MaxSessions</c> describe
-    /// (contracts/platform-config.schema.json). Only <c>memory</c> exists until Phase 2 builds
-    /// <c>dynamodb</c>; a setting this store cannot honour is refused rather than guessed at.
+    /// The store <c>Session:MaxSessions</c> describes (contracts/platform-config.schema.json), once
+    /// <see cref="SessionStores"/> has read <c>Session:Store</c> as <c>memory</c>. A bound this store
+    /// cannot honour is refused rather than guessed at.
     /// </summary>
     internal static MemorySessionStore FromConfiguration(IServiceProvider services)
     {
         IConfiguration configuration = services.GetRequiredService<IConfiguration>();
-
-        string? kind = configuration["Session:Store"];
-        if (!string.Equals(kind, "memory", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Session:Store is '{kind}'. This gateway has only the 'memory' store.");
-        }
 
         string? max = configuration["Session:MaxSessions"];
         if (!int.TryParse(max, NumberStyles.None, CultureInfo.InvariantCulture, out int maxSessions) || maxSessions < 1)

@@ -11,6 +11,11 @@
     <PackageReference Include="Duende.AccessTokenManagement.OpenIdConnect" />
   </ItemGroup>
 
+  <!-- The Phase 2 session store and refresh lease (plan row P2-1; change request P2-1, Decision 1). -->
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.DynamoDBv2" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../Platform.Abstractions/Platform.Abstractions.csproj" />
   </ItemGroup>
