@@ -9,8 +9,8 @@ namespace Platform.Hosting.Tests;
 
 /// <summary>
 /// <c>AddPlatformHosting</c> sets the host's <c>HostOptions.ShutdownTimeout</c> to 25 seconds, a
-/// constant in <c>Platform.Hosting</c> and not configuration (#363; #332 F1; change request MR-2,
-/// "Which part is whose"). The expected value is the spec's literal, not the constant read back.
+/// constant in <c>Platform.Hosting</c> and not configuration (#363; #332 F1). The expected value is
+/// the spec's literal, not the constant read back.
 ///
 /// What the timeout does on a stop, finishing a request in flight that is shorter and aborting one
 /// that is longer, is the host's own behaviour; proving it at the real value costs 25 seconds a run,
@@ -37,13 +37,26 @@ public sealed class ShutdownTimeoutTests
         Assert.Equal(TimeSpan.FromSeconds(25), web.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
     }
 
-    private static WebApplication Build(Action<WebApplicationBuilder> configure)
+    [Fact]
+    public async Task A_Configure_registered_after_AddPlatformHosting_does_not_move_the_shutdown_timeout()
+    {
+        // The reason for PostConfigure over Configure: a plain Configure in AddPlatformHosting would
+        // still beat the host's own binding, registered earlier, but lose to this later one (#363 review).
+        await using WebApplication web = Build(
+            _ => { },
+            builder => builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(90)));
+
+        Assert.Equal(TimeSpan.FromSeconds(25), web.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+    }
+
+    private static WebApplication Build(Action<WebApplicationBuilder> configure, Action<WebApplicationBuilder>? after = null)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton<IRegistry>(new Platform.Testing.InMemoryRegistry(Snapshots.None));
         configure(builder);
         builder.AddPlatformHosting();
+        after?.Invoke(builder);
         return builder.Build();
     }
 }

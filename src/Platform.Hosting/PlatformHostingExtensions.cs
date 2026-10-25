@@ -35,7 +35,9 @@ public static class PlatformHostingExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        // PostConfigure, so it runs after the host binds HostOptions from its own configuration.
+        // PostConfigure, so it runs after the host binds HostOptions from its own configuration and
+        // after any Configure<HostOptions>, whatever order they were registered in
+        // (https://learn.microsoft.com/dotnet/core/extensions/options#options-post-configuration).
         builder.Services.PostConfigure<HostOptions>(PlatformHostingLimits.Apply);
 
         KeyRing.Register(builder);
