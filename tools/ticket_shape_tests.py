@@ -917,6 +917,25 @@ class AnotherTicketsWait(unittest.TestCase):
         body = self.body("Blocked by #177 and this ticket's sibling.")
         self.assertIn("blocker-edge", rules_broken(209, body, states=((177, "OPEN"),)))
 
+    def test_this_ticket_as_the_subject_is_still_its_own_wait(self):
+        # #371's brief: "this ticket is blocked by #N" still counts. SELF is read inside the list
+        # only, so a self-reference before "blocked by" skips nothing.
+        for line in ("This ticket is blocked by #177.", "This issue is blocked by: #177"):
+            with self.subTest(line):
+                failures, _ = judged(209, self.body(line), states=((177, "OPEN"),))
+                details = [f.detail for f in failures if f.rule == "blocker-edge"]
+                self.assertEqual(len(details), 1, details)
+                self.assertIn("#177", details[0])
+
+    def test_178s_own_blocked_by_line_still_counts(self):
+        # #371's brief: #178's "Blocked by #173 (closed) and by #305" line still counts beside its
+        # follow-up sentence. Only #173 is read, since the list stops at "and by" (out of scope).
+        body = self.body(self.LINES + "- Blocked by #173 (closed) and by #305 (the benchmark).\n")
+        failures, notes = judged(209, body, states=((173, "CLOSED"), (242, "OPEN")))
+        self.assertEqual([f.rule for f in failures if f.rule == "blocker-edge"], ["blocker-edge"])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("#173", notes[0])
+
 
 class LookUp(unittest.TestCase):
     """The numbers the prose names with no edge are asked of GitHub in one GraphQL query."""

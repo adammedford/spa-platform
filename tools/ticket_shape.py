@@ -283,7 +283,8 @@ def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> di
     edge says it is a closed issue; known gives others; the rest are asked of GitHub at once."""
     states = {number: "CLOSED" for number in issue.closed_blockers}
     states.update(known or {})
-    missing = [n for n in stated(issue.body, issue.number) if n not in issue.blockers and n not in states]
+    missing = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and n not in states]
     if missing:
         states.update(look_up(missing))
     return states
@@ -393,7 +394,8 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
                                         f"integrates this ticket alone cannot have: {text[:160]}"))
 
     states = states_of(issue, states)
-    unedged = [n for n in stated(issue.body, issue.number) if n not in issue.blockers and states[n] == "OPEN"]
+    unedged = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and states[n] == "OPEN"]
     if unedged:
         failures.append(Failure("blocker-edge", "the body waits for " + ", ".join(
             f"#{number}" for number in unedged) + " with no blocked-by edge to it open"))
