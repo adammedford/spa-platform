@@ -60,10 +60,17 @@ public sealed record GatewayHarnessOptions
 
     /// <summary>
     /// The key ring. Anything but <see cref="KeyRingSharing.FrameworkDefault"/> also gives every host the
-    /// harness's one <see cref="SwitchableSessionStore"/> and one <c>InMemoryRefreshLeases</c>, and a
+    /// harness's one <see cref="SwitchableSessionStore"/> and one <see cref="RecordingRefreshLeases"/>, and a
     /// deterministic instance id (<see cref="InstanceIds"/>), which is the cell as P2-5 proves it.
     /// </summary>
     public KeyRingSharing KeyRing { get; init; } = KeyRingSharing.FrameworkDefault;
+
+    /// <summary>
+    /// When set, with <see cref="KeyRing"/> set, each host gets a refresh-lease table of its own in place of
+    /// the cell's one: two tasks sharing no refresh lease, as before plan row P2-3, which is the control of
+    /// its fifty-call row (#346). <see cref="GatewayHarness.RefreshLeases"/> is then null.
+    /// </summary>
+    public bool RefreshLeasesPerHost { get; init; }
 
     /// <summary>The instance ids the hosts get, in the order they start, when <see cref="KeyRing"/> is set.</summary>
     public IReadOnlyList<string> InstanceIds { get; init; } = ["host-a", "host-b", "host-c", "host-d"];

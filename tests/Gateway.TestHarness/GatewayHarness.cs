@@ -127,8 +127,11 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The cell's one session store, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
     public SwitchableSessionStore? SessionStore { get; private set; }
 
-    /// <summary>The cell's one refresh-lease table, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
-    public IRefreshLeases? RefreshLeases { get; private set; }
+    /// <summary>
+    /// The cell's one refresh-lease table, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>
+    /// and under <see cref="GatewayHarnessOptions.RefreshLeasesPerHost"/>.
+    /// </summary>
+    public RecordingRefreshLeases? RefreshLeases { get; private set; }
 
     /// <summary>The first gateway host's services.</summary>
     public IServiceProvider Services => hosts[0].Services;
@@ -225,7 +228,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         }
 
         SwitchableSessionStore? sessionStore = cell ? new SwitchableSessionStore() : null;
-        IRefreshLeases? leases = cell ? new InMemoryRefreshLeases(options.Clock ?? TimeProvider.System) : null;
+        RecordingRefreshLeases? leases = cell && !options.RefreshLeasesPerHost ? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System) : null;
         ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
 
         (GatewayFactory, string?, ParameterStoreStub?) NewHost(int index)
@@ -282,7 +285,7 @@ public sealed class GatewayHarness : IAsyncDisposable
                 services.RemoveAll<ISessionStore>();
                 services.AddSingleton<ISessionStore>(sessionStore!);
                 services.RemoveAll<IRefreshLeases>();
-                services.AddSingleton(leases!);
+                services.AddSingleton<IRefreshLeases>(leases ?? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System));
                 services.RemoveAll<GatewayInstance>();
                 services.AddSingleton(new GatewayInstance(instance));
             }
@@ -646,6 +649,8 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // A replace a test froze and never let go would hold its host's shutdown for the whole drain.
+        SessionStore?.Resume();
         foreach (GatewayHost host in hosts)
         {
             await host.DisposeAsync();
