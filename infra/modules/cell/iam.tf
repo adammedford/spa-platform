@@ -176,7 +176,11 @@ data "aws_iam_policy_document" "task" {
   # "The gateway cannot write. The task role reads this cell's bucket prefixes; it has no write to
   # the registry (P-03)." -- contracts/s3-layout.md. GetObject alone, and the bucket's own ARN is
   # not among the resources, so no listing is reachable even if an action were added: the gateway
-  # does a conditional GET on the registry and a GET on a key the registry names.
+  # does a conditional GET on the registry and GETs keys under prefixes the registry names. Without
+  # s3:ListBucket, S3 answers a GET on a missing key with 403, not 404 NoSuchKey
+  # (https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html, "Permissions"), and
+  # S3ObjectStore reads that 403 as a refused read, not as a missing key
+  # (contracts/changes/issue-381-object-read-refusal.md).
   statement {
     sid       = "ReadRegistryAndReleases"
     effect    = "Allow"
