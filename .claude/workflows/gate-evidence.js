@@ -655,7 +655,7 @@ for (const m of openReviews) reasons.push(`merge ${m.sha.slice(0, 12)} since ${g
 for (const x of unjudged) reasons.push(x)
 // #80 -> "Phase Prove": a red baseline means the report says trunk is not green here, per project.
 for (const p of [...new Set(allTests.filter((t) => t.status === 'baseline-red').map((t) => t.project))]) reasons.push(`${p} failed unmutated at base, so trunk is not green here`)
-if (!gateIds.length) reasons.push(`the exit test of ${gate} names no test id, so nothing here proves it`)
+if (!gateIds.length) reasons.push(g.ids.length ? `no test id the exit test of ${gate} names could be tiered, so nothing here proves it` : `the exit test of ${gate} names no test id, so nothing here proves it`)
 if (leftOut.length) reasons.push(`only or skipIds left out ${leftOut.join(', ')}, so the run did not judge the whole exit test`)
 for (const c of cleanups) {
   if (c.listening && c.listening.length) reasons.push(`${c.agent} left a listener: ${c.listening.join(', ')}`)

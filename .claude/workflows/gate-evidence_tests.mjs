@@ -628,6 +628,7 @@ try {
     if (required(d, 'P-07') !== 'D') fail(`a register row tiering P-07 D: required ${required(d, 'P-07')}`)
     const none = await execute(newRepo(), { gate: 'G3' }, { ...p07, idRows: [...EXPORT_ROWS, ...REGISTER_UNTIERED] })
     if (!named(none, unknown('P-07')) || tableRow(none.result.report.text, 'P-07') || none.n('locate')) fail(`P-07 with no register row: reasons ${JSON.stringify(none.result.reasons)}, located ${none.n('locate')}`)
+    if (!named(none, /no test id the exit test of G3 names could be tiered/) || named(none, /names no test id/)) fail(`with P-07 its one id and unknown, the verdict says the exit test names no id: ${JSON.stringify(none.result.reasons)}`)
     // Box 2: G3's "P-01 to P-06." gives no tier, so the register's table of the export's untiered rows
     // does: P-01 to P-03 H, P-04 to P-06 D. Swapped in that table, the tiers swap, so no rule of the
     // prompt or the code tiers them by number; and the Scope prompt no longer carries the P-range rule.
