@@ -43,8 +43,6 @@ public sealed class StoreOutageTests
             live.Add((await probe.NavigateAsync("https://cell.spa-poc.test:8443/healthz", ct: Ct)).StatusCode);
         }
 
-        Assert.Equal(harness.Hosts.Count, live.Count);
-
         int refused = harness.SessionStore.Refused;
         harness.SessionStore.Failing = false;
         target = harness.Hosts[1];
@@ -59,7 +57,8 @@ public sealed class StoreOutageTests
         Assert.True(refused >= failed.Count, $"the store refused {refused} call(s) for {failed.Count} request(s).");
 
         Assert.Equal([(HttpStatusCode.OK, 1L, "host-a"), (HttpStatusCode.OK, 1L, "host-b")], ready);
-        Assert.All(live, status => Assert.Equal(HttpStatusCode.OK, status));
+        // One OK per host, in host order, as ready is pinned above: an empty or short list fails here.
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.OK], live);
 
         // The cookie was never cleared, so the session is there again once the store is.
         Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
