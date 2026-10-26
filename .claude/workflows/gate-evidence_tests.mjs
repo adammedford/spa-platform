@@ -673,6 +673,28 @@ try {
     const n04 = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-04', tiers: [] }] } } })
     if (required(n04, 'N-04') !== 'H, D') fail(`N-04 with no cell tier was tiered ${required(n04, 'N-04')}, expected H, D from the export's row`)
   }
+  // The Scope prompt's tiers (#392, from #367's review): an id named after the export, P-07 among
+  // them, has its row in contracts/test-ids.md and not in docs/plan/04-tests.md, so Scope must read
+  // the register too. #392 first did this by adding P-07 to the prompt's P-range fallback; #328 then
+  // removed that fallback and tiers each untiered id in code from idTables, and check 15 proves P-07
+  // takes H from its register row. What stays of #392 here: step 4 leaves an untiered id to the
+  // script's idTables, idTables and the deployed subset name the register, and no clause of step 4
+  // tiers P-07 by number in either tier.
+  checks++
+  {
+    const scoped = allCalls.filter((c) => c.label === 'scope')
+    if (!scoped.length) fail('no Scope prompt was dispatched, so the tier search read nothing')
+    for (const c of scoped) {
+      const step = (c.prompt.match(/^4\. gate:[^\n]*/m) || [''])[0]
+      if (!step) { fail('the Scope prompt has no step 4, so its tier rules were not read'); continue }
+      const tierRule = (step.match(/an id the cell gives no tier[^.]*/) || [''])[0]
+      if (!/idTables/.test(tierRule) || /\b[HD] for\b/.test(tierRule)) fail(`the Scope prompt does not leave an untiered id to the script's idTables: ${tierRule}`)
+      if (!/document "contracts\/test-ids\.md"/.test(step)) fail('the Scope prompt\'s idTables do not include the register, contracts/test-ids.md')
+      const subset = (step.match(/"the deployed subset" is[^;)]*/) || [''])[0]
+      if (!/contracts\/test-ids\.md/.test(subset)) fail(`the Scope prompt reads the deployed subset only from the export: ${subset}`)
+      if (/\b[HD] for\b[^.;)]*\bP-07\b/.test(step)) fail(`the Scope prompt tiers P-07 by number: ${step.match(/\b[HD] for\b[^.;)]*\bP-07\b/)[0]}`)
+    }
+  }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
   console.log('gate-evidence_tests: ERROR')
