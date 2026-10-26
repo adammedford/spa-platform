@@ -107,15 +107,99 @@ public sealed class DeployedRunTests
         Dictionary<string, MethodInfo> tests = RowTests();
 
         Assert.Contains("CookiePlantingTests.N26_login_csrf_a_siblings_login_state_cookies_are_never_set_so_the_planted_callback_is_rejected", DeployedRowTests.Select(row => row.Data));
-        Assert.All(DeployedSubsetTests.DeployedRows(TestsPage()), row =>
-            Assert.Contains(tests.Keys, test => test.Contains($".N{row[2..]}_", StringComparison.Ordinal)));
+        AssertEveryDRowHasATest(TestsPage(), RegisterPage(), tests.Keys);
         Assert.All(CognitoOnly, left => Assert.True(tests.ContainsKey(left.Key) && left.Value.Length > 0, $"{left.Key} is not a D row's test."));
     }
 
-    /// <summary>The negative tests whose row the Tests tab marks D, by class and method.</summary>
-    private static Dictionary<string, MethodInfo> RowTests()
+    /// <summary>An export page with no D row, so any row the run takes below comes from the register.</summary>
+    private const string ExportPageWithNoDRow = """
+        ## Negative security tests
+
+        | ID | Attempt | Expect | Tier |
+        | --- | --- | --- | --- |
+        | N-02 | Forge a cookie | 401 | H |
+        """;
+
+    [Fact]
+    public void A_register_d_row_joins_the_run_with_its_negative_test()
     {
-        string[] rows = DeployedSubsetTests.DeployedRows(TestsPage());
+        // The register's N table (#322) is "None yet." on the tree, so the real theory cannot show this:
+        // a row the register alone marks D must run on the deployed stack as the export's do (#389).
+        const string register = """
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            | N-26 | Login CSRF | Rejected | D | #322 Q8 |
+            """;
+
+        Assert.Equal(
+            ["CookiePlantingTests.N26_login_csrf_a_siblings_login_state_cookies_are_never_set_so_the_planted_callback_is_rejected"],
+            RowTests(ExportPageWithNoDRow, register).Keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_register_d_row_with_no_negative_test_fails_the_run_naming_its_id()
+    {
+        const string register = """
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            | N-28 | Plant a D cookie | Refused | H, D | #322 Q8 |
+            """;
+        const string page = """
+            ## Negative security tests
+
+            | ID | Attempt | Expect | Tier |
+            | --- | --- | --- | --- |
+            | N-26 | Login CSRF | Rejected | D |
+            """;
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertEveryDRowHasATest(page, register, RowTests(page, register).Keys));
+        Assert.Contains("N-28", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("N-26", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("None yet.")]
+    [InlineData("| N-26 | Login CSRF | Rejected | H | #322 Q8 |")]
+    public void A_register_with_no_n_rows_or_none_marked_d_adds_no_row_to_the_run(string body)
+    {
+        string register = $"""
+            ## Negative security (N)
+
+            | ID | Attempt | Expect | Tier | Recorded by |
+            | --- | --- | --- | --- | --- |
+            {body}
+            """;
+
+        Assert.Empty(RowTests(ExportPageWithNoDRow, register));
+        AssertEveryDRowHasATest(ExportPageWithNoDRow, register, []);
+    }
+
+    /// <summary>
+    /// Fails, naming each id, when a D row of the export's negative table or of the register's (#322) has
+    /// no test among <paramref name="tests"/>, each named by class and method.
+    /// </summary>
+    internal static void AssertEveryDRowHasATest(string page, string register, IEnumerable<string> tests)
+    {
+        string[] untested = [.. DeployedSubsetTests.DeployedRowIds(page, register)
+            .Where(row => !tests.Any(test => test.Contains($".N{row[2..]}_", StringComparison.Ordinal)))];
+        Assert.Empty(untested);
+    }
+
+    /// <summary>The negative tests whose row the Tests tab or the register marks D, by class and method.</summary>
+    private static Dictionary<string, MethodInfo> RowTests() => RowTests(TestsPage(), RegisterPage());
+
+    /// <summary>
+    /// The negative tests whose row <paramref name="page"/>'s negative table or <paramref name="register"/>'s
+    /// marks D, by class and method: a later N- id lives in the register alone (#322), and its D row runs
+    /// here as the export's do (#389).
+    /// </summary>
+    internal static Dictionary<string, MethodInfo> RowTests(string page, string register)
+    {
+        string[] rows = DeployedSubsetTests.DeployedRowIds(page, register);
         return typeof(CookiePlantingTests).Assembly.GetTypes()
             .Where(type => type.Namespace == typeof(CookiePlantingTests).Namespace && type.IsPublic)
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -124,6 +208,8 @@ public sealed class DeployedRunTests
     }
 
     private static string TestsPage() => File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "docs", "plan", "04-tests.md"));
+
+    private static string RegisterPage() => File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "contracts", "test-ids.md"));
 
     /// <summary>A test's cases: none for a fact, its inline data or its member's rows for a theory.</summary>
     private static object?[][] CasesOf(MethodInfo method)
