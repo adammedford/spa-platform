@@ -242,6 +242,10 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_cloudwatch_log_group",
       "aws_iam_role",
       "aws_iam_role_policy",
+      # Continuity (#338, #417), sessions.tf: the session table, planned only under
+      # session_store = "dynamodb". P-01 admits this one gated declaration and no other database
+      # (change request issue-338-p-01-dynamodb-tripwire, decision 1).
+      "aws_dynamodb_table",
     ])
     error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; the platform root's tests count the rest (P-01)."
   }
@@ -1658,6 +1662,85 @@ run "dynamodb_with_the_cell_s_ring_prefix_plans" {
   }
 }
 
+# The session table under dynamodb (#338; change request issue-338-p-01-dynamodb-tripwire, decision
+# 2): one table, keyed on pk, with the appId index the store's RemoveAppAsync queries, time to live
+# on expiresAt and on-demand billing. Expected values come from change request P2-1's item 5 and
+# Decision 7, which name the key, the index and the TTL attribute the store writes. Encryption is
+# DynamoDB's default (#332 D6), so no server_side_encryption block is set; and there is no subject
+# index, which is G7's (ADR-0028).
+#
+# Mutations that turn this run red: hash_key = "appId"; the index renamed "app"; its key_schema on
+# pk; its projection ALL; the ttl block's attribute "expires", or enabled = false; billing_mode =
+# "PROVISIONED"; a server_side_encryption block naming a key. The table's count made 0 fails the
+# plan of the run before this one, since the grant then reads a table that is not there.
+run "under_dynamodb_the_session_table_is_keyed_on_pk_indexed_on_appid_expired_on_expiresat_and_on_demand" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  # The table is read through one instance's attributes, never as the whole resource. The provider
+  # marks the index's deprecated hash_key and range_key, and when an assertion fails, Terraform 1.16
+  # panics printing the value of any reference in it that holds the mark ("value has marks, so it
+  # cannot be serialized as JSON"). Every reference here but the index's own set carries no mark, so
+  # a failure reads as its message. The index has no unmarked path, so its assertion, when it fails,
+  # fails as that panic, after the line naming this run as failed; the exit is non-zero either way.
+  # Terraform 1.11.0, the floor tools/check.sh and CI run, does not panic: it prints the message.
+  assert {
+    condition     = can(aws_dynamodb_table.sessions[0].name) && !can(aws_dynamodb_table.sessions[1].name)
+    error_message = "Under dynamodb the cell plans exactly one session table."
+  }
+
+  assert {
+    condition = (
+      aws_dynamodb_table.sessions[0].name == "spa-platform-poc-sessions"
+      && aws_dynamodb_table.sessions[0].hash_key == "pk"
+      && aws_dynamodb_table.sessions[0].range_key == null
+      && toset([for a in aws_dynamodb_table.sessions[0].attribute : { name = a.name, type = a.type }])
+      == toset([{ name = "pk", type = "S" }, { name = "appId", type = "S" }])
+    )
+    error_message = "The session table is spa-platform-{cell}-sessions, hashed on pk (S) with no range key, and declares pk and appId as strings and nothing else (change request P2-1)."
+  }
+
+  assert {
+    condition = (
+      [
+        for g in aws_dynamodb_table.sessions[0].global_secondary_index : {
+          name       = g.name
+          projection = g.projection_type
+          key_schema = [for k in g.key_schema : { attribute_name = k.attribute_name, key_type = k.key_type }]
+        }
+      ] == [{ name = "appId", projection = "KEYS_ONLY", key_schema = [{ attribute_name = "appId", key_type = "HASH" }] }]
+    )
+    error_message = "The session table has one global secondary index, appId, hashed on appId and projecting keys only: the subject index is G7's (ADR-0028)."
+  }
+
+  assert {
+    condition     = length(aws_dynamodb_table.sessions[0].local_secondary_index) == 0
+    error_message = "The session table has no local secondary index."
+  }
+
+  assert {
+    condition = (
+      [for t in aws_dynamodb_table.sessions[0].ttl : { attribute_name = t.attribute_name, enabled = t.enabled }]
+      == [{ attribute_name = "expiresAt", enabled = true }]
+    )
+    error_message = "The session table expires items on expiresAt, the attribute the store writes (change request P2-1)."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.sessions[0].billing_mode == "PAY_PER_REQUEST"
+    error_message = "The session table bills on demand, so an idle cell pays for no provisioned capacity."
+  }
+
+  assert {
+    condition     = length([for e in aws_dynamodb_table.sessions[0].server_side_encryption : e.enabled]) == 0
+    error_message = "The session table keeps DynamoDB's default encryption: no customer-managed key at G6 (#332 D6)."
+  }
+}
+
 # Another cell's prefix, and a wider one, are refused: the grant and teardown both follow the cell's
 # own convention (P2-2 decision 8).
 run "another_cell_s_ring_prefix_is_refused" {
@@ -1695,12 +1778,28 @@ run "a_kms_key_with_no_ring_is_refused" {
 # The task role under the durable store and the ring: exactly the grants #338 names, and the three of
 # Phase 1 unchanged beside them. The expected ARNs are written out for this file's account, Region
 # and cell, so a grant assembled from anything wider fails.
+#
+# Mutations that turn this run red: a sixth DynamoDB action (dynamodb:Scan) or one of the five
+# dropped; the index named index/* rather than index/appId; the grant built from the table's name
+# rather than read from the table; a fourth ssm action on the ring (ssm:GetParameter); the ring's own
+# path dropped from its resources; the tag grant's ManagedBy value changed, its aws:TagKeys condition
+# dropped, or a fourth tag key added; ssm:DeleteParameter added to the ring grant; a ring statement
+# with effect Deny or an action wildcard.
 run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
   command = plan
 
   variables {
     session_store                    = "dynamodb"
     data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  # The table's ARN, deliberately not the one its name would give, as the bucket's is above: the
+  # grant reads the table it is on (change request issue-338-p-01-dynamodb-tripwire, decision 2), so
+  # a grant assembled from the name fails the resource assertion below.
+  override_resource {
+    target          = aws_dynamodb_table.sessions[0]
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns" }
   }
 
   assert {
@@ -1725,11 +1824,11 @@ run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
     condition = (
       one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources
       == toset([
-        "arn:aws:dynamodb:us-east-1:111122223333:table/spa-platform-poc-sessions",
-        "arn:aws:dynamodb:us-east-1:111122223333:table/spa-platform-poc-sessions/index/appId",
+        "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns",
+        "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns/index/appId",
       ])
     )
-    error_message = "The session grant names this cell's table and its appId index, and nothing wider: no other table, no index wildcard."
+    error_message = "The session grant names the session table's own ARN and its appId index, and nothing wider: no other table, no index wildcard, and not an ARN built from the table's name."
   }
 
   assert {
@@ -1815,6 +1914,9 @@ run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
   }
 }
 
+# Mutations that turn this run red: any one of the four keys dropped from ecs.tf's
+# platform_configuration, or renamed (Session__Table); Session__TableName set to a name other than
+# the table's; the key id read from the prefix variable.
 run "under_dynamodb_the_task_environment_names_the_table_the_ring_and_its_key" {
   command = plan
 
@@ -1822,6 +1924,12 @@ run "under_dynamodb_the_task_environment_names_the_table_the_ring_and_its_key" {
     session_store                    = "dynamodb"
     data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
     data_protection_kms_key_id       = "alias/spa-platform-poc"
+  }
+
+  override_resource {
+    target          = aws_dynamodb_table.sessions[0]
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns" }
   }
 
   assert {
@@ -1840,17 +1948,21 @@ run "under_dynamodb_the_task_environment_names_the_table_the_ring_and_its_key" {
     error_message = "Under dynamodb the gateway's environment carries Session__Store, Session__TableName, DataProtection__ParameterPrefix and DataProtection__KmsKeyId from the inputs (#338)."
   }
 
-  # The table the environment names is the one the task role may reach: one name, read in two places.
+  # The table the environment names is the one the module creates and the task role may reach: the
+  # name the gateway is given is the table's, and the grant is on that table's ARN.
   assert {
-    condition = contains(
-      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources,
-      "arn:aws:dynamodb:us-east-1:111122223333:table/${one([
+    condition = (
+      one([
         for e in one([
           for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
         ]).environment : e if e.name == "Session__TableName"
-      ]).value}"
+      ]).value == aws_dynamodb_table.sessions[0].name
+      && contains(
+        one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources,
+        aws_dynamodb_table.sessions[0].arn
+      )
     )
-    error_message = "Session__TableName names the table the task role's session grant is on."
+    error_message = "Session__TableName names the session table the module creates, and the task role's session grant is on that table's ARN."
   }
 }
 
@@ -1876,9 +1988,14 @@ run "with_no_kms_key_the_environment_carries_no_key_id" {
 
 # Phase 1, on the default inputs: no table grant, no ring grant and no new environment variable. The
 # environment's key set is written out as Phase 1's literal, so any key this ticket's inputs add on
-# the default fails here, and so does any key they remove. The resource set needs no run of its own:
-# no resource is added (see contracts/changes/issue-338-p-01-dynamodb-tripwire.md), and
-# the_module_declares_only_the_cell_s_intended_resource_types holds it.
+# the default fails here, and so does any key they remove. The next run holds the table's absence and
+# the two objects byte for byte.
+#
+# Mutations that turn this run red: the ring statements' condition made true; Session__TableName or
+# DataProtection__ParameterPrefix set unconditionally in ecs.tf. Two others never reach it: the
+# ReadWriteSessions statement's for_each made [1] (the grant then reads a table that is not there)
+# and session_store's default changed to dynamodb (its validation then refuses the default inputs)
+# each fail the plan of this file's first run, and every run after it is skipped.
 run "under_memory_the_cell_is_phase_1_s_unchanged" {
   command = plan
 
@@ -1926,6 +2043,47 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
       ]).environment : e if e.name == "Session__Store"
     ]).value == "memory"
     error_message = "On the default inputs Session__Store is memory."
+  }
+}
+
+# Under memory the plan is Phase 1's byte for byte (#417). The continuity inputs reach three things:
+# the session table, the task role's statements and the gateway container's definition. On the
+# default inputs, which are memory with no ring, the first plans no instance, and the other two are
+# pinned by SHA-256 to the values the module planned before #338 added the inputs (cb8dafd) and
+# still planned at 83c3055, where #417 forked: both commits give the same two digests. The statements
+# are hashed as configured rather than as rendered JSON, because the mock provider renders no policy
+# (see the mock_data block at the top). Every other resource is untouched by the inputs, and the
+# runs above already hold each of them.
+#
+# A digest is a literal, so a Phase 1 change that is meant to alter either object fails here too.
+# That is the point: the author then says, in the same change, that the Phase 1 plan moved. The
+# failing assertion prints the new digest as its "actual" value.
+#
+# Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
+# any environment value on the default changed, or one added or removed (Session__MaxSessions to
+# 20000; Session__TableName set unconditionally); a statement's action, resource or order changed
+# (ReadClientSecrets gaining ssm:GetParameterHistory); the ring's statements made unconditional.
+run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
+  command = plan
+
+  assert {
+    condition     = var.session_store == "memory" && var.data_protection_parameter_prefix == "" && var.data_protection_kms_key_id == ""
+    error_message = "The default inputs are Phase 1's: session_store memory, no ring prefix and no key id."
+  }
+
+  assert {
+    condition     = !can(aws_dynamodb_table.sessions[0].name)
+    error_message = "Under memory the cell plans no session table, and so no appId index."
+  }
+
+  assert {
+    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "3f5bc9bef62ca40978f8a6f8b168a086a8269bbc951e803e382cef021b552d88"
+    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338, byte for byte."
+  }
+
+  assert {
+    condition     = sha256(jsonencode(data.aws_iam_policy_document.task.statement)) == "9c678a246fdb4fa68a7d732d9ba4716b7536181615a141b5ec0c34032f6264dc"
+    error_message = "Under memory the task role's statements are the ones Phase 1 planned before #338, byte for byte."
   }
 }
 
