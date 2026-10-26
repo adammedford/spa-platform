@@ -97,7 +97,8 @@ public sealed class ReadRefusalTests
 
         // Mutations that turn it red: counting every request (no null check) adds a point with a null
         // key_class; dropping the key_class tag merges the two points into one of 3; tagging the route
-        // instead of the class leaves no point whose key_class is "asset".
+        // instead of the class puts all three under "asset", since "/" is on the asset route too, and
+        // leaves no point whose key_class is "shell".
         (long assets, Dictionary<string, object?> assetTags) = Assert.Single(points, p => Equals(p.Tags["key_class"], "asset"));
         (long shells, _) = Assert.Single(points, p => Equals(p.Tags["key_class"], "shell"));
         Assert.Equal(2, points.Count);

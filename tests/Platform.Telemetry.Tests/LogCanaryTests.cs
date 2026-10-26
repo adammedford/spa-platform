@@ -94,8 +94,9 @@ public sealed class LogCanaryTests
             && line.GetProperty("session_ref").GetString() == Platform.Abstractions.SessionRef.Of(Cookie));
 
         // The search reaches a line that carries read_refused, and the field is the class alone.
-        // Mutation that turns it red: logging the request path in read_refused puts the key canary on
-        // the line.
+        // Mutation that turns it red: logging the request path in read_refused fails this assertion.
+        // Logging the path on a line of its own for a refused read, read_refused still "asset", is what
+        // the canary search below catches.
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request"
             && line.TryGetProperty("read_refused", out System.Text.Json.JsonElement refused)
             && refused.GetString() == "asset");

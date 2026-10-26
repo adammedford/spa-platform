@@ -90,8 +90,9 @@ public sealed class AssetReadRefusalTests
         Assert.Equal(JsonValueKind.Null, line.GetProperty("rule").ValueKind);
 
         // N-16 over the refused read: the key holds the client's path, and no line of the gateway's
-        // carries it, the request line included. Mutation: logging the request path as read_refused
-        // fails this and the value assertion above.
+        // carries it, the request line included. Mutation that turns this search red: the telemetry stage
+        // logging the request path on a line of its own for a refused read, read_refused still "asset".
+        // Logging the path as read_refused fails the value assertion above first.
         Assert.DoesNotContain(harness.Log.Rendered, rendered => rendered.Contains("missing.0badf00d", StringComparison.Ordinal));
     }
 

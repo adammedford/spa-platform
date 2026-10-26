@@ -26,9 +26,6 @@ public sealed class SwitchableObjectStore(IObjectStore inner) : IObjectStore
         refused[key] = true;
     }
 
-    /// <summary>Reads of <paramref name="key"/> reach the bucket again.</summary>
-    public void Allow(string key) => refused.TryRemove(key, out _);
-
     /// <summary>How many reads this switch refused, so a test can tell its refusal reached the reader.</summary>
     public int Refusals => Volatile.Read(ref refusals);
 
