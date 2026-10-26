@@ -486,19 +486,20 @@ const deltaBrief = (d) => `This is a delta review. The latest review record on t
 
 // A ticket's change requests, as the Spec axis reads them (#434, #421 Q12). A change request is an
 // issue labelled change-request that blocks the ticket needing it (#408); its decision is Adam's
-// comment whose first line begins `Decision:` (#413 Q4). A request the ticket was blocked by and that
-// has since closed was decided and landed, so it is read as well as an open one. The archived files
+// comment whose first line begins `Decision:` (#413 Q4). A request closes when its edit lands, or
+// when it is declined or withdrawn (#408 Q1), and GitHub keeps a closed blocker in blockedBy, so a
+// closed one is read as well as an open one and its decision says which. The archived files
 // under contracts/changes/ stay a source until the cutover moves them (#422).
 const changeRequestSources = (inv) => {
   const cited = inv.cites.issues || []
   return `The ticket's change requests: ${cited.length
     ? `for each issue the pull request cites, ${cited.map((i) => `\`cd ${REPO} && gh issue view ${i} --json blockedBy\``).join(', ')}`
-    : `for the issue the pull request's body names as its ticket (it cites none the inventory could read), \`cd ${REPO} && gh issue view <n> --json blockedBy\``} lists the issues it is or was blocked by; read each with \`cd ${REPO} && gh issue view <cr> --json number,title,state,labels,body,comments\`, and every one labelled \`change-request\`, open or closed, is a spec source, its body and its decision comment both: the comment by @adammedford whose first line begins \`Decision:\` (\`Decision: accept as drafted <link>\` covers the draft it links, as that draft stood). Hold the diff to what was decided, not to what the request first asked; a request with no decision comment decides nothing yet. A change request under contracts/changes/ that the ticket or the row names is read as well.`
+    : `for the issue the pull request's body names as its ticket (it cites none the inventory could read), \`cd ${REPO} && gh issue view <n> --json blockedBy\``} lists the issues it is or was blocked by; read each with \`cd ${REPO} && gh issue view <cr> --json number,title,state,labels,body,comments\`, and every one labelled \`change-request\`, open or closed, is a spec source, its body and its decision comment both: the comment by @adammedford whose first line begins \`Decision:\` (\`Decision: accept as drafted <link>\` covers the draft it links, as that draft stood). Hold the diff to what was decided, not to what the request first asked; \`Decision: decline\` decides against what it asked, and a request with no decision comment decides nothing yet. A change request under contracts/changes/ that the ticket or the row names is read as well.`
 }
 // Authority, judged rather than read (#434, #411 Q5): the steering check in tools/check.sh reads each
 // commit's citation, and CI ran it, so the Spec axis judges only whether what is cited decides the
 // change. A change it finds undecided is the finding the verdict holds on and files (heldChangeRoute).
-const STEERING_AUTHORITY = `A change to a steering document (a path .github/steering.py's STEERING_DOCUMENTS names) needs an authority that decides it. The steering check in tools/check.sh reads each commit's citation mechanically and CI has already run it, so do not read citations again: judge only whether the authority it cites decides this change, the \`#n\` or decision URL deciding this text and not merely its subject. One whose cited authority does not decide it is a verified Spec finding titled "Undecided steering change: <path>", where the path, checked what the authority does and does not decide.`
+const STEERING_AUTHORITY = `A change to a steering document (a path .github/steering.py's STEERING_DOCUMENTS names) needs an authority that decides it. The steering check in tools/check.sh reads each commit's citation mechanically and CI has already run it, so do not audit again whether each commit carries one or its form: read what each steering commit cites and judge only whether the authority it cites decides this change, the \`#n\` or decision URL deciding this text and not merely its subject. One whose cited authority does not decide it is a verified Spec finding titled "Undecided steering change: <path>", with where the path and checked what the authority does and does not decide.`
 // The held-change route (#434, #411 Q5, #421 Q12): a steering change the review holds is taken out
 // of the branch by its author, since a review edits no branch, and so that it is not lost the verdict
 // files it as a change-request issue that blocks nothing (#408 Q4), after searching the open requests
