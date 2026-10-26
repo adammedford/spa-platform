@@ -19,8 +19,8 @@
 // projects its change cannot reach, which pass alone, so the merge stays and the flake is recorded; one whose change
 // reaches a failed project, one whose re-run fails again, one red on something other than a test project, and one
 // whose reach line does not parse, all reset. It also checks that each ticket has its own worktree, that a
-// lane implements while its last ticket is in review or integrating, and that no two merges run at once. No
-// agent, gh or git call is made.
+// lane implements while its last ticket is in review or integrating, that no two merges run at once, and that
+// every ticket the run files passes tools/ticket_shape.py first (#248). No agent, gh or git call is made.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -627,6 +627,42 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   const triaged = routeOf(TRIAGED)
   if (!triaged.includes('Decide the flow') || triaged.includes('Its flow is already decided')) fail(`${TRIAGED.id}, whose blocker is ready-for-agent, did not route as before`)
   if ((result.needsHuman || []).includes(TRIAGED.id)) fail(`${TRIAGED.id} went to a human although its blocker is ready-for-agent`)
+}
+
+// 19. One grammar where a ticket is filed (#248): the ticket-shape check at creation, the collect tool's forecast,
+//     and the run's own filing site. NEW TICKETS, the one place the run files a ticket, pipes each body through
+//     tools/ticket_shape.py under the label and blockers it is filed with, before its `gh issue create`, and files
+//     nothing when the check fails. Every other `gh issue create` a prompt carries is the report's own issue,
+//     "Overnight <date>", which is no ticket; the grill writes comments and files none. Retro's filing site is
+//     retro.js's, proved by its own companion.
+{
+  const RECIPE = /`cd \S+ && python3 -I -c '[^']*' (\S+\/new-ticket-<id>\.md) <label> <each --blocked-by number> \| python3 -I tools\/ticket_shape\.py -`/
+  const TICKET_CREATE = 'gh issue create --title "<id> — <short title>"'
+  const REPORT_CREATE = 'gh issue create --title "Overnight '
+  const collects = allPrompts.filter((x) => x.label === 'collect')
+  if (!collects.length) fail('no collect prompt was rendered, so the NEW TICKETS check read nothing')
+  for (const c of collects) {
+    const m = RECIPE.exec(c.prompt)
+    const create = c.prompt.indexOf(TICKET_CREATE)
+    if (!m) { fail('#248: NEW TICKETS does not pipe each body through tools/ticket_shape.py under its label and blockers'); continue }
+    if (create < 0) { fail('#248: NEW TICKETS files no ticket with gh issue create'); continue }
+    if (m.index > create) fail('#248: NEW TICKETS runs the ticket-shape check after its gh issue create, not before')
+    const filing = c.prompt.slice(create, c.prompt.indexOf('\n', create))
+    if (!filing.includes(`--body-file ${m[1]}`)) fail(`#248: NEW TICKETS files a body other than the one it checked (${m[1]}): ${filing}`)
+    const step = c.prompt.slice(m.index, c.prompt.indexOf('\n', create))
+    for (const rule of ['Only when that exits 0', 'On exit 1 file nothing for that row', 'on any other exit file nothing either', 'Never reword a body to get past the check'])
+      if (!step.includes(rule)) fail(`#248: NEW TICKETS lacks "${rule}", so a body the check fails may still be filed`)
+  }
+  // Every gh issue create in every prompt the run sends is the checked NEW TICKETS one or the report's issue.
+  for (const c of allPrompts) {
+    for (const x of c.prompt.matchAll(/gh issue create\b/g)) {
+      const rest = c.prompt.slice(x.index)
+      const ok = (c.label === 'collect' && rest.startsWith(TICKET_CREATE)) || (c.label === 'report' && rest.startsWith(REPORT_CREATE))
+      if (!ok) fail(`#248: the ${c.label} prompt carries a gh issue create the ticket-shape check does not guard: ${rest.slice(0, 80)}`)
+    }
+  }
+  const grills = allPrompts.filter((x) => x.label.startsWith('grill:'))
+  if (!grills.length) fail('no grill prompt was rendered, so the check that the grill files no issue read nothing')
 }
 
 if (failures.length) {
