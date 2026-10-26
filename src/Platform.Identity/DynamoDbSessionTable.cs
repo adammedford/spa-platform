@@ -33,10 +33,18 @@ namespace Platform.Identity;
 /// repeat, as D4 sets out per operation.</para>
 ///
 /// <para><b>The SDK's own retries.</b> A client from the container keeps its own retry policy, which
-/// for DynamoDB is 10 retries by default (11 attempts were seen at the pin). They run inside the
-/// deadline, so <see cref="StoreDeadline"/> still bounds the operation, and each adapter reads a
-/// condition failure as possibly its own earlier attempt, since an SDK retry of a committed write
-/// fails its own condition.</para>
+/// for DynamoDB is 10 retries by default: "For the <c>DynamoDBv2</c> and <c>DynamoDBStreams</c> service
+/// packages, the default value is 10" (<c>ClientConfig.MaxErrorRetry</c>,
+/// https://docs.aws.amazon.com/sdkfornet/v4/apidocs/items/Runtime/TClientConfig.html, and the same
+/// words in the XML documentation AWSSDK.Core 4.0.102.12 ships). At the pin a client answering 500 to
+/// every request made 11 attempts, while the property itself read 2; only a <c>MaxErrorRetry</c> set
+/// in code moved the count, <c>AWS_MAX_ATTEMPTS</c> did not (#401). The AWS SDKs' 2026 retry
+/// behaviour gives DynamoDB 4 attempts
+/// (https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html), behind an
+/// <c>AWS_NEW_RETRIES_2026</c> switch this Core does not read. Whatever the count, the retries run
+/// inside the deadline, so <see cref="StoreDeadline"/> still bounds the operation, and each adapter
+/// reads a condition failure as possibly its own earlier attempt, since an SDK retry of a committed
+/// write fails its own condition.</para>
 /// </summary>
 internal sealed class DynamoDbSessionTable
 {
