@@ -43,6 +43,12 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
     /// <summary>The item's shape version (MR-9). A build reads its own format and the one before it.</summary>
     internal const int Format = 1;
 
+    /// <summary>
+    /// <see cref="Format"/> as the item's number attribute holds it: the one value the write sends and the
+    /// read compares against, so the two cannot drift when the format moves on.
+    /// </summary>
+    private static readonly string FormatNumber = Format.ToString(CultureInfo.InvariantCulture);
+
     /// <summary>The data-protection purpose of the ticket's envelope; the app id is the second purpose.</summary>
     internal const string Purpose = "Platform.Identity.SessionTicket";
 
@@ -54,6 +60,12 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
 
     /// <summary>A BatchWriteItem carries at most 25 requests (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).</summary>
     private const int BatchSize = 25;
+
+    /// <summary>The wait before a batch's first resend; each later one doubles it (#391).</summary>
+    private static readonly TimeSpan FirstBackoff = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>The longest wait between two sends of one batch (#391).</summary>
+    private static readonly TimeSpan LongestBackoff = TimeSpan.FromSeconds(1);
 
     private int formatLogged;
     private int unprotectLogged;
@@ -251,6 +263,14 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
     /// Up to 25 deletes in one BatchWriteItem, sending again whatever the table hands back unprocessed
     /// until none is left or the deadline passes. A delete is idempotent, so a batch whose response was
     /// lost is sent once more.
+    ///
+    /// <para>Every send after the first waits on the store's clock, <see cref="FirstBackoff"/> and then
+    /// twice the wait before, up to <see cref="LongestBackoff"/> (#391). The table leaves items
+    /// unprocessed when it throttles, and AWS strongly recommends an exponential backoff before sending
+    /// them again, because a batch sent again at once is throttled again
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html). The wait
+    /// runs inside the batch's own deadline, so it lengthens no purge past StoreDeadline per batch; a
+    /// deadline that passes during it fails the purge as an unknown send does.</para>
     /// </summary>
     private async Task DeleteBatchAsync(string[] pks)
     {
@@ -261,8 +281,13 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
 
         using CancellationTokenSource deadline = table.Deadline();
         bool retried = false;
-        while (pending.Count > 0)
+        for (int resend = 0; pending.Count > 0; resend++)
         {
+            if (resend > 0)
+            {
+                await BackOffAsync(resend, deadline.Token);
+            }
+
             BatchWriteItemRequest batch = new()
             {
                 RequestItems = new Dictionary<string, List<WriteRequest>> { [table.TableName] = pending },
@@ -283,10 +308,27 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
             pending = sent.Value!.UnprocessedItems is { } left && left.TryGetValue(table.TableName, out List<WriteRequest>? again)
                 ? again ?? []
                 : [];
-            if (pending.Count > 0 && deadline.IsCancellationRequested)
-            {
-                throw new SessionStoreUnavailableException(Purge, table.StoreDeadline, null);
-            }
+        }
+    }
+
+    /// <summary>
+    /// The wait before the <paramref name="resend"/>th send of a batch, on the store's clock and under its
+    /// deadline, whether the send before it left items unprocessed or ended unknown. No jitter: a gateway
+    /// sends an app's batches one after another, each task purges on its own registry poll rather than
+    /// in step with the others, and the purge is hygiene (change request P2-1, item 5), so a fixed
+    /// schedule is enough and keeps the wait testable. The 5 s deadline leaves room for about eight
+    /// waits (#391's Answer, "Decided by implementer").
+    /// </summary>
+    private async Task BackOffAsync(int resend, CancellationToken deadline)
+    {
+        TimeSpan wait = TimeSpan.FromTicks(Math.Min(FirstBackoff.Ticks << Math.Min(resend - 1, 16), LongestBackoff.Ticks));
+        try
+        {
+            await Task.Delay(wait, table.Clock, deadline);
+        }
+        catch (OperationCanceledException passed) when (deadline.IsCancellationRequested)
+        {
+            throw new SessionStoreUnavailableException(Purge, table.StoreDeadline, passed);
         }
     }
 
@@ -317,7 +359,7 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
         ["expiresAt"] = new() { N = record.ExpiresAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) },
         ["version"] = new() { N = record.Version.ToString(CultureInfo.InvariantCulture) },
         ["ticket"] = new() { B = new MemoryStream(Protector(record.AppId).Protect(record.Ticket.ToArray())) },
-        ["format"] = new() { N = Format.ToString(CultureInfo.InvariantCulture) },
+        ["format"] = new() { N = FormatNumber },
     };
 
     /// <summary>
@@ -349,7 +391,7 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
         // user signs in again rather than meeting a 500 on every request. Format 1 is the first, so there
         // is no "one before it" yet; the build that writes format 2 reads 1 as well.
         string? format = item.TryGetValue("format", out AttributeValue? f) ? f.N : null;
-        if (format != "1")
+        if (format != FormatNumber)
         {
             if (Interlocked.Exchange(ref formatLogged, 1) == 0)
             {

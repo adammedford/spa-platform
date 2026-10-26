@@ -17,7 +17,8 @@ export const meta = {
 // assembled that proof: a citation of a test id is not a proof that the test can fail, CI's green
 // says less than it sounds like, landed is not done, and a review can still be open (#80 -> "Problem
 // Statement"). This script decides in code what can be decided in code, so the companion can hold
-// it: the default gate, the refusals, the id list after only and skipIds, the Locate batches, the
+// it: the default gate, the refusals, each id's tier from its row in the export or the test id
+// register, read from their table lines, and the ids neither tiers (#328), the id list after only and skipIds, the Locate batches, the
 // ranking, the round-robin dealing under the cap, which results are reused, each test's and each
 // id's verdict, each row's done, the verdict and its reasons, the report body and its dedupe. The
 // agents read git and gh, run tests and mutations, and write the issue.
@@ -144,6 +145,7 @@ const SCOPE = S({
     criteria: { type: 'array', items: S({ criterion: str, ids: strs }) },
     rows: { type: 'array', items: S({ row: str, owner: str, doneWhen: str, ids: strs }) },
   }),
+  idTables: { type: 'array', items: S({ document: str, lines: strs }) },
   rowStates: { type: 'object' },
   changeRequests: { type: 'array', items: S({ file: str, rows: strs, status: str }) },
   openIssues: { type: 'array', items: S({ number: int, title: str, rows: strs, label: str, assignee: str }) },
@@ -202,6 +204,110 @@ const refusalsOf = (scope, gate, ladderRow) => {
     else if (scope.gate.phase === 2 || !scope.gate.defined) out.push(`${gate} is a Phase 2 gate: the gates table defines no exit test for it`)
   }
   return out
+}
+
+// ---------------------------------------------------------------- tiers, in code
+// An id's tier comes from a row (#328): the export, docs/plan/04-tests.md, and the test id register,
+// contracts/test-ids.md, which lists the ids named after the export and tiers the export's rows that
+// carry none. Q37 of #349 asks that each row be checked against its source document before a tier is
+// taken from it; a Workflow script cannot open a file, so the Scope agent copies the two documents'
+// table lines as `grep` prints them, and the rows are read from those lines here, never from an
+// agent's reading of the tables. A line the agent drops leaves its ids unknown, never tiered. The
+// tables, the ranges, the
+// tiers, an id in neither, a retired id and an id both documents define are decided here, so the
+// companion can hold them. The exit test cell's own tier comes first, since a gate can require fewer
+// tiers than a row lists (G4 requires N-01 hermetic only).
+const ID_DOCS = ['docs/plan/04-tests.md', 'contracts/test-ids.md']
+const REGISTER_DOC = ID_DOCS[1]
+// A table's columns that only index or tier a row. A table with no other column, such as the
+// register's "Tiers of the export's untiered rows", defines no check, so a row in it is supplemental
+// and never a second home for its id (Q40 of #349).
+const INDEX_COLUMNS = ['ID', 'Id', 'Tier', 'Recorded by']
+const SEPARATOR_RE = /^\|(\s*:?-{3,}:?\s*\|)+\s*$/
+const cellsOf = (line) => String(line).trim().split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
+// The rows of one document's table lines, and what could not be read. A header is the line before a
+// separator; a row with a test id first and a cell count other than its header's is named, not read.
+const rowsOfLines = (document, lines) => {
+  const rows = []
+  const problems = []
+  let header = null
+  lines.forEach((line, i) => {
+    if (SEPARATOR_RE.test(String(line).trim())) return
+    if (SEPARATOR_RE.test(String(lines[i + 1] || '').trim())) { header = cellsOf(line); return }
+    const c = cellsOf(line)
+    if (!c.length || !idsOfCell(c[0]).length) return
+    if (!header || c.length !== header.length) {
+      problems.push(`a row of ${document} for ${c[0].replace(/`/g, '')} has ${c.length} cells where its table's header has ${header ? header.length : 'none'}, so it was not read`)
+      return
+    }
+    const t = header.indexOf('Tier')
+    rows.push({
+      document, id: c[0].replace(/`/g, ''), tier: t < 0 ? '' : c[t],
+      defines: header.some((h) => !INDEX_COLUMNS.includes(h)),
+      retired: document === REGISTER_DOC && c.some((x) => /\bretired\b/i.test(x)),
+    })
+  })
+  return { rows, problems }
+}
+// Every row of both documents, from the Scope agent's idTables. A document missing, empty or given
+// twice, and table lines of any other document, are named: a check that cannot read its input fails
+// closed (CODING_STANDARDS.md -> "A check fails closed").
+const idRowsOf = (tables) => {
+  const rows = []
+  const problems = []
+  for (const t of tables) {
+    if (!ID_DOCS.includes(t.document)) problems.push(`the Scope agent returned table lines of ${JSON.stringify(t.document)}, which is neither ${ID_DOCS.join(' nor ')}, so they were not read`)
+  }
+  for (const d of ID_DOCS) {
+    const given = tables.filter((t) => t.document === d)
+    if (given.length !== 1 || !given[0].lines.length) { problems.push(`the Scope agent returned ${given.length > 1 ? 'more than one copy of' : 'no table line of'} ${d}, so no id it lists could be tiered from it`); continue }
+    const r = rowsOfLines(d, given[0].lines)
+    rows.push(...r.rows)
+    problems.push(...r.problems)
+  }
+  return { rows, problems }
+}
+const ID_CELL_RE = /^([FNPA])-(\d{2})(?: to \1-(\d{2}))?$/
+const idsOfCell = (cell) => {
+  const m = ID_CELL_RE.exec(String(cell).replace(/`/g, '').trim())
+  if (!m) return []
+  const a = Number(m[2])
+  const b = m[3] ? Number(m[3]) : a
+  return b < a ? [] : Array.from({ length: b - a + 1 }, (_, i) => `${m[1]}-${String(a + i).padStart(2, '0')}`)
+}
+// "H", "D" or "H, D"; anything else is null, an unreadable cell, and never a guess.
+const tiersOfCell = (cell) => {
+  const t = String(cell).split(/[\s,]+/).filter(Boolean)
+  return t.length && t.every((x) => x === 'H' || x === 'D') ? ['H', 'D'].filter((x) => t.includes(x)) : null
+}
+// id -> its rows in either document, each with its Tier cell read; a row with no Tier cell gives no tier.
+const tierIndex = (rows) => {
+  const idx = new Map()
+  for (const r of rows) {
+    for (const id of idsOfCell(r.id)) {
+      if (!idx.has(id)) idx.set(id, [])
+      idx.get(id).push({ document: r.document, cell: r.tier, tiers: String(r.tier).trim() ? tiersOfCell(r.tier) : [], defines: r.defines, retired: r.retired })
+    }
+  }
+  return idx
+}
+// One exit-test id: { tiers } when it can be judged, else { why }, a reason the verdict names. An id
+// in neither document is unknown whatever tier the cell gives it: no row defines what it checks. A
+// retired id, and an id both documents define, are steering errors to surface whatever the cell says
+// (Q40 of #349).
+const tiersFor = (x, idx) => {
+  const all = idx.get(x.id)
+  if (!all) return { why: `${x.id} is in neither ${ID_DOCS.join(' nor ')}, so it is unknown: it was not tiered or judged` }
+  if (all.some((gv) => gv.retired)) return { why: `${x.id} is retired in ${REGISTER_DOC}, so it was not judged` }
+  if (ID_DOCS.every((d) => all.some((gv) => gv.document === d && gv.defines))) return { why: `${x.id} is listed by both ${ID_DOCS.join(' and ')}, so it was not judged` }
+  if (x.tiers.length) return { tiers: ['H', 'D'].filter((t) => x.tiers.includes(t)) }
+  const given = all.filter((gv) => !gv.tiers || gv.tiers.length)
+  const bad = given.find((gv) => !gv.tiers)
+  if (bad) return { why: `${x.id}'s Tier cell ${JSON.stringify(bad.cell)} in ${bad.document} is not H, D or both, so it was not judged` }
+  const sets = [...new Set(given.map((gv) => gv.tiers.join(', ')))]
+  if (!sets.length) return { why: `the exit test gives ${x.id} no tier and no row of ${ID_DOCS.join(' or ')} gives it one, so it was not judged` }
+  if (sets.length > 1) return { why: `the exit test gives ${x.id} no tier and its rows disagree (${given.map((gv) => `${gv.document}: ${gv.cell}`).join('; ')}), so it was not judged` }
+  return { tiers: sets[0].split(', ') }
 }
 
 // ---------------------------------------------------------------- ids, tests and items, in code
@@ -366,7 +472,7 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
 2. tagsReachable: \`git -C ${REPO} for-each-ref --merged <base> --format=%(refname:short) refs/tags\`. tagsAll: \`git -C ${REPO} for-each-ref --format=%(refname:short) refs/tags\` together with the names \`git -C ${REPO} ls-remote --tags origin\` prints.
 3. ladder: docs/roadmap.md at base, its ladder table, one {stage, gate, tag} per row in order, tag without backticks ("—" where it has none).
-4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: exitTest, the exit test cell verbatim; defined false and phase 2 when the gates table has no row for it (Phase 2's gates), else defined true and phase 1. ids: the exit test split into test ids, each with the tiers the gate requires of it ("H" hermetic, "D" deployed; "in both tiers" is both; a range "X to Y" names every id between; "the deployed subset" is every id of the negative suite whose tier column includes D, in docs/plan/04-tests.md or in contracts/test-ids.md's negative table, plus any it adds; an id the cell gives no tier takes the tiers its row gives, in docs/plan/04-tests.md or, for an id named after the export such as P-07, in contracts/test-ids.md, whose table of the export's untiered rows also tiers the export's P- and A- rows; a P- id with none is D for P-04 to P-06 and H for the plan checks P-01 to P-03 and P-07). criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names.
+4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: exitTest, the exit test cell verbatim; defined false and phase 2 when the gates table has no row for it (Phase 2's gates), else defined true and phase 1. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "D" deployed; "in both tiers" is both; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names.
 5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
 6. changeRequests: each contracts/changes/*.md at base whose **Status:** line does not begin decided, rejected or withdrawn, with the plan rows it names and that status line. openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,labels,assignees\`, each issue whose title or body names a row of rows or ends " evidence, <date>", with the rows it names, its first label and its first assignee ("" for none).
 7. ci: the GitHub Actions run of base, \`cd ${REPO} && gh run list --commit <base> --json url,headSha,databaseId\` and \`cd ${REPO} && gh run view <id> --json jobs\`, with each job's name and conclusion. lastFull: walking \`git -C ${REPO} log --first-parent --format=%H <base>\`, the most recent commit whose run's Build and test and Terraform jobs both ran and succeeded: {sha, url}.
@@ -494,11 +600,18 @@ if (refusals.length) {
   return { gate, tag, base, date, verdict: 'tag withheld', reasons, refused: true, counts: { proved: 0, didNotFail: 0, notRunHere: 0, notMutated: 0 }, rowsNotDone: [], report, runLog, agents: agentsRun }
 }
 
-// The ids this run proves: the gate's, narrowed by only and skipIds.
-const gateIds = g.ids.filter((x) => ID_RE.test(x.id) && x.tiers.length)
-// An id the Scope agent returned malformed or with no tier is named in the verdict, never dropped
-// unseen: a check that skips what it cannot read fails open (CODING_STANDARDS.md -> "A check fails closed").
-const unjudged = g.ids.filter((x) => !(ID_RE.test(x.id) && x.tiers.length)).map((x) => JSON.stringify(x.id))
+// The ids this run proves: the gate's, each tiered by the exit test cell or its row, narrowed by only
+// and skipIds. An id the Scope agent returned malformed, an id in neither document, a retired id, an
+// id both documents define and an id no cell or row tiers are named in the verdict, and so is a
+// document whose table lines could not be read: never dropped unseen, since a check that skips what
+// it cannot read fails open (CODING_STANDARDS.md -> "A check fails closed").
+const idRead = idRowsOf(scope.idTables || [])
+const idx = tierIndex(idRead.rows)
+const resolved = g.ids.map((x) => (ID_RE.test(x.id)
+  ? { id: x.id, ...tiersFor(x, idx) }
+  : { id: x.id, why: `the Scope agent returned ${JSON.stringify(x.id)} from the exit test as no test id, so it was not judged` }))
+const gateIds = resolved.filter((x) => x.tiers)
+const unjudged = [...idRead.problems, ...resolved.filter((x) => x.why).map((x) => x.why)]
 const leftOut = gateIds.filter((x) => (A.only && !A.only.includes(x.id)) || (A.skipIds && A.skipIds.includes(x.id))).map((x) => x.id)
 const ids = gateIds.filter((x) => !leftOut.includes(x.id))
 log(`gate-evidence ${gate} at ${base}: ${ids.length} ids; run log ${runLog}`)
@@ -596,10 +709,10 @@ for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reason
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)
 for (const m of openReviews) reasons.push(`merge ${m.sha.slice(0, 12)} since ${g.previousTag || 'the previous tag'} has an open review`)
-for (const x of unjudged) reasons.push(`the Scope agent returned ${x} from the exit test as no test id with a tier, so it was not judged`)
+for (const x of unjudged) reasons.push(x)
 // #80 -> "Phase Prove": a red baseline means the report says trunk is not green here, per project.
 for (const p of [...new Set(allTests.filter((t) => t.status === 'baseline-red').map((t) => t.project))]) reasons.push(`${p} failed unmutated at base, so trunk is not green here`)
-if (!gateIds.length) reasons.push(`the exit test of ${gate} names no test id, so nothing here proves it`)
+if (!gateIds.length) reasons.push(g.ids.length ? `no test id the exit test of ${gate} names could be tiered, so nothing here proves it` : `the exit test of ${gate} names no test id, so nothing here proves it`)
 if (leftOut.length) reasons.push(`only or skipIds left out ${leftOut.join(', ')}, so the run did not judge the whole exit test`)
 for (const c of cleanups) {
   if (c.listening && c.listening.length) reasons.push(`${c.agent} left a listener: ${c.listening.join(', ')}`)

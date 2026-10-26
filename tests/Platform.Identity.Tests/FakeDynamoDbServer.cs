@@ -35,7 +35,8 @@ namespace Platform.Identity.Tests;
 ///
 /// <para>A test schedules a <see cref="Fault"/> for the next call of an operation: the write commits and
 /// the response is broken mid-body, the call fails with a 500 before it commits, or the call is held,
-/// before or after it commits, until the test releases it or the client gives up.</para>
+/// before or after it commits, until the test releases it or the client gives up, or a batch hands part
+/// of itself back unprocessed. <see cref="QueryPageSize"/> pages a <c>Query</c> (#391).</para>
 /// </summary>
 internal sealed class FakeDynamoDbServer : IAsyncDisposable
 {
@@ -77,6 +78,13 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
         /// the collision a fresh 256-bit key never meets, staged.
         /// </summary>
         ForeignItemFirst,
+
+        /// <summary>
+        /// Applies every request of a <c>BatchWriteItem</c> but the last and hands that one back under
+        /// <c>UnprocessedItems</c>, unapplied, as the table does when it throttles part of a batch
+        /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).
+        /// </summary>
+        LeaveLastUnprocessed,
     }
 
     private JsonObject? lateCommit;
@@ -95,8 +103,20 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
     /// <summary>Lets a held call finish.</summary>
     public TaskCompletionSource Release { get; private set; } = NewSignal();
 
-    /// <summary>When set, sent as <c>x-amz-crc32</c> on every response, for the test that shows the SDK ignores it.</summary>
+    /// <summary>
+    /// When set, sent as <c>x-amz-crc32</c> on every response, for the <c>DynamoDbProtocolTests</c> test
+    /// that shows the SDK refuses a wrong one.
+    /// </summary>
     public string? Crc32 { get; set; }
+
+    /// <summary>
+    /// When set, a <c>Query</c> answers at most this many items and names the last of them as
+    /// <c>LastEvaluatedKey</c> whenever the page is full, as the table does when a page meets its
+    /// <c>Limit</c> or the 1 MB cap, even if no item follows
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html). Null,
+    /// the default, answers every item in one page.
+    /// </summary>
+    public int? QueryPageSize { get; set; }
 
     public static async Task<FakeDynamoDbServer> StartAsync(CancellationToken ct)
     {
@@ -226,7 +246,7 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
                 "GetItem" => GetItemThenLateCommit(body),
                 "DeleteItem" => DeleteItem(body),
                 "Query" => Query(body),
-                "BatchWriteItem" => BatchWriteItem(body),
+                "BatchWriteItem" => BatchWriteItem(body, fault == Fault.LeaveLastUnprocessed),
                 _ => throw new Refusal("UnknownOperationException", $"The fake does not answer '{operation}'."),
             };
         }
@@ -351,17 +371,36 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
 
         string app = body["ExpressionAttributeValues"]?[":app"]?["S"]?.GetValue<string>()
             ?? throw new Refusal("ValidationException", "The Query names no :app.");
+        // A page resumes after the key the last one ended on, not at an offset: the purge deletes a page
+        // before it asks for the next, so an offset would skip items.
+        string? after = null;
+        if (body["ExclusiveStartKey"] is JsonObject start)
+        {
+            after = start["pk"]?["S"]?.GetValue<string>() is { } startPk && start["appId"]?["S"]?.GetValue<string>() == app
+                ? startPk
+                : throw new Refusal("ValidationException", "The ExclusiveStartKey is not a key of the appId index for :app.");
+        }
+
         lock (writes)
         {
             // Keys only: the table's key and the index's (the index's projection, infra/modules/cell).
-            JsonArray found = [.. items.Values
+            List<JsonObject> matching = [.. items.Values
                 .Where(i => i["appId"]?["S"]?.GetValue<string>() == app)
-                .Select(i => (JsonNode)new JsonObject { ["pk"] = i["pk"]!.DeepClone(), ["appId"] = i["appId"]!.DeepClone() })];
-            return (200, new JsonObject { ["Items"] = found, ["Count"] = found.Count });
+                .Where(i => after is null || string.CompareOrdinal(i["pk"]!["S"]!.GetValue<string>(), after) > 0)
+                .OrderBy(i => i["pk"]!["S"]!.GetValue<string>(), StringComparer.Ordinal)
+                .Take(QueryPageSize ?? int.MaxValue)
+                .Select(i => new JsonObject { ["pk"] = i["pk"]!.DeepClone(), ["appId"] = i["appId"]!.DeepClone() })];
+            JsonObject answer = new() { ["Items"] = new JsonArray([.. matching]), ["Count"] = matching.Count };
+            if (QueryPageSize is { } size && matching.Count == size)
+            {
+                answer["LastEvaluatedKey"] = matching[^1].DeepClone();
+            }
+
+            return (200, answer);
         }
     }
 
-    private (int, JsonObject) BatchWriteItem(JsonObject body)
+    private (int, JsonObject) BatchWriteItem(JsonObject body, bool leaveLastUnprocessed)
     {
         JsonObject requested = body["RequestItems"]?.AsObject() ?? throw new Refusal("ValidationException", "No RequestItems.");
         if (requested.Count != 1 || requested[Table] is not JsonArray writesForTable)
@@ -374,17 +413,24 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
             throw new Refusal("ValidationException", "A BatchWriteItem carries 1 to 25 requests.");
         }
 
+        string[] pks = [.. writesForTable.Select(write => write?["DeleteRequest"]?["Key"]?["pk"]?["S"]?.GetValue<string>()
+            ?? throw new Refusal("ValidationException", "The fake answers DeleteRequests by S pk only."))];
+        int applied = leaveLastUnprocessed ? pks.Length - 1 : pks.Length;
         lock (writes)
         {
-            foreach (JsonNode? write in writesForTable)
+            foreach (string pk in pks[..applied])
             {
-                string pk = write?["DeleteRequest"]?["Key"]?["pk"]?["S"]?.GetValue<string>()
-                    ?? throw new Refusal("ValidationException", "The fake answers DeleteRequests by S pk only.");
                 items.Remove(pk);
             }
         }
 
-        return (200, new JsonObject { ["UnprocessedItems"] = new JsonObject() });
+        JsonObject unprocessed = [];
+        if (applied < pks.Length)
+        {
+            unprocessed[Table] = new JsonArray(writesForTable[^1]!.DeepClone());
+        }
+
+        return (200, new JsonObject { ["UnprocessedItems"] = unprocessed });
     }
 
     private static void RequireTable(JsonObject body)

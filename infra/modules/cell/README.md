@@ -13,6 +13,7 @@ name carries `var.cell`.
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
 | `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
 | `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
+| `sessions.tf` | #338, #417 | The DynamoDB session table, planned only under `session_store = "dynamodb"` |
 
 `tests/module.tftest.hcl` and `tests/network.tftest.hcl` check it against a mock
 provider, with no credentials and no network beyond `terraform init`. The Terraform
@@ -161,16 +162,21 @@ only when set (#338):
 
 | Grant | Behind | Scope |
 | --- | --- | --- |
-| `ReadWriteSessions` | `session_store = "dynamodb"` | `GetItem`, `PutItem`, `DeleteItem`, `Query` and `BatchWriteItem` on `table/spa-platform-{cell}-sessions` and its `index/appId`, the DynamoDB store's operations (change request P2-1) and nothing else of DynamoDB |
+| `ReadWriteSessions` | `session_store = "dynamodb"` | `GetItem`, `PutItem`, `DeleteItem`, `Query` and `BatchWriteItem` on the session table's own ARN and its `index/appId`, the DynamoDB store's operations (change request P2-1) and nothing else of DynamoDB |
 | `ReadWriteKeyRing` | `data_protection_parameter_prefix` | `ssm:PutParameter` and `ssm:GetParametersByPath` on `/spa-platform/{cell}/data-protection` and its children (P2-2 decision 12) |
 | `TagKeyRingOnCreate` | `data_protection_parameter_prefix` | `ssm:AddTagsToResource` on the ring's parameters, conditioned on exactly `Platform`, `Cell` and `ManagedBy = gateway` (#274) |
 
 No statement grants `ssm:DeleteParameter`: nothing in the platform deletes a key, and
 `teardown.sh` deletes the ring as the operator. `session_store = "dynamodb"` with no ring
-prefix is refused at plan, as the gateway refuses it at start (P2-2 decision 16). The
-module declares no session table, because P-01 reads this module's source and refuses a
-DynamoDB table whatever its count (`contracts/changes/issue-338-p-01-dynamodb-tripwire.md`),
-so the grant names the table by its name, `spa-platform-{cell}-sessions`.
+prefix is refused at plan, as the gateway refuses it at start (P2-2 decision 16).
+
+The session table, `spa-platform-{cell}-sessions` in `sessions.tf`, exists under the same
+condition as its grant. It is keyed on `pk`, carries the `appId` index and time to live on
+`expiresAt`, bills on demand and keeps DynamoDB's default encryption. P-01 admits it as the one
+database the cell may declare, and only with the count that plans none on the default inputs
+(`contracts/changes/issue-338-p-01-dynamodb-tripwire.md`). On those inputs
+`tests/module.tftest.hcl` holds the gateway's container definition and the task role's
+statements to Phase 1's digests, byte for byte.
 
 A grant can also arrive through a resource policy: in its own account a role may do
 whatever its own policy or a resource policy allows it. The bucket policy is the cell's
@@ -187,8 +193,9 @@ account.
   `infra/envs/poc/platform/tests/root.tftest.hcl`. It holds this module to being the
   platform root's whole plan, counts every type in that plan against the plan rows'
   numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
-  allowlist says. This module's own type allowlist, in `tests/module.tftest.hcl`, fails
-  on any of them as well.
+  allowlist says, save the gated session table, which it holds at no instance on the
+  default inputs and one under `dynamodb`. This module's own type allowlist, in
+  `tests/module.tftest.hcl`, fails on any of them as well, and names the session table.
 - **P-03, the task role policy,** is the task role's runs above.
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an

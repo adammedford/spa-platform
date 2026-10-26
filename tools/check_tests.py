@@ -1169,6 +1169,15 @@ LIBRARIES = {
 }
 
 
+def companion_names(path: str) -> list[str]:
+    """The two companions a script at `path` could have, as tools/check.sh's companion_names
+    spells them: its name with the extension dropped, hyphens made underscores, and `_tests.py`
+    added, or with hyphens kept and `-tests.py` added, beside it."""
+    folder, _, name = path.rpartition("/")
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return [f"{folder}/{stem.replace('-', '_')}_tests.py", f"{folder}/{stem}-tests.py"]
+
+
 def companion(path: str) -> list[str]:
     """The call that runs the companion at `path`."""
     return ["python3", "-I", path]
@@ -1303,11 +1312,20 @@ class CompanionTests(CheckTestCase):
         case = Case(self, extra={path: "" for path in beside}, change=scripts)
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        # tools/image_build_tests.py judges .dockerignore and the Dockerfiles, which no script's
-        # name names, so no change but its own earns it here; CI's documents job runs it on every
-        # pull request (#204). It was in this list from #204's merge, and the case failed on it.
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
-                                       "tools/image_build_tests.py"})
+        # A companion with no script beside it, tools/image_build_tests.py among them, is not
+        # reached from one, so no change here earns it. What it judges lies outside tools/ and
+        # .github/ (for that one: .dockerignore, the Dockerfiles, what they copy), so it must
+        # declare those files on its "Checkout inputs:" line, and a change to one earns it (#390;
+        # InputTests proves that). It was in the expected list from #204's merge until #390, and the
+        # case failed on it.
+        named = {name for path in tracked if path not in real for name in companion_names(path)}
+        scriptless = set(real) - named
+        self.assertIn("tools/image_build_tests.py", scriptless)
+        for path in sorted(scriptless):
+            with self.subTest(scriptless=path):
+                self.assertNotEqual([], declared_inputs((ROOT / path).read_text(encoding="utf-8")),
+                                    f"{path} has no script, so only a Checkout inputs line earns it")
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"} - scriptless)
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 
@@ -1449,6 +1467,7 @@ INPUTS = {
     "spikes/g0/global.json": "{}\n",
 }
 PINS_COMPANION = "tools/pins_inventory_tests.py"
+IMAGE_COMPANION = "tools/image_build_tests.py"
 
 
 def declared_inputs(text: str) -> list[str]:
@@ -1556,6 +1575,64 @@ class InputTests(CheckTestCase):
         self.assertIn("Directory.Packages.props", copied)
         self.assertEqual([], [path for path in copied
                               if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)])
+
+    def test_a_change_the_image_build_companion_reads_runs_it_and_its_failure_fails_the_check(self):
+        # #390, #354's shape for the other companion that reads the checkout: the real text of
+        # tools/image_build_tests.py, which has no script of its own, so before its line no change
+        # but its own earned it. Each change below is one it reads: the build context's ignore file,
+        # a Dockerfile it holds, a new Dockerfile its census would find, git's ignore files, and a
+        # file each Dockerfile's COPY takes from the context.
+        text = (ROOT / IMAGE_COMPANION).read_text(encoding="utf-8")
+        for change in (".dockerignore", "src/Gateway/Dockerfile", "tests/e2e/Dockerfile", "Dockerfile",
+                       ".gitignore", "infra/envs/poc/.gitignore", "src/App/App.cs",
+                       "contracts/new.schema.json", "fixtures/MockApi/Program.cs",
+                       "tools/bench/floor/Program.cs", "nuget.config"):
+            with self.subTest(change=change):
+                case = Case(self, extra={IMAGE_COMPANION: text, ".dockerignore": "bin\n"}, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([companion(IMAGE_COMPANION)], companions_run(case))
+        for change in ("README.md", "docs/notes.md", "infra/roots/a/main.tf", "fixtures/TestIdp/Program.cs"):
+            with self.subTest(change=change):
+                case = Case(self, extra={IMAGE_COMPANION: text}, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], companions_run(case))
+        case = Case(self, extra={IMAGE_COMPANION: text, ".dockerignore": "bin\n"}, change=".dockerignore",
+                    fails_on={"python3": IMAGE_COMPANION})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual(f"check: fail: the test companion {IMAGE_COMPANION} failed.",
+                         result.last_line(result.stderr))
+
+    def test_the_image_build_companion_declares_every_file_of_the_checkout_it_reads(self):
+        # As the pins guard does, this reads the companion's own names for what it reads, not a list
+        # kept here: a Dockerfile added to DOCKERFILES, a COPY a Dockerfile gains, or a path the
+        # outputs case moves to joins what the line must cover, or this fails. A COPY of a directory
+        # stands for every file that may be tracked under it later, which the context case reads too.
+        text = (ROOT / IMAGE_COMPANION).read_text(encoding="utf-8")
+        patterns = declared_inputs(text)
+        self.assertNotEqual([], patterns, f"{IMAGE_COMPANION} has no Checkout inputs line")
+        spec = importlib.util.spec_from_file_location("image_build_tests", ROOT / IMAGE_COMPANION)
+        image = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(image)
+        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON]
+        dockerfiles = (*image.DOCKERFILES, *image.OTHER_OWNERS)
+        reads += dockerfiles
+        # Its census of Dockerfiles finds a new one anywhere, at the top level too.
+        reads += image.tracked(["*Dockerfile"]) + ["Dockerfile", "some/new/place/Dockerfile"]
+        for dockerfile in dockerfiles:
+            sources = image.copied_from_context(dockerfile)
+            reads += image.tracked(sources)
+            reads += [source.rstrip("/") + "/new/file.cs" for source in sources if source.endswith("/")]
+        # git check-ignore reads the ignore file of the top level and of each directory above the
+        # outputs document.
+        parts = image.OUTPUTS_DOCUMENT.split("/")[:-1]
+        reads += ["/".join([*parts[:n], ".gitignore"]) for n in range(len(parts) + 1)]
+        self.assertIn("src/Gateway/Program.cs", reads)
+        self.assertIn("infra/envs/poc/.gitignore", reads)
+        self.assertEqual([], sorted({path for path in reads
+                                     if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)}))
 
 
 # Workflow scripts and their test companions, for WorkflowCompanionTests: a script's companion is
