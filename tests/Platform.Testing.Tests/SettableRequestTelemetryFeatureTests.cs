@@ -9,14 +9,17 @@ namespace Platform.Testing.Tests;
 public sealed class SettableRequestTelemetryFeatureTests
 {
     [Fact]
-    public void A_fresh_feature_carries_neither_field()
+    public void A_fresh_feature_carries_no_field()
     {
-        // What <c>UsePlatformTelemetry</c> hands the pipeline: a request that was not rejected has no rule, and a
-        // request with no session has no reference.
+        // What <c>UsePlatformTelemetry</c> hands the pipeline: a request that was not rejected has no rule, a
+        // request with no session has no reference, and a request whose reads were not refused has
+        // no refusal.
+        // Mutation (#427): initialise ReadRefused to "asset", and this fails.
         SettableRequestTelemetryFeature feature = new();
 
         Assert.Null(feature.Rule);
         Assert.Null(feature.SessionRef);
+        Assert.Null(feature.ReadRefused);
     }
 
     [Fact]
@@ -28,9 +31,12 @@ public sealed class SettableRequestTelemetryFeatureTests
 
         feature.Rule = "gate.origin";
         feature.SessionRef = SessionRef.Of("a-session-key");
+        feature.ReadRefused = "shell";
 
+        // Mutation (#427): make the ReadRefused setter discard its value, and this fails.
         Assert.Equal("gate.origin", feature.Rule);
         Assert.Equal(SessionRef.Of("a-session-key"), feature.SessionRef);
+        Assert.Equal("shell", feature.ReadRefused);
     }
 
     [Fact]

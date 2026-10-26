@@ -12,7 +12,7 @@ upstreams, and metrics are tagged by app.
 | --- | --- |
 | Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `status`, `duration_ms` |
 | `route` values | `asset`, `api`, `bff`, `callback`, `health` |
-| Metrics | `gateway.requests`, `auth.logins`, `auth.refreshes`, `auth.sessions.active`, `security.rejections`, `registry.revision`, `registry.age_seconds`, `registry.rejected`, `proxy.upstream.duration` |
+| Metrics | `gateway.requests`, `auth.logins`, `auth.refreshes`, `auth.sessions.active`, `security.rejections`, `registry.revision`, `registry.age_seconds`, `registry.rejected`, `proxy.upstream.duration`, `storage.read_refusals` |
 | Never logged | `Authorization`, `Cookie`, `Set-Cookie`, query strings, tokens, authorization codes, state, client secrets, session keys |
 
 `rule` carries the rule ids in `contracts/request-gate.md`, and `security.rejections` is counted by
@@ -22,6 +22,14 @@ the same id.
 session's requests without being usable as a credential. Log this, never the session key. Compute it
 with `SessionRef.Of` in `src/Platform.Abstractions`, which fixes the two things the sentence above
 leaves open: the key's UTF-8 bytes, and lowercase hex. Two writers must produce one reference.
+
+`read_refused` says which kind of key the store refused to read for the request: `asset` for any key
+but the app's shell, `shell` for its `index.html`, never a key or a path. A refused asset read
+answers a handled 404 like a confirmed-missing key (`contracts/http-contract.md`), so this field is
+what lets an operator see a permission fault. The asset route leaves it on
+`IRequestTelemetryFeature.ReadRefused`, as the next section describes for `rule` and `session_ref`,
+and every other request leaves it null (change request
+`contracts/changes/issue-381-object-read-refusal.md`, items 5 and 6).
 
 ## How `rule` and `session_ref` reach the request line
 
@@ -69,6 +77,16 @@ event": `UsePlatformTelemetry` counts it, from the same feature field it logs as
 `Platform.Telemetry` meter. One owner then guarantees that the count equals the request lines
 carrying a rule. It is tagged `rule` and `app_id`, and `app_id` is null for a request rejected before
 the app was resolved.
+
+`storage.read_refusals` is the second exception, for the same reason: `UsePlatformTelemetry` counts
+it, on the `Platform.Telemetry` meter, from `IRequestTelemetryFeature.ReadRefused`, the field behind
+`read_refused`, though the asset route in `Platform.Hosting` is what raises the event. It counts the
+requests marked with a refusal, of both classes, tagged `app_id` and `key_class` (`asset` or
+`shell`), and it is added before the line's `IsEnabled(Information)` check, as `security.rejections`
+is. What one owner guarantees is one emission decision per request, not that two exported streams
+agree in production. The evidence is tiered to what Phase 1 exports: hermetically, the count and the
+line's field agree over an in-memory metric exporter with Information logging on; deployed,
+`read_refused` appears on the log stream, since Phase 1 exports no metrics.
 
 ## Why query strings are dropped
 

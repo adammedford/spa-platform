@@ -40,6 +40,7 @@ public sealed class PublicSurfaceTests
         "ISessionStore",
         "IssuerDefinition",
         "OAuthDefinition",
+        "ObjectReadRefusedException",
         "PlatformPolicy",
         "Problems",
         "RefreshLease",
@@ -63,6 +64,7 @@ public sealed class PublicSurfaceTests
     {
         // Mutation (#160): drop "Problems" or "Rejection" from Contracted, and this fails, 1 of 108 each.
         // Mutation (#337): drop "IRefreshLeases" or "RefreshLease" from Contracted, and this fails.
+        // Mutation (#427): drop "ObjectReadRefusedException" from Contracted, and this fails.
         Assert.Equal(Contracted, PublicTypes().Select(Name).Order().ToArray());
     }
 
