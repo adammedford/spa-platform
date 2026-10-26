@@ -117,6 +117,30 @@ public sealed class SessionStoreRegistrationTests
             host.Services.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository).GetAllElements());
     }
 
+    [Fact]
+    public void The_table_is_bounded_by_the_StoreDeadline_the_refresh_lease_margin_is_derived_from()
+    {
+        // #332 D4 and G1: the lease's margin, 2 × StoreDeadline + 1 s, covers the store's real bound only
+        // if the two are one figure (#341). A host that changes the token source's StoreDeadline changes the
+        // table's with it, and an untouched host has D4's 5 s in both. Mutation that turns it red: drop the
+        // option's value from DynamoDbSessionTable.FromConfiguration, and the table keeps 5 s.
+        using IHost changed = Build(
+            new() { ["Session:Store"] = "dynamodb", ["Session:TableName"] = FakeDynamoDbServer.Table },
+            services => services
+                .AddSingleton<IAmazonDynamoDB>(new AmazonDynamoDBClient(new AnonymousAWSCredentials(), new AmazonDynamoDBConfig { ServiceURL = "http://127.0.0.1:9/" }))
+                .AddSingleton(new AccessTokenSourceOptions { StoreDeadline = TimeSpan.FromSeconds(2) }),
+            before: true);
+        using IHost untouched = Build(
+            new() { ["Session:Store"] = "dynamodb", ["Session:TableName"] = FakeDynamoDbServer.Table },
+            services => services.AddSingleton<IAmazonDynamoDB>(new AmazonDynamoDBClient(new AnonymousAWSCredentials(), new AmazonDynamoDBConfig { ServiceURL = "http://127.0.0.1:9/" })));
+
+        Assert.Equal(TimeSpan.FromSeconds(2), changed.Services.GetRequiredService<DynamoDbSessionTable>().StoreDeadline);
+        Assert.Equal(
+            (TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)),
+            (untouched.Services.GetRequiredService<DynamoDbSessionTable>().StoreDeadline,
+                untouched.Services.GetRequiredService<AccessTokenSourceOptions>().StoreDeadline));
+    }
+
     [Theory]
     [InlineData("memory")]
     [InlineData(null)]

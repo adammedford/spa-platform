@@ -38,6 +38,26 @@ namespace Platform.Identity;
 /// deadline of its own instead (T-D9), with the caveat T-D10 records: a refresh given up on may still
 /// have been carried out, and the retry is then a replay that only a grace window covers.</item>
 /// </list>
+///
+/// <para><b>The refresh lease</b> (ADR-0024; change request P2-3, Decision items 3 to 5; #332 D2 and
+/// rows F3 to F6). Two gateway tasks share no session gate, so a due token is refreshed only by the task
+/// holding the session's refresh lease, taken under the gate before the provider is called and given
+/// back in a <c>finally</c> on every outcome, fenced by its token. Holding it, the holder reads the
+/// record again, since another task may have written it since the turn began, and then checks, on the
+/// monotonic clock and with the acquisition's latency already spent, that at least
+/// <see cref="AccessTokenSourceOptions.ReservedBudget"/> remains of its lease; with less, it gives the
+/// lease back and waits as a loser rather than call the provider (D2). A loser re-reads the record every
+/// <see cref="LoserPoll"/> and asks for the lease again: a record gone answers
+/// <see cref="AccessTokenResult.Unauthenticated"/>, a token no longer due is the answer, and a lease
+/// that lapsed with the session unmoved is taken over and the refresh made (F3's recovery path). A host
+/// that registers no <see cref="IRefreshLeases"/> runs one replica, where the gate is the whole refresh
+/// gate (plan row 3.4).</para>
+///
+/// <para>What the lease does not give: an exactly-once provider call. A holder paused between the check
+/// and the send, past its lease, sends a refresh another task may also be sending; the grace window, the
+/// versioned replace and the re-read before a refusal then decide, and at worst the session ends once
+/// under one logged reason (F4). Nor does a release that fails, or a write that fails after the provider
+/// rotated: the lease is released or lapses, and the next caller's read decides (F3b).</para>
 /// </summary>
 internal sealed partial class AccessTokenSource(
     AppSessions sessions,
@@ -45,8 +65,18 @@ internal sealed partial class AccessTokenSource(
     CredentialStyles styles,
     AccessTokenSourceOptions options,
     TimeProvider clock,
-    ILogger<AccessTokenSource> logger) : IAccessTokenSource
+    ILogger<AccessTokenSource> logger,
+    IRefreshLeases? leases = null) : IAccessTokenSource
 {
+    /// <summary>
+    /// How often a loser reads the record again and asks for the lease (change request P2-3, Decision
+    /// item 4).
+    /// </summary>
+    internal static readonly TimeSpan LoserPoll = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>The lease's time to live, refused at construction when no holder could ever pass D2's check.</summary>
+    private readonly TimeSpan timeToLive = options.Validated().LeaseTimeToLive;
+
     /// <summary>
     /// How long before expiry a token is refreshed: plan row 3.8, and the library's own default for
     /// <see cref="UserTokenManagementOptions.RefreshBeforeExpiration"/>.
@@ -77,9 +107,9 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
-        using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
+        using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
 
-        switch (lease.WhileWaiting)
+        switch (turn.WhileWaiting)
         {
             case RefreshOutcome.Unavailable:
                 return new AccessTokenResult.ProviderUnavailable();
@@ -87,40 +117,130 @@ internal sealed partial class AccessTokenSource(
                 return new AccessTokenResult.SessionEnded();
         }
 
-        if (lease.Owned is not { } record)
+        if (turn.Owned is not { } record)
         {
             return new AccessTokenResult.Unauthenticated();
         }
 
-        AuthenticationTicket ticket = Deserialize(record);
-        string? access = ticket.Properties.GetTokenValue(AccessTokenName);
-        if (access is { Length: > 0 } && ExpiresAt(ticket.Properties) > clock.GetUtcNow() + RefreshBeforeExpiry)
+        if (FreshAccess(record) is { } access)
         {
             return new AccessTokenResult.Token(access);
         }
 
+        if (leases is null)
+        {
+            return (await RefreshAsync(context, app, key, turn, record)).Answer;
+        }
+
+        return await UnderTheLeaseAsync(context, app, key, turn, leases);
+    }
+
+    /// <summary>
+    /// The holder's and the loser's loop (change request P2-3, Decision item 4). Each pass asks for the
+    /// lease; holding it, reads the record and refreshes when the check allows; otherwise waits
+    /// <see cref="LoserPoll"/> and reads the record again. Every store call here runs with
+    /// <see cref="CancellationToken.None"/> (T-B15, T-B16).
+    /// </summary>
+    private async Task<AccessTokenResult> UnderTheLeaseAsync(
+        HttpContext context, AppDefinition app, string key, AppSessions.Turn turn, IRefreshLeases table)
+    {
+        long arrived = clock.GetTimestamp();
+        while (true)
+        {
+            // The clock starts before the request is sent, so the acquisition's latency is spent off the
+            // lease before anything else is (#332 D2).
+            long asked = clock.GetTimestamp();
+            if (await table.TryAcquireAsync(key, timeToLive, CancellationToken.None) is { } lease)
+            {
+                // "store_failed" is the label for the one way out not written below: a store call that
+                // threw, the F3b and F17 path, whose exception reaches the caller after the release.
+                string outcome = "store_failed";
+                try
+                {
+                    if (await turn.RereadAsync() is not { } current)
+                    {
+                        outcome = "gone";
+                        return new AccessTokenResult.Unauthenticated();
+                    }
+
+                    if (FreshAccess(current) is { } written)
+                    {
+                        // Another task refreshed between this turn's read and the lease: its token is good.
+                        outcome = "unchanged";
+                        turn.Finish(new RefreshOutcome.Refreshed());
+                        return new AccessTokenResult.Token(written);
+                    }
+
+                    if (options.MayCallProvider(clock.GetElapsedTime(asked)))
+                    {
+                        (AccessTokenResult answer, RefreshOutcome ended) = await RefreshAsync(context, app, key, turn, current);
+                        outcome = OutcomeName(ended);
+                        return answer;
+                    }
+
+                    outcome = "too_little_lease";
+                    TooLittleLease(logger, app.AppId, SessionRef.Of(key));
+                }
+                finally
+                {
+                    await ReleaseAsync(table, app, key, lease, outcome);
+                }
+            }
+
+            if (clock.GetElapsedTime(arrived) > timeToLive + timeToLive)
+            {
+                // No honest holder keeps the lease this long: every lease lapses within one time to live,
+                // and the next pass takes it over. Only a store too slow for any holder to pass the check
+                // gets here, and it fails the call with the session kept, as an outage would.
+                turn.Finish(new RefreshOutcome.Unavailable());
+                NoLease(logger, app.AppId, SessionRef.Of(key));
+                return new AccessTokenResult.ProviderUnavailable();
+            }
+
+            await Task.Delay(LoserPoll, clock);
+            if (await turn.RereadAsync() is not { } reread)
+            {
+                return new AccessTokenResult.Unauthenticated();
+            }
+
+            if (FreshAccess(reread) is { } holders)
+            {
+                // The version moved: the holder's refresh is written, and its token is the answer.
+                turn.Finish(new RefreshOutcome.Refreshed());
+                return new AccessTokenResult.Token(holders);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The refresh itself, on the record this caller holds the gate (and the lease, when there is one)
+    /// for, which is due: the library's call, then the write, the refusal's re-read or the end. Returns
+    /// the answer and how the refresh ended, which the callers queued on the gate share (T-D6).
+    /// </summary>
+    private async Task<(AccessTokenResult Answer, RefreshOutcome Outcome)> RefreshAsync(
+        HttpContext context, AppDefinition app, string key, AppSessions.Turn turn, SessionRecord record)
+    {
+        AuthenticationTicket ticket = Deserialize(record);
         if (ticket.Properties.GetTokenValue(RefreshTokenName) is not { Length: > 0 } refreshToken)
         {
             // Nothing to refresh with, so the session can never yield a token again.
-            await EndAsync(context, app, lease);
-            lease.Finish(new RefreshOutcome.Ended());
-            return new AccessTokenResult.SessionEnded();
+            await EndAsync(context, app, turn);
+            return Finished(turn, new AccessTokenResult.SessionEnded(), new RefreshOutcome.Ended());
         }
 
-        (UserToken? token, string? error) = await RefreshAsync(app, refreshToken);
+        (UserToken? token, string? error) = await CallProviderAsync(app, refreshToken);
 
         if (token is not null)
         {
-            lease.Finish(new RefreshOutcome.Refreshed());
+            turn.Finish(new RefreshOutcome.Refreshed());
             Refreshed(logger, app.AppId, SessionRef.Of(key));
-            return await StoreAsync(app, key, lease, record, ticket, token);
+            return (await StoreAsync(app, key, turn, record, ticket, token), new RefreshOutcome.Refreshed());
         }
 
         if (error != OidcConstants.TokenErrors.InvalidGrant)
         {
-            lease.Finish(new RefreshOutcome.Unavailable());
             RefreshFailed(logger, app.AppId, SessionRef.Of(key), error!);
-            return new AccessTokenResult.ProviderUnavailable();
+            return Finished(turn, new AccessTokenResult.ProviderUnavailable(), new RefreshOutcome.Unavailable());
         }
 
         // Refused. Another writer may have refreshed the session in between, so it rotated the refresh
@@ -131,21 +251,60 @@ internal sealed partial class AccessTokenSource(
             && !string.Equals(newer, refreshToken, StringComparison.Ordinal)
             && current.GetTokenValue(AccessTokenName) is { Length: > 0 } newerAccess)
         {
-            lease.Finish(new RefreshOutcome.Refreshed());
-            return new AccessTokenResult.Token(newerAccess);
+            return Finished(turn, new AccessTokenResult.Token(newerAccess), new RefreshOutcome.Refreshed());
         }
 
-        await EndAsync(context, app, lease);
-        lease.Finish(new RefreshOutcome.Ended());
+        await EndAsync(context, app, turn);
         Ended(logger, app.AppId, SessionRef.Of(key));
-        return new AccessTokenResult.SessionEnded();
+        return Finished(turn, new AccessTokenResult.SessionEnded(), new RefreshOutcome.Ended());
+    }
+
+    private static (AccessTokenResult, RefreshOutcome) Finished(AppSessions.Turn turn, AccessTokenResult answer, RefreshOutcome outcome)
+    {
+        turn.Finish(outcome);
+        return (answer, outcome);
+    }
+
+    /// <summary>
+    /// Gives the lease back, fenced by its token. A failure is logged by outcome, without the token or the
+    /// key, and never reaches the caller: the lease lapses on its own (change request P2-3, Decision item 5).
+    /// Only the exception's type is logged, since a store's message is text this code does not control.
+    /// </summary>
+    private async Task ReleaseAsync(IRefreshLeases table, AppDefinition app, string key, RefreshLease lease, string outcome)
+    {
+        try
+        {
+            await table.ReleaseAsync(key, lease, CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            ReleaseFailed(logger, app.AppId, SessionRef.Of(key), outcome, e.GetType().Name);
+        }
+    }
+
+    private static string OutcomeName(RefreshOutcome outcome) => outcome switch
+    {
+        RefreshOutcome.Refreshed => "refreshed",
+        RefreshOutcome.Unavailable => "unavailable",
+        RefreshOutcome.Ended => "ended",
+        _ => "unknown",
+    };
+
+    /// <summary>The record's access token when it is not due, else null (plan row 3.8's one-minute margin).</summary>
+    private string? FreshAccess(SessionRecord record)
+    {
+        AuthenticationProperties properties = Deserialize(record).Properties;
+        return properties.GetTokenValue(AccessTokenName) is { Length: > 0 } access
+            && ExpiresAt(properties) > clock.GetUtcNow() + RefreshBeforeExpiry
+                ? access
+                : null;
     }
 
     /// <summary>
     /// The library's refresh call, with the app's two schemes and the issuer's credential style, under
     /// a deadline tied to no request. Returns the new tokens, or the failure as a fixed category.
     /// </summary>
-    private async Task<(UserToken? Token, string? Error)> RefreshAsync(AppDefinition app, string refreshToken)
+    private async Task<(UserToken? Token, string? Error)> CallProviderAsync(AppDefinition app, string refreshToken)
     {
         UserTokenRequestParameters parameters = new()
         {
@@ -179,7 +338,7 @@ internal sealed partial class AccessTokenSource(
     /// when the provider rotated it, and the ID token only when the answer carried one (T-B13).
     /// </summary>
     private async Task<AccessTokenResult> StoreAsync(
-        AppDefinition app, string key, AppSessions.Lease lease, SessionRecord record, AuthenticationTicket ticket, UserToken token)
+        AppDefinition app, string key, AppSessions.Turn turn, SessionRecord record, AuthenticationTicket ticket, UserToken token)
     {
         string access = token.AccessToken.ToString();
         Dictionary<string, string> tokens = ticket.Properties.GetTokens()
@@ -199,7 +358,7 @@ internal sealed partial class AccessTokenSource(
         ticket.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
 
         SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
-        if (await lease.ReplaceAsync(next))
+        if (await turn.ReplaceAsync(next))
         {
             return new AccessTokenResult.Token(access);
         }
@@ -228,9 +387,9 @@ internal sealed partial class AccessTokenSource(
     /// cancellation, so a waiter can trust what it reads; the sign-out then expires the browser's cookie,
     /// unless the browser has already gone.
     /// </summary>
-    private static async Task EndAsync(HttpContext context, AppDefinition app, AppSessions.Lease lease)
+    private static async Task EndAsync(HttpContext context, AppDefinition app, AppSessions.Turn turn)
     {
-        await lease.EndAsync();
+        await turn.EndAsync();
         if (!context.RequestAborted.IsCancellationRequested && !context.Response.HasStarted)
         {
             await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
@@ -285,15 +444,93 @@ internal sealed partial class AccessTokenSource(
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "Another writer replaced the session for app {AppId}, session {SessionRef} during the refresh and left no access token in it. The session is kept.")]
     private static partial void LostToRecordWithoutToken(ILogger logger, string appId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Too little of the refresh lease for app {AppId}, session {SessionRef} remained to call the identity provider. It was given back, and the call waits for another holder's refresh.")]
+    private static partial void TooLittleLease(ILogger logger, string appId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "The refresh lease for app {AppId}, session {SessionRef} was not given back after the refresh ended ({Outcome}): {ErrorType}. It lapses on its own.")]
+    private static partial void ReleaseFailed(ILogger logger, string appId, string sessionRef, string outcome, string errorType);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "No refresh lease for app {AppId}, session {SessionRef} could be held long enough to refresh, within two times to live. The session is kept.")]
+    private static partial void NoLease(ILogger logger, string appId, string sessionRef);
 }
 
 /// <summary>Settings for <see cref="AccessTokenSource"/>.</summary>
 internal sealed class AccessTokenSourceOptions
 {
     /// <summary>
+    /// The clock-skew allowance both figures of #332 G1 add: the "+ 1 s" of
+    /// <see cref="LeaseMargin"/>'s default and of <see cref="ReservedBudget"/>.
+    /// </summary>
+    internal static readonly TimeSpan Allowance = TimeSpan.FromSeconds(1);
+
+    private TimeSpan? leaseMargin;
+
+    /// <summary>
     /// How long a refresh may take before the call gives up and the session is kept (T-D9).
     /// A deadline cannot guarantee the next request arrives inside the provider's rotation grace:
-    /// late retries can end the session, as T-D10 records. This is a bound on this call only.
+    /// late retries can end the session, as T-D10 records. This is a bound on this call only, and on
+    /// the OpenID Connect handler's code exchange, as its backchannel's timeout (#332 F1).
     /// </summary>
     public TimeSpan ProviderDeadline { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The bound on one session-store operation, its re-read and its one retry together: 5 s (#332 D4).
+    /// Taking the lease is one such operation, and so is the versioned write after the refresh. One
+    /// figure with the DynamoDB table's: its default is <see cref="DynamoDbSessionTable.DefaultStoreDeadline"/>,
+    /// and <see cref="DynamoDbSessionTable.FromConfiguration"/> bounds the table's calls by this value, so
+    /// the lease's margin always covers the store's real bound.
+    /// </summary>
+    public TimeSpan StoreDeadline { get; set; } = DynamoDbSessionTable.DefaultStoreDeadline;
+
+    /// <summary>
+    /// What the lease holds beyond <see cref="ProviderDeadline"/>: by default <c>2 × StoreDeadline + 1 s</c>,
+    /// 11 s today, covering taking the lease, the versioned write after the refresh and clock skew between
+    /// tasks (change request P2-3, item 3 as amended 2026-10-24; #332 G1). Set, it is that value instead.
+    /// </summary>
+    public TimeSpan LeaseMargin
+    {
+        get => leaseMargin ?? (StoreDeadline * 2) + Allowance;
+        set => leaseMargin = value;
+    }
+
+    /// <summary>The lease's time to live, the one derived value: <c>ProviderDeadline + LeaseMargin</c>, 21 s today.</summary>
+    public TimeSpan LeaseTimeToLive => ProviderDeadline + LeaseMargin;
+
+    /// <summary>
+    /// What must remain of the lease just before the provider is called: <c>ProviderDeadline +
+    /// StoreDeadline + 1 s</c>, 16 s today, for the call, the write after it and skew (#332 D2).
+    /// </summary>
+    public TimeSpan ReservedBudget => ProviderDeadline + StoreDeadline + Allowance;
+
+    /// <summary>
+    /// D2's check: whether a holder whose lease was asked for <paramref name="sinceAsked"/> ago, on the
+    /// monotonic clock, still has <see cref="ReservedBudget"/> of it. "At least", so the boundary passes:
+    /// an acquisition that takes its whole <see cref="StoreDeadline"/> leaves exactly the reserve.
+    /// </summary>
+    public bool MayCallProvider(TimeSpan sinceAsked) => LeaseTimeToLive - sinceAsked >= ReservedBudget;
+
+    /// <summary>
+    /// These settings, refused when no holder could ever pass <see cref="MayCallProvider"/>: a time to live
+    /// shorter than the reserve would release and retake the lease until the loser's bound, and fail every
+    /// refresh. It is what the 15 s lease did before #332 G1.
+    /// </summary>
+    public AccessTokenSourceOptions Validated()
+    {
+        if (ProviderDeadline <= TimeSpan.Zero || StoreDeadline <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("The provider and store deadlines must be positive.");
+        }
+
+        if (LeaseTimeToLive < ReservedBudget)
+        {
+            throw new InvalidOperationException(
+                $"The refresh lease's time to live ({LeaseTimeToLive.TotalSeconds} s) is shorter than the budget a holder must have left to call the provider ({ReservedBudget.TotalSeconds} s), so no refresh could ever be made.");
+        }
+
+        return this;
+    }
 }

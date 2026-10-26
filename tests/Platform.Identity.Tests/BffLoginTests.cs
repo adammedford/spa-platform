@@ -111,11 +111,11 @@ public sealed class BffLoginTests
     [Fact]
     public async Task A_relogin_discard_removes_the_session_under_the_lease_before_the_sign_out()
     {
-        // #166 box 2, #196: the discard is the session module's end through the lease (AppSessions.EndAsync
+        // #166 box 2, #196: the discard is the session module's end through the turn (AppSessions.EndAsync
         // with no action, #141 Q9), and the cookie handler's sign-out that follows finds the session gone.
         // The sign-out's ungated removal would remove the session too, so "the session is gone" cannot
         // tell the two apart; whether a gate was held as the one removal arrived can. Mutation: delete
-        // `await lease.EndAsync();` from Bff.LoginAsync, keeping the lease; the lease is released with
+        // `await turn.EndAsync();` from Bff.LoginAsync, keeping the turn; the turn is released with
         // the session still stored, the sign-out removes it with no gate held, and this fails.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         IdentityGateway.Login first = await gateway.LoginAsync(App1);
@@ -140,7 +140,7 @@ public sealed class BffLoginTests
         // The provider holds the refresh for 500 ms (its token delay, as the parallel-calls test uses),
         // and the re-login is sent once the refresh holds the gate. Mutation: discard outside the gate
         // (drop the EnterAsync and EndAsync block from Bff.LoginAsync, leaving the sign-out to remove);
-        // the removal lands while the refresh holds the lease, finds the login's refresh token, and this
+        // the removal lands while the refresh holds the turn, finds the login's refresh token, and this
         // fails.
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1]);
         gateway.Idp.Faults.AccessTokenLifetime = TimeSpan.FromSeconds(30);
