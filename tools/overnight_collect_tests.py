@@ -621,9 +621,9 @@ class LabelledBy(unittest.TestCase):
     actor of the last `labeled` event that applied it is read off the issue's timeline, and any
     other actor leaves the ticket needs-triage, named in "why"."""
 
-    # The guide's line as the proposal on #316 words it, typed here: the live guide names no account
-    # yet, and a case on it would pass on the fallback alone.
-    GUIDE = ("## This repository's additions\n\n"
+    # The guide's line as the proposal on #316 words it, typed here with an account the live policy
+    # does not name, so a case on it passes neither on the fallback nor on the live line.
+    GUIDE =("## This repository's additions\n\n"
              "- **The human's account is `@adam-m`.** A `Confirm` comment and the\n"
              "  `ready-for-agent` label count only when this account wrote them.\n")
 
@@ -635,7 +635,7 @@ class LabelledBy(unittest.TestCase):
         found = self.ticket(by("mallory"))
         self.assertEqual("needs-triage", found["status"])
         self.assertEqual("ready-for-agent was last applied by @mallory, not by @o, the "
-                         "repository's owner, since docs/agents/issue-tracker.md names no account; "
+                         "repository's owner, since docs/agents/tracker-policy.md names no account; "
                          "a lane goes only where that account applied it", found["why"])
 
     def test_the_owners_label_is_ready_for_agent(self):
@@ -704,7 +704,7 @@ class LabelledBy(unittest.TestCase):
         self.assertEqual("adam-m", collect.named_account(self.GUIDE))
         owners = self.ticket(by(OWNER), guide=self.GUIDE)
         self.assertEqual("needs-triage", owners["status"])
-        self.assertIn("not by @adam-m, the account docs/agents/issue-tracker.md names",
+        self.assertIn("not by @adam-m, the account docs/agents/tracker-policy.md names",
                       owners["why"])
         self.assertEqual("ready-for-agent", self.ticket(by("adam-m"), guide=self.GUIDE)["status"])
 
@@ -715,20 +715,32 @@ class LabelledBy(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(collect.named_account(text))
 
-    def test_the_live_guide_parses(self):
-        """The guide as it stands either names an account or names none; it never fails to read."""
-        text = (ROOT / collect.GUIDE).read_text()
-        self.assertIn(collect.named_account(text), (None, *[m.group("login") for m in
-                                                            collect.ACCOUNT_LINE.finditer(text)]))
+    def test_the_live_policy_names_the_account_and_the_setup_written_guides_name_none(self):
+        """#432: the account line lives in docs/agents/tracker-policy.md, which no setup skill
+        writes, so a re-run of the setup skill that rewrites the other two guides cannot delete
+        it and leave every label read against the fallback (#412). The line moved rather than
+        being copied, so neither setup-written guide names an account to disagree with it."""
+        self.assertEqual("docs/agents/tracker-policy.md", collect.GUIDE)
+        self.assertIsNotNone(collect.named_account(
+            (ROOT / "docs/agents/tracker-policy.md").read_text()))
+        for setup_written in ("docs/agents/issue-tracker.md", "docs/agents/triage-labels.md"):
+            with self.subTest(guide=setup_written):
+                self.assertIsNone(collect.named_account((ROOT / setup_written).read_text()))
 
     def test_main_reads_the_guide_from_the_checkout_and_none_when_it_is_absent(self):
-        """tracker_guide() is main()'s one read of the guide, which ThroughGh pins (#331)."""
+        """tracker_guide() is main()'s one read of the guide, which ThroughGh pins (#331). It
+        reads docs/agents/tracker-policy.md, and an account line left in the setup-written
+        docs/agents/issue-tracker.md is not read (#432)."""
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             self.assertIsNone(collect.tracker_guide(root))
-            guide = root / collect.GUIDE
-            guide.parent.mkdir(parents=True)
-            guide.write_text("- **The human's account is `@someone`.** Only it confirms.\n")
+            agents = root / "docs" / "agents"
+            agents.mkdir(parents=True)
+            (agents / "issue-tracker.md").write_text(
+                "- **The human's account is `@mallory`.** Only it confirms.\n")
+            self.assertIsNone(collect.named_account(collect.tracker_guide(root)))
+            (agents / "tracker-policy.md").write_text(
+                "- **The human's account is `@someone`.** Only it confirms.\n")
             self.assertEqual("someone", collect.named_account(collect.tracker_guide(root)))
 
     def test_the_account_line_is_the_steering_checks(self):

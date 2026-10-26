@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Whether an issue has the shape of a ticket a lane can finish. Owner: integrator.
 
-docs/agents/issue-tracker.md states five rules a ticket keeps, confirmed on #227. Until #247 nothing
+docs/agents/tracker-policy.md states five rules a ticket keeps, confirmed on #227. Until #247 nothing
 held them where a ticket is written: A-05 (.github/path-ownership.py) catches a two-owner ticket at
 the push, after a lane has built half of it, which is why seven of the 22 tickets of #226 ended
 partial instead of never starting. This reads one issue and fails it, naming the rule, on:
