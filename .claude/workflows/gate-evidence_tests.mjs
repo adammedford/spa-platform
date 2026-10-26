@@ -92,7 +92,7 @@ const rewrite = (lines, first, from, to) => { const l = lineOf(lines, first); if
 const tables = (exportLines = EXPORT_LINES, registerLines = REGISTER_LINES) => [{ document: EXPORT, lines: exportLines }, { document: REGISTER, lines: registerLines }]
 const ID_TABLES = tables()
 // The gate register, contracts/gates.md (#403, Q1 and Q6 of #364), as the Scope agent copies its table
-// lines. No register is committed yet (#364 lands its first row), so these lines are made here in the
+// lines. These lines are made here, so each case holds whatever the committed register says, in the
 // shape the script's header gives: a one-row gates table, its ids table beneath it, then its criteria
 // table. GATE_REGISTER is the committed file's lines when it exists, read as EXPORT_LINES are.
 const GATES_DOC = 'contracts/gates.md'
@@ -698,7 +698,8 @@ try {
   //     definition the register cannot hold, or one naming an unknown or retired id, is refused
   //     before Locate. What this proves: that the Scope prompt names contracts/gates.md, and that the
   //     code admits or refuses on a given Scope result. It does not prove that an agent copies the
-  //     file's lines correctly; the lines below are made here, since no register is committed yet.
+  //     file's lines correctly; the lines below are made here, so no case depends on the committed
+  //     register, which the last assertion reads when there is one.
   checks++
   {
     const driftBefore = driftAll.length
@@ -744,6 +745,15 @@ try {
       ['a criterion naming an id the gate does not', { gateRegister: g6(G6_IDS, [['P2-2 Something', 'N-02']]) }, { gate: 'G6' }, /G6's criterion "P2-2 Something" names N-02, which its ids table does not/],
       ['an ids table under two gate rows', { gateRegister: { exists: true, lines: [...registerOf('G6', []).slice(0, 3), '| G7 | x | y | z | w |', '| Id | Tiers required |', '| --- | --- |', '| N-01 | H |'] } }, { gate: 'G6' }, /an Id \| Tiers required table follows a gates table of 2 rows, so whose ids it lists is unclear/],
       ['a table of another shape', { gateRegister: { exists: true, lines: [...registerOf('G6', [['N-01', 'H']]), '| Gate | Ids |', '| --- | --- |', '| G6 | N-01 |'] } }, { gate: 'G6' }, /a table of contracts\/gates\.md with the header "Gate \| Ids" is none of the register's tables/],
+      // The reader's remaining guards, each of which the review of #403 could delete with this check
+      // green: a gate with two rows, an empty Exit test cell, a second ids table, an id listed twice, a
+      // row of the wrong cell count and a criterion naming no test id.
+      ['a gate with two rows', { gateRegister: { exists: true, lines: [...registerOf('G6', [['N-01', 'H']]), ...registerOf('G6', [['F-07', 'D']])] } }, { gate: 'G6' }, /G6 has more than one row in the gate register/],
+      ['an empty Exit test cell', { gateRegister: { exists: true, lines: registerOf('G6', [['N-01', 'H']], [], '') } }, { gate: 'G6' }, /G6's Exit test cell is empty/],
+      ['two ids tables for a gate', { gateRegister: { exists: true, lines: [...registerOf('G6', [['N-01', 'H']]), '| Id | Tiers required |', '| --- | --- |', '| F-07 | D |'] } }, { gate: 'G6' }, /G6 has more than one Id \| Tiers required table/],
+      ['an id listed twice', { gateRegister: g6([['N-01', 'H'], ['N-01', 'D']], []) }, { gate: 'G6' }, /G6's ids table lists N-01 twice/],
+      ['a row of the wrong cell count', { gateRegister: { exists: true, lines: [...registerOf('G6', [['N-01', 'H']]), '| F-07 | D | extra |'] } }, { gate: 'G6' }, /a row of contracts\/gates\.md's Id \| Tiers required table has 3 cells where its header has 2/],
+      ['a criterion naming no test id', { gateRegister: g6(G6_IDS, [['P2-1 A session survives a task replacement', 'N-01, session']]) }, { gate: 'G6' }, /G6's criterion "P2-1 A session survives a task replacement" names "session", which is not a test id/],
     ]) {
       const r = await execute(newRepo(), a, served)
       if (!refusedFor(r, why)) fail(`${label}: dispatched ${r.labels.join(', ')}; reasons ${JSON.stringify(r.result.reasons)}`)

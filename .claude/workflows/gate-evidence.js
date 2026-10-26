@@ -194,8 +194,8 @@ const defaultGate = (ladder, reachable) => {
 }
 // The refusals (#80 -> "Phase Scope" and Testing Decisions 7): each ends the run with a report and
 // no Locate, Prove or Row-audit agent. A gate is admitted exactly when the export's gates table or
-// the gate register defines it (#403, Q3 of #364); its phase is a label and admits nothing, so G6 is
-// admitted once the register has its row and G7 and G8 stay refused until theirs land. A register
+// the gate register defines it (#403, Q3 of #364); its phase is a label and admits nothing, so a Phase 2
+// gate such as G6 is admitted by its register row, and a gate with no row in either is refused. A register
 // problem refuses the gate it names, and a problem naming no gate refuses a gate only the register
 // could define; a gate both define is refused, since which exit test closes it would be a guess.
 const refusalsOf = (scope, gate, ladderRow, register) => {
@@ -345,8 +345,9 @@ const tiersFor = (x, idx) => {
 // Each gate takes a section of its own with those tables. An ids or criteria table belongs to the
 // one-row gates table above it; anything this cannot attribute, or cannot read, is a problem, which
 // refuses the gate it names, or, naming none, a gate only the register could define (refusalsOf).
-// An absent file is no register, not a problem: no gate is defined after the export until #364's row
-// lands; a file that exists and comes back with no table line is a problem, since the Scope agent
+// An absent file is no register, not a problem: the export's gates need none, and a gate only the
+// register could define is then refused as having no exit test; a file that exists and comes back
+// with no table line is a problem, since the Scope agent
 // dropped it (CODING_STANDARDS.md -> "A check fails closed").
 const GATES_DOC = 'contracts/gates.md'
 const PLAN_DOC = 'docs/plan/01-plan.md'
