@@ -199,7 +199,18 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// </param>
     /// <param name="idpClock">
     /// The clock the provider runs its delays on: <see cref="HeldClock"/> for a test that acts while the
-    /// provider holds a request. The system clock when null.
+    /// provider holds a request. The system clock when null. Ignored with <paramref name="beside"/>, whose
+    /// provider this gateway shares.
+    /// </param>
+    /// <param name="sessions">
+    /// The session store, for two gateways that share one as every task of a cell shares the table (plan
+    /// row P2-1), behind a recorder of this gateway's own. <paramref name="beside"/>'s store when null and
+    /// a gateway is named there, else a store of this gateway's own.
+    /// </param>
+    /// <param name="leases">
+    /// The refresh lease table, for two gateways that share one (plan row P2-3, change request P2-3
+    /// Decision item 7). None when null, as <c>AddPlatformIdentity</c> resolves none with no
+    /// <c>Session:Store</c> named (#393): one replica, where the session gate is the whole refresh gate.
     /// </param>
     /// <param name="keys">
     /// The repository the key ring is kept in: a fresh <see cref="ListXmlRepository"/> when null, so no
@@ -217,7 +228,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
         bool stubProfile = true,
         TimeProvider? idpClock = null,
         IXmlRepository? keys = null,
-        IdentityGateway? beside = null)
+        IdentityGateway? beside = null,
+        RecordingSessionStore? sessions = null,
+        IRefreshLeases? leases = null)
     {
         AppDefinition[] entries = [.. apps];
         TestIdentityProvider idp = beside?.Idp ?? new(idpClock);
@@ -229,7 +242,11 @@ internal sealed class IdentityGateway : IAsyncDisposable
         FakeClientSecretSource secrets = new();
         foreach (AppDefinition app in entries)
         {
-            Register(idp, app);
+            if (beside is null)
+            {
+                Register(idp, app);
+            }
+
             secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
         }
 
@@ -249,8 +266,13 @@ internal sealed class IdentityGateway : IAsyncDisposable
         builder.Services.AddSingleton<IRegistry>(registry);
         builder.Services.AddSingleton<IClientSecretSource>(secrets);
         builder.Services.AddSingleton<IIdpProfile>(profile);
-        RecordingSessionStore sessions = beside?.Sessions ?? new(new InMemorySessionStore());
+        sessions ??= beside?.Sessions ?? new RecordingSessionStore(new InMemorySessionStore());
         builder.Services.AddSingleton<ISessionStore>(sessions);
+        if (leases is not null)
+        {
+            builder.Services.AddSingleton(leases);
+        }
+
         IXmlRepository ring = keys ?? new ListXmlRepository();
         builder.Services.Configure<KeyManagementOptions>(o => o.XmlRepository = ring);
         // What a web host registers and an empty host does not: routing's middleware needs both.

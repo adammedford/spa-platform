@@ -33,17 +33,28 @@ namespace Platform.Identity;
 /// repeat, as D4 sets out per operation.</para>
 ///
 /// <para><b>The SDK's own retries.</b> A client from the container keeps its own retry policy, which
-/// for DynamoDB is 10 retries by default (11 attempts were seen at the pin). They run inside the
-/// deadline, so <see cref="StoreDeadline"/> still bounds the operation, and each adapter reads a
-/// condition failure as possibly its own earlier attempt, since an SDK retry of a committed write
-/// fails its own condition.</para>
+/// for DynamoDB is 10 retries by default: "For the <c>DynamoDBv2</c> and <c>DynamoDBStreams</c> service
+/// packages, the default value is 10" (<c>ClientConfig.MaxErrorRetry</c>,
+/// https://docs.aws.amazon.com/sdkfornet/v4/apidocs/items/Runtime/TClientConfig.html, and the same
+/// words in the XML documentation AWSSDK.Core 4.0.102.12 ships). At the pin a client answering 500 to
+/// every request made 11 attempts, while the property itself read 2; <c>AWS_MAX_ATTEMPTS</c> moved
+/// the property but not the count (#401). The AWS SDKs' 2026 retry behaviour gives DynamoDB 4
+/// attempts (https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html), and this
+/// Core already carries it, off by default, behind <c>AWS_NEW_RETRIES_2026=true</c>
+/// (<c>RetryPolicy.UseNewRetries2026</c>, whose shipped XML documentation says the flag goes and the
+/// behaviour becomes the default at the end of 2026); with that set, the same client made 4 attempts.
+/// So a <c>MaxErrorRetry</c> set in code, that variable, or a Core past the flag's removal changes
+/// the count. Whatever the count, the retries run inside the deadline, so <see cref="StoreDeadline"/>
+/// still bounds the operation, and each adapter reads a condition failure as possibly its own earlier
+/// attempt, since an SDK retry of a committed write fails its own condition.</para>
 /// </summary>
 internal sealed class DynamoDbSessionTable
 {
     /// <summary>
     /// D4: 5 s bounds each operation, its re-read and its one retry together. The lease's margin is
     /// <c>2 × StoreDeadline + 1 s</c> (change request P2-3, amended 2026-10-24), so this figure is read
-    /// there as well.
+    /// there as well: it is <see cref="AccessTokenSourceOptions.StoreDeadline"/>'s default, and
+    /// <see cref="FromConfiguration"/> takes that option's value, so the two are one setting.
     /// </summary>
     internal static readonly TimeSpan DefaultStoreDeadline = TimeSpan.FromSeconds(5);
 
@@ -108,7 +119,8 @@ internal sealed class DynamoDbSessionTable
             tableName,
             services.GetRequiredService<IDataProtectionProvider>(),
             services.GetService<TimeProvider>() ?? TimeProvider.System,
-            services.GetRequiredService<ILoggerFactory>().CreateLogger<DynamoDbSessionStore>());
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<DynamoDbSessionStore>(),
+            services.GetService<AccessTokenSourceOptions>()?.StoreDeadline);
     }
 
     /// <summary>

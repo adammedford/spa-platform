@@ -79,10 +79,11 @@ public sealed class DynamoDbWriteOutcomeTests : IAsyncLifetime
     [Fact]
     public async Task A_client_with_the_SDKs_own_retries_reads_its_resend_of_a_committed_create_as_success()
     {
-        // A client from the container keeps the SDK's retries (10 by default for DynamoDB). Its resend of a
-        // create whose response was lost fails attribute_not_exists against the create's own commit, and
-        // the store re-reads and finds its own ciphertext. Mutation: read a first-send condition failure as
-        // a collision without re-reading, and this create throws.
+        // A client from the container keeps the SDK's retries (10 by default for DynamoDB, cited in
+        // DynamoDbSessionTable's summary). Its resend of a create whose response was lost fails
+        // attribute_not_exists against the create's own commit, and the store re-reads and finds its own
+        // ciphertext. Mutation: read a first-send condition failure as a collision without re-reading, and
+        // this create throws.
         DynamoDbSessionStore store = new(DynamoDbTables.Over(fake, TestClock.New(), maxErrorRetry: null));
         fake.Next("PutItem", Fault.CommitThenDrop);
 

@@ -86,8 +86,8 @@ internal static class Bff
         if (sessions.KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
             // Released before the sign-out, whose ungated removal needs no gate and should wait on none.
-            using AppSessions.Lease lease = await sessions.EnterAsync(app, key);
-            await lease.EndAsync();
+            using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
+            await turn.EndAsync();
         }
 
         await context.SignOutAsync(SchemeNames.Cookie(app.AppId));

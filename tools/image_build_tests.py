@@ -24,6 +24,18 @@ What no case here can show is the image itself, because these cases need no Dock
 tools/image-check.sh builds and starts it from a tree given both conditions, and runs in
 tools/check.sh --full and in CI's Build and test job (#210).
 
+Every case reads the checkout and none reads a script of its own, so a change to what it reads can
+turn a case red with no change here. The line below names those files for tools/check.sh, whose full
+mode runs this companion when a change touches one (#390), as CI's Documents job runs it on every
+change: the root .dockerignore, every Dockerfile, which the census below finds wherever it is, the
+files each Dockerfile copies from the context, git's ignore files and the script that writes the
+outputs document. A case reads the checkout through DOCKERIGNORE, DOCKERFILES, OTHER_OWNERS, what
+they copy, OUTPUTS_DOCUMENT's ignore files or CELL_COMMON, and tools/check_tests.py derives what
+the line must cover from those names and fails while a path they reach is missing from it. A case
+that starts reading another file reads it through such a name, and the file joins the line.
+
+Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh
+
 Run: python3 -I tools/image_build_tests.py
 """
 
@@ -88,6 +100,8 @@ MUST_NOT_SEND = {
 }
 
 OUTPUTS_DOCUMENT = "infra/envs/poc/outputs.json"
+# The script that writes the outputs document, which a case reads for the path it writes to.
+CELL_COMMON = "tools/scripts/cell-common.sh"
 
 
 # --- Docker's .dockerignore rules ------------------------------------------------------------------
@@ -268,7 +282,7 @@ class TheOutputsDocument(unittest.TestCase):
     def test_the_scripts_still_write_it_there(self):
         # A guard reads the thing it guards: the ignore line is only right while the scripts write
         # where it points.
-        common = (ROOT / "tools/scripts/cell-common.sh").read_text()
+        common = (ROOT / CELL_COMMON).read_text()
         self.assertIn('OUTPUTS_FILE="${REPO_ROOT}/' + OUTPUTS_DOCUMENT + '"', common)
 
 

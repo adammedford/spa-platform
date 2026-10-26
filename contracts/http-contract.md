@@ -21,6 +21,13 @@ implementation.
 An SPA cannot serve content under `/bff/`, `/api/`, `/signin-oidc`, `/signout-callback-oidc`,
 `/signout-oidc`, `/healthz` or `/readyz`.
 
+Every 404 the asset row answers carries `Cache-Control: private, no-store`: a key the store
+answered as absent, a key whose read the store refused, and a reserved path refused before any
+read. Under the deployed role every missing asset is a refused read, and RFC 9110 section 15.5.5
+lets a cache keep a 404 heuristically, so without it a 404 caused by a passing permission fault
+could outlive the fault (change request `contracts/changes/issue-381-object-read-refusal.md`,
+item 4).
+
 The three `/bff` endpoints and session record share the G1b freeze (ADR-0017). The annotated
 `contracts-v1` tag is the freeze record; identity implementation stays blocked until it exists.
 

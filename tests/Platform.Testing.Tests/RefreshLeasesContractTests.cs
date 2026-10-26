@@ -25,7 +25,6 @@ public sealed class RefreshLeasesContractTests
         await suite.A_release_by_a_holder_whose_lease_was_taken_over_changes_nothing();
         await suite.A_second_release_of_the_same_lease_changes_nothing();
         await suite.Two_keys_are_independent();
-        await suite.A_key_with_no_session_record_can_be_taken_and_no_store_is_needed();
     }
 
     [Fact]
@@ -70,11 +69,15 @@ public sealed class RefreshLeasesContractTests
     }
 
     [Fact]
-    public async Task Requiring_a_session_record_fails_the_no_store_case()
+    public async Task Requiring_a_session_record_fails_the_free_key_case()
     {
+        // ADR-0024 decision 3. No case has a store, so every key the suite acquires has no session
+        // record, and the rule cannot fail one case without failing them all (#395): the free-key case
+        // is where it is named.
+
         Probe suite = new(Mutation.RequireSessionRecord);
 
-        await Assert.ThrowsAnyAsync<XunitException>(suite.A_key_with_no_session_record_can_be_taken_and_no_store_is_needed);
+        await Assert.ThrowsAnyAsync<XunitException>(suite.A_free_key_can_be_taken);
     }
 
     [Fact]
@@ -110,6 +113,11 @@ public sealed class RefreshLeasesContractTests
     {
         private readonly ConcurrentDictionary<string, RefreshLease> leases = new(StringComparer.Ordinal);
 
+        // The keys a session record exists under, for RequireSessionRecord. Nothing adds to it: the
+        // suite has no store and creates no session (ADR-0024 decision 3), so under that mutation
+        // every acquire is refused, which is why it fails the free-key case and every other case too.
+        private readonly HashSet<string> sessionRecords = new(StringComparer.Ordinal);
+
         public Task<RefreshLease?> TryAcquireAsync(string sessionKey, TimeSpan ttl, CancellationToken ct)
         {
             string key = Slot(sessionKey);
@@ -117,7 +125,7 @@ public sealed class RefreshLeasesContractTests
             RefreshLease fresh = new(Guid.NewGuid().ToString("n"), now + ttl);
 
             if (mutation is Mutation.RefuseEveryAcquire ||
-                (mutation is Mutation.RequireSessionRecord && sessionKey.StartsWith("no-session", StringComparison.Ordinal)))
+                (mutation is Mutation.RequireSessionRecord && !sessionRecords.Contains(sessionKey)))
             {
                 return Task.FromResult<RefreshLease?>(null);
             }
