@@ -20,7 +20,7 @@ the state bucket goes last, by hand.
 
 Terraform 1.11 gave the S3 backend `use_lockfile`, which puts the lock in an object
 beside the state instead of in a DynamoDB table. The plan chose it deliberately
-(`docs/plan/01-plan.md`, "Defaults taken"), so **no DynamoDB table exists anywhere
+(`docs/plan/01-plan.md`, "Defaults taken"), so **no DynamoDB lock table exists anywhere
 in this platform**. `required_version` here is `>= 1.11.0` for that reason; the
 workstation checked on 11 October 2026 ran 1.15.8.
 

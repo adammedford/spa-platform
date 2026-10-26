@@ -30,19 +30,12 @@ locals {
     ":parameter/spa-platform/${var.cell}/apps/*",
   ])
 
-  # Continuity (#338). The session table and its appId index, behind session_store = "dynamodb".
-  # The ARN is built from the table's name rather than read from aws_dynamodb_table because this
-  # module declares no table: P-01's tripwire reads the module's source and refuses the type
-  # whatever its count. contracts/changes/issue-338-p-01-dynamodb-tripwire.md records the decided
-  # exemption that admits the gated table.
+  # Continuity (#338). The session table (sessions.tf) and its appId index, behind
+  # session_store = "dynamodb". The table's count and the grant below both read this one condition,
+  # so the grant exists exactly when the table does.
   session_store_is_dynamodb = var.session_store == "dynamodb"
   session_table_name        = "${local.name_prefix}-sessions"
   session_table_index_name  = "appId"
-  session_table_arn = join("", [
-    "arn:${data.aws_partition.current.partition}:dynamodb:",
-    "${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}",
-    ":table/${local.session_table_name}",
-  ])
 
   # The key ring, behind data_protection_parameter_prefix (P2-2 decisions 8 and 12). The variable's
   # validation holds the prefix to /spa-platform/{cell}/data-protection/, so these ARNs are this
@@ -238,7 +231,9 @@ data "aws_iam_policy_document" "task" {
   # consistent read; PutItem, create, replace and the lease's acquire, each conditional; DeleteItem,
   # remove and the lease's release; Query on the appId index and BatchWriteItem, RemoveAppAsync's
   # purge. No Scan, no UpdateItem and nothing of the table's administration. The index is named
-  # rather than index/*, so the subject index G7 adds (ADR-0028) needs its own reviewed line.
+  # rather than index/*, so the subject index G7 adds (ADR-0028) needs its own reviewed line. The
+  # ARN is the table's own, as the bucket's is above (ADR-0014), so the grant is on the table this
+  # module creates and not on whatever a name resolves to.
   dynamic "statement" {
     for_each = local.session_store_is_dynamodb ? [1] : []
 
@@ -255,8 +250,8 @@ data "aws_iam_policy_document" "task" {
       ]
 
       resources = [
-        local.session_table_arn,
-        "${local.session_table_arn}/index/${local.session_table_index_name}",
+        aws_dynamodb_table.sessions[0].arn,
+        "${aws_dynamodb_table.sessions[0].arn}/index/${local.session_table_index_name}",
       ]
     }
   }
