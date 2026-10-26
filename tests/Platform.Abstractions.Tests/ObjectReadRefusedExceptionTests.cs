@@ -30,6 +30,7 @@ public sealed class ObjectReadRefusedExceptionTests
     {
         // The in-memory store's refusal mode has no SDK exception to wrap. The inner is then null,
         // not an invented one a caller might read as a cause.
+        // Mutation (#427 review): assign Key from an empty string, and this fails.
         ObjectReadRefusedException refused = new("registry/registry.json", innerException: null);
 
         Assert.Equal("registry/registry.json", refused.Key);
@@ -54,6 +55,7 @@ public sealed class ObjectReadRefusedExceptionTests
     {
         // A refusal with no key leaves its caller unable to say which key it was, and the asset
         // route chooses its answer by key.
+        // Mutation (#427 review): drop the null check on the key, and this fails.
         Assert.Throws<ArgumentNullException>(() => new ObjectReadRefusedException(null!, innerException: null));
     }
 
@@ -64,6 +66,7 @@ public sealed class ObjectReadRefusedExceptionTests
         // the change request says propagate unchanged. So it derives from Exception directly, not
         // from IOException, OperationCanceledException or InvalidOperationException.
         // Mutation: derive from IOException, and the base type is wrong.
+        // Mutation (#427 review): unseal it, and the second assertion fails.
         Assert.Equal(typeof(Exception), typeof(ObjectReadRefusedException).BaseType);
         Assert.True(typeof(ObjectReadRefusedException).IsSealed);
     }
@@ -73,6 +76,10 @@ public sealed class ObjectReadRefusedExceptionTests
     {
         // The change request keeps every IObjectStore signature, so the store wrappers in the test
         // projects compile unchanged. The refusal is an exception, not a new return shape.
+        // Changing the signature itself does not build until all nine implementations change with
+        // it, so the compiler guards that half; this guards the interface growing a second shape.
+        // Mutation (#427 review): add a GetAsync(string, CancellationToken) overload with a default
+        // body to IObjectStore, which builds, and this fails.
         MethodInfo get = typeof(IObjectStore).GetMethod(nameof(IObjectStore.GetAsync))!;
 
         Assert.Equal(typeof(Task<StoredObject?>), get.ReturnType);

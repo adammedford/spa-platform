@@ -28,10 +28,8 @@ but the app's shell, `shell` for its `index.html`, never a key or a path. A refu
 answers a handled 404 like a confirmed-missing key (`contracts/http-contract.md`), so this field is
 what lets an operator see a permission fault. The asset route leaves it on
 `IRequestTelemetryFeature.ReadRefused`, as the next section describes for `rule` and `session_ref`,
-and every other request leaves it null. It joins the "Log fields" row in the same landing as the
-`UsePlatformTelemetry` change that writes it, because the composed suites hold the request line to
-that row exactly (change request `contracts/changes/issue-381-object-read-refusal.md`, items 5 and
-6).
+and every other request leaves it null (change request
+`contracts/changes/issue-381-object-read-refusal.md`, items 5 and 6).
 
 ## How `rule` and `session_ref` reach the request line
 

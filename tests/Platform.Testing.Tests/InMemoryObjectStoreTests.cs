@@ -54,6 +54,8 @@ public sealed class ObjectStoreContractModeTests
     {
         // The other half: the same harness, matched, passes, so the failures above are the
         // mismatch and not the harness.
+        // Mutation (#427 review): make the refusal mode answer null, or answer a conditional read of
+        // a missing key with null, and the AmbiguousRefusal row fails.
         Mismatched suite = new(mode, mode);
 
         await suite.A_key_that_was_never_written_reads_as_the_store_declares();
@@ -75,6 +77,8 @@ public sealed class ObjectStoreContractModeTests
     {
         // The refusal is for a missing key; a key that is there reads normally, as it does under the
         // deployed role. The store's own exception is absent, since memory has none to wrap.
+        // Mutation (#427 review): refuse every key in this mode, held ones included; refuse with a
+        // key other than the one read; or give the refusal an invented inner exception. Each fails this.
         InMemoryObjectStore store = new(MissingKeyAnswer.AmbiguousRefusal);
         using MemoryStream body = new("<!doctype html>"u8.ToArray());
         await store.PutAsync("apps/app1/releases/r1/index.html", body, ifMatch: null, TestContext.Current.CancellationToken);
@@ -101,6 +105,15 @@ public sealed class ObjectStoreContractModeTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => store.GetAsync("registry/registry.json", ifNoneMatch: null, cancelled.Token));
+    }
+
+    [Fact]
+    public void A_mode_that_is_not_one_of_the_two_is_refused_at_construction()
+    {
+        // Without the guard an undefined mode falls through to the null answer, so a store built
+        // with a cast value would claim a mode it does not have and pass the confirmed-absence suite.
+        // Mutation (#427 review): drop the constructor's Enum.IsDefined guard, and this fails.
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InMemoryObjectStore((MissingKeyAnswer)99));
     }
 
     /// <summary>

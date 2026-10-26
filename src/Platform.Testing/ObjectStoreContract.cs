@@ -48,6 +48,8 @@ public abstract class ObjectStoreContract
         // The registry source polls with the ETag it last saw. If the key has gone since, the
         // answer is the same as for an unconditional read: an ETag does not turn a refusal into
         // absence or absence into a refusal.
+        // Mutation (#427 review): make the in-memory refusal mode answer a conditional read of a
+        // missing key with null, and this fails for RefusingInMemoryObjectStoreTests.
         await AssertMissingKeyAnswer(CreateStore(), "registry/registry.json", ifNoneMatch: "\"stale\"");
     }
 
