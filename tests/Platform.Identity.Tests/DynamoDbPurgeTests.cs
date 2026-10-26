@@ -51,13 +51,11 @@ public sealed class DynamoDbPurgeTests : IAsyncLifetime
         Assert.Null(queries[0].Body["ExclusiveStartKey"]);
         JsonObject resumedAt = queries[1].Body["ExclusiveStartKey"]!.AsObject();
         Assert.Equal("app1", resumedAt["appId"]!["S"]!.GetValue<string>());
-        IReadOnlyList<FakeDynamoDbServer.SeenRequest> batches = [.. fake.Requests.Where(r => r.Operation == "BatchWriteItem")];
+        IReadOnlyList<FakeDynamoDbServer.SeenRequest> batches = Batches();
         Assert.Equal([20, 10], batches.Select(Size));
 
         // The second page resumed at the last key the first page deleted.
-        Assert.Equal(
-            resumedAt["pk"]!["S"]!.GetValue<string>(),
-            batches[0].Body["RequestItems"]![FakeDynamoDbServer.Table]!.AsArray()[^1]!["DeleteRequest"]!["Key"]!["pk"]!["S"]!.GetValue<string>());
+        Assert.Equal(resumedAt["pk"]!["S"]!.GetValue<string>(), PkAt(batches[0], Size(batches[0]) - 1));
         Assert.Equal([DynamoDbSessionTable.HashOf(other)], fake.Items.Keys);
     }
 
@@ -88,6 +86,27 @@ public sealed class DynamoDbPurgeTests : IAsyncLifetime
         Assert.Equal(PkAt(batches[0], 4), PkAt(batches[1], 0));
         Assert.Empty(fake.Items);
         Assert.True(untilResent >= FirstWait, $"The unprocessed delete was sent again after {untilResent.TotalMilliseconds} ms on the store's clock.");
+    }
+
+    [Fact]
+    public async Task A_batch_whose_send_ended_unknown_is_sent_once_more_after_a_wait()
+    {
+        // A batch whose send failed or whose answer was lost is sent once more, a delete being idempotent,
+        // and that resend waits as an unprocessed one does (#391's Answer, "Decided by implementer").
+        // Mutation: skip the wait once a send has ended unknown (resend > 0 && !retried), and the second
+        // batch arrives before the clock has moved 50 ms.
+        FakeTimeProvider clock = TestClock.New();
+        DynamoDbSessionStore store = new(DynamoDbTables.Over(fake, clock));
+        await store.CreateAsync(Record, Ct);
+        fake.Next("BatchWriteItem", Fault.FailBeforeCommit);
+
+        Task purge = store.RemoveAppAsync("app1", Ct);
+        TimeSpan untilResent = await AdvanceUntil(clock, () => Batches().Count >= 2 || purge.IsCompleted);
+        await purge.WaitAsync(Ct);
+
+        Assert.Equal([1, 1], Batches().Select(Size));
+        Assert.Empty(fake.Items);
+        Assert.True(untilResent >= FirstWait, $"The batch was sent again after {untilResent.TotalMilliseconds} ms on the store's clock.");
     }
 
     [Fact]
