@@ -22,7 +22,9 @@
 // lane implements while its last ticket is in review or integrating, that no two merges run at once, and that
 // every ticket the run files passes tools/ticket_shape.py first (#248). No agent, gh or git call is made.
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -635,29 +637,50 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 //     nothing when the check fails. Every other `gh issue create` a prompt carries is the report's own issue,
 //     "Overnight <date>", which is no ticket; the grill writes comments and files none. Retro's filing site is
 //     retro.js's, proved by its own companion.
+//     The recipe is taken from the prompt and run for real, as retro_tests.mjs check 19 runs retro's, so a recipe
+//     that cannot judge, or never passes the label it is given, fails here and not on the night. Neither body
+//     cites an issue number, so ticket_shape.py makes no gh call.
 {
-  const RECIPE = /`cd \S+ && python3 -I -c '[^']*' (\S+\/new-ticket-<id>\.md) <label> <each --blocked-by number> \| python3 -I tools\/ticket_shape\.py -`/
+  const RECIPE = /`cd (\S+) && (python3 -I -c '[^']*' (\S+\/new-ticket-<id>\.md) <label> <each --blocked-by number> \| python3 -I tools\/ticket_shape\.py -)`/
   const TICKET_CREATE = 'gh issue create --title "<id> — <short title>"'
   const REPORT_CREATE = 'gh issue create --title "Overnight '
+  const top = path.resolve(here, '..', '..')
+  const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-shape-'))
+  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n**What to build:** the row's What, citing \`contracts/pipeline.md\`, and its Done when.\n## Acceptance\n- [ ] the companion passes\n${extra}`
+  fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
+  fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
+  const shapeOf = (cmd, file, blockers) => {
+    const sh = cmd.replace(/\S+\/new-ticket-<id>\.md/, file).replace('<label>', 'ready-for-agent').replace(' <each --blocked-by number>', blockers.map((n) => ` ${n}`).join(''))
+    return spawnSync('sh', ['-c', sh], { cwd: top, encoding: 'utf8' })
+  }
   const collects = allPrompts.filter((x) => x.label === 'collect')
   if (!collects.length) fail('no collect prompt was rendered, so the NEW TICKETS check read nothing')
+  const creates = new Map()   // the collect prompt -> the index of its one checked gh issue create
   for (const c of collects) {
     const m = RECIPE.exec(c.prompt)
     const create = c.prompt.indexOf(TICKET_CREATE)
     if (!m) { fail('#248: NEW TICKETS does not pipe each body through tools/ticket_shape.py under its label and blockers'); continue }
     if (create < 0) { fail('#248: NEW TICKETS files no ticket with gh issue create'); continue }
+    creates.set(c, create)
+    if (m[1] !== fixture.args.repo) fail(`#248: NEW TICKETS runs the ticket-shape check in ${m[1]}, not the main checkout ${fixture.args.repo}`)
+    if (!m[3].startsWith(`${LOG}/`)) fail(`#248: NEW TICKETS checks ${m[3]}, not a body file under ${LOG}/`)
     if (m.index > create) fail('#248: NEW TICKETS runs the ticket-shape check after its gh issue create, not before')
     const filing = c.prompt.slice(create, c.prompt.indexOf('\n', create))
-    if (!filing.includes(`--body-file ${m[1]}`)) fail(`#248: NEW TICKETS files a body other than the one it checked (${m[1]}): ${filing}`)
+    if (!filing.includes(`--body-file ${m[3]}`)) fail(`#248: NEW TICKETS files a body other than the one it checked (${m[3]}): ${filing}`)
     const step = c.prompt.slice(m.index, c.prompt.indexOf('\n', create))
     for (const rule of ['Only when that exits 0', 'On exit 1 file nothing for that row', 'on any other exit file nothing either', 'Never reword a body to get past the check'])
       if (!step.includes(rule)) fail(`#248: NEW TICKETS lacks "${rule}", so a body the check fails may still be filed`)
+    const good = shapeOf(m[2], path.join(bodyDir, 'good.md'), [900])
+    if (good.status !== 0 || !/^ticket-shape: pass:/m.test(good.stdout)) fail(`#248: the NEW TICKETS check did not pass a well-shaped body: exit ${good.status}, ${(good.stdout + good.stderr).trim()}`)
+    const bad = shapeOf(m[2], path.join(bodyDir, 'bad.md'), [])
+    if (bad.status !== 1 || !/^ticket-shape: foreground:/m.test(bad.stdout)) fail(`#248: the NEW TICKETS check did not fail a ready-for-agent foreground body on its rule: exit ${bad.status}, ${(bad.stdout + bad.stderr).trim()}`)
   }
-  // Every gh issue create in every prompt the run sends is the checked NEW TICKETS one or the report's issue.
+  fs.rmSync(bodyDir, { recursive: true, force: true })
+  // Every gh issue create in every prompt the run sends is the one checked NEW TICKETS create or the report's issue.
   for (const c of allPrompts) {
     for (const x of c.prompt.matchAll(/gh issue create\b/g)) {
       const rest = c.prompt.slice(x.index)
-      const ok = (c.label === 'collect' && rest.startsWith(TICKET_CREATE)) || (c.label === 'report' && rest.startsWith(REPORT_CREATE))
+      const ok = (c.label === 'collect' && x.index === creates.get(c)) || (c.label === 'report' && rest.startsWith(REPORT_CREATE))
       if (!ok) fail(`#248: the ${c.label} prompt carries a gh issue create the ticket-shape check does not guard: ${rest.slice(0, 80)}`)
     }
   }
