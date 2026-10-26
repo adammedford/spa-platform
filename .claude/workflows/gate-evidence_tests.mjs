@@ -6,7 +6,8 @@
 // Runs gate-evidence.js end to end with agent, parallel, log and phase stubbed, and with git and gh
 // stubbed where the script reaches them: through its agents, each of which the stub plays from a
 // served fixture as its prompt asks. The Scope agent serves the ladder, the tag listings, origin's
-// main, the gate's row of the gates table, the roadmap script's row states, the change requests,
+// main, the gate's row of the gates table, the table lines of the export, the test id register and
+// the gate register (#328, #403), the roadmap script's row states, the change requests,
 // the open issues, CI, the merges since the previous tag with their review records, and the durable
 // results it reads from disk under the run's log for the base it resolved; the Locate agents serve
 // the tests citing the ids their prompt names; the Prove agents play each item their prompt lists
@@ -90,6 +91,20 @@ const after = (lines, first, added) => { const l = lineOf(lines, first); return 
 const rewrite = (lines, first, from, to) => { const l = lineOf(lines, first); if (!l.includes(from)) throw new Error(`the row ${first} has no ${from}`); return lines.map((x) => (x === l ? x.replace(from, to) : x)) }
 const tables = (exportLines = EXPORT_LINES, registerLines = REGISTER_LINES) => [{ document: EXPORT, lines: exportLines }, { document: REGISTER, lines: registerLines }]
 const ID_TABLES = tables()
+// The gate register, contracts/gates.md (#403, Q1 and Q6 of #364), as the Scope agent copies its table
+// lines. No register is committed yet (#364 lands its first row), so these lines are made here in the
+// shape the script's header gives: a one-row gates table, its ids table beneath it, then its criteria
+// table. GATE_REGISTER is the committed file's lines when it exists, read as EXPORT_LINES are.
+const GATES_DOC = 'contracts/gates.md'
+const registerOf = (gate, idRows, criteria = [], exitTest = `the ${gate} fixture's exit test`) => [
+  '| Gate | Proves | Exit test | Unblocks | Recorded by |', '| --- | --- | --- | --- | --- |',
+  `| ${gate} | What the ${gate} fixture proves | ${exitTest} | The next gate | a fixture decision |`,
+  '| Id | Tiers required |', '| --- | --- |',
+  ...idRows.map(([id, t]) => `| ${id} | ${t} |`),
+  ...(criteria.length ? ['| Criterion | Ids |', '| --- | --- |', ...criteria.map(([c, i]) => `| ${c} | ${i} |`)] : []),
+]
+const NO_REGISTER = { exists: false, lines: [] }
+const GATE_REGISTER = fs.existsSync(path.join(top, GATES_DOC)) ? { exists: true, lines: tableLines(GATES_DOC) } : NO_REGISTER
 // An Evidence table row's cells, split on the pipes the report does not escape.
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
 
@@ -180,6 +195,7 @@ function stub(env, scriptArgs, served) {
             : { gate: gname, phase: 2, defined: false, exitTest: '', previousTag: prev ? prev.tag : '', ids: [], criteria: [], rows: [] },
           rowStates: served.rowStates || { '1.5': 'part-landed', '1.7': 'open', '6.9': 'open', '6.3': 'part-landed', '6.7': 'open', '4.1': 'landed', '4.2': 'landed' },
           idTables: served.idTables || ID_TABLES,
+          gateRegister: served.gateRegister || GATE_REGISTER,
           changeRequests: served.changeRequests || [], openIssues: served.openIssues || [],
           ci: served.ci || { url: 'https://github.com/adammedford/spa-platform/actions/runs/1', sha: base, jobs: [{ name: 'Documents', conclusion: 'success' }, { name: 'Build and test', conclusion: 'skipped' }] },
           lastFull: { sha: 'd'.repeat(40), url: 'https://github.com/adammedford/spa-platform/actions/runs/0' },
@@ -331,8 +347,11 @@ try {
     for (const [label, a, served, why] of [
       ['base differs from origin', { base: 'feature' }, { baseResolved: OTHER }, /trunk differs from origin/],
       ['the gate\'s tag exists', { gate: 'G3' }, { tagsAll: [...TAGGED, 'g3-deployed-slice'] }, /tag g3-deployed-slice already exists/],
-      ['a Phase 2 gate', { gate: 'G6' }, {}, /G6 is a Phase 2 gate/],
-      ['a Phase 2 gate by default', {}, { tagsReachable: [...TAGGED, 'g3-deployed-slice', 'g4-negative-green', 'g5-phase-1-accepted'] }, /G6 is a Phase 2 gate/],
+      // A gate neither the gates table nor the gate register defines (#403, Q3 of #364): with no
+      // register at base, and with a register that defines another gate only.
+      ['a gate neither table defines', { gate: 'G6' }, { gateRegister: NO_REGISTER }, /G6 has no exit test: neither the gates table nor the gate register defines one/],
+      ['a gate neither table defines, by default', {}, { gateRegister: NO_REGISTER, tagsReachable: [...TAGGED, 'g3-deployed-slice', 'g4-negative-green', 'g5-phase-1-accepted'] }, /G6 has no exit test: neither the gates table nor the gate register defines one/],
+      ['a gate the register does not define', { gate: 'G6' }, { gateRegister: { exists: true, lines: registerOf('G7', [['N-01', 'H']]) } }, /G6 has no exit test: neither the gates table nor the gate register defines one/],
     ]) {
       const env = newRepo()
       const { result, labels, n } = await execute(env, a, served)
@@ -672,6 +691,89 @@ try {
     // And an export id the cell leaves untiered takes its own row's Tier column: N-04 is H, D.
     const n04 = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-04', tiers: [] }] } } })
     if (required(n04, 'N-04') !== 'H, D') fail(`N-04 with no cell tier was tiered ${required(n04, 'N-04')}, expected H, D from the export's row`)
+  }
+  // 16. The gate register (#403; Q3, Q6, Q7, Q9 and Q10 of #364): a gate is admitted exactly when the
+  //     export's gates table or contracts/gates.md has its row, its ids and tiers read from the
+  //     register's Id | Tiers required table and its criteria from its Criterion | Ids table; a
+  //     definition the register cannot hold, or one naming an unknown or retired id, is refused
+  //     before Locate. What this proves: that the Scope prompt names contracts/gates.md, and that the
+  //     code admits or refuses on a given Scope result. It does not prove that an agent copies the
+  //     file's lines correctly; the lines below are made here, since no register is committed yet.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const required = (r, id) => cells(tableRow(r.result.report.text, id))[2]
+    const refusedFor = (r, re) => r.result.refused && r.labels.join() === 'scope,report' && r.result.reasons.some((x) => re.test(x)) && re.test(r.result.report.text)
+    const G6_IDS = [['N-01', 'H'], ['F-07', 'D'], ['P-01', 'H'], ['P-05', 'D']]
+    const G6_CRITERIA = [['P2-1 A session survives a task replacement', 'N-01, F-07'], ['P2-5 The two-host harness passes', 'P-01, P-05']]
+    const g6 = (idRows = G6_IDS, criteria = G6_CRITERIA) => ({ exists: true, lines: registerOf('G6', idRows, criteria, 'N-01 and P-01, hermetic. F-07 and P-05, deployed.') })
+    // The positive G6 fixture: admitted, located, tiered from the register's cells, and its criteria
+    // and exit test carried to the report.
+    const pos = await execute(newRepo(), { gate: 'G6' }, { gateRegister: g6() })
+    if (pos.result.refused || !pos.n('locate')) fail(`G6 with a register row was not admitted: ${pos.labels.join(', ')}; ${JSON.stringify(pos.result.reasons)}`)
+    const located = pos.calls.filter((c) => c.label.startsWith('locate')).flatMap((c) => dataLine(c.prompt, 'IDS') || []).sort()
+    if (located.join() !== 'F-07,N-01,P-01,P-05') fail(`G6's Locate agents were given ${located.join(', ')}, expected F-07, N-01, P-01 and P-05`)
+    const tiers = G6_IDS.map(([id]) => `${id} ${required(pos, id)}`).join(', ')
+    if (tiers !== 'N-01 H, F-07 D, P-01 H, P-05 D') fail(`G6's ids were tiered ${tiers}, expected the register's Tiers required cells`)
+    if (!/P2-1 A session survives a task replacement: N-01, F-07/.test(pos.result.report.text) || !/P2-5 The two-host harness passes: P-01, P-05/.test(pos.result.report.text)) fail('G6\'s criteria from the register are not in the report')
+    if (!/```text\nG6: N-01 and P-01, hermetic\. F-07 and P-05, deployed\., proved by/.test(pos.result.report.text)) fail('the DRAFT tag message does not quote the register\'s Exit test cell')
+    if (!/F-07 is not proved at the deployed tier: deployed, not run here/.test(pos.result.reasons.join('\n'))) fail(`G6's deployed F-07 is not reported as not run here: ${JSON.stringify(pos.result.reasons)}`)
+    // The tiers are the register's data and not a rule: F-07 required H there is tiered H.
+    const asH = await execute(newRepo(), { gate: 'G6' }, { gateRegister: g6([['N-01', 'H'], ['F-07', 'H']], []) })
+    if (required(asH, 'F-07') !== 'H') fail(`the register requiring F-07 hermetic tiered it ${required(asH, 'F-07')}`)
+    // Q10: G6's Locate prompt names #348's sitting and #358's deployed class for a D id, and an export
+    // gate's still names Phase 1's rows.
+    const would = (r) => r.calls.filter((c) => c.label.startsWith('locate')).map((c) => (c.prompt.match(/wouldRun:[^\n]*/) || [''])[0])
+    for (const w of would(pos)) if (!/#348's sitting/.test(w) || !/#358's deployed class/.test(w) || /row 6\.9/.test(w)) fail(`G6's wouldRun does not name #348's sitting and #358's deployed class: ${w}`)
+    const g3 = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY } })
+    for (const w of would(g3)) if (!/row 6\.9/.test(w) || /#348/.test(w)) fail(`G3's wouldRun lost Phase 1's rows: ${w}`)
+    // The Scope prompt asks for the register's table lines and whether the file exists at base.
+    const scope = pos.prompt('scope')
+    if (!scope.includes("show <base>:contracts/gates.md | grep -E '^[|]'") || !scope.includes('cat-file -e <base>:contracts/gates.md') || !/gateRegister/.test(scope)) fail('the Scope prompt does not ask for the gate register\'s table lines')
+    // The negatives, each refused before any Locate agent, naming the gate, the id and why.
+    for (const [label, served, a, why] of [
+      ['a missing definition', { gateRegister: { exists: true, lines: registerOf('G7', [['N-01', 'H']]) } }, { gate: 'G6' }, /G6 has no exit test: neither the gates table nor the gate register defines one/],
+      ['an unknown id', { gateRegister: g6([['N-01', 'H'], ['P-08', 'H']], []) }, { gate: 'G6' }, /the gate register's definition of G6 names P-08: P-08 is in neither docs\/plan\/04-tests\.md nor contracts\/test-ids\.md/],
+      ['a retired id', { gateRegister: g6([['N-01', 'H'], ['P-07', 'H']], []), idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-07', '| H |', '| retired |')) }, { gate: 'G6' }, /the gate register's definition of G6 names P-07: P-07 is retired in contracts\/test-ids\.md, so it was not judged \(recorded by ADR-0016 decision 7/],
+      ['G7 with only G6 defined', { gateRegister: g6() }, { gate: 'G7' }, /G7 has no exit test: neither the gates table nor the gate register defines one/],
+      ['a gate both define', { gateRegister: { exists: true, lines: registerOf('G3', [['N-01', 'H']]) } }, { gate: 'G3' }, /G3 is defined twice: by the gates table of docs\/plan\/01-plan\.md and by the gate register contracts\/gates\.md/],
+      ['a register copied with no line', { gateRegister: { exists: true, lines: [] } }, { gate: 'G6' }, /the gate register contracts\/gates\.md exists at base, but the Scope agent returned none of its table lines/],
+      ['an unreadable Tiers required cell', { gateRegister: g6([['N-01', 'hermetic']], []) }, { gate: 'G6' }, /G6's Tiers required cell for N-01 reads "hermetic", which is not H, D or both/],
+      ['a range in an Id cell', { gateRegister: g6([['N-01 to N-03', 'H']], []) }, { gate: 'G6' }, /G6's ids table names "N-01 to N-03", which is not one test id/],
+      ['a gate with no ids', { gateRegister: g6([], []) }, { gate: 'G6' }, /G6's row names no id: its Id \| Tiers required table is missing or empty/],
+      ['a criterion naming an id the gate does not', { gateRegister: g6(G6_IDS, [['P2-2 Something', 'N-02']]) }, { gate: 'G6' }, /G6's criterion "P2-2 Something" names N-02, which its ids table does not/],
+      ['an ids table under two gate rows', { gateRegister: { exists: true, lines: [...registerOf('G6', []).slice(0, 3), '| G7 | x | y | z | w |', '| Id | Tiers required |', '| --- | --- |', '| N-01 | H |'] } }, { gate: 'G6' }, /an Id \| Tiers required table follows a gates table of 2 rows, so whose ids it lists is unclear/],
+      ['a table of another shape', { gateRegister: { exists: true, lines: [...registerOf('G6', [['N-01', 'H']]), '| Gate | Ids |', '| --- | --- |', '| G6 | N-01 |'] } }, { gate: 'G6' }, /a table of contracts\/gates\.md with the header "Gate \| Ids" is none of the register's tables/],
+    ]) {
+      const r = await execute(newRepo(), a, served)
+      if (!refusedFor(r, why)) fail(`${label}: dispatched ${r.labels.join(', ')}; reasons ${JSON.stringify(r.result.reasons)}`)
+    }
+    // A register problem another gate's row carries does not refuse this gate, and an absent or
+    // malformed register does not refuse a gate the export's table defines (the default stub serves
+    // G3 with no register, which every check above runs).
+    const other = await execute(newRepo(), { gate: 'G6' }, { gateRegister: { exists: true, lines: [...g6().lines, '| Gate | Proves | Exit test | Unblocks | Recorded by |', '| --- | --- | --- | --- | --- |', '| G7 | x | y | z | w |', '| Id | Tiers required |', '| --- | --- |', '| N-01 | sometimes |'] } })
+    if (other.result.refused) fail(`a bad Tiers required cell in G7's table refused G6: ${JSON.stringify(other.result.reasons)}`)
+    const g3bad = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, gateRegister: { exists: true, lines: registerOf('G7', [['N-01', 'sometimes']]) } })
+    if (g3bad.result.refused) fail(`a bad row of G7 in the register refused G3: ${JSON.stringify(g3bad.result.reasons)}`)
+    // A problem naming no gate leaves open whether the register also defines G3: the tag is withheld
+    // with the problem named, and the run is not refused.
+    const g3doubt = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, gateRegister: { exists: true, lines: [] } })
+    if (g3doubt.result.refused || !g3doubt.n('locate') || !g3doubt.result.reasons.some((x) => /the gate register contracts\/gates\.md could not be read \(.*none of its table lines\), so whether it also defines G3 is unknown/.test(x))) fail(`a register with no line read, under G3: refused ${g3doubt.result.refused}, reasons ${JSON.stringify(g3doubt.result.reasons)}`)
+    // An unknown or retired id in the export's own exit test stays #328's verdict reason, not a refusal.
+    const exportUnknown = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: ['H'] }] } } })
+    if (exportUnknown.result.refused || !exportUnknown.n('locate')) fail(`an unknown id in the export's exit test refused the run: ${JSON.stringify(exportUnknown.result.reasons)}`)
+    // The committed register, once there is one, parses: every gate it defines is admitted with no
+    // register problem named (a guard reads the thing it guards). With none committed, the stub's
+    // default is the absent register, which the checks above run on.
+    if (GATE_REGISTER.exists) {
+      const defined = [...new Set(GATE_REGISTER.lines.map((l) => cells(l)[0]).filter((c) => /^G\d+[a-z]?$/.test(c || '')))]
+      if (!defined.length) fail(`${GATES_DOC} is committed but defines no gate this companion can find`)
+      for (const gname of defined) {
+        const r = await execute(newRepo(), { gate: gname }, {})
+        if (r.result.reasons.some((x) => /gate register/.test(x))) fail(`the committed ${GATES_DOC} refuses ${gname}: ${JSON.stringify(r.result.reasons)}`)
+      }
+    }
+    if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the register's runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
