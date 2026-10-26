@@ -11,7 +11,7 @@ namespace Platform.Hosting;
 /// is never forwarded. The decorator owns nothing: the container that registered the inner client
 /// disposes it (#332, decisions 7.5 and 8.5).
 ///
-/// It does not tag. #274 decided the ring's parameters are tagged on create, and the package's 4.0.3
+/// #274 decided the ring's parameters are tagged on create, and the package's 4.0.3
 /// copies <c>PersistOptions.Tags</c> onto the put (<c>SSMXmlRepository.StoreElementAsync</c> at tag
 /// <c>release_2026-04-17</c>,
 /// https://github.com/aws/aws-ssm-data-protection-provider-for-aspnet/blob/release_2026-04-17/src/Amazon.AspNetCore.DataProtection.SSM/SSMXmlRepository.cs),
@@ -20,21 +20,24 @@ namespace Platform.Hosting;
 ///
 /// A <see cref="DispatchProxy"/> rather than a class that forwards by hand, because the interface has
 /// hundreds of operations and a hand-written forwarder is one place to forget one.
+///
+/// Named for what it does since #399: it was <c>RingTaggingClient</c> until #351 moved the tagging
+/// onto <c>PersistOptions.Tags</c>.
 /// </summary>
-internal class RingTaggingClient : DispatchProxy
+internal class RingClientDisposeShield : DispatchProxy
 {
     private IAmazonSimpleSystemsManagement inner = null!;
 
     /// <summary>For <see cref="DispatchProxy"/>, which needs a public constructor; use <see cref="Create"/>.</summary>
-    public RingTaggingClient()
+    public RingClientDisposeShield()
     {
     }
 
     public static IAmazonSimpleSystemsManagement Create(IAmazonSimpleSystemsManagement inner)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        IAmazonSimpleSystemsManagement proxy = Create<IAmazonSimpleSystemsManagement, RingTaggingClient>();
-        ((RingTaggingClient)(object)proxy).inner = inner;
+        IAmazonSimpleSystemsManagement proxy = Create<IAmazonSimpleSystemsManagement, RingClientDisposeShield>();
+        ((RingClientDisposeShield)(object)proxy).inner = inner;
         return proxy;
     }
 
