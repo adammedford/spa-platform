@@ -38,8 +38,9 @@ The fix cannot be workstream 2's alone:
   by a passing permission fault could outlive the fault.
 - Phase 1 exports only the log stream (`src/Platform.Telemetry/PlatformTelemetryExtensions.cs`;
   `contracts/telemetry.md`). Today the refusal escapes as an unhandled exception and the 500 is its
-  signal (#63, comment 6390244202); once items 3 and 4 answer it as a handled 404, nothing on the
-  log stream distinguishes a refused read from a confirmed-missing key, so an operator cannot see a
+  signal (#63, comment 6390244202); once item 4 answers a refused asset read as a handled 404, nothing
+  on the log stream distinguishes it from a confirmed-missing key (item 3's refused shell answers
+  500 `shell_unavailable` and keeps its own Error line), so an operator cannot see a
   permission fault. The request line's fields are a closed set (`contracts/telemetry.md` -> Log
   fields). (Revision 4 said the asset route's Debug lines are off at Information; `Assets.cs` has
   no Debug logging, as #382's review noted. Corrected here on the decision.)
@@ -152,7 +153,7 @@ Integrator, 2026-10-26, on https://github.com/adammedford/spa-platform/issues/38
 the "Not asked" list, "What it leaves unchanged" and the build order under "Order once decided", on
 revision 4 of the proposal (https://github.com/adammedford/spa-platform/issues/381#issuecomment-6392882099).
 The integrator role is played by agent sessions (`GLOSSARY.md` → Integrator); the human's act is the
-decision comment this section cites (ADR-0021 decision 5).
+decision comment this section cites, and Adam's landing of it is the landing (ADR-0021 decision 5).
 
 What is decided, each for the reason given beside it under "What is asked":
 
@@ -169,7 +170,9 @@ What is decided, each for the reason given beside it under "What is asked":
   the request line and the `storage.read_refusals` counter on the `Platform.Telemetry` meter, with
   the evidence tiered to what Phase 1 exports.
 - **The order**: workstream 6's inert property first, then the integrator's items in one landing,
-  then workstreams 2 and 6 in either order; workstream 1's wording fix at any time.
+  then workstream 2, then workstream 6; workstream 1's wording fix at any time. Step 3 of "Order
+  once decided" lets workstreams 2 and 6 land in either order; the filed edges put workstream 2
+  first, because #429's composed F-06 goes red to green on workstream 2's rule.
 
 ### Landing it between gates
 
