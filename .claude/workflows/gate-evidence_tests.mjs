@@ -68,23 +68,28 @@ const GATES = {
   G5: { exitTest: 'F-07 in both tiers, and all seven acceptance criteria signed off', ids: ids(['F-07'], ['H', 'D']), rows: [row('6.7', 'ws6-verification')], criteria: [{ criterion: '6 Third SPA onboarded', ids: ['F-07'] }] },
 }
 const READY = { exitTest: 'N-01 to N-03, hermetic.', ids: ids(range('N', 1, 3), ['H']), rows: [row('4.1', 'ws4-api', ['N-01']), row('4.2', 'ws4-api')] }
-// The rows the Scope agent reads from the two documents that hold test ids (#328): one per table row
-// whose first cell is a test id or a range, with that cell and the row's Tier cell as written ("" in
-// a table with no Tier column). EXPORT_ROWS is docs/plan/04-tests.md as of the 11 October export: its
-// F and N tables carry a Tier column, its infrastructure table does not. REGISTER_ROWS is
-// contracts/test-ids.md: P-07 in its P table, and its table of the export's untiered rows.
+// The table lines the Scope agent copies from the two documents that hold test ids (#328), read here
+// from the committed files, as `git show <base>:<path> | grep -E '^[|]'` prints them, so the
+// companion holds the script to the export and the register as they are and not to a copy of them
+// (Q42 of #349; CODING_STANDARDS.md -> "A guard reads the thing it guards"). A case that needs
+// other rows edits these lines: a row dropped, added after another, or a cell rewritten.
 const EXPORT = 'docs/plan/04-tests.md'
 const REGISTER = 'contracts/test-ids.md'
-const HD = 'H, D'
-const N_TIERS = { 'N-02': 'H', 'N-09': 'H', 'N-11': 'H', 'N-12': 'H', 'N-13': 'H', 'N-14': 'H', 'N-15': 'H', 'N-16': 'H', 'N-18': 'H', 'N-20': 'H', 'N-21': 'H', 'N-22': 'H', 'N-26': 'D' }
-const EXPORT_ROWS = [
-  ...range('F', 1, 11).map((id) => ({ document: EXPORT, id, tier: id <= 'F-08' ? HD : 'H' })),
-  ...range('N', 1, 27).map((id) => ({ document: EXPORT, id, tier: N_TIERS[id] || HD })),
-  ...[...range('P', 1, 6), ...range('A', 1, 5)].map((id) => ({ document: EXPORT, id, tier: '' })),
-]
-const REGISTER_P07 = { document: REGISTER, id: 'P-07', tier: 'H' }
-const REGISTER_UNTIERED = [{ document: REGISTER, id: 'P-01 to P-03', tier: 'H' }, { document: REGISTER, id: 'P-04 to P-06', tier: 'D' }, { document: REGISTER, id: 'A-01 to A-05', tier: 'H' }]
-const ID_ROWS = [...EXPORT_ROWS, REGISTER_P07, ...REGISTER_UNTIERED]
+const tableLines = (rel) => fs.readFileSync(path.join(top, rel), 'utf8').split('\n').filter((l) => l.startsWith('|'))
+const EXPORT_LINES = tableLines(EXPORT)
+const REGISTER_LINES = tableLines(REGISTER)
+// The one line whose first cell is `first`; a fixture that names a row the file lacks is an error,
+// not a quietly different case.
+const lineOf = (lines, first) => {
+  const found = lines.filter((l) => l.split('|')[1].trim() === first)
+  if (found.length !== 1) throw new Error(`the committed table lines carry ${found.length} rows whose first cell is ${first}, expected one`)
+  return found[0]
+}
+const without = (lines, first) => { const l = lineOf(lines, first); return lines.filter((x) => x !== l) }
+const after = (lines, first, added) => { const l = lineOf(lines, first); return lines.flatMap((x) => (x === l ? [x, added] : [x])) }
+const rewrite = (lines, first, from, to) => { const l = lineOf(lines, first); if (!l.includes(from)) throw new Error(`the row ${first} has no ${from}`); return lines.map((x) => (x === l ? x.replace(from, to) : x)) }
+const tables = (exportLines = EXPORT_LINES, registerLines = REGISTER_LINES) => [{ document: EXPORT, lines: exportLines }, { document: REGISTER, lines: registerLines }]
+const ID_TABLES = tables()
 // An Evidence table row's cells, split on the pipes the report does not escape.
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
 
@@ -174,7 +179,7 @@ function stub(env, scriptArgs, served) {
             ? { gate: gname, phase: 1, defined: true, exitTest: gd.exitTest, previousTag: prev ? prev.tag : '', ids: gd.ids, criteria: gd.criteria || [], rows: gd.rows }
             : { gate: gname, phase: 2, defined: false, exitTest: '', previousTag: prev ? prev.tag : '', ids: [], criteria: [], rows: [] },
           rowStates: served.rowStates || { '1.5': 'part-landed', '1.7': 'open', '6.9': 'open', '6.3': 'part-landed', '6.7': 'open', '4.1': 'landed', '4.2': 'landed' },
-          idRows: served.idRows || ID_ROWS,
+          idTables: served.idTables || ID_TABLES,
           changeRequests: served.changeRequests || [], openIssues: served.openIssues || [],
           ci: served.ci || { url: 'https://github.com/adammedford/spa-platform/actions/runs/1', sha: base, jobs: [{ name: 'Documents', conclusion: 'success' }, { name: 'Build and test', conclusion: 'skipped' }] },
           lastFull: { sha: 'd'.repeat(40), url: 'https://github.com/adammedford/spa-platform/actions/runs/0' },
@@ -446,10 +451,16 @@ try {
       ['a red baseline says trunk is not green', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'red' } }, {}, /tests\/Gateway\.ComposedTests failed unmutated at base, so trunk is not green here/],
       ['an id in neither document, with no tier', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: [] }] } } }, {}, /N-28 is in neither .*so it is unknown: it was not tiered or judged/],
       ['an id in neither document, though the cell tiers it', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: ['H'] }] } } }, {}, /N-28 is in neither .*so it is unknown: it was not tiered or judged/],
-      ['an id no row and no cell tiers', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idRows: EXPORT_ROWS }, {}, /the exit test gives P-04 no tier and no row of .* gives it one, so it was not judged/],
-      ['an id whose rows disagree', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idRows: [...ID_ROWS, { document: REGISTER, id: 'P-04', tier: 'H' }] }, {}, /the exit test gives P-04 no tier and its rows disagree/],
-      ['an unreadable Tier cell', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idRows: [...EXPORT_ROWS, { document: REGISTER, id: 'P-04 to P-06', tier: 'deployed' }] }, {}, /P-04's Tier cell "deployed" in contracts\/test-ids\.md is not H, D or both/],
-      ['no row read from either document', { gates: { G3: READY }, idRows: [] }, {}, /returned no row of docs\/plan\/04-tests\.md or contracts\/test-ids\.md naming a test id/],
+      ['an id no row and no cell tiers', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, without(REGISTER_LINES, 'P-04 to P-06')) }, {}, /the exit test gives P-04 no tier and no row of .* gives it one, so it was not judged/],
+      ['an id whose rows disagree', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, after(REGISTER_LINES, 'P-04 to P-06', '| P-04 | H | a second tier row |')) }, {}, /the exit test gives P-04 no tier and its rows disagree/],
+      ['an unreadable Tier cell', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-04 to P-06', '| D |', '| deployed |')) }, {}, /P-04's Tier cell "deployed" in contracts\/test-ids\.md is not H, D or both/],
+      ['no table line read from either document', { gates: { G3: READY }, idTables: [] }, {}, /returned no table line of docs\/plan\/04-tests\.md/],
+      ['no table line read from the register', { gates: { G3: READY }, idTables: tables(EXPORT_LINES, []) }, {}, /returned no table line of contracts\/test-ids\.md, so no id it lists could be tiered from it/],
+      ['the register given twice', { gates: { G3: READY }, idTables: [...ID_TABLES, { document: REGISTER, lines: REGISTER_LINES }] }, {}, /returned more than one copy of contracts\/test-ids\.md/],
+      ['table lines of a third document', { gates: { G3: READY }, idTables: [...ID_TABLES, { document: 'docs/plan/01-plan.md', lines: ['| ID | Tier |', '| --- | --- |', '| N-01 | D |'] }] }, {}, /table lines of "docs\/plan\/01-plan\.md", which is neither docs\/plan\/04-tests\.md nor contracts\/test-ids\.md, so they were not read/],
+      ['a row whose cells do not match its header', { gates: { G3: READY }, idTables: tables(rewrite(EXPORT_LINES, 'N-05', '| H, D |', '|')) }, {}, /a row of docs\/plan\/04-tests\.md for N-05 has 3 cells where its table's header has 4, so it was not read/],
+      ['an id retired in the register', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-07', tiers: ['H'] }] } }, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-07', 'ADR-0016 decision 7', 'Retired; ADR-0016 decision 7')) }, {}, /P-07 is retired in contracts\/test-ids\.md, so it was not judged/],
+      ['an id both documents define', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-04', tiers: ['H'] }] } }, idTables: tables(EXPORT_LINES, after(REGISTER_LINES, 'P-07', '| N-04 | A second home | Rejected | H, D | none |')) }, {}, /N-04 is listed by both docs\/plan\/04-tests\.md and contracts\/test-ids\.md, so it was not judged/],
       ['an id the Scope agent returned malformed', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-4', tiers: ['H'] }] } } }, {}, /"N-4" .*was not judged/],
       ['a row is not done', { ...base, audit: { '4.1': [{ sha: '2'.repeat(40), subject: 'Merge task 4.1: x', form: 'landed', outstanding: ['Outstanding test ids: N-01 (4.1)'], ownership: 'pass', ownershipDetail: '' }] } }, {}, /row 4\.1 is not done/],
       ['a row whose merge crosses owners', { ...base, audit: { '4.2': [{ sha: '3'.repeat(40), subject: 'Merge task 4.2: x', form: 'landed', outstanding: [], ownership: 'fail', ownershipDetail: 'src/Platform.Identity/X.cs is ws3-oauth' }] } }, {}, /row 4\.2 is not done/],
@@ -618,29 +629,42 @@ try {
     const required = (r, id) => cells(tableRow(r.result.report.text, id))[2]
     const unknown = (id) => new RegExp(`${id} is in neither docs/plan/04-tests\\.md nor contracts/test-ids\\.md, so it is unknown`)
     const named = (r, re) => r.result.reasons.some((x) => re.test(x)) && re.test(r.result.report.text)
-    // Box 1: a register row (P-07, Tier H) tiers P-07 H; the same row saying D tiers it D, so the tier
-    // is the row's and not a default; without the row, P-07 is unknown and has no evidence row.
+    // Box 1: the committed register's row (P-07, Tier H) tiers P-07 H; the same row saying D tiers it
+    // D, so the tier is the row's and not a default; with the row omitted, P-07 is unknown and has no
+    // evidence row; and an invented row, P-08 Tier D, tiers P-08 D, so the ids are read from the
+    // register's lines and never derived from the ids the gate requires (Q42 of #349).
     const p07 = { gates: { G3: { exitTest: 'P-07.', ids: ids(['P-07'], []), rows: [] } } }
     const h = await execute(newRepo(), { gate: 'G3' }, p07)
-    if (required(h, 'P-07') !== 'H' || named(h, unknown('P-07'))) fail(`a register row tiering P-07 H: required ${required(h, 'P-07')}, reasons ${JSON.stringify(h.result.reasons)}`)
+    if (required(h, 'P-07') !== 'H' || named(h, unknown('P-07'))) fail(`the committed register row tiering P-07 H: required ${required(h, 'P-07')}, reasons ${JSON.stringify(h.result.reasons)}`)
     if (h.result.verdict !== 'tag ready') fail(`P-07 tiered H from the register and proved is still withheld: ${JSON.stringify(h.result.reasons)}`)
-    const d = await execute(newRepo(), { gate: 'G3' }, { ...p07, idRows: [...EXPORT_ROWS, { ...REGISTER_P07, tier: 'D' }, ...REGISTER_UNTIERED] })
+    const d = await execute(newRepo(), { gate: 'G3' }, { ...p07, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-07', '| H |', '| D |')) })
     if (required(d, 'P-07') !== 'D') fail(`a register row tiering P-07 D: required ${required(d, 'P-07')}`)
-    const none = await execute(newRepo(), { gate: 'G3' }, { ...p07, idRows: [...EXPORT_ROWS, ...REGISTER_UNTIERED] })
-    if (!named(none, unknown('P-07')) || tableRow(none.result.report.text, 'P-07') || none.n('locate')) fail(`P-07 with no register row: reasons ${JSON.stringify(none.result.reasons)}, located ${none.n('locate')}`)
+    const none = await execute(newRepo(), { gate: 'G3' }, { ...p07, idTables: tables(EXPORT_LINES, without(REGISTER_LINES, 'P-07')) })
+    if (!named(none, unknown('P-07')) || tableRow(none.result.report.text, 'P-07') || none.n('locate')) fail(`P-07 with its register row omitted: reasons ${JSON.stringify(none.result.reasons)}, located ${none.n('locate')}`)
     if (!named(none, /no test id the exit test of G3 names could be tiered/) || named(none, /names no test id/)) fail(`with P-07 its one id and unknown, the verdict says the exit test names no id: ${JSON.stringify(none.result.reasons)}`)
-    // Box 2: G3's "P-01 to P-06." gives no tier, so the register's table of the export's untiered rows
-    // does: P-01 to P-03 H, P-04 to P-06 D. Swapped in that table, the tiers swap, so no rule of the
-    // prompt or the code tiers them by number; and the Scope prompt no longer carries the P-range rule.
+    const p08 = { gates: { G3: { exitTest: 'P-08.', ids: ids(['P-08'], []), rows: [] } } }
+    const invented = await execute(newRepo(), { gate: 'G3' }, { ...p08, idTables: tables(EXPORT_LINES, after(REGISTER_LINES, 'P-07', '| P-08 | Invented check | Holds | D | none |')) })
+    if (required(invented, 'P-08') !== 'D' || named(invented, unknown('P-08'))) fail(`an invented register row tiering P-08 D: required ${required(invented, 'P-08')}, reasons ${JSON.stringify(invented.result.reasons)}`)
+    const notInvented = await execute(newRepo(), { gate: 'G3' }, p08)
+    if (!named(notInvented, unknown('P-08'))) fail(`P-08, in neither committed document, is not reported as unknown: ${JSON.stringify(notInvented.result.reasons)}`)
+    // Box 2: G3's "P-01 to P-06." gives no tier, so the committed register's table of the export's
+    // untiered rows does: P-01 to P-03 H, P-04 to P-06 D, and none of them is a duplicate of its export
+    // row, since that table defines no check (Q40 of #349). Swapped in that table, the tiers swap, so
+    // no rule of the prompt or the code tiers them by number; and the Scope prompt no longer carries
+    // the P-range rule.
     const g3 = await execute(newRepo(), { gate: 'G3' })
     const g3Tiers = range('P', 1, 6).map((id) => required(g3, id))
-    if (g3Tiers.join() !== 'H,H,H,D,D,D') fail(`G3's P-01 to P-06 tiered ${g3Tiers.join(', ')}, expected H for P-01 to P-03 and D for P-04 to P-06 from the register`)
-    const swapped = await execute(newRepo(), { gate: 'G3' }, { idRows: [...EXPORT_ROWS, REGISTER_P07, { document: REGISTER, id: 'P-01 to P-03', tier: 'D' }, { document: REGISTER, id: 'P-04 to P-06', tier: 'H' }] })
+    if (g3Tiers.join() !== 'H,H,H,D,D,D') fail(`G3's P-01 to P-06 tiered ${g3Tiers.join(', ')}, expected H for P-01 to P-03 and D for P-04 to P-06 from the register: ${JSON.stringify(g3.result.reasons)}`)
+    const swappedLines = rewrite(rewrite(REGISTER_LINES, 'P-01 to P-03', '| H |', '| D |'), 'P-04 to P-06', '| D |', '| H |')
+    const swapped = await execute(newRepo(), { gate: 'G3' }, { idTables: tables(EXPORT_LINES, swappedLines) })
     const swappedTiers = range('P', 1, 6).map((id) => required(swapped, id))
     if (swappedTiers.join() !== 'D,D,D,H,H,H') fail(`with the register's P tiers swapped, P-01 to P-06 tiered ${swappedTiers.join(', ')}, expected D, D, D, H, H, H`)
     const scope = g3.prompt('scope')
     for (const re of [/D for P-04 to P-06/, /H for the plan checks P-01 to P-03/, /a P- id with none/]) if (re.test(scope)) fail(`the Scope prompt still tiers P- ids by number: ${re}`)
-    if (!scope.includes('contracts/test-ids.md') || !/idRows/.test(scope)) fail('the Scope prompt does not ask for the register\'s rows beside the export\'s')
+    // This proves the prompt names the register, for idTables and for the deployed subset, not that
+    // an agent's expansion of the deployed subset is complete (Q41 of #349).
+    if (!scope.includes("show <base>:contracts/test-ids.md | grep -E '^[|]'") || !/idTables/.test(scope)) fail('the Scope prompt does not ask for the register\'s table lines beside the export\'s')
+    if (!/"the deployed subset" is every N- id whose row in docs\/plan\/04-tests\.md or contracts\/test-ids\.md has a Tier cell that includes D/.test(scope)) fail('the Scope prompt\'s deployed subset does not read the register beside the export')
     // An id the cell does tier keeps the cell's tier, though its row lists more: G4 requires N-01 to
     // N-25 hermetic, and their rows say H, D.
     const g4 = await execute(newRepo(), { gate: 'G4' }, { gates: { G4: { ...GATES.G4, rows: [] } } })
