@@ -16,7 +16,7 @@ namespace Platform.Hosting;
 /// <c>SecureString</c>s under <c>DataProtection:KmsKeyId</c> or the account's default key, in the
 /// standard tier (decision 13: no key encryptor, so no configuration key for the tier), each tagged on
 /// create with the three resource tags (contracts/resource-tags.md; #274) through the package's
-/// <c>PersistOptions.Tags</c> (#349 Q47). It writes through <see cref="RingTaggingClient"/>, the
+/// <c>PersistOptions.Tags</c> (#349 Q47). It writes through <see cref="RingClientDisposeShield"/>, the
 /// Dispose shield, over the client <c>AddPlatformRegistry</c> registered.
 /// </summary>
 internal static class KeyRing
@@ -139,7 +139,7 @@ internal static class KeyRing
             _ => new ServiceDescriptor(type, InnerClientKey, last.ImplementationType!, last.Lifetime),
         });
 
-        services.AddSingleton(provider => RingTaggingClient.Create(
+        services.AddSingleton(provider => RingClientDisposeShield.Create(
             provider.GetRequiredKeyedService<IAmazonSimpleSystemsManagement>(InnerClientKey)));
     }
 }
