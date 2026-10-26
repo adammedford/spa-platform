@@ -94,9 +94,15 @@ public static class PlatformIdentityExtensions
         // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
         // no session settings. The DynamoDB client comes from the container, so a host that registers its
         // own first wins, as AddPlatformRegistry registers IAmazonS3 (change request P2-1, Decision 3); the
-        // default reads its Region and credentials from the environment, the task role in a cell.
+        // default reads its Region and credentials from the environment, the task role in a cell. The lease
+        // is null under the memory store or none named, which the container hands to an optional
+        // dependency as it would an unregistered service, and GetRequiredService refuses (#393). The refusal
+        // is the vendor's: GetRequiredService throws when "there is no service of type T"
+        // (https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.serviceproviderserviceextensions.getrequiredservice),
+        // which its source decides by a null from GetService. That a null from a registered factory reaches
+        // an optional constructor parameter has no vendor page; SessionStoreRegistrationTests pins it.
         services.TryAddSingleton<ISessionStore>(SessionStores.FromConfiguration);
-        services.TryAddSingleton<IRefreshLeases>(SessionStores.LeasesFromConfiguration);
+        services.TryAddSingleton<IRefreshLeases>(provider => SessionStores.LeasesFromConfiguration(provider)!);
         services.TryAddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient());
         services.TryAddSingleton(DynamoDbSessionTable.FromConfiguration);
 
