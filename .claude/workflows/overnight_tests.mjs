@@ -19,9 +19,10 @@
 // projects its change cannot reach, which pass alone, so the merge stays and the flake is recorded; one whose change
 // reaches a failed project, one whose re-run fails again, one red on something other than a test project, and one
 // whose reach line does not parse, all reset; and three whose re-run agent answers ok with a project not passed,
-// answers ok on another head, or dies, which keep no merge and reset the run branch (#397). It also checks that each ticket has its own worktree, that a
-// lane implements while its last ticket is in review or integrating, that no two merges run at once, and that
-// every ticket the run files passes tools/ticket_shape.py first (#248). No agent, gh or git call is made.
+// answers ok on another head, or dies, which keep no merge and reset the run branch (#397). It also checks that
+// each ticket has its own worktree, that a lane implements while its last ticket is in review or integrating, that
+// no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). No
+// agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

@@ -749,9 +749,12 @@ const finish = async (t, impl, at) => {
         if (!kept && (!rr || rr.ok)) {
           log(`flake: ${t.id} ${rule.projects.join(', ')} -> not kept: ${keep.why}; resetting ${INT_BRANCH} to ${out.old}`)
           const rs = await agent(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
-          flake.reset = rs && rs.ok ? `${INT_BRANCH} reset to ${out.old}` : `${INT_BRANCH} not reset to ${out.old}: ${rs ? rs.notes : 'the reset agent died'}`
+          // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
+          const back = !!(rs && rs.ok && rs.head === out.old)
+          flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
+            : `${INT_BRANCH} not reset to ${out.old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}`
           // A run branch that may hold a merge the run reports failed is no base to start more tickets on.
-          if (!(rs && rs.ok) && !halted) { halted = `${flake.reset}, after ${t.id}'s re-run was not kept; no new tickets started`; log(halted) }
+          if (!back && !halted) { halted = `${flake.reset}, after ${t.id}'s re-run was not kept; no new tickets started`; log(halted) }
         } else log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
         out = kept
           ? { ...out, ok: true, mergeSha: rr.mergeSha, headSha: rr.headSha, notes: `the gate's tests failed only in ${rule.projects.join(', ')}, which the change cannot reach; they passed alone and the rest of the check passed (#375). ${flake.notes}`, flake }
