@@ -1,7 +1,7 @@
 namespace Platform.Abstractions;
 
 /// <summary>
-/// Where a later stage leaves the two request-line fields only it can know, for
+/// Where a later stage leaves the request-line fields only it can know, for
 /// <c>UsePlatformTelemetry</c> to read once the pipeline has returned. The telemetry stage sets it on
 /// the request before calling the rest of the pipeline, and every later stage writes it.
 /// contracts/telemetry.md -> "How `rule` and `session_ref` reach the request line" is the contract;
@@ -54,4 +54,18 @@ public interface IRequestTelemetryFeature
     /// Workstream 3 writes this field, wherever it holds both the key and the request.
     /// </summary>
     string? SessionRef { get; set; }
+
+    /// <summary>
+    /// Which kind of key the store refused to read for this request, or null when no read was
+    /// refused: <c>asset</c> for any key but the app's shell, <c>shell</c> for its
+    /// <c>index.html</c>. Those two values and nothing else, never a key or a path, which could carry
+    /// whatever the client put in the URL.
+    ///
+    /// The asset route writes it, null-conditionally, when <see cref="IObjectStore.GetAsync"/>
+    /// throws <see cref="ObjectReadRefusedException"/>; every other case leaves it null, the
+    /// reserved-path 404 included. A refused asset read answers a handled 404 that is otherwise
+    /// indistinguishable from a confirmed-missing key, so this field is what lets an operator see a
+    /// permission fault. Change request contracts/changes/issue-381-object-read-refusal.md, item 5.
+    /// </summary>
+    string? ReadRefused { get; set; }
 }

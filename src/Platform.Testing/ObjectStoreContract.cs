@@ -12,17 +12,43 @@ namespace Platform.Testing;
 /// is a delete followed by a write. Keeping them in one suite is what stops the in-memory double and
 /// the S3 store from disagreeing — task 2.2 builds against the double and only meets the bucket in
 /// task 1.7.
+///
+/// <para>A store answers a key that was never written in one of two modes, and declares which in
+/// <see cref="MissingKeys"/>: null, confirmed absence, or <see cref="ObjectReadRefusedException"/>,
+/// ambiguous refusal, which is how S3 answers a role with <c>s3:GetObject</c> and no
+/// <c>s3:ListBucket</c> (P-03; https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html,
+/// "Permissions"). Each run asserts exactly the declared answer and never accepts either, so a
+/// store that changes how it answers fails its own suite until its declaration changes with it.
+/// Every other case here holds in both modes: the read with its ETag, the not-modified answer, and
+/// the conditional writes. Change request contracts/changes/issue-381-object-read-refusal.md,
+/// item 2.</para>
 /// </summary>
 public abstract class ObjectStoreContract
 {
     protected abstract IObjectStore CreateStore();
 
-    [Fact]
-    public async Task A_key_that_was_never_written_reads_as_null()
-    {
-        IObjectStore store = CreateStore();
+    /// <summary>
+    /// How the store under test answers a key that was never written. Confirmed absence unless a
+    /// subclass says otherwise, because that is how every store answered before the refusal mode
+    /// existed, and a subclass written then keeps compiling and keeps asserting what it did.
+    /// </summary>
+    protected virtual MissingKeyAnswer MissingKeys => MissingKeyAnswer.ConfirmedAbsence;
 
-        Assert.Null(await store.GetAsync("registry/registry.json", ifNoneMatch: null, TestContext.Current.CancellationToken));
+    [Fact]
+    public async Task A_key_that_was_never_written_reads_as_the_store_declares()
+    {
+        // Mutation (#427): make this accept null or a refusal alike, and the mismatched-declaration
+        // test in Platform.Testing.Tests fails, for each of the two mismatches.
+        await AssertMissingKeyAnswer(CreateStore(), "registry/registry.json", ifNoneMatch: null);
+    }
+
+    [Fact]
+    public async Task A_conditional_read_of_a_key_never_written_reads_as_the_store_declares()
+    {
+        // The registry source polls with the ETag it last saw. If the key has gone since, the
+        // answer is the same as for an unconditional read: an ETag does not turn a refusal into
+        // absence or absence into a refusal.
+        await AssertMissingKeyAnswer(CreateStore(), "registry/registry.json", ifNoneMatch: "\"stale\"");
     }
 
     [Fact]
@@ -151,6 +177,27 @@ public abstract class ObjectStoreContract
 
         Assert.Equal("app one", await Read(store, "apps/app1/releases/r1/index.html"));
         Assert.Equal("app two", await Read(store, "apps/app2/releases/r1/index.html"));
+    }
+
+    private async Task AssertMissingKeyAnswer(IObjectStore store, string key, string? ifNoneMatch)
+    {
+        switch (MissingKeys)
+        {
+            case MissingKeyAnswer.ConfirmedAbsence:
+                Assert.Null(await store.GetAsync(key, ifNoneMatch, TestContext.Current.CancellationToken));
+                break;
+
+            case MissingKeyAnswer.AmbiguousRefusal:
+                ObjectReadRefusedException refused = await Assert.ThrowsAsync<ObjectReadRefusedException>(
+                    () => store.GetAsync(key, ifNoneMatch, TestContext.Current.CancellationToken));
+                Assert.Equal(key, refused.Key);
+                break;
+
+            default:
+                // Fails closed: a declaration this suite does not know asserts nothing, so it fails.
+                Assert.Fail($"{nameof(MissingKeys)} is {MissingKeys}, which this suite has no answer for.");
+                break;
+        }
     }
 
     private static async Task<bool> Put(IObjectStore store, string key, string body, string? ifMatch)
