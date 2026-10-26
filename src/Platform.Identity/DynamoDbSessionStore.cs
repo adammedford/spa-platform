@@ -43,6 +43,12 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
     /// <summary>The item's shape version (MR-9). A build reads its own format and the one before it.</summary>
     internal const int Format = 1;
 
+    /// <summary>
+    /// <see cref="Format"/> as the item's number attribute holds it: the one value the write sends and the
+    /// read compares against, so the two cannot drift when the format moves on.
+    /// </summary>
+    private static readonly string FormatNumber = Format.ToString(CultureInfo.InvariantCulture);
+
     /// <summary>The data-protection purpose of the ticket's envelope; the app id is the second purpose.</summary>
     internal const string Purpose = "Platform.Identity.SessionTicket";
 
@@ -317,7 +323,7 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
         ["expiresAt"] = new() { N = record.ExpiresAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) },
         ["version"] = new() { N = record.Version.ToString(CultureInfo.InvariantCulture) },
         ["ticket"] = new() { B = new MemoryStream(Protector(record.AppId).Protect(record.Ticket.ToArray())) },
-        ["format"] = new() { N = Format.ToString(CultureInfo.InvariantCulture) },
+        ["format"] = new() { N = FormatNumber },
     };
 
     /// <summary>
@@ -349,7 +355,7 @@ internal sealed class DynamoDbSessionStore(DynamoDbSessionTable table) : ISessio
         // user signs in again rather than meeting a 500 on every request. Format 1 is the first, so there
         // is no "one before it" yet; the build that writes format 2 reads 1 as well.
         string? format = item.TryGetValue("format", out AttributeValue? f) ? f.N : null;
-        if (format != "1")
+        if (format != FormatNumber)
         {
             if (Interlocked.Exchange(ref formatLogged, 1) == 0)
             {
