@@ -21,16 +21,19 @@ internal static class SessionStores
     };
 
     /// <summary>
-    /// The refresh lease over the same table, when the store is <c>dynamodb</c>. The memory store runs on
-    /// one replica, where the in-process session gate of <see cref="AppSessions"/> is the whole refresh
-    /// gate and there is no other task to lease against, so it has none, and asking for one is refused
-    /// with that reason rather than handed a lease that guards nothing.
+    /// The refresh lease over the same table, when the store is <c>dynamodb</c>, and none otherwise. The
+    /// memory store runs on one replica, where the in-process session gate of <see cref="AppSessions"/> is
+    /// the whole refresh gate and there is no other task to lease against. An unset <c>Session:Store</c>
+    /// is a host that brought its own store (the component tests' <c>IdentityGateway</c>), which brings its
+    /// own lease too when it runs more than one replica. Null there, not a refusal, so a service that takes
+    /// the lease as an optional dependency, as the token source of P2-3 does, is built without one (#393;
+    /// a throw here failed #341's merge, #384). A value that names neither store is refused as
+    /// <see cref="FromConfiguration"/> refuses it.
     /// </summary>
-    public static IRefreshLeases LeasesFromConfiguration(IServiceProvider services) => Kind(services) switch
+    public static IRefreshLeases? LeasesFromConfiguration(IServiceProvider services) => Kind(services) switch
     {
         "dynamodb" => new DynamoDbRefreshLeases(services.GetRequiredService<DynamoDbSessionTable>()),
-        "memory" => throw new InvalidOperationException(
-            "Session:Store is 'memory', which runs on one replica and has no refresh lease: the session gate is the whole refresh gate there."),
+        "memory" or null => null,
         var other => throw Unknown(other),
     };
 

@@ -117,16 +117,59 @@ public sealed class SessionStoreRegistrationTests
             host.Services.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository).GetAllElements());
     }
 
-    [Fact]
-    public void The_memory_store_has_no_refresh_lease_and_says_why()
+    [Theory]
+    [InlineData("memory")]
+    [InlineData(null)]
+    public void Under_the_memory_store_or_none_named_there_is_no_lease_and_an_optional_dependency_is_built_without_one(string? kind)
     {
-        // One replica: the session gate is the whole refresh gate. Mutation: hand back a DynamoDB lease for
-        // the memory store, and its construction asks for a table nobody configured.
-        using IHost host = Build(new() { ["Session:Store"] = "memory", ["Session:MaxSessions"] = "10" });
+        // The memory store runs on one replica, where the session gate is the whole refresh gate, and an
+        // unset Session:Store is a host that brought its own store, as IdentityGateway does, and brings its
+        // own lease with it if it needs one. Either way a service that takes the lease as an optional
+        // dependency, as the token source does under P2-3 (#341), is built without it (#393). Mutation that
+        // turns both rows red: throw for 'memory' and for an unset value again, as the factory did when
+        // #341's merge 4bfd78c failed 106 composed tests (#384).
+        using IHost host = Build(
+            new() { ["Session:Store"] = kind, ["Session:MaxSessions"] = "10" },
+            services => services.AddSingleton<OptionalLeaseConsumer>());
+
+        Assert.Null(host.Services.GetService<IRefreshLeases>());
+        Assert.Null(host.Services.GetRequiredService<OptionalLeaseConsumer>().Leases);
+    }
+
+    [Fact]
+    public void A_store_nobody_named_is_refused_for_the_lease_as_it_is_for_the_store()
+    {
+        // A value that names neither store is a mistake, not a host that brought its own, so the lease is
+        // refused with the store's own reason rather than quietly left out. Mutation: answer null for every
+        // value but 'dynamodb', and nothing is thrown.
+        using IHost host = Build(
+            new() { ["Session:Store"] = "redis", ["Session:MaxSessions"] = "10" },
+            services => services.AddSingleton<OptionalLeaseConsumer>());
 
         InvalidOperationException refused =
-            Assert.Throws<InvalidOperationException>(() => host.Services.GetRequiredService<IRefreshLeases>());
-        Assert.Contains("one replica", refused.Message, StringComparison.Ordinal);
+            Assert.Throws<InvalidOperationException>(() => host.Services.GetRequiredService<OptionalLeaseConsumer>());
+        Assert.Contains("Session:Store is 'redis'", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_lease_registered_beforehand_is_kept_whatever_Session_Store_names()
+    {
+        // The two-gateway tests of P2-3 share one lease between hosts over the memory store (change request
+        // P2-3, Decision item 7). Mutation: register the factory with AddSingleton, and the host's own lease
+        // is replaced by none.
+        InMemoryRefreshLeases own = new(TimeProvider.System);
+        using IHost host = Build(
+            new() { ["Session:Store"] = "memory", ["Session:MaxSessions"] = "10" },
+            services => services.AddSingleton<IRefreshLeases>(own),
+            before: true);
+
+        Assert.Same(own, host.Services.GetRequiredService<IRefreshLeases>());
+    }
+
+    /// <summary>A service that takes the lease as an optional dependency, as the token source of P2-3 does.</summary>
+    private sealed class OptionalLeaseConsumer(IRefreshLeases? leases = null)
+    {
+        public IRefreshLeases? Leases { get; } = leases;
     }
 
     private static IHost Build(
