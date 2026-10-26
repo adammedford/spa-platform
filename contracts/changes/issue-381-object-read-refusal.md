@@ -6,7 +6,9 @@
   (`UsePlatformTelemetry`, composed F-06 and readiness, the deployed sitting) and workstream 1
   (wording in `infra/modules/cell`)
 - **Date:** 2026-10-24
-- **Status:** open
+- **Status:** decided, 2026-10-26, on
+  https://github.com/adammedford/spa-platform/issues/381#issuecomment-6423650225. See the Decision
+  section below. The tickets are #425, #427, #428, #429 and #426, in the build order
 
 The full proposal, with the options weighed and the tests listed per project, is on #381:
 https://github.com/adammedford/spa-platform/issues/381#issuecomment-6392882099, revision 4,
@@ -35,9 +37,13 @@ The fix cannot be workstream 2's alone:
   `Cache-Control`; RFC 9110 section 15.5.5 lets a cache keep a 404 heuristically, so a 404 caused
   by a passing permission fault could outlive the fault.
 - Phase 1 exports only the log stream (`src/Platform.Telemetry/PlatformTelemetryExtensions.cs`;
-  `contracts/telemetry.md`), and the asset route's Debug lines are off at the default Information
-  level, so a refusal has no signal an operator can see. The request line's fields are a closed set
-  (`contracts/telemetry.md` -> Log fields).
+  `contracts/telemetry.md`). Today the refusal escapes as an unhandled exception and the 500 is its
+  signal (#63, comment 6390244202); once item 4 answers a refused asset read as a handled 404, nothing
+  on the log stream distinguishes it from a confirmed-missing key (item 3's refused shell answers
+  500 `shell_unavailable` and keeps its own Error line), so an operator cannot see a
+  permission fault. The request line's fields are a closed set (`contracts/telemetry.md` -> Log
+  fields). (Revision 4 said the asset route's Debug lines are off at Information; `Assets.cs` has
+  no Debug logging, as #382's review noted. Corrected here on the decision.)
 
 ## What is asked
 
@@ -140,3 +146,44 @@ the member to the interface alone fails with CS0535 on the first (the audit's pr
 
 #381 closes when F-06 passes in a fresh deployed sitting of the fixed commit (#63); hermetic
 passes do not replace it.
+
+## Decision
+
+Integrator, 2026-10-26, on https://github.com/adammedford/spa-platform/issues/381#issuecomment-6423650225. **Accepted as written**: items 1 to 6 under "What is asked",
+the "Not asked" list, "What it leaves unchanged" and the build order under "Order once decided", on
+revision 4 of the proposal (https://github.com/adammedford/spa-platform/issues/381#issuecomment-6392882099).
+The integrator role is played by agent sessions (`GLOSSARY.md` → Integrator); the human's act is the
+decision comment this section cites, and Adam's landing of it is the landing (ADR-0021 decision 5).
+
+What is decided, each for the reason given beside it under "What is asked":
+
+- **The refusal** (item 1): `ObjectReadRefusedException` in `Platform.Abstractions`, with `Key` and
+  the store's exception inner, thrown by `S3ObjectStore` for 403 `AccessDenied` alone; null keeps
+  meaning confirmed absence; the interface's signatures do not change.
+- **The contract in two modes** (item 2): each store declares its answer to a never-written key and
+  the run asserts exactly that answer; `InMemoryObjectStore` gains the refusal mode.
+- **The shell** (item 3): the `shell_unavailable` row and `Problems.ShellUnavailable`; an unreadable
+  `index.html`, null or refused, answers 500 whatever the role's permissions.
+- **Caching** (item 4): every 404 the asset endpoint answers, and the `shell_unavailable` 500, carry
+  `Cache-Control: private, no-store`.
+- **The signal** (items 5 and 6): `IRequestTelemetryFeature.ReadRefused`, the `read_refused` field on
+  the request line and the `storage.read_refusals` counter on the `Platform.Telemetry` meter, with
+  the evidence tiered to what Phase 1 exports.
+- **The order**: workstream 6's inert property first, then the integrator's items in one landing,
+  then workstream 2, then workstream 6; workstream 1's wording fix at any time. Step 3 of "Order
+  once decided" lets workstreams 2 and 6 land in either order; the filed edges put workstream 2
+  first, because #429's composed F-06 goes red to green on workstream 2's rule.
+
+### Landing it between gates
+
+`contracts/README.md` → "What may land between gates": a new type that changes no existing stage,
+owner or entry point's signature lands on the integrator's decision. `ObjectReadRefusedException` is
+such a type; `ReadRefused` is a new member on `IRequestTelemetryFeature`, whose two implementations
+are named above and gain it in the stated order, so nothing built against the frozen contract has
+to change to keep compiling; the `shell_unavailable` row is a new Errors row, as change request
+4.2's `503 idp_unavailable` was; `read_refused` and `storage.read_refusals` are new entries in
+`contracts/telemetry.md`'s two closed lists, which the same precedent carries.
+
+The tickets are #381's sub-issues, one per owner in the build order above: #425 (workstream 6,
+the inert property), #427 (the integrator, blocked by #425), #428 (workstream 2, blocked by #427),
+#429 (workstream 6, blocked by #427 and #428) and #426 (workstream 1, at any time).
