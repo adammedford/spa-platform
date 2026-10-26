@@ -103,7 +103,10 @@ internal sealed class FakeDynamoDbServer : IAsyncDisposable
     /// <summary>Lets a held call finish.</summary>
     public TaskCompletionSource Release { get; private set; } = NewSignal();
 
-    /// <summary>When set, sent as <c>x-amz-crc32</c> on every response, for the test that shows the SDK ignores it.</summary>
+    /// <summary>
+    /// When set, sent as <c>x-amz-crc32</c> on every response, for the <c>DynamoDbProtocolTests</c> test
+    /// that shows the SDK refuses a wrong one.
+    /// </summary>
     public string? Crc32 { get; set; }
 
     /// <summary>
