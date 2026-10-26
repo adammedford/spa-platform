@@ -37,14 +37,16 @@ namespace Platform.Identity;
 /// packages, the default value is 10" (<c>ClientConfig.MaxErrorRetry</c>,
 /// https://docs.aws.amazon.com/sdkfornet/v4/apidocs/items/Runtime/TClientConfig.html, and the same
 /// words in the XML documentation AWSSDK.Core 4.0.102.12 ships). At the pin a client answering 500 to
-/// every request made 11 attempts, while the property itself read 2; only a <c>MaxErrorRetry</c> set
-/// in code moved the count, <c>AWS_MAX_ATTEMPTS</c> did not (#401). The AWS SDKs' 2026 retry
-/// behaviour gives DynamoDB 4 attempts
-/// (https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html), behind an
-/// <c>AWS_NEW_RETRIES_2026</c> switch this Core does not read. Whatever the count, the retries run
-/// inside the deadline, so <see cref="StoreDeadline"/> still bounds the operation, and each adapter
-/// reads a condition failure as possibly its own earlier attempt, since an SDK retry of a committed
-/// write fails its own condition.</para>
+/// every request made 11 attempts, while the property itself read 2; <c>AWS_MAX_ATTEMPTS</c> moved
+/// the property but not the count (#401). The AWS SDKs' 2026 retry behaviour gives DynamoDB 4
+/// attempts (https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html), and this
+/// Core already carries it, off by default, behind <c>AWS_NEW_RETRIES_2026=true</c>
+/// (<c>RetryPolicy.UseNewRetries2026</c>, whose shipped XML documentation says the flag goes and the
+/// behaviour becomes the default at the end of 2026); with that set, the same client made 4 attempts.
+/// So a <c>MaxErrorRetry</c> set in code, that variable, or a Core past the flag's removal changes
+/// the count. Whatever the count, the retries run inside the deadline, so <see cref="StoreDeadline"/>
+/// still bounds the operation, and each adapter reads a condition failure as possibly its own earlier
+/// attempt, since an SDK retry of a committed write fails its own condition.</para>
 /// </summary>
 internal sealed class DynamoDbSessionTable
 {
