@@ -115,7 +115,7 @@ public sealed class RefreshLeasesContractTests
 
         // The keys a session record exists under, for RequireSessionRecord. Nothing adds to it: the
         // suite has no store and creates no session (ADR-0024 decision 3), so under that mutation
-        // every acquire is refused, which is why it fails the free-key case and every case after it.
+        // every acquire is refused, which is why it fails the free-key case and every other case too.
         private readonly HashSet<string> sessionRecords = new(StringComparer.Ordinal);
 
         public Task<RefreshLease?> TryAcquireAsync(string sessionKey, TimeSpan ttl, CancellationToken ct)
