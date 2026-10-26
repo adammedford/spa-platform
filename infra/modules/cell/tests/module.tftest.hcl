@@ -892,7 +892,7 @@ run "the_task_role_reads_this_cell_s_bucket_prefixes_and_no_others" {
       one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadRegistryAndReleases"]).resources,
       aws_s3_bucket.platform.arn
     )
-    error_message = "The bucket's own ARN is not granted: the gateway never lists the bucket, it GETs keys the registry names."
+    error_message = "The bucket's own ARN is not granted: the gateway never lists the bucket, it GETs keys under prefixes the registry names, and a missing one answers 403 under this GetObject-only grant, which S3ObjectStore reads as a refused read, not as a missing key."
   }
 }
 
