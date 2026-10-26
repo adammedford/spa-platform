@@ -39,7 +39,7 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task ReplaceAsync_writes_only_over_the_version_the_lease_read()
+    public async Task ReplaceAsync_writes_only_over_the_version_the_turn_read()
     {
         // T-D2: another gateway task sharing the store writes the session between this turn's read and
         // its write, arranged here as a direct store write between EnterAsync and ReplaceAsync: the race
@@ -171,7 +171,7 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task A_lease_over_another_clients_record_owns_nothing_and_neither_replaces_nor_removes_it()
+    public async Task A_turn_over_another_clients_record_owns_nothing_and_neither_replaces_nor_removes_it()
     {
         // The turn's half of the ownership rule. Mutation: drop the Owned check at the top of EndAsync
         // (end by key whatever the turn owns); another client's session is removed, and this fails.
@@ -195,7 +195,7 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task ActiveGates_returns_to_zero_once_every_lease_is_disposed()
+    public async Task ActiveGates_returns_to_zero_once_every_turn_is_disposed()
     {
         // The table is bounded by the calls in flight, not by the sessions that ever entered. Mutation:
         // skip the last leaver's remove from the table; the count stays at two, and this fails.
@@ -288,7 +288,7 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task RemoveAsync_does_not_wait_for_a_lease_held_on_the_same_key()
+    public async Task RemoveAsync_does_not_wait_for_a_turn_held_on_the_same_key()
     {
         // Ungated by necessity: the token source ends a session and then signs out while it still holds
         // the turn, and the sign-out's remove reaches this member; the gate is not re-entrant, so a

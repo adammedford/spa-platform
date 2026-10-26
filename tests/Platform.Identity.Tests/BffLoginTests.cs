@@ -109,7 +109,7 @@ public sealed class BffLoginTests
     }
 
     [Fact]
-    public async Task A_relogin_discard_removes_the_session_under_the_lease_before_the_sign_out()
+    public async Task A_relogin_discard_removes_the_session_under_the_turn_before_the_sign_out()
     {
         // #166 box 2, #196: the discard is the session module's end through the turn (AppSessions.EndAsync
         // with no action, #141 Q9), and the cookie handler's sign-out that follows finds the session gone.

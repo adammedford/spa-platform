@@ -205,7 +205,10 @@ internal sealed partial class AccessTokenSource(
 
             if (FreshAccess(reread) is { } holders)
             {
-                // The version moved: the holder's refresh is written, and its token is the answer.
+                // The holder's refresh is written, and its token is the answer. Item 4 waits "until the
+                // version moves"; a token no longer due is the stricter test, since a version that moved
+                // without a usable token (another writer's record with none) leaves the loser waiting
+                // and then refreshing, rather than answering with nothing.
                 turn.Finish(new RefreshOutcome.Refreshed());
                 return new AccessTokenResult.Token(holders);
             }
