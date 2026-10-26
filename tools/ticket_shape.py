@@ -477,8 +477,8 @@ def main(argv: list[str]) -> int:
         print(f"ticket-shape: {failure.rule}: {failure.detail}")
     if failures:
         broken = list(dict.fromkeys(failure.rule for failure in failures))
-        print(f"ticket-shape: fail: #{issue.number} breaks {len(broken)} rule(s) of the tracker "
-              f"guide's ticket shape: {', '.join(broken)}")
+        print(f"ticket-shape: fail: #{issue.number} breaks {len(broken)} rule(s) of the ticket "
+              f"shape in docs/agents/tracker-policy.md: {', '.join(broken)}")
         return 1
     print(f"ticket-shape: pass: #{issue.number} has the shape of a ticket a lane can finish")
     return 0

@@ -623,7 +623,7 @@ class LabelledBy(unittest.TestCase):
 
     # The guide's line as the proposal on #316 words it, typed here with an account the live policy
     # does not name, so a case on it passes neither on the fallback nor on the live line.
-    GUIDE =("## This repository's additions\n\n"
+    GUIDE = ("## This repository's additions\n\n"
              "- **The human's account is `@adam-m`.** A `Confirm` comment and the\n"
              "  `ready-for-agent` label count only when this account wrote them.\n")
 
@@ -767,8 +767,9 @@ class ThroughGh(unittest.TestCase):
         gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(base),
                     "GH_FIXTURES": str(self.fixtures), "GH_LOG": str(self.log)}
-        # The repository's branches, roadmap and tracker guide are this checkout's; the cases pin
-        # them. A guide naming no account leaves the fixtures' owner as the one who may label (#316).
+        # The repository's branches, roadmap and tracker policy are this checkout's; the cases
+        # pin them. A policy naming no account leaves the fixtures' owner as the one who may label
+        # (#316).
         for name, value in (("branches", lambda root: []), ("roadmap", lambda root: ROAD),
                             ("tracker_guide", lambda root: None)):
             patcher = mock.patch.object(collect, name, value)
@@ -1044,11 +1045,11 @@ GH_IN_A_CHECKOUT = GH_DOUBLE.replace(
 
 
 class RepoFlag(unittest.TestCase):
-    """--repo DIR (#377): the checkout whose git, gh, roadmap and tracker guide the tool reads, so
+    """--repo DIR (#377): the checkout whose git, gh, roadmap and tracker policy the tool reads, so
     origin/main's copy of the tool, kept outside any checkout, forecasts against the main checkout.
 
     Everything here runs against a throwaway checkout that differs from this one in each thing it
-    is read for: a task branch that claims 1.6b, a tracker guide naming @someone, the only account
+    is read for: a task branch that claims 1.6b, a tracker policy naming @someone, the only account
     whose label counts, and a tools/roadmap.py of its own whose closed gate no real roadmap has. A
     tool that read any of the three from anywhere else would print other tickets."""
 
@@ -1145,7 +1146,7 @@ class RepoFlag(unittest.TestCase):
 
     def test_repo_sends_every_read_to_the_checkout_it_names(self):
         """git's branches, every gh call (the listings, the timelines and the prose look-up), the
-        roadmap and the tracker guide all come from DIR, though the tool and its caller are both
+        roadmap and the tracker policy all come from DIR, though the tool and its caller are both
         outside it."""
         self.assert_the_checkouts_tickets(
             self.collect_from(self.outside, "--repo", str(self.checkout)))
