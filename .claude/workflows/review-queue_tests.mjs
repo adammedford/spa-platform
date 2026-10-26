@@ -1214,7 +1214,9 @@ try {
     if (!/file nothing/.test(v)) fail('PR 435: the verdict prompt files a second request when one with that title is open')
     for (const c of allPrompts) if (/trailer/i.test(c.prompt)) fail(`the ${c.label} prompt mentions a trailer; reading the citation is the steering check's (#411 Q5)`)
     const body = commentOf(env, 435)
-    for (const want of ['## Change requests', '- #501 Glossary: Held change: filed, blocking nothing.', '- #490 Review guide: change requests as spec sources: already open, nothing filed.', '- Agent guide: the done rule: not filed: GitHub could not be reached.']) if (!body.includes(want)) fail(`PR 435: the comment lacks ${JSON.stringify(want)}`)
+    // The numbers are built, not written: a literal hash-number here is a citation the steering check
+    // reads, and these name no issue of this repository.
+    for (const want of ['## Change requests', `- #${filed[0].number} Glossary: Held change: filed, blocking nothing.`, `- #${filed[1].number} Review guide: change requests as spec sources: already open, nothing filed.`, '- Agent guide: the done rule: not filed: GitHub could not be reached.']) if (!body.includes(want)) fail(`PR 435: the comment lacks ${JSON.stringify(want)}`)
     if (JSON.stringify(resultOf(435, result).changeRequests) !== JSON.stringify(filed)) fail(`PR 435: the return's changeRequests are ${JSON.stringify(resultOf(435, result).changeRequests)}`)
     // A review that holds no steering change names no section for it.
     const quiet = run({ prs: [101] }, PRS)
