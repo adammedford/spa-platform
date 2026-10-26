@@ -168,8 +168,8 @@ internal sealed class RequestTelemetry
     }
 
     /// <summary>
-    /// The feature this stage hands the rest of the pipeline. Both fields start null, which is what a
-    /// request that no stage rejected and that carried no session keeps.
+    /// The feature this stage hands the rest of the pipeline. Every field starts null, which is what a
+    /// request that no stage rejected, that carried no session and whose object read was not refused keeps.
     /// </summary>
     private sealed class RequestTelemetryFeature : IRequestTelemetryFeature
     {
@@ -177,7 +177,8 @@ internal sealed class RequestTelemetry
 
         public string? SessionRef { get; set; }
 
-        // Inert until change request issue-381-object-read-refusal.md's interface member and read_refused request-line field follow.
+        // Lands before the IRequestTelemetryFeature member it implements, so adding that member cannot fail CS0535
+        // (change request issue-381-object-read-refusal.md, "Order once decided" step 1).
         public string? ReadRefused { get; set; }
     }
 }
