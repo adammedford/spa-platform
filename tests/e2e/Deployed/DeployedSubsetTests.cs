@@ -31,7 +31,7 @@ public sealed partial class DeployedSubsetTests
     /// </summary>
     internal static void AssertEveryDRowHasATest(string page, string register, Dictionary<string, string> sources)
     {
-        string[] rows = [.. DeployedRows(page), .. RegisterDeployedRows(register)];
+        string[] rows = DeployedRowIds(page, register);
         string[] untested = [.. rows.Where(row => !sources.Values.Any(source => source.Contains($"Task N{row[2..]}_", StringComparison.Ordinal)))];
         Assert.Empty(untested);
     }
@@ -188,6 +188,12 @@ public sealed partial class DeployedSubsetTests
         await stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown);
         await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() => stack.AssertRuleLoggedAsync(mark, RuleIds.HostUnknown));
     }
+
+    /// <summary>
+    /// The D rows of the export's negative table and of the register's (#322): the one list of deployed
+    /// rows this fact and <see cref="DeployedRunTests"/> both hold to a test.
+    /// </summary>
+    internal static string[] DeployedRowIds(string page, string register) => [.. DeployedRows(page), .. RegisterDeployedRows(register)];
 
     /// <summary>The ids of the rows in the negative table whose Tier cell names D.</summary>
     internal static string[] DeployedRows(string page)
