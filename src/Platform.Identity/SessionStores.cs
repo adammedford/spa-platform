@@ -7,7 +7,8 @@ namespace Platform.Identity;
 /// <summary>
 /// The store <c>Session:Store</c> names (contracts/platform-config.schema.json): <c>memory</c>, the
 /// Phase 1 store on one replica (plan row 3.4), or <c>dynamodb</c>, the session table every task shares
-/// (plan row P2-1). Any other value, or none, is refused rather than guessed at. Each is built on first
+/// (plan row P2-1). Any other value is refused rather than guessed at, and so is none for the store,
+/// where the lease answers none (<see cref="LeasesFromConfiguration"/>, #393). Each is built on first
 /// use, so a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs no
 /// session settings and makes no call to the table.
 /// </summary>

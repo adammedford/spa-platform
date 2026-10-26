@@ -96,7 +96,11 @@ public static class PlatformIdentityExtensions
         // own first wins, as AddPlatformRegistry registers IAmazonS3 (change request P2-1, Decision 3); the
         // default reads its Region and credentials from the environment, the task role in a cell. The lease
         // is null under the memory store or none named, which the container hands to an optional
-        // dependency as it would an unregistered service, and GetRequiredService refuses (#393).
+        // dependency as it would an unregistered service, and GetRequiredService refuses (#393). The refusal
+        // is the vendor's: GetRequiredService throws when "there is no service of type T"
+        // (https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.serviceproviderserviceextensions.getrequiredservice),
+        // which its source decides by a null from GetService. That a null from a registered factory reaches
+        // an optional constructor parameter has no vendor page; SessionStoreRegistrationTests pins it.
         services.TryAddSingleton<ISessionStore>(SessionStores.FromConfiguration);
         services.TryAddSingleton<IRefreshLeases>(provider => SessionStores.LeasesFromConfiguration(provider)!);
         services.TryAddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient());

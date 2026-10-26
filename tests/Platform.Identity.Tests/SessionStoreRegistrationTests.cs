@@ -134,6 +134,9 @@ public sealed class SessionStoreRegistrationTests
 
         Assert.Null(host.Services.GetService<IRefreshLeases>());
         Assert.Null(host.Services.GetRequiredService<OptionalLeaseConsumer>().Leases);
+        // The registration's comment says a required resolution is refused; this pins that vendor
+        // behaviour rather than a guard of ours, so it fails only if GetRequiredService stops refusing a null.
+        Assert.Throws<InvalidOperationException>(() => host.Services.GetRequiredService<IRefreshLeases>());
     }
 
     [Fact]
