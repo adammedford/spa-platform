@@ -13,7 +13,8 @@ namespace Platform.Registry;
 ///
 /// The SDK answers S3's conditional statuses with exceptions, not responses, so each one is read back
 /// into the interface's own terms here: 304 is <see cref="StoredObject.NotModified"/>, a missing key is
-/// null, and a refused write is false. Every other failure propagates to the caller.
+/// null, a refused read is <see cref="ObjectReadRefusedException"/>, and a refused write is false.
+/// Every other failure propagates to the caller.
 /// </summary>
 public sealed class S3ObjectStore : IObjectStore
 {
@@ -48,10 +49,20 @@ public sealed class S3ObjectStore : IObjectStore
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound && ex.ErrorCode == "NoSuchKey")
         {
-            // Only NoSuchKey is a missing key. NoSuchBucket is a configuration fault, and so is the 403
-            // S3 returns for a missing key when the caller lacks s3:ListBucket (same page, "Permissions"):
-            // both propagate rather than read as "no registry".
+            // Only NoSuchKey is a missing key. NoSuchBucket is a configuration fault and propagates
+            // rather than read as "no registry".
             return null;
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.Forbidden && ex.ErrorCode == "AccessDenied")
+        {
+            // Without s3:ListBucket, S3 answers a missing key with 403 AccessDenied (same page,
+            // "Permissions"), and the gateway's deployed role has none (P-03). The same answer covers
+            // an existing key the role may not read, so it is a refusal, not absence, and the caller
+            // decides what it means for its key (change request
+            // contracts/changes/issue-381-object-read-refusal.md, item 1). Every other 403 code (a
+            // signature, credential, clock or storage-class fault), 5xx, a transport failure and
+            // cancellation propagate unchanged.
+            throw new ObjectReadRefusedException(key, ex);
         }
 
         // The caller owns the stream (IObjectStore). Disposing it releases the connection.

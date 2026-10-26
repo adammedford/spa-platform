@@ -33,6 +33,16 @@ internal sealed partial class Assets(ILogger logger)
     // asset needs a session (ADR-0008), so no shared cache may keep one.
     private const string RevalidateCacheControl = "private, no-cache";
 
+    // Every 404 this endpoint answers (contracts/http-contract.md, the asset row; change request
+    // contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110 section 15.5.5 lets a cache
+    // keep a 404 heuristically, and under the deployed role every missing asset is a refused read, so a
+    // 404 a passing permission fault caused must not outlive the fault.
+    private const string NotFoundCacheControl = "private, no-store";
+
+    // The values of IRequestTelemetryFeature.ReadRefused: which kind of key was refused, never which key.
+    private const string RefusedShell = "shell";
+    private const string RefusedAsset = "asset";
+
     /// <summary>
     /// The paths an SPA cannot serve (contracts/http-contract.md, Endpoints). They are matched without
     /// regard to case, as endpoint routing and the request gate match them
@@ -74,6 +84,7 @@ internal sealed partial class Assets(ILogger logger)
 
         if (IsReserved(request.Path))
         {
+            context.Response.Headers.CacheControl = NotFoundCacheControl;
             await RejectAsync(context, RuleIds.PathReserved);
             return;
         }
@@ -104,12 +115,43 @@ internal sealed partial class Assets(ILogger logger)
             ? null
             : request.Headers.IfNoneMatch.ToString();
 
+        // The shell is the resolved key whose release-relative path is exactly index.html, compared
+        // ordinally: /, /index.html and every extensionless fallback, one under /assets/ included, but
+        // not /Index.html or /assets/index.html (change request issue-381-object-read-refusal, item 3).
+        bool shell = string.Equals(relative, IndexHtml, StringComparison.Ordinal);
+
         IObjectStore store = context.RequestServices.GetRequiredService<IObjectStore>();
-        StoredObject? stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
+        StoredObject? stored;
+        try
+        {
+            stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
+        }
+        catch (ObjectReadRefusedException)
+        {
+            // A refusal is ambiguous: a missing key under a role without s3:ListBucket, or a key the
+            // role may not read (IObjectStore.GetAsync). The request line carries which kind of key it
+            // was (contracts/telemetry.md, read_refused), never the key, which holds the client's path.
+            if (context.Features.Get<IRequestTelemetryFeature>() is { } telemetry)
+            {
+                telemetry.ReadRefused = shell ? RefusedShell : RefusedAsset;
+            }
+
+            if (shell)
+            {
+                // An unreadable shell is a page that does not load, whatever the cause, and a 404 would
+                // pass for an ordinary missing file: it stays the failure it is. The exception names the
+                // release's index.html key and no client path.
+                throw;
+            }
+
+            // Under the deployed role this is how every missing asset arrives, so it answers as one.
+            await NotFoundAsync(context);
+            return;
+        }
+
         if (stored is null)
         {
-            // An answer, not a rejection: no rule id, only the code (#142).
-            await Problems.WriteAsync(context, Problems.NotFound);
+            await NotFoundAsync(context);
             return;
         }
 
@@ -148,6 +190,16 @@ internal sealed partial class Assets(ILogger logger)
         }
 
         await body.CopyToAsync(response.Body, context.RequestAborted);
+    }
+
+    /// <summary>
+    /// 404 <c>not_found</c>, never cached. An answer, not a rejection: no rule id, only the code
+    /// (#142).
+    /// </summary>
+    private static Task NotFoundAsync(HttpContext context)
+    {
+        context.Response.Headers.CacheControl = NotFoundCacheControl;
+        return Problems.WriteAsync(context, Problems.NotFound);
     }
 
     private static bool IsReserved(PathString path)
