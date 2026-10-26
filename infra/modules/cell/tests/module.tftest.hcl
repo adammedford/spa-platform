@@ -1687,6 +1687,7 @@ run "under_dynamodb_the_session_table_is_keyed_on_pk_indexed_on_appid_expired_on
   # cannot be serialized as JSON"). Every reference here but the index's own set carries no mark, so
   # a failure reads as its message. The index has no unmarked path, so its assertion, when it fails,
   # fails as that panic, after the line naming this run as failed; the exit is non-zero either way.
+  # Terraform 1.11.0, the floor tools/check.sh and CI run, does not panic: it prints the message.
   assert {
     condition     = can(aws_dynamodb_table.sessions[0].name) && !can(aws_dynamodb_table.sessions[1].name)
     error_message = "Under dynamodb the cell plans exactly one session table."
@@ -1990,9 +1991,11 @@ run "with_no_kms_key_the_environment_carries_no_key_id" {
 # the default fails here, and so does any key they remove. The next run holds the table's absence and
 # the two objects byte for byte.
 #
-# Mutations that turn this run red: the ReadWriteSessions statement's for_each made [1]; the ring
-# statements' condition made true; Session__TableName or DataProtection__ParameterPrefix set
-# unconditionally in ecs.tf; session_store's default changed to dynamodb.
+# Mutations that turn this run red: the ring statements' condition made true; Session__TableName or
+# DataProtection__ParameterPrefix set unconditionally in ecs.tf. Two others never reach it: the
+# ReadWriteSessions statement's for_each made [1] (the grant then reads a table that is not there)
+# and session_store's default changed to dynamodb (its validation then refuses the default inputs)
+# each fail the plan of this file's first run, and every run after it is skipped.
 run "under_memory_the_cell_is_phase_1_s_unchanged" {
   command = plan
 
@@ -2057,10 +2060,9 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 # failing assertion prints the new digest as its "actual" value.
 #
 # Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
-# any environment value on the default changed, or one added
-# or removed (Session__MaxSessions to 20000; Session__TableName set unconditionally); a statement's
-# action, resource or order changed (ReadClientSecrets gaining ssm:GetParameterHistory); the ring's
-# statements made unconditional.
+# any environment value on the default changed, or one added or removed (Session__MaxSessions to
+# 20000; Session__TableName set unconditionally); a statement's action, resource or order changed
+# (ReadClientSecrets gaining ssm:GetParameterHistory); the ring's statements made unconditional.
 run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
   command = plan
 

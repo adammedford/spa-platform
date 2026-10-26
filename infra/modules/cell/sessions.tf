@@ -30,8 +30,8 @@ resource "aws_dynamodb_table" "sessions" {
     type = "S"
   }
 
-  # key_schema rather than the index's own hash_key, which the provider deprecates for it from
-  # 6.68.0, the version the roots pin.
+  # key_schema rather than the index's own hash_key, which the provider's schema marks deprecated
+  # at 6.68.0, the version the roots pin (`terraform providers schema -json`, read for #417).
   global_secondary_index {
     name            = local.session_table_index_name
     projection_type = "KEYS_ONLY"

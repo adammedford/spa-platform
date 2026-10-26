@@ -829,9 +829,9 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
 # local.session_store_is_dynamodb ? 1 : 0. The plan assertion after the tripwire holds that it is
 # none here. Mutations that turn this run red: the count made ? 2 : 0, or written as
 # var.session_store == "dynamodb" ? 1 : 0; a second DynamoDB declaration with the same count line;
-# the condition inverted, so the default inputs plan one table. So what this run stops proving is that the module's source names no DynamoDB table; what
-# it goes on proving is P-01's sentence, that the Phase 1 plan holds no database (change request
-# issue-338-p-01-dynamodb-tripwire, decision 1).
+# the condition inverted, so the default inputs plan one table. So what this run stops proving is
+# that the module's source names no DynamoDB table; what it goes on proving is P-01's sentence, that
+# the Phase 1 plan holds no database (change request issue-338-p-01-dynamodb-tripwire, decision 1).
 run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_and_no_nat_gateway_instance_or_database" {
   command = plan
 
