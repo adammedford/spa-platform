@@ -29,8 +29,10 @@ turn a case red with no change here. The line below names those files for tools/
 mode runs this companion when a change touches one (#390), as CI's Documents job runs it on every
 change: the root .dockerignore, every Dockerfile, which the census below finds wherever it is, the
 files each Dockerfile copies from the context, git's ignore files and the script that writes the
-outputs document. A file a case starts reading joins the line; tools/check_tests.py fails while one
-is missing.
+outputs document. A case reads the checkout through DOCKERIGNORE, DOCKERFILES, OTHER_OWNERS, what
+they copy, OUTPUTS_DOCUMENT's ignore files or CELL_COMMON, and tools/check_tests.py derives what
+the line must cover from those names and fails while a path they reach is missing from it. A case
+that starts reading another file reads it through such a name, and the file joins the line.
 
 Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh
 

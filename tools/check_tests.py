@@ -1312,11 +1312,12 @@ class CompanionTests(CheckTestCase):
         case = Case(self, extra={path: "" for path in beside}, change=scripts)
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        # A companion with no script beside it, tools/image_build_tests.py alone today, is not
+        # A companion with no script beside it, tools/image_build_tests.py among them, is not
         # reached from one, so no change here earns it. What it judges lies outside tools/ and
-        # .github/ (.dockerignore, the Dockerfiles, what they copy), so it must declare those files
-        # on its "Checkout inputs:" line, and a change to one earns it (#390; InputTests proves
-        # that). It was in this list from #204's merge, and the case failed on it.
+        # .github/ (for that one: .dockerignore, the Dockerfiles, what they copy), so it must
+        # declare those files on its "Checkout inputs:" line, and a change to one earns it (#390;
+        # InputTests proves that). It was in the expected list from #204's merge until #390, and the
+        # case failed on it.
         named = {name for path in tracked if path not in real for name in companion_names(path)}
         scriptless = set(real) - named
         self.assertIn("tools/image_build_tests.py", scriptless)
