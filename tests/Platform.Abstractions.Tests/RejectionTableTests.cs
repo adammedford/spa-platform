@@ -71,53 +71,16 @@ public sealed class RejectionTableTests
         Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ContractTables.ParseErrors(["## Other section"]));
     }
 
-    /// <summary>
-    /// The <c>code</c> column of contracts/request-gate.md -> Rule ids, paired by hand.
-    ///
-    /// Why by hand: #159's change request decided the column lands between gates
-    /// (contracts/changes/issue-160-rejection-table.md, "Landing it between gates"), but committing a
-    /// frozen contract's table is the integrator's act and it is not in contracts/request-gate.md
-    /// yet. #160 provides a hand pairing only for #159 holding the column for G3's tag; #159 decided
-    /// otherwise, but with the column uncommitted this pairs by hand as that case would, and says so
-    /// here as #160 asks. These cells are the change request's column verbatim, <c>—</c> included.
-    /// Once the column is in the contract, this list goes and the test below reads
-    /// <see cref="ContractTables.ParseRuleCodes"/> over <see cref="ContractTables.RequestGate"/>
-    /// instead, the parser the planted-table tests already prove.
-    /// </summary>
-    private static readonly (string Rule, string Code)[] CodeColumn =
-    [
-        ("host.unknown", "not_found"),
-        ("path.invalid", "invalid_request"),
-        ("path.reserved", "not_found"),
-        ("gate.cookie-name", "invalid_request"),
-        ("gate.fetch-site", "origin_rejected"),
-        ("gate.origin", "origin_rejected"),
-        ("gate.method", "method_not_allowed"),
-        ("gate.navigation", "origin_rejected"),
-        ("csrf.token", "csrf_failed"),
-        ("auth.callback", "—"),
-        ("auth.session", "unauthenticated"),
-        ("api.unknown", "unknown_api"),
-    ];
-
     [Fact]
     public void Rejection_rows_are_the_code_column_by_rule_id()
     {
-        // Mutation: change gate.origin's code in Rejection.Rows to csrf_failed.
+        // Mutation: change gate.origin's code in Rejection.Rows to csrf_failed, or its cell in
+        // contracts/request-gate.md -> Rule ids. A rule id the table lists with no code cell fails
+        // the reader, and RuleIdsTests holds the table's ids to RuleIds.All.
         Assert.Equal(
-            CodeColumn.Where(row => row.Code != "—").ToHashSet(),
+            ContractTables.ParseRuleCodes(ContractTables.RequestGate()).ToHashSet(),
             Rejection.Rows.ToHashSet());
         Assert.Equal(Rejection.Rows.Length, Rejection.Rows.Select(row => row.Rule).Distinct().Count());
-    }
-
-    [Fact]
-    public void The_hand_paired_column_covers_every_rule_id_once()
-    {
-        // The hand pairing is keyed by the contract's rule ids: RuleIdsTests holds RuleIds.All to the
-        // table's first column, so an id added there without a cell here fails this test.
-        Assert.Equal(
-            RuleIds.All.Order(StringComparer.Ordinal).ToArray(),
-            CodeColumn.Select(row => row.Rule).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Fact]
@@ -157,7 +120,7 @@ public sealed class RejectionTableTests
     public void The_code_column_reader_refuses_an_empty_table_and_a_table_without_the_column()
     {
         // Mutation: drop the parser's Assert.NotEmpty, or its check that each row has a code cell.
-        // The second is today's contract, whose table has not gained the column yet.
+        // The second is a two-column table, the Rule ids table's shape before #159.
         Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ContractTables.ParseRuleCodes(["## Rule ids", "| Rule id | Fires when | `code` |", "| --- | --- | --- |"]));
         Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ContractTables.ParseRuleCodes(["## Other section"]));
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ContractTables.ParseRuleCodes(
