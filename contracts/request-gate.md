@@ -47,20 +47,27 @@ constants so that no owner keeps a copy of its own: A-03 stops one workstream re
 and four workstreams raise these ids. A test in `tests/Platform.Abstractions.Tests` reads the
 table below and fails if the two drift. ADR-0015 decided it.
 
-| Rule id | Fires when |
-| --- | --- |
-| `host.unknown` | The request authority matches no registry `host` |
-| `path.invalid` | The path failed normalisation |
-| `path.reserved` | A reserved path that is switched off |
-| `gate.cookie-name` | A cookie name imitates a platform cookie, in another letter case or sent twice |
-| `gate.fetch-site` | `Sec-Fetch-Site` is absent, `same-site` or `cross-site` where `same-origin` is required |
-| `gate.origin` | `Origin` is present and is not the app origin |
-| `gate.method` | The path does not accept the method |
-| `gate.navigation` | `/bff/login` without `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` |
-| `csrf.token` | The antiforgery token was missing or wrong |
-| `auth.callback` | Any refused login callback |
-| `auth.session` | A cookie that resolves to no session for this app |
-| `api.unknown` | The app lists no upstream under that name |
+| Rule id | Fires when | `code` |
+| --- | --- | --- |
+| `host.unknown` | The request authority matches no registry `host` | `not_found` |
+| `path.invalid` | The path failed normalisation | `invalid_request` |
+| `path.reserved` | A reserved path that is switched off | `not_found` |
+| `gate.cookie-name` | A cookie name imitates a platform cookie, in another letter case or sent twice | `invalid_request` |
+| `gate.fetch-site` | `Sec-Fetch-Site` is absent, `same-site` or `cross-site` where `same-origin` is required | `origin_rejected` |
+| `gate.origin` | `Origin` is present and is not the app origin | `origin_rejected` |
+| `gate.method` | The path does not accept the method | `method_not_allowed` |
+| `gate.navigation` | `/bff/login` without `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` | `origin_rejected` |
+| `csrf.token` | The antiforgery token was missing or wrong | `csrf_failed` |
+| `auth.callback` | Any refused login callback | — |
+| `auth.session` | A cookie that resolves to no session for this app | `unauthenticated` |
+| `api.unknown` | The app lists no upstream under that name | `unknown_api` |
 
-Nothing writes `auth.callback` or `auth.session` yet; they wait on workstream 3. A refusal by an
-upstream API is the API's to log.
+`auth.callback` ends on no problem body: the OpenID Connect handler's remote-failure event writes
+the static failure page `contracts/http-contract.md` → Errors describes, under that id.
+`auth.session` is noted by workstream 3 wherever a cookie resolves to no session for this app,
+except at `/bff/login` and `/bff/logout`, which do what they were asked over a dead cookie and end
+in no rejection; elsewhere another writer then ends the response: the `/bff/session` endpoint
+answers `401 unauthenticated`; the access-token step behind `MapPlatformProxy` answers
+`401 unauthenticated`; and `UsePlatformShellGate`'s challenge answers a fetch with
+`401 unauthenticated` and a navigation with a redirect to the identity provider, which has no
+problem body. A refusal by an upstream API is the API's to log.
