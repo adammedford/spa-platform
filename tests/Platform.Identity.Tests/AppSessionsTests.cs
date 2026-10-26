@@ -28,38 +28,38 @@ public sealed class AppSessionsTests
         string key = await store.CreateAsync(Record(App1), Ct);
         string other = await store.CreateAsync(Record(App1), Ct);
 
-        AppSessions.Lease first = await sessions.EnterAsync(App1, key);
-        Task<AppSessions.Lease> second = sessions.EnterAsync(App1, key);
-        using AppSessions.Lease elsewhere = await sessions.EnterAsync(App1, other);
+        AppSessions.Turn first = await sessions.EnterAsync(App1, key);
+        Task<AppSessions.Turn> second = sessions.EnterAsync(App1, key);
+        using AppSessions.Turn elsewhere = await sessions.EnterAsync(App1, other);
 
         Assert.False(second.IsCompleted);
         first.Dispose();
-        using AppSessions.Lease next = await second;
+        using AppSessions.Turn next = await second;
         Assert.NotNull(next.Owned);
     }
 
     [Fact]
-    public async Task ReplaceAsync_writes_only_over_the_version_the_lease_read()
+    public async Task ReplaceAsync_writes_only_over_the_version_the_turn_read()
     {
-        // T-D2: another gateway task sharing the store writes the session between this lease's read and
+        // T-D2: another gateway task sharing the store writes the session between this turn's read and
         // its write, arranged here as a direct store write between EnterAsync and ReplaceAsync: the race
         // the token source's tests once placed by counting store reads (#167). The stale write must lose
         // and leave the winner. Mutation: take the expected version from a fresh read of the store
         // instead of from Owned, which makes the write unversioned; the stale replace succeeds over the
-        // winner, and this fails. A loss changes nothing on the lease either. Mutation: set Owned to the
-        // record offered before the store answers; the lease claims a write that lost, and this fails.
+        // winner, and this fails. A loss changes nothing on the turn either. Mutation: set Owned to the
+        // record offered before the store answers; the turn claims a write that lost, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1, version: 1), Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
-        SessionRecord owned = Assert.IsType<SessionRecord>(lease.Owned);
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
+        SessionRecord owned = Assert.IsType<SessionRecord>(turn.Owned);
 
         SessionRecord winner = Record(App1, version: 2, subject: "winner");
         Assert.True(await store.ReplaceAsync(key, winner, expectedVersion: 1, Ct));
 
-        Assert.False(await lease.ReplaceAsync(owned with { Version = 2, Subject = "stale" }));
+        Assert.False(await turn.ReplaceAsync(owned with { Version = 2, Subject = "stale" }));
         Assert.Equal(winner, await store.GetAsync(key, Ct));
-        Assert.Equal(owned, lease.Owned);
+        Assert.Equal(owned, turn.Owned);
     }
 
     [Fact]
@@ -68,19 +68,19 @@ public sealed class AppSessionsTests
         // The other half of the versioned replace, so the test above cannot pass by refusing everything.
         // Mutation: return false unconditionally; this fails. The second write is versioned at the first
         // write's version, so a constant expected version (the ticket's mutation; any constant, the
-        // version the lease read included) cannot win both writes, and this fails.
+        // version the turn read included) cannot win both writes, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1, version: 1), Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
-        SessionRecord next = Assert.IsType<SessionRecord>(lease.Owned) with { Version = 2, Subject = "rotated" };
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
+        SessionRecord next = Assert.IsType<SessionRecord>(turn.Owned) with { Version = 2, Subject = "rotated" };
 
-        Assert.True(await lease.ReplaceAsync(next));
+        Assert.True(await turn.ReplaceAsync(next));
         Assert.Equal(next, await store.GetAsync(key, Ct));
-        Assert.Equal(next, lease.Owned);
+        Assert.Equal(next, turn.Owned);
 
         SessionRecord after = next with { Version = 3, Subject = "rotated again" };
-        Assert.True(await lease.ReplaceAsync(after));
+        Assert.True(await turn.ReplaceAsync(after));
         Assert.Equal(after, await store.GetAsync(key, Ct));
     }
 
@@ -92,10 +92,10 @@ public sealed class AppSessionsTests
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1), Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
         SessionRecord? given = null;
 
-        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => lease.EndAsync(record =>
+        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => turn.EndAsync(record =>
         {
             given = record;
             throw new InvalidOperationException("the revocation failed");
@@ -104,7 +104,7 @@ public sealed class AppSessionsTests
         Assert.Equal("the revocation failed", thrown.Message);
         Assert.Equal(Record(App1), given);
         Assert.Null(await store.GetAsync(key, Ct));
-        Assert.Null(lease.Owned);
+        Assert.Null(turn.Owned);
     }
 
     [Fact]
@@ -117,10 +117,10 @@ public sealed class AppSessionsTests
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1), Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
         SessionRecord? storedWhenTheActionRan = null;
 
-        await lease.EndAsync(async _ => storedWhenTheActionRan = await store.GetAsync(key, Ct));
+        await turn.EndAsync(async _ => storedWhenTheActionRan = await store.GetAsync(key, Ct));
 
         Assert.Equal(Record(App1), storedWhenTheActionRan);
         Assert.Null(await store.GetAsync(key, Ct));
@@ -136,19 +136,19 @@ public sealed class AppSessionsTests
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1), Ct);
 
-        AppSessions.Lease holder = await sessions.EnterAsync(App1, key);
+        AppSessions.Turn holder = await sessions.EnterAsync(App1, key);
         Assert.Null(holder.WhileWaiting);
-        Task<AppSessions.Lease> queued = sessions.EnterAsync(App1, key);
+        Task<AppSessions.Turn> queued = sessions.EnterAsync(App1, key);
         holder.Finish(new RefreshOutcome.Unavailable());
-        Task<AppSessions.Lease> arrivedAfter = sessions.EnterAsync(App1, key);
+        Task<AppSessions.Turn> arrivedAfter = sessions.EnterAsync(App1, key);
         holder.Dispose();
 
-        AppSessions.Lease waiter = await queued;
+        AppSessions.Turn waiter = await queued;
         Assert.IsType<RefreshOutcome.Unavailable>(waiter.WhileWaiting);
         waiter.Dispose();
 
         // A caller that queued after the refresh ended waited behind none, so it has no outcome to share.
-        using AppSessions.Lease later = await arrivedAfter;
+        using AppSessions.Turn later = await arrivedAfter;
         Assert.Null(later.WhileWaiting);
     }
 
@@ -171,20 +171,20 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task A_lease_over_another_clients_record_owns_nothing_and_neither_replaces_nor_removes_it()
+    public async Task A_turn_over_another_clients_record_owns_nothing_and_neither_replaces_nor_removes_it()
     {
-        // The lease's half of the ownership rule. Mutation: drop the Owned check at the top of EndAsync
-        // (end by key whatever the lease owns); another client's session is removed, and this fails.
+        // The turn's half of the ownership rule. Mutation: drop the Owned check at the top of EndAsync
+        // (end by key whatever the turn owns); another client's session is removed, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         SessionRecord foreign = Record(App1, clientId: "client-before-rotation");
         string key = await store.CreateAsync(foreign, Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
         bool ran = false;
 
-        Assert.Null(lease.Owned);
-        Assert.False(await lease.ReplaceAsync(foreign with { Version = 2, Subject = "mallory" }));
-        await lease.EndAsync(_ =>
+        Assert.Null(turn.Owned);
+        Assert.False(await turn.ReplaceAsync(foreign with { Version = 2, Subject = "mallory" }));
+        await turn.EndAsync(_ =>
         {
             ran = true;
             return Task.CompletedTask;
@@ -195,7 +195,7 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task ActiveGates_returns_to_zero_once_every_lease_is_disposed()
+    public async Task ActiveGates_returns_to_zero_once_every_turn_is_disposed()
     {
         // The table is bounded by the calls in flight, not by the sessions that ever entered. Mutation:
         // skip the last leaver's remove from the table; the count stays at two, and this fails.
@@ -204,9 +204,9 @@ public sealed class AppSessionsTests
         string first = await store.CreateAsync(Record(App1), Ct);
         string second = await store.CreateAsync(Record(App1), Ct);
 
-        AppSessions.Lease a = await sessions.EnterAsync(App1, first);
-        Task<AppSessions.Lease> queued = sessions.EnterAsync(App1, first);
-        AppSessions.Lease b = await sessions.EnterAsync(App1, second);
+        AppSessions.Turn a = await sessions.EnterAsync(App1, first);
+        Task<AppSessions.Turn> queued = sessions.EnterAsync(App1, first);
+        AppSessions.Turn b = await sessions.EnterAsync(App1, second);
         Assert.Equal(2, sessions.ActiveGates);
 
         a.Dispose();
@@ -288,16 +288,16 @@ public sealed class AppSessionsTests
     }
 
     [Fact]
-    public async Task RemoveAsync_does_not_wait_for_a_lease_held_on_the_same_key()
+    public async Task RemoveAsync_does_not_wait_for_a_turn_held_on_the_same_key()
     {
         // Ungated by necessity: the token source ends a session and then signs out while it still holds
-        // the lease, and the sign-out's remove reaches this member; the gate is not re-entrant, so a
+        // the turn, and the sign-out's remove reaches this member; the gate is not re-entrant, so a
         // gated remove there would wait on itself (#141, Q12). Mutation: enter the gate in RemoveAsync;
-        // the remove waits on the held lease, the deadline passes, and this fails.
+        // the remove waits on the held turn, the deadline passes, and this fails.
         InMemorySessionStore store = new();
         AppSessions sessions = new(store);
         string key = await store.CreateAsync(Record(App1), Ct);
-        using AppSessions.Lease lease = await sessions.EnterAsync(App1, key);
+        using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
 
         await sessions.RemoveAsync(App1, key, Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
 

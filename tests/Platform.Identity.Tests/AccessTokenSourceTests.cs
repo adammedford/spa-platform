@@ -307,7 +307,7 @@ public sealed class AccessTokenSourceTests
         // session with no access token. The versioned winner holds no token, and this call's own was never
         // persisted, so the call has no token it may hand back. It fails with ProviderUnavailable, the
         // winner stays as it was written, and the source's warning names the session by reference.
-        // Mutation: treat a winner with no token as ended (end the lease and answer SessionEnded); the
+        // Mutation: treat a winner with no token as ended (end the turn and answer SessionEnded); the
         // session is removed, and this fails.
         CapturedLog logs = new();
         HeldClock hold = new();

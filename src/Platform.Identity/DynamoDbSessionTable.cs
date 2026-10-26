@@ -53,7 +53,8 @@ internal sealed class DynamoDbSessionTable
     /// <summary>
     /// D4: 5 s bounds each operation, its re-read and its one retry together. The lease's margin is
     /// <c>2 × StoreDeadline + 1 s</c> (change request P2-3, amended 2026-10-24), so this figure is read
-    /// there as well.
+    /// there as well: it is <see cref="AccessTokenSourceOptions.StoreDeadline"/>'s default, and
+    /// <see cref="FromConfiguration"/> takes that option's value, so the two are one setting.
     /// </summary>
     internal static readonly TimeSpan DefaultStoreDeadline = TimeSpan.FromSeconds(5);
 
@@ -118,7 +119,8 @@ internal sealed class DynamoDbSessionTable
             tableName,
             services.GetRequiredService<IDataProtectionProvider>(),
             services.GetService<TimeProvider>() ?? TimeProvider.System,
-            services.GetRequiredService<ILoggerFactory>().CreateLogger<DynamoDbSessionStore>());
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<DynamoDbSessionStore>(),
+            services.GetService<AccessTokenSourceOptions>()?.StoreDeadline);
     }
 
     /// <summary>
