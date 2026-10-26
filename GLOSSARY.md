@@ -160,13 +160,23 @@ it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is na
 point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A stage is named, not
 numbered).
 
-**Rejection** — a response a stage ends the request with **under a rule id**: a 400, 403, 404, 405 or
-a 401 that `contracts/request-gate.md` has an id for. The rule id is what makes it one, not the
-status: a 404 for an asset that is simply absent carries no id and is an answer, not a rejection.
-Every rejection reaches the request line under its rule id and is counted under that id in
-`security.rejections`. What Kestrel refuses before any stage runs, the 431 for oversized headers, is
-the server's answer and not a rejection. The code's log messages say "refused"; the contracts and
-the metric say "rejection", and that is the word.
+**Rejection** — a response a stage ends the request with **under a rule id**: a 400, 403, 404 or
+405, a 401 that `contracts/request-gate.md` has an id for, or the shell gate's challenge of a
+navigation whose cookie resolves to no session. Ended once by `Rejection`; where another writer ends
+the response, the rule is noted. The rule id is what makes it one, not the status: a 404 for an
+asset that is simply absent carries no id and is an answer, not a rejection. Every rejection reaches
+the request line under its rule id and is counted under that id in `security.rejections`. What
+Kestrel refuses before any stage runs, the 431 for oversized headers, is the server's answer and not
+a rejection. The code's log messages say "refused"; the contracts and the metric say "rejection".
+_Avoid_: refusal in contracts, tests and metric names; error.
+
+**Answer** — a response the application ends a request with under no rule id: an absent asset's
+404, the proxy's 401 `session_ended`, 503, 502 and 504, and the 401 for a request that presented
+no cookie. _Avoid_: "rejection" for any of these; "error" where a problem body is meant.
+
+**Problem body** — the `application/problem+json` body the browser contract gives an error: a
+status and a stable `code` from `contracts/http-contract.md` → Errors, and nothing that describes
+the request. _Avoid_: error body.
 
 **Rule id** — the identifier of the rule a rejection fired under, from the table in
 `contracts/request-gate.md` → Rule ids, held once as `Platform.Abstractions.RuleIds` (ADR-0015). It
