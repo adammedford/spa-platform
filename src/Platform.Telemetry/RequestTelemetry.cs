@@ -176,5 +176,8 @@ internal sealed class RequestTelemetry
         public string? Rule { get; set; }
 
         public string? SessionRef { get; set; }
+
+        // Inert until change request issue-381-object-read-refusal.md's interface member and read_refused request-line field follow.
+        public string? ReadRefused { get; set; }
     }
 }
