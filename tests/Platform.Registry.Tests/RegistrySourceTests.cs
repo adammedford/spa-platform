@@ -195,6 +195,48 @@ public sealed class RegistrySourceTests
         Assert.Same(live, registry.Current);
     }
 
+    /// <summary>
+    /// A refused read is never "no registry" (change request
+    /// contracts/changes/issue-381-object-read-refusal.md, item 1): before the first snapshot it is a
+    /// failure, and the gateway stays not ready. The store is the deployed shape, a GetObject-only role
+    /// over a bucket with no registry object, which the in-memory double's refusal mode models.
+    ///
+    /// Mutation: in <c>RefreshOnceAsync</c>, catch <see cref="ObjectReadRefusedException"/> and return
+    /// <see cref="RefreshOutcome.Missing"/>, and this fails on the outcome (as does the test below).
+    /// </summary>
+    [Fact]
+    public async Task A_refused_read_before_the_first_snapshot_is_a_failure_and_nothing_goes_live()
+    {
+        RegistrySource refusing = new(
+            new InMemoryObjectStore(MissingKeyAnswer.AmbiguousRefusal), secrets, Examples.Policy(), registry, Key,
+            logs.CreateLogger<RegistrySource>());
+        CountSwaps();
+
+        Assert.Equal(RefreshOutcome.Failed, await refusing.RefreshAsync(Ct));
+
+        Assert.Same(LiveRegistry.NoSnapshot, registry.Current);
+        Assert.Equal(0, swaps);
+        Assert.Contains(logs.Lines, line => line.Text.Contains(nameof(ObjectReadRefusedException), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// After a working snapshot, a refused read keeps it: the revision that was live stays live, as for
+    /// any other store failure. Mutation: as above, and this fails on the outcome.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_read_after_a_working_snapshot_is_a_failure_and_the_live_revision_stays()
+    {
+        RegistrySnapshot live = await GoLive(Examples.Registry());
+        CountSwaps();
+        store.FailNextRead = new ObjectReadRefusedException(Key, innerException: null);
+
+        Assert.Equal(RefreshOutcome.Failed, await source.RefreshAsync(Ct));
+
+        Assert.Same(live, registry.Current);
+        Assert.Equal(42, registry.Current.Revision);
+        Assert.Equal(0, swaps);
+    }
+
     [Fact]
     public async Task One_unreadable_secret_at_cold_start_costs_one_app_not_all()
     {

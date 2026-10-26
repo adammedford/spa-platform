@@ -1,4 +1,5 @@
 using Amazon.Runtime;
+using Platform.Abstractions;
 
 namespace Spactl;
 
@@ -77,6 +78,20 @@ public static class SpactlApp
         catch (RefusedException refused)
         {
             await environment.Error.WriteLineAsync(refused.Message);
+            return 1;
+        }
+        catch (ObjectReadRefusedException refused)
+        {
+            // S3's 403 AccessDenied on a read, which the store raises as this neutral exception and so
+            // neither AWS handler below catches. It means the key is missing or these credentials may
+            // not read it, and spactl cannot tell which, so it stops: the registry read, the release
+            // prefix check and a resumed publish's byte comparison each propagate it rather than read it
+            // as "missing" or "different bytes", and nothing after the refused read is written (change
+            // request contracts/changes/issue-381-object-read-refusal.md, item 1). The key is a bucket
+            // path, never a credential.
+            await environment.Error.WriteLineAsync(
+                $"The read of {refused.Key} was refused: the object is missing or not readable with these " +
+                "credentials, and spactl cannot tell which. Nothing after that read was written.");
             return 1;
         }
         catch (AmazonServiceException aws)
