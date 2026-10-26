@@ -259,8 +259,8 @@ function stub(env, scriptArgs, served) {
           listing: served.listing || LISTING_ONE,
           issue: issue ? { number: issue.number, title: issue.title, url: issue.url, state: issue.state } : { number: 0, title: '', url: '', state: '' },
           phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)),
-          counts: served.replayCounts || { comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 } },
-          pending: '', renamed: '', stoppedAt: 0, reason: '',
+          counts: served.replayCounts || { comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 }, create: { applied: 0, skipped: 0, failed: 0 } },
+          creates: [], pending: '', renamed: '', stoppedAt: 0, reason: '',
           ...(served.replay || {}),
         }
       } else if (label === 'comments') {
@@ -889,9 +889,9 @@ try {
   checks++
   {
     const ZERO = { applied: 0, skipped: 0, failed: 0 }
-    const OCT22 = { counts: { comment: ZERO, edit: ZERO, close: ZERO }, pending: '""', renamed: '""', stoppedAt: 0, reason: '""' }
+    const OCT22 = { counts: { comment: ZERO, edit: ZERO, close: ZERO, create: ZERO }, pending: '""', renamed: '""', stoppedAt: 0, reason: '""' }
     const replayLine = (t) => (/### Replay\n\n- (.*)\n/.exec(t) || [])[1] || ''
-    const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; nothing was replayed'
+    const NOTHING = 'comment 0 applied, 0 skipped, 0 failed; edit 0 applied, 0 skipped, 0 failed; close 0 applied, 0 skipped, 0 failed; create 0 applied, 0 skipped, 0 failed; nothing was replayed'
     for (const [label, replay] of [
       ['2026-10-22\'s Replay result', OCT22],
       ['an empty reason', { ...OCT22, pending: '', renamed: '', reason: '' }],
@@ -918,12 +918,12 @@ try {
       // A failed count is a failed line even when the agent leaves stoppedAt at 0, which contradicts
       // its prompt as 2026-10-22's '""' did: it is still refused, never kept as a note (#319 review;
       // CODING_STANDARDS.md -> "A check fails closed").
-      const unnumbered = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', counts: { comment: { applied: 1, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, reason: 'HTTP 502: Bad Gateway' } })
+      const unnumbered = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, pending: '', renamed: '', counts: { comment: { applied: 1, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO, create: ZERO }, reason: 'HTTP 502: Bad Gateway' } })
       if (!unnumbered.result.refusals.some((r) => /^Replay stopped at a line it did not number of .*: HTTP 502: Bad Gateway$/.test(r))) fail(`a failed count with stoppedAt 0: refusals ${JSON.stringify(unnumbered.result.refusals)}`)
       if (!/; stopped at a line it did not number: HTTP 502/.test(replayLine(unnumbered.result.handover.text)) || /the agent noted/.test(unnumbered.result.handover.text)) fail(`a failed count with stoppedAt 0: the Replay line is ${JSON.stringify(replayLine(unnumbered.result.handover.text))}`)
     }
     const PENDING = `/tmp/morning-tests-repo/.scratch/overnight/log/pending-${DATE}.jsonl`
-    const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
+    const real = await execute(newRepo(), { date: DATE }, { replay: { counts: { comment: { applied: 2, skipped: 0, failed: 1 }, edit: ZERO, close: ZERO, create: ZERO }, pending: PENDING, renamed: '', stoppedAt: 3, reason: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } })
     const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
     if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
     if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
@@ -1271,6 +1271,111 @@ try {
     if (!firstLine(unread).includes(`fork point not read; the night's base ${BASE}.`)) fail(`no fork point returned: the hand-over's first line is ${JSON.stringify(firstLine(unread))}`)
     const vp = (await execute(newRepo(), { date: DATE }, {})).prompt('verify')
     if (!/forkPoint/.test(vp) || !/merge-base origin\/main overnight\//.test(vp)) fail('the Verify prompt does not ask for the fork point, the merge base of origin/main and the integration branch')
+  }
+
+  // 25. A pending create line counts as replayed (#433). The overnight run queues a change request it
+  //     could not file as {issue: 0, action: "create", title, label, blocking, body} (#421 Q2), and the
+  //     morning counts it beside comment, edit and close: in the schema, in the lookup's breach (a line
+  //     applied over a refused lookup), and in the hand-over's Replay line, where a morning that
+  //     replayed only a create line has replayed something.
+  checks++
+  {
+    const ZERO = { applied: 0, skipped: 0, failed: 0 }
+    const ONE = { comment: ZERO, edit: ZERO, close: ZERO, create: { applied: 1, skipped: 0, failed: 0 } }
+    const ok = await execute(newRepo(), { date: DATE })
+    const schema = (ok.calls.find((c) => c.label === 'replay') || {}).schema || {}
+    const counts = (schema.properties || {}).counts || {}
+    if (!(counts.required || []).includes('create') || !(counts.properties || {}).create) fail(`#433: Replay's counts schema has no required create field: ${JSON.stringify(counts.required)}`)
+    const breach = await execute(newRepo(), { date: DATE }, { listing: [], issue: null, replayCounts: ONE })
+    if (!/applied lines despite the refusal/.test(breach.result.halted || '')) fail(`#433: a create line applied over a refused lookup is not named as a breach: ${JSON.stringify(breach.result.halted)}`)
+    const only = await execute(newRepo(), { date: DATE }, { replayCounts: ONE, replay: { creates: [{ line: 1, title: 'A queued request', number: 612, found: false, filed: true, tickets: [] }] } })
+    const line = (/### Replay\n\n- (.*)\n/.exec(only.result.handover.text) || [])[1] || ''
+    if (!/; create 1 applied, 0 skipped, 0 failed/.test(line) || /nothing was replayed/.test(line)) fail(`#433: a morning that replayed one create line reads ${JSON.stringify(line)}`)
+  }
+
+  // 25a. The Replay prompt replays a create line idempotently (#433; #421 Q3): it names the verb, then
+  //      searches the open change-request issues for the title before it files, files with the line's
+  //      label, checks each blocked ticket's edges before adding one, and checks each ticket's comments
+  //      before commenting the number; and the line goes to the progress file only after its last
+  //      step, so a morning that crashed midway runs it again and the search finds what it filed.
+  checks++
+  {
+    const p = (await execute(newRepo(), { date: DATE })).prompt('replay')
+    const at = (re) => p.search(re)
+    if (!/"action": "comment"\|"edit"\|"close"\|"create"/.test(p)) fail('#433: the Replay prompt does not name create among the pending verbs')
+    const steps = [
+      ['the pending-file check', /`test -e [^`]*\/pending-<date>\.jsonl[^`]*`/],
+      ['the title search', /`cd [^`]*gh issue list --state open --label change-request [^`]*--search "<title> in:title"[^`]*`/],
+      ['the create', /`cd [^`]*gh issue create --title "<title>" --label change-request,ready-for-human [^`]*`/],
+      ['the edge read', /`cd [^`]*gh issue view <ticket> --json blockedBy`/],
+      ['the edge add', /`cd [^`]*gh issue edit <ticket> --add-blocked-by <number>`/],
+      ['the comments read', /`cd [^`]*gh issue view <ticket> --json comments[^`]*`/],
+      ['the number comment', /`cd [^`]*gh issue comment <ticket> --body-file [^`]*`/],
+    ]
+    let last = -1
+    for (const [what, re] of steps) {
+      const w = at(re)
+      if (w < 0) fail(`#433: the Replay prompt does not name ${what}`)
+      else if (w < last) fail(`#433: the Replay prompt reaches ${what} before the step that must precede it`)
+      else last = w
+    }
+    if (!/found[^\n]*files nothing/.test(p)) fail('#433: the Replay prompt does not say a title already found files nothing')
+    if (!/progress file only once its last step/.test(p)) fail('#433: the Replay prompt does not hold a create line out of the progress file until its last step')
+    if (!/If neither exists(?:(?!If only)[^\n])*skip to step 3/.test(p)) fail('#433: the create steps broke the no-pending-file sentence')
+  }
+
+  // 25b. The script holds the Replay agent to the create rule by what it reports (#433): a title
+  //      already found files nothing and gets its missing edge added and its number commented, which
+  //      the hand-over says, with no refusal; a request both found and filed, a found request with no
+  //      number, a blocked ticket left without its edge or its comment, or more create lines counted
+  //      than reported, is refused and named (CODING_STANDARDS.md -> "A check fails closed").
+  checks++
+  {
+    const REQ = 612
+    const T1 = 433
+    const T2 = 434
+    const counted = (n) => ({ comment: { applied: 0, skipped: 0, failed: 0 }, edit: { applied: 0, skipped: 0, failed: 0 }, close: { applied: 0, skipped: 0, failed: 0 }, create: { applied: n, skipped: 0, failed: 0 } })
+    const rec = (over) => ({ line: 2, title: 'The proxy needs a header contract', number: REQ, found: true, filed: false, tickets: [{ number: T1, edge: 'added', comment: 'posted' }, { number: T2, edge: 'present', comment: 'present' }], ...over })
+    const run = (creates, n = creates.length) => execute(newRepo(), { date: DATE }, { replayCounts: counted(n), replay: { creates } })
+    const replayed = (t) => (/### Replay\n\n([\s\S]*?)\n\n###/.exec(t) || [])[1] || ''
+    const found = await run([rec({})])
+    const fr = found.result
+    if (fr.refusals.length) fail(`#433 found: refused ${JSON.stringify(fr.refusals)}, expected none`)
+    const rl = replayed(fr.handover.text)
+    if (!rl.includes(`- create line 2: ${cite(REQ)} The proxy needs a header contract, found open, filed nothing; ${cite(T1)}: edge added, number commented; ${cite(T2)}: edge already there, number already commented`)) fail(`#433 found: the hand-over's Replay section does not say the request was found, nothing filed and the edge added:\n${rl}`)
+    const filedNew = await run([rec({ found: false, filed: true, tickets: [{ number: T1, edge: 'present', comment: 'posted' }] })])
+    if (filedNew.result.refusals.length || !replayed(filedNew.result.handover.text).includes(`- create line 2: ${cite(REQ)} The proxy needs a header contract, filed; ${cite(T1)}: edge already there, number commented`)) fail(`#433 filed: refusals ${JSON.stringify(filedNew.result.refusals)}; Replay section:\n${replayed(filedNew.result.handover.text)}`)
+    for (const [label, creates, n, named] of [
+      ['found and filed', [rec({ filed: true })], 1, /create line 2 \(.*\) was found open and filed again, so the request may be filed twice/],
+      ['found with no number', [rec({ number: 0 })], 1, /create line 2 \(.*\) was reported found or filed with no number/],
+      ['an edge left out', [rec({ tickets: [{ number: T1, edge: 'none', comment: 'posted' }] })], 1, new RegExp(`create line 2 \\(.*\\) blocks ${cite(T1)}, which carries no edge from it`)],
+      ['a comment left out', [rec({ tickets: [{ number: T1, edge: 'added', comment: 'none' }] })], 1, new RegExp(`create line 2 \\(.*\\) blocks ${cite(T1)}, which carries no comment naming its number`)],
+      ['more counted than reported', [rec({})], 2, /counts 2 create line\(s\) applied and reports 1/],
+    ]) {
+      const r = (await run(creates, n)).result
+      if (!r.refusals.some((x) => named.test(x)) || !named.test(r.handover.text)) fail(`#433 ${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.refusals)}`)
+    }
+  }
+
+  // 25c. integrator-edit narrows (#433; #421 Q5, Q9): it is only a Confirmed answer to a question in a
+  //      "## Questions for Adam" comment on a ticket not labelled change-request, and its old "change
+  //      request's status line" clause is gone: a Confirm on the Overnight issue never authorises a
+  //      request's edit, which only Adam's Decision: comment on the request does. Classify reads the
+  //      "## Proposed glossary / ADR" comment only for its ADR candidates.
+  checks++
+  {
+    const cls = (await execute(newRepo(), { date: DATE })).prompt('classify')
+    const ie = (/^- integrator-edit: .*$/m.exec(cls) || [''])[0]
+    if (!ie) fail('#433: the Classify prompt defines no integrator-edit kind')
+    else {
+      if (!/Confirmed answer to a question in a "## Questions for Adam" comment/.test(ie)) fail(`#433: integrator-edit is not narrowed to a Confirmed grill answer: ${ie}`)
+      if (!/not labelled change-request/.test(ie) || !/on a ticket labelled change-request is never this kind/.test(ie)) fail(`#433: integrator-edit does not exclude change-request tickets: ${ie}`)
+      if (!/a Confirm on the Overnight issue never authorises a change request's edit/.test(ie)) fail(`#433: integrator-edit does not say a Confirm never authorises a request's edit: ${ie}`)
+      if (/status line/.test(ie)) fail(`#433: integrator-edit still covers a change request's status line: ${ie}`)
+    }
+    const read = (/^For each question above, read .*$/m.exec(cls) || [''])[0]
+    if (!/"## Proposed glossary \/ ADR" comment only for its ADR candidates/.test(read)) fail(`#433: Classify does not read proposals only for ADR candidates: ${read}`)
+    if (!/a glossary or steering proposal there is never an answer/.test(read)) fail(`#433: Classify may still classify a proposal as an answer: ${read}`)
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
