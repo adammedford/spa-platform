@@ -14,7 +14,8 @@ export const meta = {
 // The review-queue workflow of the spec #79. For each pull request it is given it inventories, reviews
 // on both axes, mutates the tests the diff adds or changes, decides, and posts exactly one comment
 // whose last line is the review record docs/agents/review.md -> "The review record" defines. It never
-// merges, pushes, tags, labels, assigns or edits a branch. Every build or test run happens in a
+// merges, pushes, tags, labels, assigns or edits a branch; the one other tracker write is a held
+// steering change filed as a change-request issue (below). Every build or test run happens in a
 // throwaway worktree under wt, detached at the head and removed after the run. Test companion:
 // review-queue_tests.mjs beside it.
 //
@@ -93,7 +94,15 @@ export const meta = {
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
 // the ones with none are returned as followUps and end the comment's findings as the table under
 // "## Follow-ups", which morning.js reads from the latest record and files. The review still writes
-// nothing outside its log and its one comment.
+// nothing outside its log and its one comment, but for the change requests below.
+//
+// Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
+// each cited ticket is or was blocked by, with their decision comments, as spec sources. It judges
+// whether the authority a steering change cites decides it, and reads no citation itself: the
+// steering check does that. A steering change the review holds comes out of the branch at its
+// author's hand, and so that it is not lost the verdict agent files it as a change-request issue
+// blocking nothing, after a title search finds no open one; the comment's "## Change requests" lists
+// each, and one it could not file is reported there, never queued.
 //
 // Reading a review at a glance (#294). A description whose stated head is not the head is a verified
 // Spec finding reached by comparison, not by an axis's reading: the inventory reports each sha the
@@ -386,8 +395,11 @@ const VERDICT = {
     // Every finding the review carries rather than holds on (#292), with the open ticket that owns
     // it ("" for none) and the earliest record on this pull request that carried it ("" for none).
     followUps: { type: 'array', items: { type: 'object', properties: { axis: { type: 'string', enum: ['Standards', 'Spec'] }, title: { type: 'string' }, where: { type: 'string' }, ticket: { type: 'string' }, firstCarried: { type: 'string' } }, required: ['axis', 'title', 'where', 'ticket', 'firstCarried'] } },
+    // Each held steering change filed as a change-request issue (#434): number 0 when it could not be
+    // filed, error why; found true when an open request with its title was there and nothing was filed.
+    changeRequests: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, number: { type: 'integer' }, found: { type: 'boolean' }, error: { type: 'string' } }, required: ['title', 'number', 'found', 'error'] } },
   },
-  required: ['verdict', 'findings', 'claims', 'outstanding', 'summary', 'earlierFindings', 'followUps'],
+  required: ['verdict', 'findings', 'claims', 'outstanding', 'summary', 'earlierFindings', 'followUps', 'changeRequests'],
 }
 const RESULTS = ['reproduced', 'did-not-fail', 'could-not-run', 'removed']
 const MUTATION = {
@@ -472,6 +484,33 @@ const deltaBrief = (d) => `This is a delta review. The latest review record on t
     ? `which is no ancestor of the head: the branch was rebuilt. These new commits have the tree of an old one (new = old): ${mappingText(d)}; what the earlier record cleared there is not re-reviewed. Review the commit(s) that map onto none, ${d.commits.join(', ') || '(none: every commit maps)'}, each with \`git -C ${REPO} show <sha>\`, and the content diff from the recorded head, \`git -C ${REPO} diff ${d.from} ${d.to}\` (files: ${d.changedFiles.join(', ') || '(none)'}).`
     : `an ancestor of the head. Review the range ${deltaRange(d)}: \`git -C ${REPO} diff ${deltaRange(d)}\` and \`git -C ${REPO} log ${deltaRange(d)} --oneline\` (${d.commits.length} commit(s); files: ${d.changedFiles.join(', ') || '(none)'}).`} Read the whole diff, \`git -C ${REPO} diff ${d.fork}...${d.to}\`, for context only: what the earlier record cleared is not re-reviewed.${d.merges.length ? ` The range holds merge commit(s) ${d.merges.join(', ')}: audit each one's resolution on its own, with \`git -C ${REPO} show --remerge-diff <merge>\`, as the review guide requires.` : ''}${d.verdict === 'hold' ? ` The earlier record held: read ${d.url} and check each of its findings for an answer in ${d.rebuilt ? 'the content diff' : 'the range'}.` : ''}`
 
+// A ticket's change requests, as the Spec axis reads them (#434, #421 Q12). A change request is an
+// issue labelled change-request that blocks the ticket needing it (#408); its decision is Adam's
+// comment whose first line begins `Decision:` (#413 Q4). A request closes when its edit lands, or
+// when it is declined or withdrawn (#408 Q1), and GitHub keeps a closed blocker in blockedBy, so a
+// closed one is read as well as an open one and its decision says which. The archived files
+// under contracts/changes/ stay a source until the cutover moves them (#422).
+const changeRequestSources = (inv) => {
+  const cited = inv.cites.issues || []
+  return `The ticket's change requests: ${cited.length
+    ? `for each issue the pull request cites, ${cited.map((i) => `\`cd ${REPO} && gh issue view ${i} --json blockedBy\``).join(', ')}`
+    : `for the issue the pull request's body names as its ticket (it cites none the inventory could read), \`cd ${REPO} && gh issue view <n> --json blockedBy\``} lists the issues it is or was blocked by; read each with \`cd ${REPO} && gh issue view <cr> --json number,title,state,labels,body,comments\`, and every one labelled \`change-request\`, open or closed, is a spec source, its body and its decision comment both: the comment by @adammedford whose first line begins \`Decision:\` (\`Decision: accept as drafted <link>\` covers the draft it links, as that draft stood). Hold the diff to what was decided, not to what the request first asked; \`Decision: decline\` decides against what it asked, and a request with no decision comment decides nothing yet. A change request under contracts/changes/ that the ticket or the row names is read as well.`
+}
+// Authority, judged rather than read (#434, #411 Q5): the steering check in tools/check.sh reads each
+// commit's citation, and CI ran it, so the Spec axis judges only whether what is cited decides the
+// change. A change it finds undecided is the finding the verdict holds on and files (heldChangeRoute).
+const STEERING_AUTHORITY = `A change to a steering document (a path .github/steering.py's STEERING_DOCUMENTS names) needs an authority that decides it. The steering check in tools/check.sh reads each commit's citation mechanically and CI has already run it, so do not audit again whether each commit carries one or its form: read what each steering commit cites and judge only whether the authority it cites decides this change, the \`#n\` or decision URL deciding this text and not merely its subject. One whose cited authority does not decide it is a verified Spec finding titled "Undecided steering change: <path>", with where the path and checked what the authority does and does not decide.`
+// The held-change route (#434, #411 Q5, #421 Q12): a steering change the review holds is taken out
+// of the branch by its author, since a review edits no branch, and so that it is not lost the verdict
+// files it as a change-request issue that blocks nothing (#408 Q4), after searching the open requests
+// for its title. A review keeps no pending-writes file, so a request it cannot file is reported, not
+// queued (#421 Q11).
+const heldChangeRoute = (n, inv) => `A held steering change: a verified "Undecided steering change" finding holds the verdict, and the change comes out of the branch before it merges. Its author takes it out, since this review edits no branch. So that it is not lost, file it as a change request, the one tracker write a review makes besides its comment, for each such finding:
+1. Search first, with <title> plain prose naming the change and no id prefix: \`cd ${REPO} && gh issue list --state open --label change-request --search "<title> in:title" --json number,title\`. If an open request has that title, file nothing: number is its number and found is true.
+2. Otherwise file it, blocking nothing: \`cd ${REPO} && gh issue create --title "<title>" --label change-request --label ready-for-human --body-file - <<'EOF'\` with the body on stdin and \`EOF\` on a line of its own after it. The body: \`**Raised by:** #${n}, from the review of its head ${inv.head}\`, then \`**Touches:**\` the steering paths, \`## The gap\` (what the cited authority does and does not decide) and \`## The change\` (each changed paragraph whole, as the branch has it). number is the number gh prints, found false.
+3. If GitHub cannot be reached or the create fails, number is 0 and error says why; name it in outstanding too. Nothing queues it: a review keeps no pending-writes file.
+changeRequests: one entry per held steering change, with title, number, found and error ("" when filed or found). [] when the review holds none.`
+
 const axisPrompt = (axis, n, inv, d) => `You are the ${axis} axis of a review of pull request #${n}: ${inv.title}. You are a fresh agent and wrote none of its commits.
 
 ${HOUSE}
@@ -491,7 +530,7 @@ The pull request, as the inventory read it (${DIR(n)}/inventory.json holds the w
 ${d ? deltaBrief(d) : `Read the diff yourself with the review guide's commands (\`git -C ${REPO} diff ${inv.forkPoint}...${inv.head}\`).`} A diff with no code in it, docs-only or tracker-only, is reviewed all the same: no pull request is exempt by what it touches.
 ${axis === 'Standards'
     ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail, by file and test name.'
-    : 'Hold the diff to the spec sources the review guide\'s table names: the plan row, the issue\'s body and comments, the contracts and pipeline table, the test and evidence ids the row names, change requests and ADRs. The pull request body is the author\'s claim, not the spec: put every claim in claims, verified or not, and how.'}
+    : `Hold the diff to the spec sources the review guide's table names: the plan row, the issue's body and comments, the contracts and pipeline table, the test and evidence ids the row names, the ticket's change requests and ADRs. ${changeRequestSources(inv)} ${STEERING_AUTHORITY} The pull request body is the author's claim, not the spec: put every claim in claims, verified or not, and how.`}
 ${axis === 'Standards' ? 'Each nomination: test (by the name the inventory\'s candidates use, if it is one), project (what runs it alone), and why you suspect it cannot fail. ' : ''}Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
 
 const verdictPrompt = (n, inv, mut, d, stale = []) => `Decide the review of pull request #${n}: ${inv.title}. You wrote none of its commits.
@@ -510,6 +549,7 @@ ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files.
+${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
 
 const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
@@ -716,6 +756,14 @@ const followUpLines = (list) => ['## Follow-ups', '',
       ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD].map(cell).join(' | ')} |`)]
     : ['- None: the review carries no finding that names no open ticket.']),
   '']
+// The held steering changes the verdict filed (#434), as a section only when there is one: filed,
+// found already open, or not filed and why.
+const changeRequestLines = (list) => (list.length
+  ? ['## Change requests', '', 'Held steering changes, each filed as a change-request issue blocking nothing, so none is lost when it comes out of the branch (#411 Q5).', '',
+    ...list.map((c) => (c.number > 0
+      ? `- #${c.number} ${c.title}: ${c.found ? 'already open, nothing filed' : 'filed, blocking nothing'}.`
+      : `- ${c.title}: not filed: ${c.error || 'the verdict named no number'}.`)), '']
+  : [])
 const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   '## Review',
   '',
@@ -737,6 +785,7 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   ...(v.claims.length ? v.claims.map((c) => `- ${c.claim}: ${c.verified ? 'verified' : 'not verified'}. ${c.how}`) : ['- None stated.']),
   '',
   ...followUpLines(followUps),
+  ...changeRequestLines(v.changeRequests),
   ...earlierLines(d, v),
   '## Mutations',
   '',
@@ -794,7 +843,7 @@ const blank = (n) => ({
   number: n, head: '', base: '', baseTip: '', verdict: '', outcome: 'failed', stage: '', recordUrl: '',
   findings: { verified: [], suspected: [] }, mutations: [], notMutated: [], skippedBecauseRecorded: false,
   headMoved: false, earlierRecords: [], earlierRecord: null, range: null, outsideRange: [], clearedByEarlier: [], commentFile: '',
-  followUps: [],
+  followUps: [], changeRequests: [],
 })
 const failed = (res, stage) => ({ ...res, outcome: 'failed', stage, verdict: '', recordUrl: '' })
 const review = async (n) => {
@@ -877,6 +926,7 @@ const reviewOne = async (n, res, at) => {
   const v = await run(verdictPrompt(n, inv, mut, d, stale), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) return failed(res, 'verdict: the verdict agent returned nothing')
   v.earlierFindings = v.earlierFindings || []
+  v.changeRequests = (v.changeRequests || []).filter((c) => c && c.title)
   // The comparison's findings lead the verdict's own: the verdict was told of them and not to repeat them.
   v.findings = [...stale, ...(v.findings || [])]
   // The script holds on what it can judge itself: a mutation row under the hold rules, or a held
@@ -894,6 +944,7 @@ const reviewOne = async (n, res, at) => {
   const body = commentBody(inv, v, record, mut, d, full, followUps)
   res.verdict = verdict
   res.followUps = followUps
+  res.changeRequests = v.changeRequests
   res.findings = {
     verified: v.findings.filter((f) => f.status === 'verified'),
     suspected: v.findings.filter((f) => f.status === 'suspected'),
