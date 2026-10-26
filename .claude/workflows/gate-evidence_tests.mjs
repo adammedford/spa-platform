@@ -584,6 +584,25 @@ try {
       if (/P-0[1237]\b/.test(deployed)) fail(`the ${c.label} prompt's wouldRun lists a plan-policy id as a deployed clause: ${deployed}`)
     }
   }
+  // The Scope prompt's tiers (#392, from #367's review): an id named after the export, P-07 among
+  // them, has its row in contracts/test-ids.md and not in docs/plan/04-tests.md, so Scope reads a tier
+  // there too, and the fallback for a P- id with no tier counts P-07 with the hermetic plan checks.
+  checks++
+  {
+    const scoped = allCalls.filter((c) => c.label === 'scope')
+    if (!scoped.length) fail('no Scope prompt was dispatched, so the tier search read nothing')
+    for (const c of scoped) {
+      const step = (c.prompt.match(/^4\. gate:[^\n]*/m) || [''])[0]
+      if (!step) { fail('the Scope prompt has no step 4, so its tier rules were not read'); continue }
+      const tierRule = (step.match(/an id the cell gives no tier[^;]*?(?=;|,? and a P- id)/) || [''])[0]
+      if (!/contracts\/test-ids\.md/.test(tierRule)) fail(`the Scope prompt reads an untiered id's tier only from the export: ${tierRule}`)
+      const subset = (step.match(/"the deployed subset" is[^;]*/) || [''])[0]
+      if (!/contracts\/test-ids\.md/.test(subset)) fail(`the Scope prompt reads the deployed subset only from the export: ${subset}`)
+      const fallback = (step.match(/a P- id with none is[^)]*/) || [''])[0]
+      if (!/\bH for [^;]*P-01 to P-03 and P-07\b/.test(fallback)) fail(`the Scope prompt's fallback does not tier P-07 hermetic with P-01 to P-03: ${fallback}`)
+      if (/\bD for (?:(?! and H for)[^,;])*P-07\b/.test(fallback)) fail(`the Scope prompt's fallback tiers P-07 deployed: ${fallback}`)
+    }
+  }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
   console.log('gate-evidence_tests: ERROR')
