@@ -1137,7 +1137,7 @@ class SteeringTests(unittest.TestCase):
             "and 61-security-suite-refresh-outcome-flake.md",
             out,
         )
-        self.assertIn("docs/agents/issue-tracker.md", out)
+        self.assertIn("docs/agents/tracker-policy.md", out)
 
     def test_every_number_sharing_files_is_reported_in_every_tracker(self):
         """Three files on one number are one line naming all three, and a second collision in
@@ -1567,7 +1567,7 @@ class SteeringTests(unittest.TestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
                                       f"is a comment by {who}, not by @adammedford, the "
-                                      "repository's owner, since docs/agents/issue-tracker.md "
+                                      "repository's owner, since docs/agents/tracker-policy.md "
                                       "names no account"), out)
                 self.assertIn("STEERING FAILED: an Authority: comment was written by an account "
                               "that does not confirm.", out)
@@ -1582,12 +1582,12 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(0, code, out)
 
     def test_the_account_the_guide_names_confirms_and_the_owner_then_does_not(self):
-        """The account is read from the guide, not assumed: once docs/agents/issue-tracker.md
+        """The account is read from the guide, not assumed: once docs/agents/tracker-policy.md
         names one, its comment vouches and the owner's no longer does."""
-        guide = ("# Issue tracker\n\n## This repository's additions\n\n"
+        guide = ("# Tracker policy\n\n## This repository's additions\n\n"
                  "- **The human's account is `@adam-m`.** A `Confirm` comment counts only when\n"
                  "  this account wrote it.\n")
-        self.write(steering.GUIDE, guide)
+        self.write("docs/agents/tracker-policy.md", guide)
         for author, code_wanted in (("adam-m", 0), ("adammedford", 1)):
             with self.subTest(author=author):
                 self.comments({COMMENT_ID: COMMENT}, author=author)
@@ -1600,8 +1600,27 @@ class SteeringTests(unittest.TestCase):
                 if code_wanted:
                     self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
                                           "is a comment by @adammedford, not by @adam-m, the "
-                                          "account docs/agents/issue-tracker.md names for a "
+                                          "account docs/agents/tracker-policy.md names for a "
                                           "Confirm"), out)
+
+    def test_an_account_line_left_in_the_setup_written_guide_is_not_read(self):
+        """#432: the account line moved to docs/agents/tracker-policy.md, which no setup skill
+        writes, so a re-run of the setup skill cannot delete it (#412). A line in
+        docs/agents/issue-tracker.md, the guide that skill rewrites, names nobody: @mallory's
+        comment is judged against the owner, and the line says which file was read."""
+        self.write("docs/agents/issue-tracker.md",
+                   "# Issue tracker\n\n## This repository's additions\n\n"
+                   "- **The human's account is `@mallory`.** It confirms.\n")
+        self.comments({COMMENT_ID: COMMENT}, author="mallory")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on the setup guide's account"
+        sha = self.commit(message(subject, COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                              "is a comment by @mallory, not by @adammedford, the repository's "
+                              "owner, since docs/agents/tracker-policy.md names no account"), out)
 
     def test_a_range_that_renames_the_account_cannot_vouch_itself(self):
         """#316 review: the account is read from the guide at the base. A range that writes the
@@ -1609,7 +1628,7 @@ class SteeringTests(unittest.TestCase):
         judged against the owner the base's guide leaves, so both commits fail."""
         self.comments({COMMENT_ID: COMMENT}, author="mallory")
         base = self.baseline()
-        self.write(steering.GUIDE, "# Issue tracker\n\n## This repository's additions\n\n"
+        self.write(steering.GUIDE, "# Tracker policy\n\n## This repository's additions\n\n"
                                    "- **The human's account is `@mallory`.** It confirms.\n")
         guide_sha = self.commit(message("Name the account", COMMENT))
         self.write("GLOSSARY.md", "# Glossary\n")
@@ -1617,7 +1636,7 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
         why = ("is a comment by @mallory, not by @adammedford, the repository's owner, since "
-               "docs/agents/issue-tracker.md names no account")
+               "docs/agents/tracker-policy.md names no account")
         self.assertIn(refuses(guide_sha, "Name the account", (steering.GUIDE,), COMMENT, why), out)
         self.assertIn(refuses(glossary_sha, "The glossary, on mallory's Confirm",
                               ("GLOSSARY.md",), COMMENT, why), out)

@@ -36,7 +36,7 @@ and the line it passes prints how many headers it compared: a rule that quietly 
 is the defect it was written to catch, one level up.
 
 **No citation that resolves to nothing.** The dangling-pointer rule again, for the one pointer
-written as a number rather than a path. `docs/agents/issue-tracker.md` says a document citing a
+written as a number rather than a path. The tracker guide once said a document citing a
 ticket "is citing a file every other session and CI can open, which is the whole point of citing
 it", and merged code once cited overnight tickets 63 and 64 while `origin/main` stopped at 61. A
 number alone does not say where, so where it resolves is this rule's decision: against the tracker
@@ -53,12 +53,13 @@ files resolves, and still leaves its reader to guess. `.scratch/overnight/issues
 that is a failure at the second push, since neither branch was wrong until the other landed. The
 check is per tracker, read by the same trackers() the citation rule resolves in, because numbering
 restarts in each and `06` in several of them is several tickets. What a session does when its
-number is taken is in docs/agents/issue-tracker.md; the rule cannot do the part that matters,
+number is taken is in this rule's failure message, beside the archive's rules in
+docs/agents/tracker-policy.md; the rule cannot do the part that matters,
 which is reading each citation of the old number to see which ticket it meant, because after a
 rename every one of them still resolves. The line it passes prints how many tickets it read.
 
 **No `#NNN` that names nothing.** The citation rule once more, for the form a ticket takes since
-ADR-0020 moved tickets to GitHub Issues. `docs/agents/issue-tracker.md` says to cite an issue or a
+ADR-0020 moved tickets to GitHub Issues. `docs/agents/tracker-policy.md` says to cite an issue or a
 pull request as `#NNN`, that the two share one number sequence, and that this check fails a push
 over a `#NNN` that names neither. GitHub is what knows which numbers exist, so the rule asks it,
 once per run and through `gh`: GitHub's REST API "considers every pull request an issue", so one
@@ -92,7 +93,7 @@ a number is an issue or a pull request, and a ticket is an issue. The listing ca
 with no error (#297), so a number it lacks is asked about alone before it is refused: a 404 or a
 410 refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
 against the comment GitHub keeps under its id, and that comment's author against the account
-that confirms (#316): the one docs/agents/issue-tracker.md names at the base, or the repository's
+that confirms (#316): the one docs/agents/tracker-policy.md names at the base, or the repository's
 owner while it names none, since a `Confirm` by any other account that can comment confirms
 nothing. Offline, the trailer is still required, and its citations are reported as not checked;
 the line the rule passes prints how many held commits GitHub vouched for.
@@ -419,14 +420,14 @@ GH_COMMENT = (
     "--jq", r'"\(.html_url) \(.user.login // "")"',
 )
 
-# Who may write the comment an `Authority: <URL>` cites (#316). docs/agents/issue-tracker.md says a
+# Who may write the comment an `Authority: <URL>` cites (#316). docs/agents/tracker-policy.md says a
 # `Confirm` comment is the human's act, and CODING_STANDARDS.md -> "An authorisation is read from
 # its author" counts one only when the account the rule names wrote it. The account is the one the
 # guide names on a line of this shape, matched narrowly so that prose about accounts is not read as
 # naming one; while it names none, the repository's owner, read off the URL GitHub keeps the comment
 # at. tools/overnight_collect.py reads the same line for who may apply `ready-for-agent`, and
 # tools/overnight_collect_tests.py holds the two equal.
-GUIDE = "docs/agents/issue-tracker.md"
+GUIDE = "docs/agents/tracker-policy.md"
 ACCOUNT_LINE = re.compile(
     r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
 )
@@ -888,7 +889,7 @@ def comment_url(root: pathlib.Path, comment: str) -> tuple[Comment | None, str]:
 
 
 def named_account(guide: str | None) -> str | None:
-    """The account the tracker guide names on its "The human's account is `@<login>`." line, or
+    """The account the tracker policy names on its "The human's account is `@<login>`." line, or
     None when it names none (or the tree has no guide)."""
     found = ACCOUNT_LINE.search(guide or "")
     return found.group("login") if found else None
@@ -1094,7 +1095,7 @@ def judged(
 ) -> tuple[str, str]:
     """What one Authority: value comes to: ("vouched", ""), ("refused", why it resolves to
     nothing), ("unconfirmed", who wrote the comment it cites, when that is not the account that
-    confirms), or ("unchecked", why GitHub could not say). account is the one the tracker guide
+    confirms), or ("unchecked", why GitHub could not say). account is the one the tracker policy
     names, None when it names none, which leaves the repository's owner.
 
     A number the listing lacks is judged on what issue_kind() said of it alone, in `looked_up`:
@@ -1324,7 +1325,7 @@ def main(argv: list[str] | None = None) -> int:
             f"or {TRACKER_ROOT}/{DEFAULT_TRACKER}/{ISSUES}/ for a file outside {TRACKER_ROOT}/.",
             "Write '<tracker> ticket NN' to cite across trackers, file the ticket, or add it to",
             "UNFILED in this script with the reason it is named early. The resolution rule is",
-            "in docs/agents/issue-tracker.md.",
+            "in docs/agents/tracker-policy.md.",
         ),
         report(
             filed,
@@ -1338,7 +1339,7 @@ def main(argv: list[str] | None = None) -> int:
             "reached origin/main second to the next free number in its directory, and move",
             "every citation that meant it in the same commit. Read each one: after the rename",
             "the number still resolves, to the other file, so no check finds one left behind.",
-            "The procedure is in docs/agents/issue-tracker.md.",
+            "The archive's rules are in docs/agents/tracker-policy.md.",
         ),
         report(
             unissued,
@@ -1346,7 +1347,7 @@ def main(argv: list[str] | None = None) -> int:
             "Issues and pull requests share one number sequence, and this run asked GitHub for",
             "every number it has issued here. Fix the number, or write another repository's as",
             "owner/repo#NNN, which this rule does not read. The form is in",
-            "docs/agents/issue-tracker.md.",
+            "docs/agents/tracker-policy.md.",
         ),
         report(
             untracked,
@@ -1394,9 +1395,9 @@ def main(argv: list[str] | None = None) -> int:
             unconfirmed,
             "STEERING FAILED: an Authority: comment was written by an account that does not "
             "confirm.",
-            "A Confirm comment is the human's act (docs/agents/issue-tracker.md), and",
+            "A Confirm comment is the human's act (docs/agents/tracker-policy.md), and",
             "CODING_STANDARDS.md -> \"An authorisation is read from its author\" counts one only",
-            "when the account the rule names wrote it: the account docs/agents/issue-tracker.md",
+            "when the account the rule names wrote it: the account docs/agents/tracker-policy.md",
             "names, or the repository's owner while it names none. Cite that account's comment",
             "holding the confirmed answer, or leave the steering document as it was.",
         ),

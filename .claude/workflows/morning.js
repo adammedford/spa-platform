@@ -70,7 +70,7 @@ export const meta = {
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
 // name no open ticket; the morning reads the table of the latest record on each open pull request
 // into main, and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
-// to the record, as neither a sub-issue nor a blocker (docs/agents/issue-tracker.md). Neither Verify's
+// to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
@@ -165,7 +165,7 @@ const HOUSE = (mdir) => `House rules (a morning session; Adam reads the hand-ove
 - The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset or build there. The only files you may write there are under ${mdir}/, and the pending-writes file's progress file and its rename in ${LOG}/; git's own bookkeeping for fetches and worktrees is the only other change.
 - The tracker is GitHub Issues. Run every \`gh\` command with \`cd ${REPO} &&\` in front so it resolves this repository. A multi-line comment or body goes through a file you write under ${mdir}/ and \`--body-file <that file>\`.
 - If \`gh\` fails because GitHub is unreachable, stop and report it as your reason. The morning replays the pending-writes file and never writes one: a tracker write you cannot make is a failure you report, never a line you queue.
-- Never write a comment that begins "Confirm" or "Approved" on any issue: a confirmation is Adam's act (docs/agents/issue-tracker.md; #78 grill Q7).
+- Never write a comment that begins "Confirm" or "Approved" on any issue: a confirmation is Adam's act (docs/agents/tracker-policy.md; #78 grill Q7).
 - Never run the landing script, tools/land.sh: Adam runs it (#78 grill Q2). Never merge, rebase or cherry-pick into any branch, never tag, never pass --admin or --no-verify, never force-push, never delete a branch (#71 owns deletion), and never remove a worktree by force.
 - Only two branches may be pushed, each with the pre-push hook running: the integration branch and the morning branch. Before a push, compare the remote tip with the local one: equal, skip the push; not an ancestor of the local tip, stop, because someone else pushed and the morning never force-pushes.
 - Begin every Bash command that touches a worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. A bare \`git commit\` lands on Adam's branch.
@@ -668,7 +668,7 @@ const refreshDescription = (body, head, merges, lanes) => {
 // whose change is an edit to a ticket's body boxes or blocked-by edges is applied to that ticket; the
 // part of it the answer alone cannot state (a ticket not yet filed, a condition) is filed as a
 // follow-up naming the ticket, and so is an edit stated nowhere. A follow-up names its origin on a
-// Raised-by line and is neither a sub-issue nor a blocker of it (docs/agents/issue-tracker.md).
+// Raised-by line and is neither a sub-issue nor a blocker of it (docs/agents/tracker-policy.md).
 const BOX_LINE = /^- \[[ x]\] \S/
 const followUpTicket = (date, issue, q, f) => ({
   q: q.q, title: f.title, blockedBy: f.blockedBy, file: `${paths(date).mdir}/apply/followup-q${q.q}.md`,
@@ -849,7 +849,7 @@ Rewrites (a ticket with "rewrite": true): first preserve the current body verbat
 FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
 1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
 2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
-3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/issue-tracker.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
+3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, first preserve the current body verbatim in a comment headed "## Body before ${date}" whose next line names Q<n> of #${issue} (\`cd ${REPO} && gh issue comment <target> --body-file <file>\`), then write the body with exactly those lines removed and no other byte changed, \`cd ${REPO} && gh issue edit <target> --body-file <file>\`. List each in edits {issue: the target, preserved: that comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
 A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
@@ -881,7 +881,7 @@ ${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
 For each follow-up, in order:
 1. Write its body, exactly, to its file.
 2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
-3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/issue-tracker.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
 If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you.`
 }
 

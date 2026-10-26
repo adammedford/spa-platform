@@ -19,7 +19,7 @@ A pre-launch audit is the same command.
                                                                forecast with another copy's rules
 
 --repo names the checkout whose git, gh repository (every gh call runs in it), tools/roadmap.py and
-docs/agents/issue-tracker.md are read, from any directory in it; without it, the checkout this
+docs/agents/tracker-policy.md are read, from any directory in it; without it, the checkout this
 script is in. It is for a forecast by origin/main's rules before the main checkout has moved (#377):
 a copy of the tool kept outside any checkout, read against the main checkout. The rules themselves,
 tools/ticket_shape.py, .github/path-ownership.py and OWNERSHIP.md, are the copy's own, read beside
@@ -45,7 +45,7 @@ The rules, as the collect step states them:
   CODING_STANDARDS.md -> "An authorisation is read from its author" says it counts only when the
   account the rule names applied it. So each ticket listed under it has its timeline read, and the
   actor of the last `labeled` event that applied `ready-for-agent` must be the account
-  docs/agents/issue-tracker.md names in its "The human's account is `@<login>`." line, or the
+  docs/agents/tracker-policy.md names in its "The human's account is `@<login>`." line, or the
   repository's owner (from the issue's own URL) while the guide names none. Any other actor, a
   deleted one, or no such event, and the ticket is needs-triage with the actor in "why": whoever
   can label an issue cannot send a lane at it.
@@ -102,11 +102,11 @@ PLAN_ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
 PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
-# Who may apply `ready-for-agent` (#316): the account the tracker guide names on a line of this
+# Who may apply `ready-for-agent` (#316): the account the tracker policy names on a line of this
 # shape, matched narrowly so that prose about accounts is not read as naming one.
 # .github/steering.py reads the same line for who may write a `Confirm`, and
 # overnight_collect_tests.py holds the two equal.
-GUIDE = "docs/agents/issue-tracker.md"
+GUIDE = "docs/agents/tracker-policy.md"
 ACCOUNT_LINE = re.compile(
     r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
 )
@@ -238,7 +238,7 @@ def checkout(given: str) -> pathlib.Path:
 
 
 def tracker_guide(root: pathlib.Path) -> str | None:
-    """docs/agents/issue-tracker.md, which names the account that may apply ready-for-agent, or None
+    """docs/agents/tracker-policy.md, which names the account that may apply ready-for-agent, or None
     when the checkout has no guide."""
     path = root / GUIDE
     return path.read_text() if path.exists() else None
@@ -281,7 +281,7 @@ def labelled_for_agent(listings: dict[str, list[dict]]) -> list[int]:
 
 
 def named_account(guide: str | None) -> str | None:
-    """The account the tracker guide names on its "The human's account is `@<login>`." line, or
+    """The account the tracker policy names on its "The human's account is `@<login>`." line, or
     None when it names none (or there is no guide)."""
     found = ACCOUNT_LINE.search(guide or "")
     return found.group("login") if found else None
@@ -448,7 +448,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     with the rest of the input; None reads it here. states gives what a number the prose names is,
     beyond the listed issues; prose_states() asks GitHub for the rest. timelines gives each
     ready-for-agent ticket's timeline events, and timeline() asks GitHub for any it lacks; guide is
-    the text of docs/agents/issue-tracker.md, which names the account that may apply the label.
+    the text of docs/agents/tracker-policy.md, which names the account that may apply the label.
     root is the checkout those two asks of GitHub run in."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
@@ -568,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
                              "ticket, and optionally branches.txt and roadmap.json from DIR "
                              "instead of asking GitHub")
     parser.add_argument("--repo", metavar="DIR",
-                        help="the checkout whose git, gh repository, roadmap and tracker guide "
+                        help="the checkout whose git, gh repository, roadmap and tracker policy "
                              "are read, for a copy of this tool kept outside it; default: the "
                              "checkout this script is in")
     arguments = parser.parse_args(argv)
