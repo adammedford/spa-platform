@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Platform.Testing;
 
 namespace Gateway.TestHarness;
 
@@ -74,6 +75,22 @@ public sealed record GatewayHarnessOptions
 
     /// <summary>The instance ids the hosts get, in the order they start, when <see cref="KeyRing"/> is set.</summary>
     public IReadOnlyList<string> InstanceIds { get; init; } = ["host-a", "host-b", "host-c", "host-d"];
+
+    /// <summary>
+    /// How the cell's bucket answers a key it does not hold. <see cref="MissingKeyAnswer.AmbiguousRefusal"/>
+    /// is the deployed answer: the task role grants <c>s3:GetObject</c> and no <c>s3:ListBucket</c>, so S3
+    /// answers a missing key with 403 and the store raises a refusal (change request
+    /// contracts/changes/issue-381-object-read-refusal.md, items 1 and 2). The default is the confirmed
+    /// absence every suite before #429 ran against.
+    /// </summary>
+    public MissingKeyAnswer MissingKeys { get; init; } = MissingKeyAnswer.ConfirmedAbsence;
+
+    /// <summary>
+    /// Whether the first registry revision is in the bucket before the gateway starts. False starts every
+    /// host with no snapshot live, as a task starts in a cell whose registry has not been published or
+    /// cannot be read: <c>/readyz</c> answers 503 until a revision goes live (#429).
+    /// </summary>
+    public bool RegistryAtStart { get; init; } = true;
 
     /// <summary>Two hosts over one ring, one session store and one lease table: the cell of plan row P2-5.</summary>
     public static GatewayHarnessOptions TwoHosts => new() { Hosts = 2, KeyRing = KeyRingSharing.OneParameterStore };
