@@ -91,10 +91,9 @@ public sealed class ArchitectureTests
         // same rule runs here over the one project that must hold the literals: the twelve declarations
         // in RuleIds, the twelve code declarations in Problems (#158; shell_unavailable since #427),
         // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
-        // comments too. No doc
-        // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
-        // The count moves with its subject: a quoted id or code added to or removed from
-        // Platform.Abstractions moves it.
+        // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
+        // its declaration only. The count moves with its subject: a quoted id or code added to or
+        // removed from Platform.Abstractions moves it.
         // Mutation (#444): drop ShellUnavailable from Problems, as before #427's held patch, and the
         // count reads 24 and Problems.cs 11.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
