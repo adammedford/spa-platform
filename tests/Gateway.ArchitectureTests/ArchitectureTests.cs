@@ -89,8 +89,9 @@ public sealed class ArchitectureTests
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
         // same rule runs here over the one project that must hold the literals: the twelve declarations
-        // in RuleIds, the twelve code declarations in Problems (#158, and shell_unavailable since #427), and the one quoted id in
-        // IRequestTelemetryFeature's doc comment, which proves the scan reads comments too. No doc
+        // in RuleIds, the twelve code declarations in Problems (#158; shell_unavailable since #427),
+        // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
+        // comments too. No doc
         // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
         // The count moves with its subject: a quoted id or code added to or removed from
         // Platform.Abstractions moves it.
