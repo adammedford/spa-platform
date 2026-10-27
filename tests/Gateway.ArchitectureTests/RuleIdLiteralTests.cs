@@ -34,7 +34,7 @@ public sealed class RuleIdLiteralTests : IDisposable
     public void A_quoted_problem_code_is_one_violation_at_its_line_and_the_constant_and_the_prose_are_none()
     {
         // The same three shapes for a code of contracts/http-contract.md -> Errors (#158): the rule
-        // takes the eleven codes as well as the twelve rule ids.
+        // takes the twelve codes as well as the twelve rule ids.
         Write(
             "Answers.cs",
             [
@@ -49,16 +49,19 @@ public sealed class RuleIdLiteralTests : IDisposable
     }
 
     [Fact]
-    public void The_ids_are_the_twelve_rule_ids_and_the_eleven_problem_codes()
+    public void The_ids_are_the_twelve_rule_ids_and_the_twelve_problem_codes()
     {
         // Counted from the two contract tables, contracts/request-gate.md -> Rule ids and
         // contracts/http-contract.md -> Errors, not from the types the rule reads: RuleIdsTests and
         // RejectionTableTests hold those types to the tables, and this holds the rule to both types.
-        Assert.Equal(23, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
+        // The twelfth code is shell_unavailable (#427). Mutation (#444): drop it from Problems.Rows, as
+        // before #427's held patch, and the count reads 23 and the shell_unavailable assertion fails.
+        Assert.Equal(24, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains("host.unknown", RuleIdLiterals.Ids);
         Assert.Contains("api.unknown", RuleIdLiterals.Ids);
         Assert.Contains("invalid_request", RuleIdLiterals.Ids);
         Assert.Contains("upstream_timeout", RuleIdLiterals.Ids);
+        Assert.Contains("shell_unavailable", RuleIdLiterals.Ids);
     }
 
     [Fact]

@@ -10,7 +10,7 @@ upstreams, and metrics are tagged by app.
 
 | Kind | Names |
 | --- | --- |
-| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `status`, `duration_ms` |
+| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `read_refused`, `status`, `duration_ms` |
 | `route` values | `asset`, `api`, `bff`, `callback`, `health` |
 | Metrics | `gateway.requests`, `auth.logins`, `auth.refreshes`, `auth.sessions.active`, `security.rejections`, `registry.revision`, `registry.age_seconds`, `registry.rejected`, `proxy.upstream.duration`, `storage.read_refusals` |
 | Never logged | `Authorization`, `Cookie`, `Set-Cookie`, query strings, tokens, authorization codes, state, client secrets, session keys |
@@ -28,8 +28,10 @@ but the app's shell, `shell` for its `index.html`, never a key or a path. A refu
 answers a handled 404 like a confirmed-missing key (`contracts/http-contract.md`), so this field is
 what lets an operator see a permission fault. The asset route leaves it on
 `IRequestTelemetryFeature.ReadRefused`, as the next section describes for `rule` and `session_ref`,
-and every other request leaves it null (change request
-`contracts/changes/issue-381-object-read-refusal.md`, items 5 and 6).
+and every other request leaves it null. Unlike `rule` and `session_ref`, which every line carries
+whether or not they are null, `UsePlatformTelemetry` writes `read_refused` only on the line of a
+request whose read was refused, and leaves it off every other line (change request
+`contracts/changes/issue-381-object-read-refusal.md`, items 5 and 6; #429).
 
 ## How `rule` and `session_ref` reach the request line
 
@@ -60,9 +62,9 @@ rule id; `contracts/request-gate.md` says the same.
 The request line carries no value forwarded headers settle: no scheme, no client address, no host.
 That is what lets the telemetry stage run before `UsePlatformForwardedHeaders` without logging a
 value the trusted-network rule has not yet been applied to, and it is held by the "Log fields" row
-above: a line is those fields and nothing else. The span's own tags are the framework
-instrumentation's, set when hosting starts the activity before any stage runs, so the order of
-these two stages does not change them.
+above: a line is those fields and nothing else, with `read_refused` only on a line that has a value
+for it. The span's own tags are the framework instrumentation's, set when hosting starts the
+activity before any stage runs, so the order of these two stages does not change them.
 
 ## The instruments
 
@@ -72,11 +74,11 @@ rather than with `new Meter(...)`. Workstream 6 subscribes metrics to `Platform.
 and traces to `Platform.*` plus the proxy's own `Yarp.ReverseProxy`, so an instrument named outside
 that shape is one nobody sees.
 
-`security.rejections` is the exception to "the instrument belongs to the project that raises the
-event": `UsePlatformTelemetry` counts it, from the same feature field it logs as `rule`, on its own
-`Platform.Telemetry` meter. One owner then guarantees that the count equals the request lines
-carrying a rule. It is tagged `rule` and `app_id`, and `app_id` is null for a request rejected before
-the app was resolved.
+`security.rejections` is the first of two exceptions to "the instrument belongs to the project that
+raises the event": `UsePlatformTelemetry` counts it, from the same feature field it logs as `rule`,
+on its own `Platform.Telemetry` meter. One owner then guarantees that the count equals the request
+lines carrying a rule. It is tagged `rule` and `app_id`, and `app_id` is null for a request rejected
+before the app was resolved.
 
 `storage.read_refusals` is the second exception, for the same reason: `UsePlatformTelemetry` counts
 it, on the `Platform.Telemetry` meter, from `IRequestTelemetryFeature.ReadRefused`, the field behind

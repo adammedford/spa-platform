@@ -33,7 +33,7 @@ public static class RuleIdLiterals
 {
     /// <summary>
     /// What the rule holds the workstream projects to: the twelve rule ids of <see cref="RuleIds.All"/>
-    /// and the eleven problem codes of <see cref="Problems.Rows"/>, the <c>code</c> column of
+    /// and the twelve problem codes of <see cref="Problems.Rows"/>, the <c>code</c> column of
     /// <c>contracts/http-contract.md</c> -> Errors (#158). Read from those two types, never listed
     /// here: <c>RuleIdsTests</c> and <c>RejectionTableTests</c> hold the types to the contract tables, so a
     /// row the contract gains reaches this rule without an edit to it. A code is a stable string four

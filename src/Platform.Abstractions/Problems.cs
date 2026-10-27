@@ -48,7 +48,10 @@ public static class Problems
     /// <summary>403. The antiforgery token was missing or wrong.</summary>
     public const string CsrfFailed = "csrf_failed";
 
-    /// <summary>404. Unknown host, missing asset, or a reserved path that is switched off.</summary>
+    /// <summary>
+    /// 404. Unknown host, missing asset (any key but the app's shell, which is
+    /// <see cref="ShellUnavailable"/>), or a reserved path that is switched off.
+    /// </summary>
     public const string NotFound = "not_found";
 
     /// <summary>404. The app lists no upstream under that name.</summary>
@@ -56,6 +59,14 @@ public static class Problems
 
     /// <summary>405. The path does not accept the method.</summary>
     public const string MethodNotAllowed = "method_not_allowed";
+
+    /// <summary>
+    /// 500. The app's release has no readable <c>index.html</c>: the store answered null or refused
+    /// the read, and both answer the same, so that one absent shell does not answer 404 or 500
+    /// depending on the role's permissions. Change request
+    /// contracts/changes/issue-381-object-read-refusal.md, item 3.
+    /// </summary>
+    public const string ShellUnavailable = "shell_unavailable";
 
     /// <summary>502. The upstream could not be reached.</summary>
     public const string UpstreamUnavailable = "upstream_unavailable";
@@ -81,6 +92,7 @@ public static class Problems
         (StatusCodes.Status404NotFound, NotFound),
         (StatusCodes.Status404NotFound, UnknownApi),
         (StatusCodes.Status405MethodNotAllowed, MethodNotAllowed),
+        (StatusCodes.Status500InternalServerError, ShellUnavailable),
         (StatusCodes.Status502BadGateway, UpstreamUnavailable),
         (StatusCodes.Status503ServiceUnavailable, IdpUnavailable),
         (StatusCodes.Status504GatewayTimeout, UpstreamTimeout),

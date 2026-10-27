@@ -20,12 +20,28 @@ public sealed class ProblemsTests
     [InlineData("not_found", 404)]
     [InlineData("unknown_api", 404)]
     [InlineData("method_not_allowed", 405)]
+    [InlineData("shell_unavailable", 500)]
     [InlineData("upstream_unavailable", 502)]
     [InlineData("idp_unavailable", 503)]
     [InlineData("upstream_timeout", 504)]
     public void A_code_s_status_is_the_Errors_table_s(string code, int status)
     {
+        // Mutation (#427): give ShellUnavailable 503 in Problems.Rows, and the shell_unavailable row fails.
         Assert.Equal(status, Problems.StatusOf(code));
+    }
+
+    [Fact]
+    public async Task The_shell_s_problem_is_a_500_with_its_own_code()
+    {
+        // contracts/http-contract.md -> Errors: an unreadable index.html is a fault of the release
+        // or the role, never "not found", so the shared writer answers it with its own row.
+        // Mutation (#427): remove ShellUnavailable's Rows entry, and the write throws.
+        DefaultHttpContext context = Contexts.WithBody();
+
+        await Problems.WriteAsync(context, Problems.ShellUnavailable);
+
+        Assert.Equal(500, context.Response.StatusCode);
+        Contexts.AssertProblemBody(context, 500, "shell_unavailable");
     }
 
     [Theory]
