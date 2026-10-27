@@ -1,6 +1,6 @@
 # The ticket-shape check, where tickets are written. Owner: integrator, written for #247.
 #
-# tools/ticket_shape.py holds the five rules of docs/agents/issue-tracker.md's "The shape of a
+# tools/ticket_shape.py holds the five rules of docs/agents/tracker-policy.md's "The shape of a
 # ticket a lane can finish" (#227). Run at the push, as A-05 is, a two-owner ticket is found after a
 # lane has built half of it; run here, it is found when the ticket is opened, edited or labelled,
 # before any lane takes it. /to-tickets is a user-level skill outside this repository (#213), so this
@@ -70,7 +70,7 @@ jobs:
             printf '%s\n' "~~~text"
             cat "$verdict"
             printf '%s\n' "~~~" ""
-            printf '%s\n' "The rules are the tracker guide's \"The shape of a ticket a lane can finish\" (docs/agents/issue-tracker.md). A box flagged for a sitting or a landing is reworded, or moved to a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel \`ready-for-agent\`."
+            printf '%s\n' "The rules are the tracker policy's \"The shape of a ticket a lane can finish\" (docs/agents/tracker-policy.md). A box flagged for a sitting or a landing is reworded, or moved to a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel \`ready-for-agent\`."
           } > "$comment"
           gh issue comment "$NUMBER" --body-file "$comment"
           exit 1

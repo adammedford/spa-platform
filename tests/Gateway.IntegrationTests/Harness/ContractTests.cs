@@ -243,4 +243,42 @@ public sealed class ContractTests
         Assert.Contains("contracts/telemetry.md", thrown.Message, StringComparison.Ordinal);
         Assert.Contains("Log fields", thrown.Message, StringComparison.Ordinal);
     }
+
+    private const string Endpoints = """
+        # Browser contract
+
+        ## Endpoints
+
+        | Endpoint | Used as | Behaviour |
+        | --- | --- | --- |
+        | `GET` on anything else | Navigation | The asset at that path. |
+
+        Every 404 the asset row answers
+        carries `Cache-Control: private, no-store`: a key the store answered as absent, and `another`.
+
+        ## Cookies
+        """;
+
+    [Fact]
+    public void The_asset_404s_cache_control_is_the_first_backquote_of_its_sentence_read_across_the_wrap()
+    {
+        // The planted sentence wraps between "answers" and "carries", as prose wrapped for the page does.
+        // Mutation that turns it red: matching the sentence on the section's lines as written, unjoined.
+        Assert.Equal("private, no-store", ContractParser.AssetNotFoundCacheControl(Endpoints));
+    }
+
+    [Theory]
+    [InlineData("Every 404 the asset row answers", "Every 404 the asset row has")]
+    [InlineData("`Cache-Control: private, no-store`", "`Cache-Control: `")]
+    [InlineData("`Cache-Control: private, no-store`", "`Pragma: no-cache`")]
+    public void The_asset_404_sentence_reworded_or_its_header_changed_throws_naming_the_file_and_the_section(string from, string to)
+    {
+        // Mutations that turn it red: returning the backquote whatever it holds (the last two rows), or
+        // taking the section's first `Cache-Control:` backquote whatever sentence holds it (the first).
+        string planted = Endpoints.Replace(from, to, StringComparison.Ordinal);
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.AssetNotFoundCacheControl(planted));
+
+        Assert.Contains("contracts/http-contract.md -> Endpoints", thrown.Message, StringComparison.Ordinal);
+    }
 }

@@ -32,9 +32,8 @@ internal static class ContractTables
     ];
 
     /// <summary>
-    /// The <c>code</c> column of the Rule ids table, by rule id: the column #159's change request
-    /// decided (contracts/changes/issue-160-rejection-table.md, "The `code` column"), appended last.
-    /// A row whose cell is <c>—</c>, an id that ends on no problem body, is left out, as
+    /// The <c>code</c> column of the Rule ids table, by rule id: the last cell of each row. A row
+    /// whose cell is <c>—</c>, an id that ends on no problem body, is left out, as
     /// <see cref="Rejection.Rows"/> leaves it out.
     /// </summary>
     public static (string Rule, string Code)[] ParseRuleCodes(IEnumerable<string> lines)

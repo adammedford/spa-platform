@@ -15,14 +15,18 @@
 // Each mocked review reports the files its branch changed, and every integrated ticket but the second shares
 // one, so the run must integrate those one after the other (#279). One more ticket nobody waits on stops at its
 // implement on a question for Adam, and the run's return value must give every failed, skipped and needs-human
-// ticket its stage and a one-line reason (#280). Five more meet a red integration gate (#375): one on test
+// ticket its stage and a one-line reason (#280). Eight more meet a red integration gate (#375): one on test
 // projects its change cannot reach, which pass alone, so the merge stays and the flake is recorded; one whose change
 // reaches a failed project, one whose re-run fails again, one red on something other than a test project, and one
-// whose reach line does not parse, all reset. It also checks that each ticket has its own worktree, that a
-// lane implements while its last ticket is in review or integrating, and that no two merges run at once. No
+// whose reach line does not parse, all reset; and three whose re-run agent answers ok with a project not passed,
+// answers ok on another head, or dies, which keep no merge and reset the run branch (#397). It also checks that
+// each ticket has its own worktree, that a lane implements while its last ticket is in review or integrating, that
+// no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). No
 // agent, gh or git call is made.
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -49,13 +53,17 @@ const QUESTION = 'Which store holds the rotated keys: the parameter store or the
 // The files each mocked review says its branch changed (#279): a file of its own, and SHARED_FILE for every ticket
 // the fixture integrates except CONFLICT_ALWAYS, so those tickets share a file with no planned group in common,
 // and CONFLICT_ALWAYS shares none, so other tickets may integrate while it is back in its lane.
-// Four more tickets nobody waits on meet a red integration gate (#375), one per outcome the re-run rule has:
+// Five more tickets nobody waits on meet a red integration gate (#375), one per outcome the re-run rule has:
 // FLAKE_KEPT failed only on projects its change cannot reach, which pass alone, so its merge stays; FLAKE_REACHED
 // failed on a project its change reaches, so it resets with no re-run; FLAKE_AGAIN's unreachable project fails again
 // alone, so it resets and says so; FLAKE_OTHER's gate failed on the smoke test, not a test project, so it resets.
 // FLAKE_GARBLED's reach line does not parse, so it resets too: a rule that cannot read its input does not re-run.
-const [FLAKE_KEPT, FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED] = free.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN)
-const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED]
+// Three more are re-run, and the re-run agent's answer is not enough to keep the merge (#397): FLAKE_CLAIMED's agent
+// answers ok though a project it re-ran did not pass, FLAKE_ELSEWHERE's answers ok on a head that is not the gate's,
+// and FLAKE_DIED's agent dies. The script keeps no merge on any of them, and puts the run branch back to its old head.
+const [FLAKE_KEPT, FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED, FLAKE_CLAIMED, FLAKE_ELSEWHERE, FLAKE_DIED] = free.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN)
+const FLAKE_UNKEPT = [FLAKE_CLAIMED, FLAKE_ELSEWHERE, FLAKE_DIED]
+const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED, ...FLAKE_UNKEPT]
 // Four tickets the 2026-10-20 fixture lacks, added after every ticket above is chosen from it so none of those
 // choices moves (#379). CLOSE has every acceptance box ticked, so collect gives it the status close-in-morning: no
 // lane, listed with the issues to close, and met for AFTER_CLOSE, which waits on it. HELD is needs-triage with an open
@@ -82,7 +90,11 @@ const reachLine = {
   // failedAt is what holds it back.
   [FLAKE_OTHER]: JSON.stringify({ failedAt: 'other', verdict: 'check: fail: the smoke test failed.', projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
   [FLAKE_GARBLED]: 'test-reach: fail: cannot read the log',
+  [FLAKE_CLAIMED]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: UNREACHED.map((project) => ({ project, reachedBy: [] })), changed: ['tools/bench/report.py'] }),
+  [FLAKE_ELSEWHERE]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
+  [FLAKE_DIED]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
 }
+const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
 const SHARED_FILE = '.gitignore'
 const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
@@ -129,8 +141,13 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'rerun') {
     const projects = JSON.parse(reachLine[id]).projects.map((p) => ({ project: p.project, log: `log-${p.project}`, passed: id === FLAKE_KEPT }))
     if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects } }
+    // An answer of ok the script must not keep (#397): tests/e2e did not pass, or every project passed on another head.
+    if (id === FLAKE_CLAIMED) return { ok: true, mergeSha: 'm-claimed', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: p.project !== 'tests/e2e' })) }
+    if (id === FLAKE_ELSEWHERE) return { ok: true, mergeSha: 'm-elsewhere', headSha: ELSEWHERE, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: true })) }
+    if (id === FLAKE_DIED) return null
     return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
   }
+  if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
@@ -264,8 +281,9 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 //    lock since #279, in the ticket's own lane, so it is not counted here; check 13 holds what it may overlap.
 {
   const spans = []
-  // A re-run holds the lock its red integrate held (#375), so it is counted with the integrates.
-  for (const s of events.filter((x) => (x.kind === 'integrate' || x.kind === 'rerun') && x.edge === 'start')) {
+  // A re-run holds the lock its red integrate held (#375), and so does the reset of a merge it did not keep (#397),
+  // so both are counted with the integrates.
+  for (const s of events.filter((x) => ['integrate', 'rerun', 'reset'].includes(x.kind) && x.edge === 'start')) {
     const e = events.find((x) => x.kind === s.kind && x.id === s.id && x.edge === 'end' && x.at >= s.at && x.n === s.n)
     spans.push({ label: `${s.kind}:${s.id}#${s.n}`, from: s.at, to: e ? e.at : Infinity })
   }
@@ -519,7 +537,7 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 // 17. A red integration gate on test projects the change cannot reach is re-run once, alone (#375). On 2026-10-24
 //     #305 changed Python under tools/bench/ alone and was reset because 30 Spactl.Tests tests failed (#373).
 {
-  if (!FLAKE_GARBLED) fail('the fixture has too few free tickets for the five re-run cases, so the flake checks read nothing')
+  if (!FLAKE_DIED) fail('the fixture has too few free tickets for the eight re-run cases, so the flake checks read nothing')
   const reruns = (id) => allPrompts.filter((c) => c.label === `rerun:${id}`)
   const flakes = result.flakes || []
   const flakeOf = (id) => flakes.filter((f) => f.id === id)
@@ -574,7 +592,40 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     const [f] = flakeOf(id)
     if (!f || f.kept !== false || f.projects.some((x) => x.passed)) fail(`${id}'s flake record does not say the re-run failed: ${JSON.stringify(f)}`)
   }
-  if (flakes.length !== 2) fail(`the run's result holds ${flakes.length} re-runs, not 2`)
+  // Outcome 6 (#397): the merge is kept on the script's own reading of the re-run, every failed project recorded as
+  // passed alone on the gate's head, never on the agent's ok alone. An ok with a project not passed, an ok on another
+  // head, and a dead agent keep nothing: the ticket fails, its reason says why, and a reset agent puts the run branch
+  // back to the old head inside the same lock, since the re-run agent that answered ok left its merge in.
+  {
+    const resets = (id) => allPrompts.filter((c) => c.label === `reset:${id}`)
+    const why = {
+      [FLAKE_CLAIMED]: ['tests/e2e did not pass alone'],
+      [FLAKE_ELSEWHERE]: [ELSEWHERE, RED],
+      [FLAKE_DIED]: ['the re-run agent died'],
+    }
+    for (const id of FLAKE_UNKEPT) {
+      if (reruns(id).length !== 1) fail(`${id} ran ${reruns(id).length} re-runs, not 1`)
+      if ((result.integrated || []).includes(id)) fail(`${id}'s re-run agent's answer does not show every project passed on the gate's head, yet its merge was kept`)
+      if (!(result.failed || []).includes(id)) fail(`${id}'s merge was not kept, yet it is not reported failed`)
+      const r = reasonOf(id)
+      if (!r.startsWith('re-run failed: ') || why[id].some((w) => !r.includes(w))) fail(`${id}'s reason does not say why the script kept no merge (${why[id].join(', ')}): ${r}`)
+      const [f] = flakeOf(id)
+      if (flakeOf(id).length !== 1 || f.kept !== false) fail(`${id}'s flake record does not say the merge was not kept: ${JSON.stringify(f)}`)
+      if (!logs.some((l) => l.text.startsWith(`flake: ${id} `) && l.text.includes('-> not kept: '))) fail(`no "flake: ${id} ... -> not kept: ..." log line`)
+      const rs = resets(id)
+      if (rs.length !== 1) fail(`${id}'s merge was not kept and ran ${rs.length} reset agents, not 1`)
+      else {
+        const p = rs[0].prompt
+        if (!p.includes(`reset --hard ${OLD}`) || !p.includes(`merge-base --is-ancestor ${OLD} HEAD`)) fail(`the reset of ${id} does not put the run branch back to ${OLD} only when ${OLD} is an ancestor of its head`)
+        if (!p.includes('"## Flake at integrate: merge not kept"')) fail(`the reset of ${id} records no "## Flake at integrate: merge not kept" comment on its ticket`)
+      }
+    }
+    const [c] = flakeOf(FLAKE_CLAIMED)
+    if (c && JSON.stringify(c.projects.map((x) => [x.project, x.passed])) !== JSON.stringify([['tests/Spactl.Tests', true], ['tests/e2e', false]])) fail(`${FLAKE_CLAIMED}'s flake does not record each project's pass as its re-run gave it: ${JSON.stringify(c.projects)}`)
+    // The agent that answered red reset the branch itself, as its prompt says; a kept merge needs no reset.
+    for (const id of [FLAKE_KEPT, FLAKE_AGAIN]) if (resets(id).length) fail(`${id} ran a reset agent, though its re-run agent's answer and the script's verdict agree`)
+  }
+  if (flakes.length !== 5) fail(`the run's result holds ${flakes.length} re-runs, not 5`)
   if (!logs.some((l) => l.text === `flake: ${FLAKE_KEPT} ${UNREACHED.join(', ')} -> passed alone, merge kept`)) fail(`no "flake: ... -> passed alone, merge kept" log line for ${FLAKE_KEPT}`)
   // Outcome 5: the report lists each flake under a heading of its own, the project's path, the same every night.
   const HEADING = 'Give each project its own heading, `### Flake: <project>`'
@@ -627,6 +678,63 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   const triaged = routeOf(TRIAGED)
   if (!triaged.includes('Decide the flow') || triaged.includes('Its flow is already decided')) fail(`${TRIAGED.id}, whose blocker is ready-for-agent, did not route as before`)
   if ((result.needsHuman || []).includes(TRIAGED.id)) fail(`${TRIAGED.id} went to a human although its blocker is ready-for-agent`)
+}
+
+// 19. One grammar where a ticket is filed (#248): the ticket-shape check at creation, the collect tool's forecast,
+//     and the run's own filing site. NEW TICKETS, the one place the run files a ticket, pipes each body through
+//     tools/ticket_shape.py under the label and blockers it is filed with, before its `gh issue create`, and files
+//     nothing when the check fails. Every other `gh issue create` a prompt carries is the report's own issue,
+//     "Overnight <date>", which is no ticket; the grill writes comments and files none. Retro's filing site is
+//     retro.js's, proved by its own companion.
+//     The recipe is taken from the prompt and run for real, as retro_tests.mjs check 19 runs retro's, so a recipe
+//     that cannot judge, or never passes the label it is given, fails here and not on the night. Neither body
+//     cites an issue number, so ticket_shape.py makes no gh call.
+{
+  const RECIPE = /`cd (\S+) && (python3 -I -c '[^']*' (\S+\/new-ticket-<id>\.md) <label> <each --blocked-by number> \| python3 -I tools\/ticket_shape\.py -)`/
+  const TICKET_CREATE = 'gh issue create --title "<id> — <short title>"'
+  const REPORT_CREATE = 'gh issue create --title "Overnight '
+  const top = path.resolve(here, '..', '..')
+  const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-shape-'))
+  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n**What to build:** the row's What, citing \`contracts/pipeline.md\`, and its Done when.\n## Acceptance\n- [ ] the companion passes\n${extra}`
+  fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
+  fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
+  const shapeOf = (cmd, file, blockers) => {
+    const sh = cmd.replace(/\S+\/new-ticket-<id>\.md/, file).replace('<label>', 'ready-for-agent').replace(' <each --blocked-by number>', blockers.map((n) => ` ${n}`).join(''))
+    return spawnSync('sh', ['-c', sh], { cwd: top, encoding: 'utf8' })
+  }
+  const collects = allPrompts.filter((x) => x.label === 'collect')
+  if (!collects.length) fail('no collect prompt was rendered, so the NEW TICKETS check read nothing')
+  const creates = new Map()   // the collect prompt -> the index of its one checked gh issue create
+  for (const c of collects) {
+    const m = RECIPE.exec(c.prompt)
+    const create = c.prompt.indexOf(TICKET_CREATE)
+    if (!m) { fail('#248: NEW TICKETS does not pipe each body through tools/ticket_shape.py under its label and blockers'); continue }
+    if (create < 0) { fail('#248: NEW TICKETS files no ticket with gh issue create'); continue }
+    creates.set(c, create)
+    if (m[1] !== fixture.args.repo) fail(`#248: NEW TICKETS runs the ticket-shape check in ${m[1]}, not the main checkout ${fixture.args.repo}`)
+    if (!m[3].startsWith(`${LOG}/`)) fail(`#248: NEW TICKETS checks ${m[3]}, not a body file under ${LOG}/`)
+    if (m.index > create) fail('#248: NEW TICKETS runs the ticket-shape check after its gh issue create, not before')
+    const filing = c.prompt.slice(create, c.prompt.indexOf('\n', create))
+    if (!filing.includes(`--body-file ${m[3]}`)) fail(`#248: NEW TICKETS files a body other than the one it checked (${m[3]}): ${filing}`)
+    const step = c.prompt.slice(m.index, c.prompt.indexOf('\n', create))
+    for (const rule of ['Only when that exits 0', 'On exit 1 file nothing for that row', 'on any other exit file nothing either', 'Never reword a body to get past the check'])
+      if (!step.includes(rule)) fail(`#248: NEW TICKETS lacks "${rule}", so a body the check fails may still be filed`)
+    const good = shapeOf(m[2], path.join(bodyDir, 'good.md'), [900])
+    if (good.status !== 0 || !/^ticket-shape: pass:/m.test(good.stdout)) fail(`#248: the NEW TICKETS check did not pass a well-shaped body: exit ${good.status}, ${(good.stdout + good.stderr).trim()}`)
+    const bad = shapeOf(m[2], path.join(bodyDir, 'bad.md'), [])
+    if (bad.status !== 1 || !/^ticket-shape: foreground:/m.test(bad.stdout)) fail(`#248: the NEW TICKETS check did not fail a ready-for-agent foreground body on its rule: exit ${bad.status}, ${(bad.stdout + bad.stderr).trim()}`)
+  }
+  fs.rmSync(bodyDir, { recursive: true, force: true })
+  // Every gh issue create in every prompt the run sends is the one checked NEW TICKETS create or the report's issue.
+  for (const c of allPrompts) {
+    for (const x of c.prompt.matchAll(/gh issue create\b/g)) {
+      const rest = c.prompt.slice(x.index)
+      const ok = (c.label === 'collect' && x.index === creates.get(c)) || (c.label === 'report' && rest.startsWith(REPORT_CREATE))
+      if (!ok) fail(`#248: the ${c.label} prompt carries a gh issue create the ticket-shape check does not guard: ${rest.slice(0, 80)}`)
+    }
+  }
+  const grills = allPrompts.filter((x) => x.label.startsWith('grill:'))
+  if (!grills.length) fail('no grill prompt was rendered, so the check that the grill files no issue read nothing')
 }
 
 if (failures.length) {

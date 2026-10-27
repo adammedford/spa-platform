@@ -27,13 +27,17 @@ namespace Platform.Identity;
 /// decides, refreshes and writes, and the next holder reads what was written (T-D2, T-D3).
 ///
 /// A gate also carries the outcome of the last refresh it ran, so the calls that queued behind a
-/// refresh share its outage rather than each asking the provider again (T-D6). The lease carries and
+/// refresh share its outage rather than each asking the provider again (T-D6). The turn carries and
 /// compares that outcome and never interprets it: which outcome a refresh had is the token source's
 /// decision. A gate exists only while someone holds or waits for it, so the table is bounded by the
 /// calls in flight, not by the sessions that ever refreshed (<see cref="ActiveGates"/>).
 ///
-/// In process only. Two gateway tasks share no gate; the re-read before a refusal ends a session
-/// (T-B8) and the session store's versioned replace are what cover that case.
+/// In process only. Two gateway tasks share no gate: the refresh lease (<see cref="IRefreshLeases"/>,
+/// ADR-0024) is the cross-task half, which <see cref="AccessTokenSource"/> takes while it holds its turn
+/// here, so fifty calls on one task take one lease. The re-read before a refusal ends a session (T-B8)
+/// and the session store's versioned replace still cover what no lease closes. The held gate is a
+/// <see cref="Turn"/>, not a lease, so that "lease" means the refresh lease alone (change request P2-3,
+/// Decision item 8).
 /// </summary>
 internal sealed class AppSessions(ISessionStore store)
 {
@@ -45,7 +49,7 @@ internal sealed class AppSessions(ISessionStore store)
     /// up changes nothing, and the request's cancellation token must not reach the refresh (T-B15, T-B16).
     /// </summary>
     /// <param name="app">The app the caller acts for; a record that is not its and its client's is not owned.</param>
-    public async Task<Lease> EnterAsync(AppDefinition app, string sessionKey)
+    public async Task<Turn> EnterAsync(AppDefinition app, string sessionKey)
     {
         Gate gate;
         long finished;
@@ -74,7 +78,7 @@ internal sealed class AppSessions(ISessionStore store)
             throw;
         }
 
-        return new Lease(this, sessionKey, gate, finished, owned);
+        return new Turn(this, app, sessionKey, gate, finished, owned);
     }
 
     /// <summary>
@@ -130,7 +134,7 @@ internal sealed class AppSessions(ISessionStore store)
     ///
     /// Ungated by necessity, and so the exception to "every end runs under the session gate" is this
     /// writer, the framework's cookie handler: the gate is not re-entrant, and the token source ends a
-    /// session and then signs out while it still holds the lease, so a gated remove reached through that
+    /// session and then signs out while it still holds the turn, so a gated remove reached through that
     /// sign-out would wait on itself. It takes the caller's token, which is the request's.
     /// </summary>
     public async Task RemoveAsync(AppDefinition app, string sessionKey, CancellationToken cancellationToken)
@@ -251,10 +255,10 @@ internal sealed class AppSessions(ISessionStore store)
     /// <summary>
     /// A held gate and the record read under it. Disposing it lets the next waiter in. Its operations run
     /// with <see cref="CancellationToken.None"/>: a disconnecting browser strands no rotated refresh token
-    /// and stops no removal (T-B15, T-B16). A lease over an absent or foreign record owns nothing, and
+    /// and stops no removal (T-B15, T-B16). A turn over an absent or foreign record owns nothing, and
     /// nothing under it replaces or removes.
     /// </summary>
-    internal sealed class Lease(AppSessions owner, string sessionKey, Gate gate, long finishedOnArrival, SessionRecord? owned)
+    internal sealed class Turn(AppSessions owner, AppDefinition app, string sessionKey, Gate gate, long finishedOnArrival, SessionRecord? owned)
         : IDisposable
     {
         private bool released;
@@ -270,6 +274,18 @@ internal sealed class AppSessions(ISessionStore store)
         /// queued behind a refresh takes its outcome rather than repeating it (T-D6).
         /// </summary>
         public RefreshOutcome? WhileWaiting => gate.Finished != finishedOnArrival ? gate.Last : null;
+
+        /// <summary>
+        /// Reads the record again under the gate, with the same ownership check, and makes what it read
+        /// <see cref="Owned"/>, so a later <see cref="ReplaceAsync"/> expects the version read now. The
+        /// token source calls it once it holds the refresh lease and on each pass of a loser's wait: another
+        /// task, which shares no gate, may have written the session since the turn began (ADR-0024).
+        /// </summary>
+        public async Task<SessionRecord?> RereadAsync()
+        {
+            Owned = OwnedBy(app, await owner.store.GetAsync(sessionKey, CancellationToken.None));
+            return Owned;
+        }
 
         /// <summary>Records how the refresh this holder ran ended, for the callers waiting behind it.</summary>
         public void Finish(RefreshOutcome outcome)

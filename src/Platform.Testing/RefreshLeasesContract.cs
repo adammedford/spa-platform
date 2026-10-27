@@ -17,7 +17,8 @@ namespace Platform.Testing;
 /// What is deliberately not here: a same-token re-acquire. <see cref="IRefreshLeases.TryAcquireAsync"/>
 /// takes no token, and a caller whose success response was lost never held one; that retry is
 /// internal to the DynamoDB adapter and proved over its protocol fake, not here (G3 on #332). No case
-/// needs a session store: the lease is independent of the record (ADR-0024 decision 3).
+/// needs a session store: the lease is independent of the record (ADR-0024 decision 3), and
+/// <see cref="A_free_key_can_be_taken"/> is the case that names it.
 ///
 /// Each case names the mutation of an implementation that turns it red.
 /// </summary>
@@ -32,7 +33,12 @@ public abstract class RefreshLeasesContract
     [Fact]
     public async Task A_free_key_can_be_taken()
     {
-        // Mutation: answer null on every acquire, and this fails.
+        // Also the case for ADR-0024 decision 3: no session store exists here and none is created, so
+        // "session-a" has no session record, and the lease is taken all the same. Mutation: answer
+        // null on every acquire, or require a session record under the key (the DynamoDB store's
+        // attribute_exists(pk) on the session item), and this fails. With no store, the second is the
+        // first, and it fails every other case too; a case of its own for it could not fail apart
+        // from this one, so there is none (#395).
         FakeTimeProvider clock = TestClock.New();
         IRefreshLeases leases = CreateLeases(clock);
 
@@ -134,18 +140,6 @@ public abstract class RefreshLeasesContract
 
         await leases.ReleaseAsync("session-a", a, Ct);
         Assert.Null(await leases.TryAcquireAsync("session-b", Ttl, Ct));
-    }
-
-    [Fact]
-    public async Task A_key_with_no_session_record_can_be_taken_and_no_store_is_needed()
-    {
-        // No ISessionStore exists in this case, and none is created: the key below was never a
-        // session (ADR-0024 decision 3). Mutation: require a session record under the key (the
-        // DynamoDB store's attribute_exists(pk) on the session item), and this acquire is refused.
-        FakeTimeProvider clock = TestClock.New();
-        IRefreshLeases leases = CreateLeases(clock);
-
-        Assert.NotNull(await leases.TryAcquireAsync("no-session-was-ever-created-under-this-key", Ttl, Ct));
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

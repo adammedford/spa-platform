@@ -26,7 +26,15 @@ internal sealed class SigningKeyRing : IDisposable
         _generation = 1;
     }
 
-    private static RsaSecurityKey NewKey(string kid) => new(RSA.Create(2048)) { KeyId = kid };
+    // RSA.Create defers generating the key to its first use, which would be the first /jwks request: up
+    // to 190 ms on Linux, more on a loaded runner, inside a gateway test's sub-second provider deadline.
+    // The export here generates it while the provider is built, outside any request.
+    private static RsaSecurityKey NewKey(string kid)
+    {
+        RSA rsa = RSA.Create(2048);
+        rsa.ExportParameters(includePrivateParameters: false);
+        return new(rsa) { KeyId = kid };
+    }
 
     /// <summary>The key every token is signed with, unless the unpublished key is asked for.</summary>
     public SigningCredentials Current

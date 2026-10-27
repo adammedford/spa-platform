@@ -97,7 +97,7 @@ other file.
 ## An authorisation is read from its author
 
 A comment, a label or a file that unlocks an action counts only when the account the rule names
-wrote it. A `Confirm` comment is the human's act (`docs/agents/issue-tracker.md`), so code that
+wrote it. A `Confirm` comment is the human's act (`docs/agents/tracker-policy.md`), so code that
 matches its first word and not its author lets anyone who can comment on the repository take an
 action out of its dry run. #271's morning script read every comment beginning `Confirm`, and an
 outsider's `Confirm Q1` dispatched a commit applier (fixed in 58f5858).

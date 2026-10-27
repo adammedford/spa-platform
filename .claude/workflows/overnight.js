@@ -7,7 +7,7 @@ export const meta = {
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
     { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
-    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375)' },
+    { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue' },
     { title: 'Report', detail: 'one issue, Overnight <date>: the report, then the questions Q1..Qn' },
   ],
@@ -99,7 +99,7 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 - Every file you write outside your worktree goes under ${LOG}/ (${RESEARCH}/ for research): a listing, a snapshot, a script, a body file, a draft. A file these instructions do not name by path begins with your task id (collect's with \`collect-\`, the report's with \`report-\`), so no two agents write the same file. The session scratchpad your system prompt names is off limits: every agent of the run is handed the launching session's, and on 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot of the same name there (#202).
 - The tracker is GitHub Issues: read with \`gh issue view\`, write with \`gh issue comment\` / \`gh issue edit\`; never write a ticket file, the directories under .scratch/<slug>/issues/ are an archive. Run every \`gh\` command with \`cd ${REPO} &&\` in front so it resolves this repository. A multi-line comment body goes through stdin: \`gh issue comment <n> --body-file - <<'EOF' ... EOF\`.
 - If \`gh\` fails because GitHub is unreachable, append the comment or label change you meant to make as one JSON line to ${PENDING} ({"issue": <n>, "action": "comment"|"edit"|"close", "body": "<the comment text, or the gh issue edit flags>"}) and continue; the morning session replays it.
-- Never write a comment that begins "Confirm" on any issue: a confirmation is the human's act (docs/agents/issue-tracker.md).
+- Never write a comment that begins "Confirm" on any issue: a confirmation is the human's act (docs/agents/tracker-policy.md).
 - An ADR you write is a draft: put it under ${LOG}/, name its path in your "## Answer" or "## Review" comment, and leave it uncommitted, because a scripted session drafts an ADR and never commits one (ADR-0021 decision 4). Title it \`ADR draft: <title>\`, cite it by that title, and leave its number to the session that commits it, which takes the next free one then (docs/adr/README.md).
 - Begin every Bash command that touches your worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. To delete a file under tests/, run \`cd <worktree> && git rm tests/<path>\` as ONE Bash call: the shell's directory resets after every call, so a \`git rm\` in a call of its own runs in Adam's main checkout. A bare \`git commit\` lands on Adam's branch.
 - To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under ${LOG}/ and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
@@ -220,6 +220,13 @@ const RERUN = {
   },
   required: ['ok', 'mergeSha', 'headSha', 'notes', 'projects'],
 }
+// Putting the run branch back after a re-run whose merge the script did not keep (#397). ok: the branch is at the old
+// head on return; head: its sha then.
+const RESET = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, head: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'head', 'notes'],
+}
 const RESOLVE = {
   type: 'object',
   // tip: the run branch's sha the back-merge took in, the fixed point of the second review (#279)
@@ -256,7 +263,7 @@ SETUP, in order:
 2. If branch ${INT_BRANCH} exists it must be ${BASE_REF} or a descendant of it (\`git -C ${REPO} merge-base --is-ancestor ${BASE_REF} ${INT_BRANCH}\`); otherwise "dirty-start". If it does not exist, \`git -C ${REPO} worktree add -b ${INT_BRANCH} ${INT_WT} ${BASE_REF}\`. If it exists but ${INT_WT} is not a worktree, \`git -C ${REPO} worktree add ${INT_WT} ${INT_BRANCH}\`.
 3. \`mkdir -p ${LOG} ${RESEARCH}\`, then record what is untracked before the run starts: \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/untracked-at-start.txt\`. The report compares against it. That file is the only thing this step writes to disk.
 
-COLLECT. Read docs/plan/03-workstreams-and-tasks.md in full (every task table and the "Dispatch order" table), docs/plan/01-plan.md's gates table, docs/agents/landing-work.md, docs/agents/issue-tracker.md, OWNERSHIP.md, AGENTS.md, contracts/README.md, and every contracts/changes/*.md.
+COLLECT. Read docs/plan/03-workstreams-and-tasks.md in full (every task table and the "Dispatch order" table), docs/plan/01-plan.md's gates table, docs/agents/landing-work.md, docs/agents/issue-tracker.md, docs/agents/tracker-policy.md, OWNERSHIP.md, AGENTS.md, contracts/README.md, and every contracts/changes/*.md.
 - LANDED: run \`cd ${REPO} && python3 -I tools/roadmap.py --json\` and read its "rows": a task id is landed when its state is "landed", which is how docs/roadmap.md counts it, merges inside merges included. "part-landed" and "open" are not landed, and "ongoing" (I-7, 6.8) is SKIP. Gates: its "closed_gates". If it exits non-zero, say so in "reason" and stop rather than guess (#70).
 - CLAIMED: a task with a branch \`task/<id>-...\` (local or origin) that is not landed. It is Adam's to merge in the morning; status "claimed", no ticket work.
 - SKIP: rows whose Needs is "Ongoing" (I-7, 6.8) and landed rows. List landed ids in "landed".
@@ -273,7 +280,7 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
 - status (exactly one, in this order of precedence):
   * label ready-for-human -> "ready-for-human" (whether or not it has an assignee);
   * label needs-triage -> "needs-triage";
-  * label ready-for-agent last applied by an account other than the one docs/agents/issue-tracker.md names (the repository's owner while it names none) -> "needs-triage", "why" naming who applied it (#316): an authorisation is read from its author (CODING_STANDARDS.md), so whoever can label an issue cannot send a lane at it. Only tools/overnight_collect.py reads who applied it, from the issue's timeline; FORECAST below gives you its answer;
+  * label ready-for-agent last applied by an account other than the one docs/agents/tracker-policy.md names (the repository's owner while it names none) -> "needs-triage", "why" naming who applied it (#316): an authorisation is read from its author (CODING_STANDARDS.md), so whoever can label an issue cannot send a lane at it. Only tools/overnight_collect.py reads who applied it, from the issue's timeline; FORECAST below gives you its answer;
   * label ready-for-agent with an assignee, or whose plan row is CLAIMED by a branch -> "claimed";
   * label ready-for-agent with openBoxes 0 (every acceptance box ticked), whatever it waits on -> "close-in-morning", "why" "${CLOSE_WHY}" (#379): it gets no lane, and the report lists it with the issues to close;
   * label ready-for-agent whose every open blocker is itself a ticket in tonight's set that resolves to "ready-for-agent" or "close-in-morning" by these rules -> "ready-for-agent", with blockedBy naming those blockers' ids: the lane runs it after they integrate, which is how the G2 chain landed on 2026-10-17;
@@ -296,7 +303,7 @@ NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and no
   3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
 Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>"). An open change request (contracts/changes/*.md with Status open) is not a ticket of its own tonight: name it in "reason" and in the "why" of every ticket it holds up.
 
-FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, each ready-for-agent issue's timeline among it, the task branches, the roadmap, OWNERSHIP.md and docs/agents/issue-tracker.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. The status the tool gives is the ticket's (#316): give each ticket in "tickets" the "status" and "why" of the tool's ticket with the same issue number, copied as printed, in place of yours, since the tool alone reads who applied ready-for-agent; a ticket the tool does not list keeps yours. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run; and, since who applied each label then went unread, give every ticket whose status would be "ready-for-agent" the status "blocked", blockedBy [], and the why "tools/overnight_collect.py did not run, so who applied ready-for-agent is unread (#316)", so no lane starts on a label nobody checked.
+FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, each ready-for-agent issue's timeline among it, the task branches, the roadmap, OWNERSHIP.md and docs/agents/tracker-policy.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. The status the tool gives is the ticket's (#316): give each ticket in "tickets" the "status" and "why" of the tool's ticket with the same issue number, copied as printed, in place of yours, since the tool alone reads who applied ready-for-agent; a ticket the tool does not list keeps yours. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run; and, since who applied each label then went unread, give every ticket whose status would be "ready-for-agent" the status "blocked", blockedBy [], and the why "tools/overnight_collect.py did not run, so who applied ready-for-agent is unread (#316)", so no lane starts on a label nobody checked.
 
 Return outcome "ok", tickets (sorted by n), landed, reason, base: the base's full sha (on "dirty-start", whatever HEAD is), and shell and shellCommand from SETUP 0.`
 
@@ -349,7 +356,7 @@ STEP 2 — outcomes. Every record below is a comment on issue #${t.issue} (\`cd 
 - Human-owned decision (the plan, contracts and ADRs are silent or contradict, and the choice is hard to reverse): ${STANDING ? "Adam's standing answer, granted for this run (" + DATE + "), is that he accepts the implementer's recommendation, so take it and keep going, on one condition: the recommendation is weighed, not asserted. It covers the code on your own branch and nothing else (ADR-0023 decision 1): on it no steering document changes, no ticket body is rewritten beyond its boxes, no ticket is filed and nothing merges." : "No standing answer was granted for this run, so every human-owned decision goes the \"## Status note\" way described at the end of this bullet, and the \"## Decisions taken\" route below is closed tonight."} In a comment headed "## Decisions taken" write, for each: the question; at least two real alternatives, each with what it costs and what it breaks, citing the plan row, contract or ADR that bears on it; the one you took and why it beats the others on those terms; what evidence would show it was wrong, and how it is reversed. A decision whose alternatives are strawmen, or whose choice contradicts a frozen contract or an accepted ADR, is not yours to take: that one goes in a comment headed "## Status note" with the question, the options and your recommendation, then \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\`, a commit with subject "Task ${t.id}: partial, question for Adam", and outcome "needs-human". List every decision taken in delegatedDecisions prefixed "Human-owned:", to tell it from a gap decision.
 - Steering documents (GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/, contracts/; adding a change request under contracts/changes/ is not a change to one): a new term or guide sentence you need is a proposal, not an edit. Put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under a heading "## Proposed steering changes" in your "## Answer" comment and change no steering file for it; the report puts each proposal to Adam, and once he confirms it a session commits it on its own branch (ADR-0023 decision 4). The one steering change you commit is one this ticket's acceptance criteria ask for, in a commit whose message ends with the trailer "Authority: #${t.issue}" (ADR-0023 decision 3); the reviewer holds any other.
 - Cannot get green (or it needs AWS, network the machine refuses, or another owner's path): a comment headed "## Status note" saying what blocks it and what you tried; \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\` (the label stays ready-for-agent); commit what exists with subject "Task ${t.id}: attempt, not green"; return "failed".
-- Green: tick the boxes you can point at (${TICK(t, 'tick')}), then a comment headed "## Answer" (what landed, where, seams, the check's last line, and an "Outstanding:" line if partial), and commit everything in the worktree with subject "Task ${t.id}: <what landed>" and a short body. The Answer says where each part went, the branch and the sha, and that the issue closes when that lands on main. Never close the issue: complete or partial, it stays open and assigned until the landing pull request's \`Closes #${t.issue}\` line closes it on the merge into main (#100; docs/agents/issue-tracker.md). A partial row's Answer carries its Outstanding line.
+- Green: tick the boxes you can point at (${TICK(t, 'tick')}), then a comment headed "## Answer" (what landed, where, seams, the check's last line, and an "Outstanding:" line if partial), and commit everything in the worktree with subject "Task ${t.id}: <what landed>" and a short body. The Answer says where each part went, the branch and the sha, and that the issue closes when that lands on main. Never close the issue: complete or partial, it stays open and assigned until the landing pull request's \`Closes #${t.issue}\` line closes it on the merge into main (#100; docs/agents/tracker-policy.md). A partial row's Answer carries its Outstanding line.
 - No commit: if the lane makes no commit (\`git -C ${WT(t)} rev-parse HEAD\` equals forkSha), you claimed an issue you did no work on, so remove the assignee before returning: \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`.
 Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "Decided by implementer".
 
@@ -439,6 +446,20 @@ STEP 5 — record it on the issue: one comment headed "## Flake at integrate" (\
 
 Return ok, mergeSha ("" when red), headSha (${red.redHead} when green, "" otherwise), notes, projects (one per project above: project, log, passed).`
 
+// The script keeps a re-run's merge on its own reading of the answer (#397): every failed project recorded as passed
+// alone, on the gate's head. When it keeps none although the re-run agent answered ok, or the agent died, the merge
+// may still be on the run branch, so this agent puts the branch back to the old head, inside the same lock, before
+// another ticket merges on top of a merge the run reports failed.
+const resetPrompt = (t, red, why) => `Put ${INT_BRANCH} back to the head it had before ticket ${t.n}'s merge (task ${t.id}, issue #${t.issue}). You are the only integrator running: the integration lock the gate held is held for you (#375, #397).
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The merge's gate, ${LOG}/${t.id}-integrate.txt, failed on test projects the change cannot reach, and their re-run did not show each one passed alone on the gate's head ${red.redHead}: ${why}. So the script keeps no merge, and the re-run may have left it on ${INT_BRANCH}. Re-run, fix and judge nothing here.
+
+STEP 1 — if \`git -C ${INT_WT} merge-base --is-ancestor ${red.old} HEAD\` succeeds (it does when HEAD is ${red.old} itself), everything after ${red.old} is this ticket's merge and what followed it under the lock: \`git -C ${INT_WT} reset --hard ${red.old}\`. Otherwise change nothing, and return ok=false with notes "${INT_BRANCH} is at <HEAD>, which does not descend from ${red.old}".
+STEP 2 — record it on the issue: one comment headed "## Flake at integrate: merge not kept" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): why the script kept no merge (the reason above), that it overrides any "## Flake at integrate" comment the re-run posted, and whether ${INT_BRANCH} was put back to ${red.old}, found there, or left where it was.
+
+Return ok (true when ${INT_BRANCH} is at ${red.old} on return), head (\`git -C ${INT_WT} rev-parse HEAD\` on return) and notes.`
+
 // A conflict at integrate (#136): the ticket goes back to its lane (#279), where its branch back-merges the run
 // branch in its own worktree and resolves it there, so the integration worktree never holds a half-resolved merge.
 // The integration lock is released meanwhile, so other tickets integrate; the files this ticket changed stay
@@ -463,7 +484,7 @@ const grillPrompt = (t, context) => `Grill ticket ${t.n} (task ${t.id}) on paper
 ${context ? `Context from tonight: ${context}\n` : ''}
 STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), glossaryProposals and adrCandidates read from the "## Proposed glossary / ADR" comment, summary "carried from an earlier night, not re-grilled", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
 
-${STANDING ? "ADAM'S STANDING ANSWER, granted for this run (" + DATE + "): he accepts the recommendation on every question. Under each question write the line \"Answer: yes, pre-accepted under the standing answer granted " + DATE + "\", and in later rounds treat the recommendation as decided rather than provisional. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue (docs/agents/issue-tracker.md), so still write the question and the recommendation in full." : "NO STANDING ANSWER was granted for this run. Under each question write the line \"Answer: open\". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers."}
+${STANDING ? "ADAM'S STANDING ANSWER, granted for this run (" + DATE + "): he accepts the recommendation on every question. Under each question write the line \"Answer: yes, pre-accepted under the standing answer granted " + DATE + "\", and in later rounds treat the recommendation as decided rather than provisional. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue (docs/agents/tracker-policy.md), so still write the question and the recommendation in full." : "NO STANDING ANSWER was granted for this run. Under each question write the line \"Answer: open\". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers."}
 
 Follow ${SKILLS}/grill-with-docs/SKILL.md (read it; it is not callable): ${skill('grilling')}, then ${skill('domain-modeling')}.
 Run the design tree ON PAPER, because nobody can answer: write round 1 in the grilling format (numbered ❓ question with its options, ➡️ your recommendation), ADOPT each recommendation as decided when a standing answer was granted, and as provisional when not (the rule above), recompute the frontier, write the next round; stop when the frontier is empty and nothing is silently assumed. Facts are your job: read the repo (${REPO}: the plan, contracts/, docs/adr/, GLOSSARY.md, the code, \`git log\`), never guess and never ask Adam a fact. Decisions are Adam's: every one goes in the questions.
@@ -488,7 +509,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty and "forecastFailed" is "". When "forecastFailed" is not empty, the section says the forecast did not run and quotes it, never "none". This section comes before Integrated, so the forecast reads as made before the lanes ran;
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
-   - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept" or "re-run failed, reset"; "none" under the section's own heading when the list is empty;
+   - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept", "re-run failed, reset", or, when the entry's "reset" is not "", "not kept: <its why>" and its reset (#397); "none" under the section's own heading when the list is empty;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
@@ -574,7 +595,7 @@ let failures = 0
 // this, since outside the integration lock the branch's tip may be a merge still under its gate.
 let verifiedTip = ''
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
-const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes}, one per re-run (#375)
+const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes, why, reset}, one per re-run (#375); why and reset are "" when the merge was kept (#397)
 let halted = null
 
 const grill = (t, context) => {
@@ -682,6 +703,19 @@ const rerunRule = (out) => {
   return { projects: [...new Set(ps.map((p) => p.project))] }
 }
 
+// The keep rule (#397): a re-run's merge stays only when the agent answered ok on the gate's own head and its record
+// shows every project the rule re-ran as passed alone. The agent's ok alone is not enough: its prompt ties ok to
+// those passes, but an answer that contradicts itself keeps nothing, since a check fails closed (CODING_STANDARDS.md).
+// projects is the script's list, each with passed as the agent recorded it. Returns {kept} or {why} not.
+const keepRule = (rr, red, projects) => {
+  if (!rr) return { why: 'the re-run agent died' }
+  if (!rr.ok) return { why: String(rr.notes || '').replace(/^re-run failed:\s*/, '') || 'no notes' }
+  const notPassed = projects.filter((p) => !p.passed).map((p) => p.project)
+  if (notPassed.length) return { why: `the re-run agent answered ok, but by its own record ${notPassed.join(', ')} did not pass alone` }
+  if (rr.headSha !== red.redHead) return { why: `the re-run agent answered ok on head ${rr.headSha || '""'}, not the gate's head ${red.redHead}` }
+  return { kept: true }
+}
+
 // Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
 // names the stage it is in, so a throw from the tail is reported against that stage, not always review.
 const finish = async (t, impl, at) => {
@@ -693,23 +727,38 @@ const finish = async (t, impl, at) => {
     at.stage = 'integrate'
     // One merge at a time (#136): the integration lock covers each merge and its gate, not a conflict's resolve.
     // A green merge's head becomes the verified tip as the agent returns, before its slot is released (#279).
-    // A red gate on test projects the change cannot reach is re-run inside the same lock and slot (#375).
+    // A red gate on test projects the change cannot reach is re-run inside the same lock and slot (#375); the script's
+    // keep rule, not the re-run agent's ok, decides whether its merge stays, and a reset inside that lock undoes one
+    // it does not keep (#397).
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
       let out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
       const rule = rerunRule(out)
       if (rule.projects) {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
         const rr = await agent(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
-        const kept = !!(rr && rr.ok && rr.headSha)
-        const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr leaves kept false and the notes 'the re-run agent died', so each project reads not passed and the merge resets
+        const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr, or one naming no project, records each project as not passed, and the keep rule keeps no merge
+        const projects = rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) }))
+        // The script's verdict, not the agent's ok (#397).
+        const keep = keepRule(rr, out, projects)
+        const kept = !!keep.kept
         const flake = { id: t.id, issue: t.issue, kept, gateLog: `${LOG}/${t.id}-integrate.txt`, rerunLog: `${LOG}/${t.id}-rerun.txt`,
-          projects: rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) })),
-          notes: rr ? String(rr.notes || '') : 'the re-run agent died' }
+          projects, notes: rr ? String(rr.notes || '') : 'the re-run agent died', why: keep.why || '', reset: '' }
         flakes.push(flake)
-        log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
+        // An agent that answered red reset the branch itself (its STEP 4); one that answered ok, or died, may have left
+        // the merge in, so the script puts the branch back before the lock is released (#397).
+        if (!kept && (!rr || rr.ok)) {
+          log(`flake: ${t.id} ${rule.projects.join(', ')} -> not kept: ${keep.why}; resetting ${INT_BRANCH} to ${out.old}`)
+          const rs = await agent(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+          // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
+          const back = !!(rs && rs.ok && rs.head === out.old)
+          flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
+            : `${INT_BRANCH} not reset to ${out.old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}`
+          // A run branch that may hold a merge the run reports failed is no base to start more tickets on.
+          if (!back && !halted) { halted = `${flake.reset}, after ${t.id}'s re-run was not kept; no new tickets started`; log(halted) }
+        } else log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
         out = kept
           ? { ...out, ok: true, mergeSha: rr.mergeSha, headSha: rr.headSha, notes: `the gate's tests failed only in ${rule.projects.join(', ')}, which the change cannot reach; they passed alone and the rest of the check passed (#375). ${flake.notes}`, flake }
-          : { ...out, ok: false, notes: `re-run failed: ${flake.notes.replace(/^re-run failed:\s*/, '') || 'no notes'}. ${out.notes}`, flake }
+          : { ...out, ok: false, notes: `re-run failed: ${keep.why}. ${flake.reset ? `${flake.reset}. ` : ''}${out.notes}`, flake }
       } else if (out && !out.ok && !(out.conflictFiles || []).length) log(`${t.id}: integration gate red; no re-run: ${rule.why}`)
       if (out && out.ok && out.headSha) verifiedTip = out.headSha
       return out

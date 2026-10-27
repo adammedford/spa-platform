@@ -68,6 +68,11 @@ public sealed class GatewayHarness : IAsyncDisposable
     private readonly SemaphoreSlim registryWrites = new(1, 1);
     private JsonObject document;
 
+    // Whether the registry object is in the bucket. Under GatewayHarnessOptions.RegistryAtStart false it
+    // is not until the first publish, and reading it to learn its ETag would be refused in the refusal
+    // mode rather than answered null.
+    private bool registryWritten;
+
     private GatewayHarness(
         GatewayHarnessOptions options,
         TestIdentityProvider idp,
@@ -75,6 +80,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         EchoUpstream echo,
         EchoUpstreamListener echoListener,
         InMemoryObjectStore store,
+        SwitchableObjectStore gatewayStore,
         FakeClientSecretSource secrets,
         CapturedLog log,
         JsonObject document)
@@ -85,6 +91,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         Echo = echo;
         this.echoListener = echoListener;
         Store = store;
+        GatewayStore = gatewayStore;
         Secrets = secrets;
         Log = log;
         this.document = document;
@@ -109,8 +116,18 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>Where the echo upstream listens.</summary>
     public Uri EchoAddress => echoListener.BaseAddress;
 
-    /// <summary>The cell's bucket: the registry object and every release.</summary>
+    /// <summary>
+    /// The cell's bucket: the registry object and every release. It answers a key it does not hold as
+    /// <see cref="GatewayHarnessOptions.MissingKeys"/> says.
+    /// </summary>
     public InMemoryObjectStore Store { get; }
+
+    /// <summary>
+    /// The bucket as every gateway host reads it: <see cref="Store"/>, with a switch that refuses reads of
+    /// a key it holds, as a role denied that key is refused (#429). The harness's own reads and writes go
+    /// to <see cref="Store"/>, as <c>spactl</c>'s go to the bucket under another role.
+    /// </summary>
+    public SwitchableObjectStore GatewayStore { get; }
 
     /// <summary>The client secrets the gateway reads. Set a new reference here before publishing it (F-09).</summary>
     public FakeClientSecretSource Secrets { get; }
@@ -127,8 +144,11 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The cell's one session store, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
     public SwitchableSessionStore? SessionStore { get; private set; }
 
-    /// <summary>The cell's one refresh-lease table, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>.</summary>
-    public IRefreshLeases? RefreshLeases { get; private set; }
+    /// <summary>
+    /// The cell's one refresh-lease table, every host's, or null under <see cref="KeyRingSharing.FrameworkDefault"/>
+    /// and under <see cref="GatewayHarnessOptions.RefreshLeasesPerHost"/>.
+    /// </summary>
+    public RecordingRefreshLeases? RefreshLeases { get; private set; }
 
     /// <summary>The first gateway host's services.</summary>
     public IServiceProvider Services => hosts[0].Services;
@@ -165,7 +185,8 @@ public sealed class GatewayHarness : IAsyncDisposable
         EchoUpstream echo = new();
         EchoUpstreamListener echoListener = await echo.ListenAsync(ct);
 
-        InMemoryObjectStore store = new();
+        InMemoryObjectStore store = new(options.MissingKeys);
+        SwitchableObjectStore gatewayStore = new(store);
         FakeClientSecretSource secrets = new();
         CapturedLog log = new();
 
@@ -225,7 +246,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         }
 
         SwitchableSessionStore? sessionStore = cell ? new SwitchableSessionStore() : null;
-        IRefreshLeases? leases = cell ? new InMemoryRefreshLeases(options.Clock ?? TimeProvider.System) : null;
+        RecordingRefreshLeases? leases = cell && !options.RefreshLeasesPerHost ? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System) : null;
         ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
 
         (GatewayFactory, string?, ParameterStoreStub?) NewHost(int index)
@@ -264,7 +285,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             }
 
             services.RemoveAll<IObjectStore>();
-            services.AddSingleton<IObjectStore>(store);
+            services.AddSingleton<IObjectStore>(gatewayStore);
             services.RemoveAll<IClientSecretSource>();
             services.AddSingleton<IClientSecretSource>(secrets);
             if (options.Clock is { } clock)
@@ -282,7 +303,7 @@ public sealed class GatewayHarness : IAsyncDisposable
                 services.RemoveAll<ISessionStore>();
                 services.AddSingleton<ISessionStore>(sessionStore!);
                 services.RemoveAll<IRefreshLeases>();
-                services.AddSingleton(leases!);
+                services.AddSingleton<IRefreshLeases>(leases ?? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System));
                 services.RemoveAll<GatewayInstance>();
                 services.AddSingleton(new GatewayInstance(instance));
             }
@@ -296,7 +317,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         }
 
         GatewayHarness harness = new(
-            options, idp, mockApi, echo, echoListener, store, secrets, log,
+            options, idp, mockApi, echo, echoListener, store, gatewayStore, secrets, log,
             new JsonObject { ["schemaVersion"] = 1, ["revision"] = 0, ["apps"] = new JsonArray() });
         harness.upstreamsByApi = upstreams;
         harness.newHost = NewHost;
@@ -315,13 +336,20 @@ public sealed class GatewayHarness : IAsyncDisposable
                 entries.Add(harness.EntryFor(app, options.Release));
             }
 
-            JsonObject first = new() { ["schemaVersion"] = 1, ["revision"] = 1, ["apps"] = entries };
-            if (!await store.PutAsync(RegistryKey, Utf8(first.ToJsonString()), ifMatch: null, ct))
+            // Without it, the document stays the revision-0 placeholder, so each host starts expecting the
+            // empty snapshot the live registry holds before its first load, and the first publish writes
+            // the object unconditionally.
+            if (options.RegistryAtStart)
             {
-                throw new InvalidOperationException("the registry object already exists in a new store.");
-            }
+                JsonObject first = new() { ["schemaVersion"] = 1, ["revision"] = 1, ["apps"] = entries };
+                if (!await store.PutAsync(RegistryKey, Utf8(first.ToJsonString()), ifMatch: null, ct))
+                {
+                    throw new InvalidOperationException("the registry object already exists in a new store.");
+                }
 
-            harness.document = first;
+                harness.document = first;
+                harness.registryWritten = true;
+            }
 
             for (int i = 0; i < options.Hosts; i++)
             {
@@ -505,11 +533,13 @@ public sealed class GatewayHarness : IAsyncDisposable
         await registryWrites.WaitAsync(ct);
         try
         {
-            string before = await RegistryETagAsync(ct);
+            string? before = registryWritten ? await RegistryETagAsync(ct) : null;
             if (!await Store.PutAsync(RegistryKey, Utf8(text), before, ct))
             {
                 throw new InvalidOperationException("the registry object changed under the harness.");
             }
+
+            registryWritten = true;
 
             // Only the harness writes the object, and only under this lock, so this is the write's ETag.
             written = await RegistryETagAsync(ct);
@@ -646,6 +676,8 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // A replace a test froze and never let go would hold its host's shutdown for the whole drain.
+        SessionStore?.Resume();
         foreach (GatewayHost host in hosts)
         {
             await host.DisposeAsync();

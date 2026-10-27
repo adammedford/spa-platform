@@ -14,8 +14,8 @@ namespace Platform.Abstractions;
 /// stage spelled the status and code itself, in four projects that A-03 keeps apart, and the copies
 /// had diverged (#142). ADR-0015 decision 1 put the ids in this project; #142 (Q1, Q5) and change
 /// request contracts/changes/issue-160-rejection-table.md put the join and its writer beside them.
-/// tests/Platform.Abstractions.Tests holds <see cref="Rows"/> to the <c>code</c> column that change
-/// request decided for contracts/request-gate.md -> Rule ids.
+/// tests/Platform.Abstractions.Tests holds <see cref="Rows"/> to the <c>code</c> column of
+/// contracts/request-gate.md -> Rule ids.
 ///
 /// What is not behind it, on purpose. The Warning line is the caller's: this never logs, so
 /// <c>UsePlatformHostResolution</c> can stay silent and every pinned line keeps its template and

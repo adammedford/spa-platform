@@ -70,7 +70,7 @@ export const meta = {
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
 // name no open ticket; the morning reads the table of the latest record on each open pull request
 // into main, and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
-// to the record, as neither a sub-issue nor a blocker (docs/agents/issue-tracker.md). Neither Verify's
+// to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
@@ -165,7 +165,7 @@ const HOUSE = (mdir) => `House rules (a morning session; Adam reads the hand-ove
 - The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset or build there. The only files you may write there are under ${mdir}/, and the pending-writes file's progress file and its rename in ${LOG}/; git's own bookkeeping for fetches and worktrees is the only other change.
 - The tracker is GitHub Issues. Run every \`gh\` command with \`cd ${REPO} &&\` in front so it resolves this repository. A multi-line comment or body goes through a file you write under ${mdir}/ and \`--body-file <that file>\`.
 - If \`gh\` fails because GitHub is unreachable, stop and report it as your reason. The morning replays the pending-writes file and never writes one: a tracker write you cannot make is a failure you report, never a line you queue.
-- Never write a comment that begins "Confirm" or "Approved" on any issue: a confirmation is Adam's act (docs/agents/issue-tracker.md; #78 grill Q7).
+- Never write a comment that begins "Confirm" or "Approved" on any issue: a confirmation is Adam's act (docs/agents/tracker-policy.md; #78 grill Q7).
 - Never run the landing script, tools/land.sh: Adam runs it (#78 grill Q2). Never merge, rebase or cherry-pick into any branch, never tag, never pass --admin or --no-verify, never force-push, never delete a branch (#71 owns deletion), and never remove a worktree by force.
 - Only two branches may be pushed, each with the pre-push hook running: the integration branch and the morning branch. Before a push, compare the remote tip with the local one: equal, skip the push; not an ancestor of the local tip, stop, because someone else pushed and the morning never force-pushes.
 - Begin every Bash command that touches a worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. A bare \`git commit\` lands on Adam's branch.
@@ -184,6 +184,19 @@ const LOOKUP = (then) => (A.issue
 
 // ---------------------------------------------------------------- schemas
 const COUNTS = { type: 'object', properties: { applied: { type: 'integer' }, skipped: { type: 'integer' }, failed: { type: 'integer' } }, required: ['applied', 'skipped', 'failed'] }
+// The pending-writes file's verbs, each counted. create is a change request the overnight run could
+// not file (#433; #421 Q2, Q3): only the overnight run queues one, and a create line counts as replayed.
+const VERBS = ['comment', 'edit', 'close', 'create']
+// What the Replay agent did with each create line it ran: the request it found or filed, and per
+// ticket the request blocks, the edge and the comment naming its number (judgeCreates reads it).
+const CREATED = {
+  type: 'object',
+  properties: {
+    line: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, found: { type: 'boolean' }, filed: { type: 'boolean' },
+    tickets: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, edge: { type: 'string', enum: ['added', 'present', 'none'] }, comment: { type: 'string', enum: ['posted', 'present', 'none'] } }, required: ['number', 'edge', 'comment'] } },
+  },
+  required: ['line', 'title', 'number', 'found', 'filed', 'tickets'],
+}
 const LISTED = { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, state: { type: 'string' } }, required: ['number', 'title', 'state'] } }
 const COMMENT = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, body: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'body'] }
 const REPLAY = {
@@ -192,11 +205,12 @@ const REPLAY = {
     listing: LISTED,
     issue: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' } }, required: ['number', 'title', 'url', 'state'] },
     phaseFiles: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, inputs: { type: 'string' }, result: { type: 'object' } }, required: ['name', 'inputs', 'result'] } },
-    counts: { type: 'object', properties: { comment: COUNTS, edit: COUNTS, close: COUNTS }, required: ['comment', 'edit', 'close'] },
+    counts: { type: 'object', properties: Object.fromEntries(VERBS.map((v) => [v, COUNTS])), required: VERBS },
+    creates: { type: 'array', items: CREATED },
     pending: { type: 'string' }, renamed: { type: 'string' },
     stoppedAt: { type: 'integer' }, reason: { type: 'string' },
   },
-  required: ['listing', 'issue', 'phaseFiles', 'counts', 'pending', 'renamed', 'stoppedAt', 'reason'],
+  required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
 const COMMENTS_READ = {
   type: 'object',
@@ -313,6 +327,34 @@ const replayStop = (r) => (r.stoppedAt > 0 ? `line ${r.stoppedAt}`
 // 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
 // as the two-character string "", which the run read as a stop and refused beside the real one.
 const blankField = (s) => (typeof s === 'string' && /^\s*(?:""\s*)?$/.test(s) ? '' : s)
+// The create lines Replay ran, judged against the rule its prompt states (#433; #421 Q3): a request
+// found by its title files nothing, one not found is filed once, and either way every ticket it blocks
+// carries its edge and a comment naming its number, since the lane's merge body names it by title
+// alone. What the agent reports against that rule is a refusal naming the line, never read as done
+// (CODING_STANDARDS.md -> "A check fails closed"), and so is a create line counted applied that it
+// does not report.
+const EDGE_SAID = { added: 'edge added', present: 'edge already there', none: 'no edge' }
+const COMMENT_SAID = { posted: 'number commented', present: 'number already commented', none: 'no comment' }
+const createsOf = (r) => (Array.isArray(r && r.creates) ? r.creates : [])
+const judgeCreates = (r) => {
+  const out = []
+  const creates = createsOf(r)
+  for (const c of creates) {
+    const at = `Replay's create line ${c.line} ("${c.title}")`
+    if (c.found && c.filed) out.push(`${at} was found open and filed again, so the request may be filed twice: check the open change-request issues for its title`)
+    if ((c.found || c.filed) && !(c.number > 0)) out.push(`${at} was reported found or filed with no number, so no edge or comment can name it`)
+    if (!c.found && !c.filed) continue
+    for (const t of c.tickets || []) {
+      if (!['added', 'present'].includes(t.edge)) out.push(`${at} blocks #${t.number}, which carries no edge from it`)
+      if (!['posted', 'present'].includes(t.comment)) out.push(`${at} blocks #${t.number}, which carries no comment naming its number`)
+    }
+  }
+  const applied = ((r && r.counts && r.counts.create) || {}).applied || 0
+  const done = creates.filter((c) => c.found || c.filed).length
+  if (applied > done) out.push(`Replay counts ${applied} create line(s) applied and reports ${done} found or filed, so the rest cannot be checked for a duplicate, an edge or a comment`)
+  return out
+}
+const createLines = (r) => createsOf(r).map((c) => `create line ${c.line}: #${c.number} ${c.title}, ${c.found && !c.filed ? 'found open, filed nothing' : c.filed && !c.found ? 'filed' : c.found ? 'found open and filed again' : 'neither found nor filed'}; ${(c.tickets || []).length ? c.tickets.map((t) => `#${t.number}: ${EDGE_SAID[t.edge] || t.edge}, ${COMMENT_SAID[t.comment] || t.comment}`).join('; ') : 'blocks nothing'}`)
 
 // ---------------------------------------------------------------- follow-ups, read here
 // review-queue.js's record recogniser and follow-ups table, by copy: a workflow script imports
@@ -668,7 +710,7 @@ const refreshDescription = (body, head, merges, lanes) => {
 // whose change is an edit to a ticket's body boxes or blocked-by edges is applied to that ticket; the
 // part of it the answer alone cannot state (a ticket not yet filed, a condition) is filed as a
 // follow-up naming the ticket, and so is an edit stated nowhere. A follow-up names its origin on a
-// Raised-by line and is neither a sub-issue nor a blocker of it (docs/agents/issue-tracker.md).
+// Raised-by line and is neither a sub-issue nor a blocker of it (docs/agents/tracker-policy.md).
 const BOX_LINE = /^- \[[ x]\] \S/
 const followUpTicket = (date, issue, q, f) => ({
   q: q.q, title: f.title, blockedBy: f.blockedBy, file: `${paths(date).mdir}/apply/followup-q${q.q}.md`,
@@ -761,15 +803,21 @@ const replayPrompt = () => `Replay: find the night's Overnight issue, then repla
 ${HOUSE(paths(A.date || '<date>').mdir)}
 
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below.`)}
-2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing and skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close", "body"}: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied:
+2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, creates is [], stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing and skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close"|"create", "body"}, a create line carrying "title", "label" and "blocking" too: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied (a create line's once its last step is done, as below):
    - a comment: write its body to ${LOG}/morning-<date>/replay-<line>.md and post it, \`cd ${REPO} && gh issue comment <issue> --body-file ${LOG}/morning-<date>/replay-<line>.md\`;
    - an edit that changes labels or assignees: \`cd ${REPO} && gh issue edit <issue> <its flags>\`;
    - an edit that replaces a body (--body-file): only if the issue's body is still the one the lane read, which the lane's saved body file in ${LOG}/ shows (\`cd ${REPO} && gh issue view <issue> --json body --jq .body\`, compared byte for byte); otherwise skip it and count it skipped, because a stale body would clobber a newer spec;
-   - a close: \`cd ${REPO} && gh issue close <issue>\`.
+   - a close: \`cd ${REPO} && gh issue close <issue>\`;
+   - a create, {"issue": 0, "action": "create", "title", "label": "change-request,ready-for-human", "blocking", "body"}: a change request a lane could not file overnight, which only the overnight run queues (#433; #421 Q2, Q3). A create line whose issue is not 0, whose label is not exactly "change-request,ready-for-human" or whose title is empty is a failed line. blocking is the ticket the request blocks, or a list of them; 0 or [] blocks nothing. Its steps run in this order, each skipped when already done, so a line run twice files one request:
+     1. Search the open change-request issues for its title first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 100 --search "<title> in:title" --json number,title\`. An issue there whose title equals the line's title exactly is the request, found already filed: its number is the request's number, and the line files nothing.
+     2. Only when none is found, file it: write its body to ${LOG}/morning-<date>/replay-<line>.md, then \`cd ${REPO} && gh issue create --title "<title>" --label change-request,ready-for-human --body-file ${LOG}/morning-<date>/replay-<line>.md\`, adding --blocking <ticket> for each ticket it blocks. The new issue's number is the request's number.
+     3. Each ticket it blocks, its edge: \`cd ${REPO} && gh issue view <ticket> --json blockedBy\`, and when the request's number is not among them, \`cd ${REPO} && gh issue edit <ticket> --add-blocked-by <number>\`.
+     4. Each ticket it blocks, the request's number, because the lane's merge body names the request only by its title and cannot be edited: \`cd ${REPO} && gh issue view <ticket> --json comments --jq '.comments[].body'\`, and unless a comment there already names #<number>, write "Change request #<number>, <title>, is the request this ticket's Outstanding line names by title; the morning of <date> replayed it from line <line> of the pending-writes file." to ${LOG}/morning-<date>/replay-<line>-<ticket>.md and post it, \`cd ${REPO} && gh issue comment <ticket> --body-file ${LOG}/morning-<date>/replay-<line>-<ticket>.md\`.
+     A create line goes to the progress file only once its last step is done, never at the create, so a morning that crashed midway runs the line again and step 1 finds the request it filed. It counts as applied whether step 2 filed the request or step 1 found it. Return each create line you ran in creates as {line, title, number: the request's number (0 when it was neither found nor filed), found: step 1 found it, filed: step 2 filed it, tickets: one {number, edge: "added"|"present"|"none", comment: "posted"|"present"|"none"} per ticket it blocks}.
    The first line that fails stops the replay: nothing after it is applied, stoppedAt is its line number and reason the error. When every line is applied, rename the file, \`mv ${LOG}/pending-<date>.jsonl ${LOG}/pending-<date>.replayed.jsonl\`, and never delete it. pending is the pending file's path or "", renamed the new path or "".
 3. The issue: \`cd ${REPO} && gh issue view <number> --json number,title,url,state\`. issue carries its number, title, url and state. Return none of its body or comments: the Apply phase reads the comments itself (#319).
 4. The morning's durable state: every JSON file under ${LOG}/morning-<date>/ (apply/ included), each as {name: its path under that directory without .json, inputs, result} from its contents; an empty list when there is none.
-Return listing, issue, phaseFiles, counts per action (applied, skipped, failed), pending, renamed, stoppedAt (the number of the line that failed, 0 when no line failed) and reason (that line's error, "" when no line failed).`
+Return listing, issue, phaseFiles, counts per action (applied, skipped, failed), creates, pending, renamed, stoppedAt (the number of the line that failed, 0 when no line failed) and reason (that line's error, "" when no line failed).`
 
 const verifyPrompt = (date, issue, phaseKey) => {
   const p = paths(date)
@@ -818,11 +866,11 @@ PHASE FILE: ${p.mdir}/classify.json INPUTS: ${phaseKey}
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 QUESTIONS: ${JSON.stringify(questions)}
 
-For each question above, read its ticket's "## Questions for Adam", "## Grilling record" and "Proposed glossary / ADR" comments (\`cd ${REPO} && gh issue view <issue> --json title,body,labels,comments\`) and assign it exactly one kind:
+For each question above, read its ticket's "## Questions for Adam" and "## Grilling record" comments, its labels, and its "## Proposed glossary / ADR" comment only for its ADR candidates, which are decision-to-record: a glossary or steering proposal there is never an answer, since proposals are filed as change requests (#421 Q9) (\`cd ${REPO} && gh issue view <issue> --json title,body,labels,comments\`), and assign it exactly one kind:
 - no-repo-change: the answer needs nothing from the morning: the grilling already records the decision, and applying it is the ticket's own implementation (code, a test, a script, anything that needs a build or a run). An answer that asks for a follow-up or another ticket to be filed is never this kind, even when that ticket's work is code: it is follow-up. Nor is one whose change is to a ticket's boxes or blocked-by edges: it is ticket-edit. summary says why nothing is needed.
 - follow-up: the answer asks for a ticket to be filed, an integrator or workstream follow-up, rather than for an edit the morning makes itself (#320). followUp carries title (what to build, as an issue title), touches (the repository paths its work writes, from which its owner is derived; at least one), blockedBy (the open issues it waits for, as numbers) and what (what to build, in a sentence or two, from the answer and its recommendation).
 - ticket-edit: the answer's change is to a ticket's body boxes or blocked-by edges, this ticket's or another's, short of a rewrite (#320). target is that ticket's number; removeBoxes the box lines to take off its body, each copied whole and exactly from its current body (\`cd ${REPO} && gh issue view <target> --json body\`); addBlockedBy the issue numbers to add as its blockers; unstated whatever part of the change the answer alone does not state as those (a ticket not filed yet, a condition still open, a box reworded rather than removed), "" when none. A change you cannot state at all goes whole in unstated: the morning files it as a follow-up naming the target.
-- integrator-edit: a document a session steers by, on an integrator path: a glossary term, a sentence in an agent guide, a change request's status line (#78 grill Q8). Never a contract sentence or an ADR, its status or its index row: those are decision-to-record.
+- integrator-edit: an edit to a document a session steers by, on an integrator path, such as a glossary term or a sentence in an agent guide, that a Confirmed answer to a question in a "## Questions for Adam" comment decides, on a ticket not labelled change-request (#78 grill Q8; #421 Q9). A question on a ticket labelled change-request is never this kind, whatever it asks: a Confirm on the Overnight issue never authorises a change request's edit, which only Adam's Decision: comment on the request does (#421 Q5), so it is no-repo-change, its summary saying so. Never a contract sentence or an ADR, its status or its index row: those are decision-to-record.
 - workstream-ticket: an edit inside a workstream's paths (OWNERSHIP.md), which becomes a ticket rather than an edit.
 - decision-to-record: an ADR candidate, drafted as a comment and never as a file.
 Every question carries target, removeBoxes, addBlockedBy, unstated and followUp; give 0, [], [], "" and {"title": "", "touches": [], "blockedBy": [], "what": ""} where its kind uses none of them.
@@ -849,7 +897,7 @@ Rewrites (a ticket with "rewrite": true): first preserve the current body verbat
 FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
 1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
 2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
-3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/issue-tracker.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
+3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, first preserve the current body verbatim in a comment headed "## Body before ${date}" whose next line names Q<n> of #${issue} (\`cd ${REPO} && gh issue comment <target> --body-file <file>\`), then write the body with exactly those lines removed and no other byte changed, \`cd ${REPO} && gh issue edit <target> --body-file <file>\`. List each in edits {issue: the target, preserved: that comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
 A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
@@ -881,7 +929,7 @@ ${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
 For each follow-up, in order:
 1. Write its body, exactly, to its file.
 2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
-3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/issue-tracker.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
 If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you.`
 }
 
@@ -981,8 +1029,8 @@ const handoverText = (s) => {
   // A stop is a failed line (#319): only a failed line (replayStop) says "stopped"; a reason the agent
   // gave with no line failed is kept as its note, never read as a stop.
   const stopped = replayStop(s.replay)
-  const none = !stopped && !s.replay.renamed && ['comment', 'edit', 'close'].every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
-  list('Replay', [['comment', 'edit', 'close'].map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : '')])
+  const none = !stopped && !s.replay.renamed && VERBS.every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
+  list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [] }
@@ -1106,6 +1154,7 @@ const refusals = []
 // (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A
 // stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
 if (replayStop(rep)) refusals.push(`Replay stopped at ${replayStop(rep)} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
+refusals.push(...judgeCreates(rep))
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
 
 phase('Verify')

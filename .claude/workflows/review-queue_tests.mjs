@@ -168,7 +168,7 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], followUps: (behave.followUps || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
@@ -1161,6 +1161,67 @@ try {
       const h = await execute(run(a, SERVED, b))
       if (Object.keys(h || {})[0] !== 'summary' || !Array.isArray(h.summary) || h.summary.length) fail(`${why} returns ${JSON.stringify(h)}, expected summary [] first`)
     }
+  }
+
+  // A ticket's change requests are spec sources (#434, #421 Q12): the Spec axis reads, for each issue
+  // the pull request cites, the issues it is or was blocked by, and holds the diff to each one
+  // labelled change-request, its body and its decision comment, open or closed, so the diff is held
+  // to what was decided. The Standards axis is not sent there.
+  checks++
+  {
+    const SERVED = { 434: pr(434, ['.claude/workflows/review-queue.js'], { cites: { planRow: '', issues: [434, 381], mergeSubject: '' } }) }
+    const env = run({ prs: [434] }, SERVED)
+    await execute(env)
+    const spec = env.prompts['spec:434'] || ''
+    for (const i of [434, 381]) if (!spec.includes(`cd ${env.repo} && gh issue view ${i} --json blockedBy`)) fail(`PR 434: the Spec prompt does not read the issues #${i} is blocked by`)
+    if (!/labelled `change-request`/.test(spec)) fail('PR 434: the Spec prompt does not keep the blocking issues labelled change-request')
+    if (!/open or closed/.test(spec)) fail('PR 434: the Spec prompt does not read a closed change request as well as an open one')
+    if (!/its body and its decision comment/.test(spec) || !/`Decision:`/.test(spec)) fail('PR 434: the Spec prompt does not name each request\'s body and its Decision: comment as spec sources')
+    if (!/what was decided/.test(spec)) fail('PR 434: the Spec prompt does not hold the diff to what the request\'s decision decided')
+    if (/blockedBy/.test(env.prompts['standards:434'] || '')) fail('PR 434: the Standards prompt reads change requests, which are the Spec axis\'s sources')
+  }
+
+  // A held steering change is filed, not lost (#434, #411 Q5, #421 Q12). The Spec axis judges whether
+  // the authority a steering change cites decides it; the citation itself is the steering check's,
+  // so no prompt asks for a trailer to be read. A change it holds is a verified finding the author
+  // takes out of the branch, and the verdict files it as a change-request issue blocking nothing,
+  // after searching the open requests for its title; a request it cannot file is reported, since a
+  // review keeps no pending-writes file (#421 Q11). The comment and the return name each one.
+  checks++
+  {
+    const SERVED = { 435: pr(435, ['GLOSSARY.md'], { cites: { planRow: '', issues: [434], mergeSubject: '' } }) }
+    const filed = [
+      { title: 'Glossary: Held change', number: 501, found: false, error: '' },
+      { title: 'Review guide: change requests as spec sources', number: 490, found: true, error: '' },
+      { title: 'Agent guide: the done rule', number: 0, found: false, error: 'GitHub could not be reached' },
+    ]
+    const env = run({ prs: [435] }, SERVED, { verdict: 'hold', changeRequests: { 435: filed } })
+    const result = await execute(env)
+    const spec = env.prompts['spec:435'] || ''
+    if (!/steering document/.test(spec) || !/whether the authority it cites decides this change/.test(spec)) fail('PR 435: the Spec prompt does not judge whether a steering change\'s cited authority decides it')
+    const v = env.prompts['verdict:435'] || ''
+    const search = v.indexOf(`cd ${env.repo} && gh issue list --state open --label change-request --search "<title> in:title"`)
+    const create = v.indexOf(`cd ${env.repo} && gh issue create`)
+    if (search < 0) fail('PR 435: the verdict prompt does not search the open change requests by title')
+    if (create < 0) fail('PR 435: the verdict prompt does not file a held steering change as an issue')
+    if (search >= 0 && create >= 0 && search > create) fail('PR 435: the verdict prompt files the request before it searches for one')
+    const createLine = create >= 0 ? v.slice(create, v.indexOf('\n', create) < 0 ? undefined : v.indexOf('\n', create)) : ''
+    if (!/--label change-request --label ready-for-human/.test(createLine)) fail('PR 435: the request is not filed labelled change-request and ready-for-human')
+    if (/--blocking|--blocked-by/.test(v)) fail('PR 435: the held change\'s request blocks something, but it blocks nothing')
+    if (!/--body-file -/.test(createLine)) fail('PR 435: the request body is not passed on stdin, so the review would write a file outside its OUTPUT FILE lines')
+    if (!v.includes('**Raised by:** #435')) fail('PR 435: the request body does not say the review of #435 raised it')
+    if (!/out of the branch/.test(v)) fail('PR 435: the verdict prompt does not say the held change comes out of the branch')
+    if (!/file nothing/.test(v)) fail('PR 435: the verdict prompt files a second request when one with that title is open')
+    for (const c of allPrompts) if (/trailer/i.test(c.prompt)) fail(`the ${c.label} prompt mentions a trailer; reading the citation is the steering check's (#411 Q5)`)
+    const body = commentOf(env, 435)
+    // The numbers are built, not written: a literal hash-number here is a citation the steering check
+    // reads, and these name no issue of this repository.
+    for (const want of ['## Change requests', `- #${filed[0].number} Glossary: Held change: filed, blocking nothing.`, `- #${filed[1].number} Review guide: change requests as spec sources: already open, nothing filed.`, '- Agent guide: the done rule: not filed: GitHub could not be reached.']) if (!body.includes(want)) fail(`PR 435: the comment lacks ${JSON.stringify(want)}`)
+    if (JSON.stringify(resultOf(435, result).changeRequests) !== JSON.stringify(filed)) fail(`PR 435: the return's changeRequests are ${JSON.stringify(resultOf(435, result).changeRequests)}`)
+    // A review that holds no steering change names no section for it.
+    const quiet = run({ prs: [101] }, PRS)
+    await execute(quiet)
+    if (commentOf(quiet, 101).includes('## Change requests')) fail('PR 101: a review that filed no request carries a Change requests section')
   }
 
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended

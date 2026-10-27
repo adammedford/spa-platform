@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -62,7 +63,8 @@ public static class PlatformIdentityExtensions
         // this setup sets. The validation AddOpenIdConnect would add for one fixed name is registered
         // for every OpenID Connect scheme instead (R-D9). AddOpenIdConnect's own registrations:
         // https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectExtensions.cs
-        services.TryAddSingleton<IssuerDirectory>();
+        services.TryAddSingleton(sp => new IssuerDirectory(
+            sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<AccessTokenSourceOptions>().ProviderDeadline));
 
         // The options invalidator of task 3.6. Both options setups depend on it, so it subscribes to
         // the registry before the first scheme's options are built.
@@ -94,16 +96,25 @@ public static class PlatformIdentityExtensions
         // start-up: a gateway that never touches a session (the ALB health check, tools/smoke.sh) needs
         // no session settings. The DynamoDB client comes from the container, so a host that registers its
         // own first wins, as AddPlatformRegistry registers IAmazonS3 (change request P2-1, Decision 3); the
-        // default reads its Region and credentials from the environment, the task role in a cell.
+        // default reads its Region and credentials from the environment, the task role in a cell. The lease
+        // is null under the memory store or none named, which the container hands to an optional
+        // dependency as it would an unregistered service, and GetRequiredService refuses (#393). The refusal
+        // is the vendor's: GetRequiredService throws when "there is no service of type T"
+        // (https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.serviceproviderserviceextensions.getrequiredservice),
+        // which its source decides by a null from GetService. That a null from a registered factory reaches
+        // an optional constructor parameter has no vendor page; SessionStoreRegistrationTests pins it.
         services.TryAddSingleton<ISessionStore>(SessionStores.FromConfiguration);
-        services.TryAddSingleton<IRefreshLeases>(SessionStores.LeasesFromConfiguration);
+        services.TryAddSingleton<IRefreshLeases>(provider => SessionStores.LeasesFromConfiguration(provider)!);
         services.TryAddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient());
         services.TryAddSingleton(DynamoDbSessionTable.FromConfiguration);
 
         // The token source of task 3.8, over the token library (ADR-0005). The library's options hook gets
         // the sentinel as its default challenge scheme, so it binds to no app (T-B1, T-B2); the source
         // names both schemes on every call and calls the library's endpoint in the credential style of
-        // the app's issuer (ADR-0017), one refresh at a time per session.
+        // the app's issuer (ADR-0017), one refresh at a time per session: under the session gate, and
+        // across tasks under the refresh lease when one resolves (ADR-0024), which is the DynamoDB lease
+        // above or a host's own. Under the memory store none resolves: one replica, where the gate is the
+        // whole refresh gate.
         services.AddOpenIdConnectAccessTokenManagement(o => o.ChallengeScheme = Scheme.Parse(ProfileTokenEndpoints.SentinelScheme));
         Type endpointType = ProfileTokenEndpoints.RegisteredEndpointType(services);
         services.TryAddSingleton(sp => new ProfileTokenEndpoints(sp, endpointType));
