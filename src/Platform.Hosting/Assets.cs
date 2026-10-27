@@ -33,8 +33,8 @@ internal sealed partial class Assets(ILogger logger)
     // asset needs a session (ADR-0008), so no shared cache may keep one.
     private const string RevalidateCacheControl = "private, no-cache";
 
-    // Every 404 this endpoint answers (contracts/http-contract.md, the asset row; change request
-    // contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110 section 15.5.5 lets a cache
+    // Every 404 this endpoint answers, and its shell_unavailable 500 (contracts/http-contract.md, the
+    // asset row; change request contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110 section 15.5.5 lets a cache
     // keep a 404 heuristically, and under the deployed role every missing asset is a refused read, so a
     // 404 a passing permission fault caused must not outlive the fault.
     private const string NotFoundCacheControl = "private, no-store";
@@ -138,10 +138,8 @@ internal sealed partial class Assets(ILogger logger)
 
             if (shell)
             {
-                // An unreadable shell is a page that does not load, whatever the cause, and a 404 would
-                // pass for an ordinary missing file: it stays the failure it is. The exception names the
-                // release's index.html key and no client path.
-                throw;
+                await ShellUnavailableAsync(context, app, "refused");
+                return;
             }
 
             // Under the deployed role this is how every missing asset arrives, so it answers as one.
@@ -151,6 +149,12 @@ internal sealed partial class Assets(ILogger logger)
 
         if (stored is null)
         {
+            if (shell)
+            {
+                await ShellUnavailableAsync(context, app, "null");
+                return;
+            }
+
             await NotFoundAsync(context);
             return;
         }
@@ -200,6 +204,20 @@ internal sealed partial class Assets(ILogger logger)
     {
         context.Response.Headers.CacheControl = NotFoundCacheControl;
         return Problems.WriteAsync(context, Problems.NotFound);
+    }
+
+    /// <summary>
+    /// 500 <c>shell_unavailable</c>, never cached, whether the store answered null or refused (change
+    /// request issue-381-object-read-refusal, items 3 and 4). An unreadable shell is a page that does
+    /// not load, whatever the cause, and a 404 would pass for an ordinary missing file; answering both
+    /// the same keeps one absent shell from answering 404 or 500 depending on the role's permissions.
+    /// The Error line says which it was, for the operator the status cannot tell.
+    /// </summary>
+    private Task ShellUnavailableAsync(HttpContext context, AppDefinition app, string answer)
+    {
+        LogShellUnavailable(logger, app.AppId, app.Release, answer);
+        context.Response.Headers.CacheControl = NotFoundCacheControl;
+        return Problems.WriteAsync(context, Problems.ShellUnavailable);
     }
 
     private static bool IsReserved(PathString path)
@@ -286,4 +304,9 @@ internal sealed partial class Assets(ILogger logger)
     // client's text, and the telemetry contract's request line already carries the route.
     [LoggerMessage(EventId = 1001, Level = LogLevel.Warning, Message = "Asset request refused under {Rule}")]
     private static partial void LogRejected(ILogger logger, string rule);
+
+    // The app, its release and the store's answer, null or refused. Not the key, which the release
+    // fixes, and not the path, which is the client's text and may be any extensionless fallback.
+    [LoggerMessage(EventId = 1002, Level = LogLevel.Error, Message = "The shell of app {AppId} release {Release} is unavailable: the store answered {Answer}")]
+    private static partial void LogShellUnavailable(ILogger logger, string appId, string release, string answer);
 }
