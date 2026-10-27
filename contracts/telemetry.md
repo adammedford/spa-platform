@@ -10,7 +10,7 @@ upstreams, and metrics are tagged by app.
 
 | Kind | Names |
 | --- | --- |
-| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `status`, `duration_ms` |
+| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `read_refused`, `status`, `duration_ms` |
 | `route` values | `asset`, `api`, `bff`, `callback`, `health` |
 | Metrics | `gateway.requests`, `auth.logins`, `auth.refreshes`, `auth.sessions.active`, `security.rejections`, `registry.revision`, `registry.age_seconds`, `registry.rejected`, `proxy.upstream.duration`, `storage.read_refusals` |
 | Never logged | `Authorization`, `Cookie`, `Set-Cookie`, query strings, tokens, authorization codes, state, client secrets, session keys |
