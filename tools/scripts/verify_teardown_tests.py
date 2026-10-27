@@ -5,9 +5,12 @@
 the platform tag (#118, #232 Q3): IAM's own listings of roles and customer managed policies, read by
 their tags; the roles the cell declares, confirmed absent by name; and the tagging query in the
 selected Region, which drops ECS records whose describe says INACTIVE and confirms each EC2 id with a
-describe, the session table with DynamoDB's (#338) and the user pool with Cognito's (#466). The cases are #118 step 2's records, read on the platform project after the platform root's
-destroy (2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and
-four rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name.
+describe, the session table with DynamoDB's (#338) and the user pool with Cognito's (#466). The
+cases are #118 step 2's records, read on the platform project after the platform root's destroy
+(2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and four
+rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name. The
+user pool's are #242's, read after the teardown of 2026-10-27: the index went on listing the
+identity root's pool while DescribeUserPool answered ResourceNotFoundException.
 
 The doubles, the world they share and the universal every run holds (no output names the account id)
 are tools/scripts/cell_doubles.py's.
