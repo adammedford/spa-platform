@@ -34,10 +34,10 @@ internal sealed partial class Assets(ILogger logger)
     private const string RevalidateCacheControl = "private, no-cache";
 
     // Every 404 this endpoint answers, and its shell_unavailable 500 (contracts/http-contract.md, the
-    // asset row; change request contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110 section 15.5.5 lets a cache
-    // keep a 404 heuristically, and under the deployed role every missing asset is a refused read, so a
-    // 404 a passing permission fault caused must not outlive the fault.
-    private const string NotFoundCacheControl = "private, no-store";
+    // asset row; change request contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110
+    // section 15.5.5 lets a cache keep a 404 heuristically, and under the deployed role every missing
+    // asset is a refused read, so a 404 a passing permission fault caused must not outlive the fault.
+    private const string NoStoreCacheControl = "private, no-store";
 
     // The values of IRequestTelemetryFeature.ReadRefused: which kind of key was refused, never which key.
     private const string RefusedShell = "shell";
@@ -84,7 +84,7 @@ internal sealed partial class Assets(ILogger logger)
 
         if (IsReserved(request.Path))
         {
-            context.Response.Headers.CacheControl = NotFoundCacheControl;
+            context.Response.Headers.CacheControl = NoStoreCacheControl;
             await RejectAsync(context, RuleIds.PathReserved);
             return;
         }
@@ -122,6 +122,7 @@ internal sealed partial class Assets(ILogger logger)
 
         IObjectStore store = context.RequestServices.GetRequiredService<IObjectStore>();
         StoredObject? stored;
+        bool refused = false;
         try
         {
             stored = await store.GetAsync(key, ifNoneMatch, context.RequestAborted);
@@ -129,33 +130,22 @@ internal sealed partial class Assets(ILogger logger)
         catch (ObjectReadRefusedException)
         {
             // A refusal is ambiguous: a missing key under a role without s3:ListBucket, or a key the
-            // role may not read (IObjectStore.GetAsync). The request line carries which kind of key it
-            // was (contracts/telemetry.md, read_refused), never the key, which holds the client's path.
+            // role may not read (IObjectStore.GetAsync). Under the deployed role this is how every
+            // missing asset arrives, so it answers as one. The request line carries which kind of key
+            // it was (contracts/telemetry.md, read_refused), never the key, which holds the client's
+            // path; for the same reason the exception, which names the key, is not logged.
             if (context.Features.Get<IRequestTelemetryFeature>() is { } telemetry)
             {
                 telemetry.ReadRefused = shell ? RefusedShell : RefusedAsset;
             }
 
-            if (shell)
-            {
-                await ShellUnavailableAsync(context, app, "refused");
-                return;
-            }
-
-            // Under the deployed role this is how every missing asset arrives, so it answers as one.
-            await NotFoundAsync(context);
-            return;
+            stored = null;
+            refused = true;
         }
 
         if (stored is null)
         {
-            if (shell)
-            {
-                await ShellUnavailableAsync(context, app, "null");
-                return;
-            }
-
-            await NotFoundAsync(context);
+            await (shell ? ShellUnavailableAsync(context, app, refused) : NotFoundAsync(context));
             return;
         }
 
@@ -202,7 +192,7 @@ internal sealed partial class Assets(ILogger logger)
     /// </summary>
     private static Task NotFoundAsync(HttpContext context)
     {
-        context.Response.Headers.CacheControl = NotFoundCacheControl;
+        context.Response.Headers.CacheControl = NoStoreCacheControl;
         return Problems.WriteAsync(context, Problems.NotFound);
     }
 
@@ -213,10 +203,10 @@ internal sealed partial class Assets(ILogger logger)
     /// the same keeps one absent shell from answering 404 or 500 depending on the role's permissions.
     /// The Error line says which it was, for the operator the status cannot tell.
     /// </summary>
-    private Task ShellUnavailableAsync(HttpContext context, AppDefinition app, string answer)
+    private Task ShellUnavailableAsync(HttpContext context, AppDefinition app, bool refused)
     {
-        LogShellUnavailable(logger, app.AppId, app.Release, answer);
-        context.Response.Headers.CacheControl = NotFoundCacheControl;
+        LogShellUnavailable(logger, app.AppId, app.Release, refused ? "refused" : "null");
+        context.Response.Headers.CacheControl = NoStoreCacheControl;
         return Problems.WriteAsync(context, Problems.ShellUnavailable);
     }
 
