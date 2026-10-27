@@ -5,9 +5,12 @@
 the platform tag (#118, #232 Q3): IAM's own listings of roles and customer managed policies, read by
 their tags; the roles the cell declares, confirmed absent by name; and the tagging query in the
 selected Region, which drops ECS records whose describe says INACTIVE and confirms each EC2 id with a
-describe. The cases are #118 step 2's records, read on the platform project after the platform root's
-destroy (2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and
-four rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name.
+describe, the session table with DynamoDB's (#338) and the user pool with Cognito's (#466). The
+cases are #118 step 2's records, read on the platform project after the platform root's destroy
+(2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and four
+rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name. The
+user pool's are #242's, read after the teardown of 2026-10-27: the index went on listing the
+identity root's pool while DescribeUserPool answered ResourceNotFoundException.
 
 The doubles, the world they share and the universal every run holds (no output names the account id)
 are tools/scripts/cell_doubles.py's.
@@ -53,6 +56,8 @@ GROUP = "sg-0123456789abcdef0"
 TABLE = re.search(r'session_table_name\s*=\s*"([^"]+)"', _IAM)[1].replace("${local.name_prefix}", cell.FAMILY)
 TABLE_ARN = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{TABLE}"
 RULES = [f"sgr-0123456789abcde{n}" for n in "0123"]
+# The identity root's user pool, as the doubles' destroy of that root names it.
+_, POOL_ARN, POOL = cell.DESTROYED["idp"]
 
 
 def tagged(arn: str, kind: str, value: str = PLATFORM_VALUE, **state) -> dict:
@@ -200,6 +205,16 @@ class ATornDownCellPasses(Verify):
         self.assertEqual(0, result.status, result.output)
         self.assertEqual(3, len(case.aws("dynamodb describe-table")))
 
+    def test_a_user_pool_cognito_no_longer_knows_passes_and_is_counted(self):
+        # #466, read after #242's teardown: the index went on listing the identity root's pool past
+        # the wait while DescribeUserPool answered ResourceNotFoundException for it.
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([POOL], [call["options"]["user-pool-id"] for call in case.aws("cognito-idp describe-user-pool")])
+        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+
     def test_the_tagging_index_s_own_lag_is_retried(self):
         world = torn_down_world()
         world["tag_lag"] = 2
@@ -276,6 +291,22 @@ class AStandingResourceFails(Verify):
         world = torn_down_world()
         world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="ACTIVE"))
         world["faults"]["dynamodb describe-table"] = ["AccessDeniedException", "DescribeTable"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("AccessDeniedException", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
+
+    def test_a_user_pool_cognito_still_describes(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:cognito-idp:{REGION}:<account>:userpool/{POOL} (Cognito still describes it)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_user_pool_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0))
+        world["faults"]["cognito-idp describe-user-pool"] = ["AccessDeniedException", "DescribeUserPool"]
         _, result = self.verify(world)
         self.assertEqual(1, result.status, result.output)
         self.assertIn("AccessDeniedException", result.stderr)
