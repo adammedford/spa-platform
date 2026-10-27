@@ -89,18 +89,20 @@ public sealed class ArchitectureTests
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
         // same rule runs here over the one project that must hold the literals: the twelve declarations
-        // in RuleIds, the eleven code declarations in Problems (#158), and the one quoted id in
+        // in RuleIds, the twelve code declarations in Problems (#158, and shell_unavailable since #427), and the one quoted id in
         // IRequestTelemetryFeature's doc comment, which proves the scan reads comments too. No doc
         // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
         // The count moves with its subject: a quoted id or code added to or removed from
         // Platform.Abstractions moves it.
+        // Mutation (#444): drop ShellUnavailable from Problems, as before #427's held patch, and the
+        // count reads 24 and Problems.cs 11.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(24, hits.Length);
+        Assert.Equal(25, hits.Length);
         Assert.Equal(
             [
                 ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
-                ("Platform.Abstractions/Problems.cs", 11),
+                ("Platform.Abstractions/Problems.cs", 12),
                 ("Platform.Abstractions/RuleIds.cs", 12),
             ],
             hits
