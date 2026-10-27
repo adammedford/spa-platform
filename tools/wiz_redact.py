@@ -2,6 +2,7 @@
 """Redact a post of the `wiz` skill: text in on stdin, redacted text out on stdout. Owner: integrator.
 
     python3 -I tools/wiz_redact.py [--keep-last-four] < draft > post
+    <an AWS read> 2>&1 | tee -a <record> | python3 -I tools/wiz_redact.py --stream
 
 The `wiz` skill posts each stage's evidence to its ticket from captured output, and every post goes
 through this script first (#259). It used to follow a paragraph of prose, which can fail quietly;
@@ -29,9 +30,18 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies seven rules, in 
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
-An input that carries `AccessDenied` or `Access Denied` is not redacted at all: AWS answering that
+A post that carries `AccessDenied` or `Access Denied` is not redacted at all: AWS answering that
 where it did not before is a stop of the skill's (ask about the spend limit, per
 docs/agents/aws-rules.md), so the script writes nothing to stdout, one line to stderr, and exits 3.
+One shape is let through (#468): a whole line of P-04's passing cases,
+`pass  <case>: 403 AccessDenied (<the kind of policy>)`, as verify-release-immutability.sh prints
+it, since there the refusal is the evidence. Any other line naming the refusal still stops.
+
+--stream is the terminal's mode (#468). Each line goes through the same seven rules as it arrives
+and is flushed at once, so a long-running command reads live; `AccessDenied` passes through, since
+the human has to see it to stop (the skill's rule 7), and the mode always exits 0. A rule that spans
+lines, a JSON value broken over several, is applied to each line alone.
+
 A usage error exits 2. Input that is not UTF-8 passes through byte for byte where no rule matches.
 
 Standard library only, kept 3.9-compatible (D-3 in docs/dependencies.md).
@@ -39,6 +49,7 @@ Standard library only, kept 3.9-compatible (D-3 in docs/dependencies.md).
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import typing
@@ -46,6 +57,15 @@ import typing
 ACCESS_DENIED_EXIT = 3
 
 ACCESS_DENIED = re.compile(r"AccessDenied|Access Denied")
+
+# A passing case line of P-04 (tools/scripts/verify-release-immutability.sh), whole: the refusal is
+# the case's subject, and its parentheses hold only the kind of policy S3 named, in one of the two
+# forms the script's denial() prints.
+P04_CASE = re.compile(
+    r"^pass  (?:(?!AccessDenied|Access Denied)[^\n])+: 403 AccessDenied "
+    r"\((?:explicit deny in an? [A-Za-z -]+ policy|no [A-Za-z -]+ policy allows it)\)$",
+    re.MULTILINE,
+)
 
 # The plain form goes wherever no digit touches it, a hyphen included, because a CDK bootstrap
 # bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between hyphens. Only the
@@ -208,10 +228,26 @@ def main(argv: list[str]) -> int:
         "--keep-last-four", action="store_true",
         help="keep the last four digits of a twelve-digit number, as <account-1234>",
     )
+    parser.add_argument(
+        "--stream", action="store_true",
+        help="redact line by line for the terminal, flushing each line, and pass AccessDenied through",
+    )
     args = parser.parse_args(argv)
 
+    if args.stream:
+        try:
+            for line in sys.stdin.buffer:
+                text = line.decode("utf-8", "surrogateescape")
+                sys.stdout.buffer.write(redact(text, args.keep_last_four).encode("utf-8", "surrogateescape"))
+                sys.stdout.buffer.flush()
+        except BrokenPipeError:
+            # A reader such as `head` went away; the record already holds the whole output. Point
+            # stdout at /dev/null so the flush at exit does not raise again.
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+
     text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
-    if ACCESS_DENIED.search(text):
+    if ACCESS_DENIED.search(P04_CASE.sub("", text)):
         sys.stderr.write(
             "wiz_redact: the input carries an AWS AccessDenied answer; nothing was written. "
             "Stop the sitting and ask about the spend limit (docs/agents/aws-rules.md).\n"

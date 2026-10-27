@@ -8,7 +8,8 @@ leaks an account id, an authorization code or a secret into a public comment and
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
 seven rules has at least one case that turns red when that rule is removed from the script; #259's
-merge body names the mutation and the case.
+merge body names the mutation and the case. #468 added the terminal's --stream mode and P-04's
+passing case lines, which a post carries as they are.
 
 The ids, codes and secrets below are made up for the cases; none is a real account or credential.
 """
@@ -274,6 +275,80 @@ class AccessDenied(unittest.TestCase):
 
     def test_the_words_access_denied_alone_stop(self) -> None:
         self.assertStops("upload failed: Access Denied (account 123456789012 is not authorized)\n")
+
+    def test_a_p04_failure_line_stops(self) -> None:
+        self.assertStops("FAIL  a PUT without If-None-Match gets 403: expected 403 AccessDenied, got succeeded\n")
+
+    def test_a_p04_pass_line_beside_another_access_denied_stops(self) -> None:
+        self.assertStops(
+            "pass  a PUT without If-None-Match gets 403: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "An error occurred (AccessDenied) when calling the PutObject operation: is not authorized\n"
+        )
+
+    def test_a_p04_pass_line_that_is_not_the_whole_line_stops(self) -> None:
+        self.assertStops("  pass  a PUT gets 403: 403 AccessDenied (explicit deny in a resource-based policy) "
+                         "is not authorized\n")
+
+    def test_a_p04_pass_line_whose_case_carries_access_denied_stops(self) -> None:
+        self.assertStops("pass  Access Denied for account 123456789012 is not authorized: "
+                         "403 AccessDenied (explicit deny in a resource-based policy)\n")
+
+    def test_a_p04_pass_line_with_another_reason_stops(self) -> None:
+        self.assertStops("pass  a PUT gets 403: 403 AccessDenied (the spend limit is reached)\n")
+
+
+class P04CaseLines(Redacts):
+    def test_p04s_passing_case_lines_are_posted_as_they_are(self) -> None:
+        # verify-release-immutability.sh's own lines, from #63's P-04 comment of 2026-10-27; both
+        # forms of the kind of policy S3 names.
+        text = (
+            "~~~\n"
+            "pass  a second PUT with If-None-Match: * gets 412: 412 PreconditionFailed\n"
+            "pass  a PUT without If-None-Match gets 403: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "pass  a plain-HTTP request is refused: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "pass  the teardown role cannot write: a PUT with If-None-Match: * to a new key gets 403: "
+            "403 AccessDenied (no identity-based policy allows it)\n"
+            "verify-release-immutability: pass: 23 cases as expected.\n"
+            "~~~\n"
+        )
+        self.assertRedacts(text, text)
+
+
+class Stream(Redacts):
+    def test_the_stream_masks_account_ids_and_arns_and_passes_access_denied_through(self) -> None:
+        self.assertRedacts(
+            "taskDefinitionArn arn:aws:ecs:us-east-1:123456789012:task-definition/spa-platform-poc:7\n"
+            "An error occurred (AccessDeniedException) when calling the DescribeServices operation: "
+            "User: arn:aws:sts::123456789012:assumed-role/x/y is not authorized\n"
+            "upload failed: Access Denied (account 123456789012)\n",
+            "taskDefinitionArn task-definition/spa-platform-poc:7\n"
+            "An error occurred (AccessDeniedException) when calling the DescribeServices operation: "
+            "User: assumed-role/x/y is not authorized\n"
+            "upload failed: Access Denied (account <account>)\n",
+            "--stream",
+        )
+
+    def test_the_stream_applies_every_rule_to_each_line(self) -> None:
+        self.assertRedacts('{"clientId": "3n4b5c6d7e8f9g0h"}\n> Authorization: Bearer abc\n',
+                           '{"clientId": "<elided>"}\n> Authorization: Bearer <elided>\n', "--stream")
+
+    def test_the_stream_writes_a_line_before_the_next_one_arrives(self) -> None:
+        process = subprocess.Popen([sys.executable, "-I", str(SCRIPT), "--stream"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(b"account 123456789012\n")
+            process.stdin.flush()
+            self.assertEqual(process.stdout.readline(), b"account <account>\n")
+        finally:
+            process.stdin.close()
+            process.wait(timeout=60)
+            process.stdout.close()
+            process.stderr.close()
+        self.assertEqual(process.returncode, 0)
+
+    def test_the_stream_keeps_the_last_four_digits_on_request(self) -> None:
+        self.assertRedacts("account 123456789012\n", "account <account-9012>\n",
+                           "--stream", "--keep-last-four")
 
 
 class Usage(unittest.TestCase):
