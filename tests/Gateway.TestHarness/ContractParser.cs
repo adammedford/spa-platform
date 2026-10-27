@@ -12,8 +12,8 @@ namespace Gateway.TestHarness;
 /// proven that way: <see cref="ErrorRows"/> (a second table and a table without its separator among
 /// the breaks, which prove <see cref="ContractSection.Rows"/> reads every table in a section),
 /// <see cref="Error"/>, <see cref="CookieNames"/>, <see cref="BaselineCspTemplate"/>,
-/// <see cref="FixedResponseHeaders"/> (an empty value), <see cref="ForbiddenHeaderPrefix"/> and
-/// <see cref="TelemetryNames"/>. <see cref="BaselineCsp"/> is fed only unbroken text there, and
+/// <see cref="FixedResponseHeaders"/> (an empty value), <see cref="ForbiddenHeaderPrefix"/>,
+/// <see cref="AssetNotFoundCacheControl"/> and <see cref="TelemetryNames"/>. <see cref="BaselineCsp"/> is fed only unbroken text there, and
 /// <see cref="CookiePrefix"/> and <see cref="CsrfHeaderName"/> are read only from the live contract.
 /// Nothing here reads a file; <see cref="Contract"/> does, once per member.
 ///
@@ -144,6 +144,27 @@ internal static class ContractParser
             : throw new InvalidOperationException(
                 $"{BrowserContract} -> The baseline content security policy: the block does not hold exactly one "
                 + "<placeholder> for the provider origin. The contract reader reads it from there.");
+    }
+
+    /// <summary>
+    /// The <c>Cache-Control</c> value every 404 of the asset row carries, from the Endpoints sentence that
+    /// begins "Every 404 the asset row answers carries": its first backquote, which holds
+    /// <c>Cache-Control: value</c>. Read across the page's line wrapping. No such sentence, or a first
+    /// backquote that is not the header with a value, throws.
+    /// </summary>
+    internal static string AssetNotFoundCacheControl(string browserContract)
+    {
+        const string Sentence = "Every 404 the asset row answers carries ";
+        const string Header = "Cache-Control: ";
+        ContractSection endpoints = ContractSection.Of(BrowserContract, browserContract, "## Endpoints");
+        string prose = endpoints.Text.Replace('\n', ' ');
+        int at = prose.IndexOf(Sentence, StringComparison.Ordinal);
+        string first = at < 0
+            ? throw endpoints.Broken($"no sentence begins '{Sentence}`{Header}...`'")
+            : ContractSection.Backquoted(prose[(at + Sentence.Length)..]).FirstOrDefault() ?? string.Empty;
+        return first.StartsWith(Header, StringComparison.Ordinal) && first[Header.Length..].Trim().Length > 0
+            ? first[Header.Length..]
+            : throw endpoints.Broken($"the sentence '{Sentence}...' backquotes '{first}', not `{Header}value`");
     }
 
     /// <summary>

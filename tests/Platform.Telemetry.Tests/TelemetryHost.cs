@@ -44,6 +44,13 @@ public sealed class TelemetryHost : IAsyncDisposable
     /// <summary>A header naming the rule id the later-stage stand-in rejects the request under.</summary>
     public const string RejectHeader = "X-Test-Reject";
 
+    /// <summary>
+    /// A header naming the class of key the later-stage stand-in reports a refused object read for,
+    /// <c>asset</c> or <c>shell</c>, as the asset route writes it (change request
+    /// contracts/changes/issue-381-object-read-refusal.md, item 5).
+    /// </summary>
+    public const string ReadRefusedHeader = "X-Test-Read-Refused";
+
     private readonly StageHost host;
     private readonly EchoUpstreamListener upstream;
     private readonly ConcurrentQueue<Activity> spans;
@@ -93,14 +100,17 @@ public sealed class TelemetryHost : IAsyncDisposable
         CancellationToken ct,
         bool telemetry = true,
         IDictionary<string, string?>? configuration = null,
-        string unknownHostRule = "host.unknown")
+        string unknownHostRule = "host.unknown",
+        string appId = AppId)
     {
         EchoUpstream echo = new();
         EchoUpstreamListener listener = await echo.ListenAsync(ct);
 
         ConcurrentQueue<Activity> spans = new();
         List<Metric> metrics = [];
-        AppDefinition entry = TestApps.Entry(AppId);
+        // The app host resolution pins. Overridable so a metric test can pick out its own points by
+        // app_id among the instruments every host in the test process reports to.
+        AppDefinition entry = TestApps.Entry(appId);
 
         StageHost host;
         try
@@ -205,6 +215,15 @@ public sealed class TelemetryHost : IAsyncDisposable
             {
                 fields?.Rule = rule;
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
+            // The asset route's refused read: the class of key, never the key, and the 404 a refused
+            // asset answers. The telemetry stage reads the class and not the status.
+            if (context.Request.Headers[ReadRefusedHeader] is [{ } refused, ..])
+            {
+                fields?.ReadRefused = refused;
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
 

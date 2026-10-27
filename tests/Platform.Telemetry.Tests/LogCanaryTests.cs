@@ -20,7 +20,14 @@ public sealed class LogCanaryTests
     private const string Cookie = "CANARY-COOKIE-b850";
     private const string Secret = "CANARY-SECRET-e1e9";
 
-    private static readonly string[] Canaries = [Code, State, Token, Cookie, Secret];
+    // Not a credential: the client's path, which becomes the object key the asset route reads. read_refused
+    // names the class of key and never the key or the path (contracts/telemetry.md), so the search
+    // covers it as it covers the credentials.
+    private const string Key = "CANARY-KEY-4d27";
+
+    private static readonly string[] Credentials = [Code, State, Token, Cookie, Secret];
+
+    private static readonly string[] Canaries = [.. Credentials, Key];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -48,6 +55,13 @@ public sealed class LogCanaryTests
         api.Headers.Add("Authorization", "Bearer " + Token);
         api.Headers.Add("Cookie", "__Host-spa-session=" + Cookie);
         await client.SendAsync(api, Ct);
+
+        // A refused object read: the key is the path, and the request carries a session cookie, so the
+        // line that carries read_refused is searched with a key and a credential behind it.
+        using HttpRequestMessage refused = new(HttpMethod.Get, new Uri(host.BaseAddress, $"/assets/{Key}.js"));
+        refused.Headers.Add(TelemetryHost.ReadRefusedHeader, "asset");
+        refused.Headers.Add("Cookie", "__Host-spa-session=" + Cookie);
+        await client.SendAsync(refused, Ct);
 
         // A logger in the authentication namespace writing at Debug and Trace, as the handler does,
         // and an application logger that names its properties plainly.
@@ -78,6 +92,14 @@ public sealed class LogCanaryTests
         Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request"
             && line.GetProperty("route").GetString() == "api"
             && line.GetProperty("session_ref").GetString() == Platform.Abstractions.SessionRef.Of(Cookie));
+
+        // The search reaches a line that carries read_refused, and the field is the class alone.
+        // Mutation that turns it red: logging the request path in read_refused fails this assertion.
+        // Logging the path on a line of its own for a refused read, read_refused still "asset", is what
+        // the canary search below catches.
+        Assert.Contains(host.Log.Json, line => line.GetProperty("msg").GetString() == "request"
+            && line.TryGetProperty("read_refused", out System.Text.Json.JsonElement refused)
+            && refused.GetString() == "asset");
         foreach (string line in host.Log.Rendered)
         {
             foreach (string canary in Canaries)
@@ -123,7 +145,8 @@ public sealed class LogCanaryTests
         foreach (System.Diagnostics.Activity span in host.Spans)
         {
             string rendered = span.DisplayName + " " + string.Join(" ", span.TagObjects.Select(t => t.Key + "=" + t.Value));
-            foreach (string canary in Canaries)
+            // A span carries the request path by design (url.path), so the key canary is not searched here.
+            foreach (string canary in Credentials)
             {
                 Assert.DoesNotContain(canary, rendered, StringComparison.Ordinal);
             }
