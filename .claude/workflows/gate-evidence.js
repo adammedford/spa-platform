@@ -682,7 +682,7 @@ const g = scope.gate
 const regGate = scopeRefusals.length ? undefined : register.gates.get(gate)
 const def = regGate
   ? { exitTest: regGate.exitTest, ids: regGate.ids, criteria: regGate.criteria, fromRegister: true }
-  : { exitTest: (g && g.exitTest) || '', ids: (g && g.ids) || [], criteria: (g && g.criteria) || [], fromRegister: false }
+  : { exitTest: (g && g.exitTest) || '', ids: (g && g.ids) || [], criteria: (g && g.criteria) || [], fromRegister: false }  // empty-ok: no ids fails the verdict below ("names no test id"), and a null g leaves refusals that stop the run first
 const ctx = { base, date, runLog, gate, fromRegister: def.fromRegister }
 // The ids this run proves: the gate's, each tiered by the exit test cell or its row, narrowed by only
 // and skipIds. An id the Scope agent returned malformed, an id in neither document, a retired id, an
