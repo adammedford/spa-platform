@@ -25,11 +25,11 @@ Every 404 the asset row answers carries `Cache-Control: private, no-store`: a ke
 answered as absent, a key whose read the store refused, and a reserved path refused before any
 read. Under the deployed role every missing asset is a refused read, and RFC 9110 section 15.5.5
 lets a cache keep a 404 heuristically, so without it a 404 caused by a passing permission fault
-could outlive the fault. So does the asset route's `shell_unavailable` 500. The shell is the key
-whose release-relative path is exactly `index.html`, compared ordinally: `/`, `/index.html` and
-every extensionless fallback, including one under `/assets/`, and not `/Index.html` or
-`/assets/index.html` (change request `contracts/changes/issue-381-object-read-refusal.md`, items 3
-and 4).
+could outlive the fault. The asset route's `shell_unavailable` 500 carries it too. The shell is the
+key whose release-relative path is exactly `index.html`, compared ordinally: `/`, `/index.html` and
+every extensionless fallback, including one under `/assets/`, resolve to it, and `/Index.html` and
+`/assets/index.html` do not (change request `contracts/changes/issue-381-object-read-refusal.md`,
+items 3 and 4).
 
 The three `/bff` endpoints and session record share the G1b freeze (ADR-0017). The annotated
 `contracts-v1` tag is the freeze record; identity implementation stays blocked until it exists.
