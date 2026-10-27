@@ -299,9 +299,10 @@ judge() {
       ;;
     # The identity root's user pool. The index went on listing it 16 minutes after #242's teardown
     # while DescribeUserPool answered ResourceNotFoundException (#466), so a pool Cognito no longer
-    # knows is dropped and one it still describes stands. Its Status is documented as no longer
-    # used, so the describe reads the id.
+    # knows is dropped and one it still describes stands.
     # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html
+    # The pool's Status is documented as no longer used, so the describe reads the id.
+    # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UserPoolType.html
     cognito-idp:userpool/*)
       aws_call cognito-idp describe-user-pool --user-pool-id "${resource##*/}" --query UserPool.Id
       case "$OUTCOME" in
