@@ -26,8 +26,9 @@
 #   4. The tag query in the selected Region. An ECS cluster, service or task definition whose
 #      describe says INACTIVE is dropped, and so is a task definition teardown.sh deleted
 #      (DELETE_IN_PROGRESS) or one ECS no longer knows; an EC2 id is dropped when EC2's describe does
-#      not know it, and the cell's session table when DynamoDB's does not (#338). Anything else
-#      listed stands: the key ring's parameters among them, which teardown.sh deletes first.
+#      not know it, the cell's session table when DynamoDB's does not (#338), and the identity
+#      root's user pool when Cognito's does not (#466). Anything else listed stands: the key ring's
+#      parameters among them, which teardown.sh deletes first.
 # A reader that finds something is asked again, every SPA_TEARDOWN_TAG_POLL seconds, until it finds
 # nothing or SPA_TEARDOWN_TAG_WAIT runs out: the tagging API can lag a deletion, so the query retries
 # for a few minutes first (docs/plan/05-infrastructure-and-cost.md, Teardown). A reader that has
@@ -184,6 +185,7 @@ INACTIVE=0
 DELETED=0
 UNKNOWN=0
 TABLES=0
+POOLS=0
 
 # An ECS describe's status, or its failure's reason: INACTIVE is dropped (#118 step 2), and so is
 # MISSING, which is how DescribeClusters and DescribeServices answer for one they do not know (a
@@ -295,6 +297,19 @@ judge() {
         *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
       esac
       ;;
+    # The identity root's user pool. The index went on listing it 16 minutes after #242's teardown
+    # while DescribeUserPool answered ResourceNotFoundException (#466), so a pool Cognito no longer
+    # knows is dropped and one it still describes stands. Its Status is documented as no longer
+    # used, so the describe reads the id.
+    # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html
+    cognito-idp:userpool/*)
+      aws_call cognito-idp describe-user-pool --user-pool-id "${resource##*/}" --query UserPool.Id
+      case "$OUTCOME" in
+        success) stands "${arn} (Cognito still describes it)" ;;
+        ResourceNotFoundException) POOLS=$((POOLS + 1)) ;;
+        *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
+      esac
+      ;;
     # Every other type the index lists stands: the index lists a resource that carries the tag.
     *) stands "$arn" ;;
   esac
@@ -306,6 +321,7 @@ read_tag_index() {
   DELETED=0
   UNKNOWN=0
   TABLES=0
+  POOLS=0
   # --tag-filters matches a value exactly: no prefix, no wildcard (contracts/resource-tags.md).
   # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_TagFilter.html
   aws_read "the platform tag query" resourcegroupstaggingapi get-resources \
@@ -320,6 +336,7 @@ read_tag_index() {
   [ "$DELETED" -eq 0 ] || dropped="${dropped}, ${DELETED} ECS records deleted"
   [ "$UNKNOWN" -eq 0 ] || dropped="${dropped}, ${UNKNOWN} EC2 ids describe does not know"
   [ "$TABLES" -eq 0 ] || dropped="${dropped}, ${TABLES} DynamoDB tables DynamoDB does not know"
+  [ "$POOLS" -eq 0 ] || dropped="${dropped}, ${POOLS} Cognito user pools Cognito does not know"
   SUMMARY="${count} listed, none standing${dropped:+:}${dropped#,}"
 }
 

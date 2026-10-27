@@ -562,6 +562,20 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         if "describe_knows" in entry:
             entry["describe_knows"] -= 1
         return entry.get("status", "ACTIVE")
+    if command == "cognito-idp describe-user-pool":
+        # A pool Cognito does not know is ResourceNotFoundException (#466). "describe_knows" counts the
+        # describes that still find it, as for EC2.
+        # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html
+        if query != "UserPool.Id":
+            raise Unexpected(f"describe-user-pool --query {query!r}")
+        ident = options.get("user-pool-id", "")
+        entry = next((entry for entry in world["tagged"]
+                      if entry["type"] == "cognito-idp:userpool" and entry["arn"].endswith(f":userpool/{ident}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError("ResourceNotFoundException", "DescribeUserPool")
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return ident
     if command == "ssm get-parameters-by-path":
         # The path is a hierarchy and takes no trailing slash; --recursive reads below its first
         # level. The CLI pages on its own and --query applies to the whole answer.
