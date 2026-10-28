@@ -257,8 +257,8 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
     def test_a_rollout_in_progress_after_the_waiter_that_then_completes_passes(self):
         # #467: services-stable returned while the primary deployment was still IN_PROGRESS, and the
         # one read that followed failed a deployment that completed a minute later. While it is in
-        # progress the double lists two deployments, as the service did then (1 to add, 1 to
-        # destroy), so the deployment count is shown to be read after the rollout settles.
+        # progress the double lists two deployments (a test device, see cell_doubles.py), so the
+        # deployment count is shown to be read after the rollout settles.
         world = seeded_world()
         world["faults"]["rollout_in_progress"] = 3
         case = cell.Case(self, outputs=True, world=world)

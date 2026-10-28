@@ -387,9 +387,11 @@ wait_and_assert() {
   # applied task definition, completed.
   # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html
   #
-  # The waiter does not wait on the primary's rolloutState, and returns while it is still
-  # IN_PROGRESS, for instance while the previous task's target drains: one read then failed a
-  # deployment that completed a minute later (#467). So it is read again, every
+  # The waiter succeeds on one deployment with its running count at the desired count, and does not
+  # read the primary's rolloutState, which can still be IN_PROGRESS when it returns: one read then
+  # failed a deployment that completed a minute later (#467).
+  # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ecs/wait/services-stable.html
+  # So it is read again, every
   # ROLLOUT_POLL_SECONDS, until it is COMPLETED or FAILED, at most ROLLOUT_READS times: 40 reads 15
   # seconds apart, the waiter's own cadence, span 585 seconds, within its ten minutes. Every other
   # value fails at once. Everything after this loop reads the service as the last read found it.

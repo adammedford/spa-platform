@@ -367,8 +367,11 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             return [td_arn(service["taskDefinition"]), TARGET_GROUP_ARN]
         if query == ("services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, "
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
-            # A rollout still in progress: the primary reads IN_PROGRESS, beside the previous
-            # deployment not yet drained, for as many reads as are left, then settles (#467).
+            # A rollout still in progress: the primary reads IN_PROGRESS for as many reads as are
+            # left, then settles (#467). These reads also list two deployments, as the "deployments"
+            # fault does, so a case shows that the later checks use the settled read and not the
+            # first. That is a test device, not what #242 saw: the real waiter succeeds only on one
+            # deployment, and this double's waiter does not model that condition.
             if service.get("inProgressReads", 0) > 0:
                 service["inProgressReads"] -= 1
                 return [td_arn(service["taskDefinition"]), "IN_PROGRESS", 2, TARGET_GROUP_ARN]
