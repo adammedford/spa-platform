@@ -737,6 +737,29 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   if (!grills.length) fail('no grill prompt was rendered, so the check that the grill files no issue read nothing')
 }
 
+// 20. A complete lane's ticket is not its row (#388, #457). On 2026-10-24 the integrate step wrote "Merge task P2-2"
+//     from the lane's completeness alone while #338 and #342, parts of P2-2, were open. Every integrate prompt of a
+//     complete lane asks tools/landing_subjects.py for the subject's head, in the integration worktree, before the
+//     merge, and writes the subject from its answer, never from completeness. The rule itself is proved in
+//     tools/landing_subjects_tests.py; here only that the prompt asks it, and asks it first.
+{
+  const INT_WT = `${fixture.args.wt}/overnight`
+  const integrates = allPrompts.filter((x) => x.label.startsWith('integrate:'))
+  if (!integrates.length) fail('#388: no integrate prompt was rendered, so the subject check read nothing')
+  for (const c of integrates) {
+    const id = c.label.split(':')[1]
+    const ask = `python3 -I tools/landing_subjects.py --subject-for ${id} --ticket ${byId[id].issue}`
+    const at = c.prompt.indexOf(ask)
+    const merge = c.prompt.indexOf(' merge --no-ff --no-edit -F ')
+    if (at < 0) { fail(`#388: the ${c.label} prompt does not ask "${ask}" for the subject`); continue }
+    if (!c.prompt.slice(0, at).endsWith(`cd ${INT_WT} && `)) fail(`#388: the ${c.label} prompt asks the subject outside the integration worktree ${INT_WT}`)
+    if (merge < 0 || merge < at) fail(`#388: the ${c.label} prompt merges before it asks the subject`)
+    if (!c.prompt.includes('- subject "<head>: <what landed>"')) fail(`#388: the ${c.label} prompt does not write the subject from the answer's head`)
+    if (c.prompt.includes(`- subject "Merge task ${id}: `)) fail(`#388: the ${c.label} prompt still writes "Merge task ${id}" from the lane's completeness`)
+    if (!c.prompt.includes('naming each open part ticket')) fail(`#388: the ${c.label} prompt does not name the open part tickets on a part merge's Outstanding line`)
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))

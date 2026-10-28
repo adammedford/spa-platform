@@ -942,7 +942,8 @@ class PartRowMergeTests(CheckTestCase):
                           f"pre-push: {PART_ROW_FAIL}", HOOK_FIX], result.stderr)
 
 
-LANDING_FAIL = "a full-landing merge names a ticket with an open box, or the full-landing merges were not judged."
+LANDING_FAIL = ("a full-landing merge names a ticket with an open box or a plan row with an open part ticket, "
+                "or the full-landing merges were not judged.")
 
 
 class FullLandingMergeTests(CheckTestCase):

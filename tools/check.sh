@@ -99,9 +99,11 @@
 # open `- [ ]` box, naming the commit, the issue and each open box. A "Merge part of task" commit,
 # and a commit with no Ticket line, is never judged by it. On 2026-10-22 the overnight integrate step
 # wrote "Merge task 6.7" over #62 with two boxes open, and tools/roadmap.py, which reads such a
-# subject as landed for good, said S7 owed nothing. Without gh, a login or GitHub it says the merges
-# went unchecked and fails nothing, as the steering check does offline; only python3 is a tool it
-# needs.
+# subject as landed for good, said S7 owed nothing. It also fails a full landing that names a plan
+# row while an open issue, other than one on the merge's Ticket lines, declares itself part of that
+# row (#388, #457): "Merge task P2-2" landed so on 2026-10-24 with #338 and #342 open. Without gh, a
+# login or GitHub it says the merges went unchecked and fails nothing, as the steering check does
+# offline; only python3 is a tool it needs.
 #
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
@@ -377,7 +379,7 @@ fi
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I tools/landing_subjects.py --base "$base" \
-      || fail "a full-landing merge names a ticket with an open box, or the full-landing merges were not judged."
+      || fail "a full-landing merge names a ticket with an open box or a plan row with an open part ticket, or the full-landing merges were not judged."
   else
     echo "pre-push: full-landing merges not checked: no main to diff against." >&2
   fi
