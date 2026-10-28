@@ -59,8 +59,11 @@ out of order.
 
 **A commit that changes a steering document names its authority** (ADR-0023). The steering
 documents are `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`, `OWNERSHIP.md`, `CODING_STANDARDS.md`,
-`docs/agents/`, `docs/adr/` and `contracts/`. The commit's message ends with a trailer in one of two
-forms, on a line of its own in the last paragraph, beside any other trailers:
+`docs/agents/`, `docs/adr/` and `contracts/`, except `docs/agents/issue-tracker.md`,
+`docs/agents/triage-labels.md` and `docs/agents/aws-rules.md`, which a setup skill rewrites when it
+is run again (#411, #412). `docs/agents/domain.md` stays in the set while it holds a rule of this
+repository's. The commit's message ends with a trailer in one of two forms, on a line of its own in
+the last paragraph, beside any other trailers:
 
 ```
 Authority: #<n>     the ticket whose acceptance criterion asks for the change,
@@ -76,13 +79,14 @@ trailer to the last commit. git reads trailers from the message's last paragraph
 
 `.github/steering.py` holds this, in the pre-push hook and in CI, on every branch (#102). It reads
 each non-merge commit between the base the check judges against and HEAD, made since the starting
-point the script records, and fails one that changes a steering document with no `Authority:`
-trailer, a `#<n>` that names no issue (a pull request's number included), or a URL that is not a
-comment on this repository, naming the commit and the paths. A merge needs no trailer, and neither
-does a commit that only adds an open change request under `contracts/changes/`; editing or removing
-one does, and a commit that sets a request's Status to decided needs a trailer that is the URL of a
-confirmed answer, never a bare `#<n>`. Whether what the trailer cites decides the change is the
-reviewer's call, not the check's.
+points the script records, and fails one that changes a steering document with no `Authority:`
+trailer, a `#<n>` that names no issue (a pull request's number included) or names a change request,
+or a URL that is not a comment on this repository, naming the commit and the paths. A change
+request's own number is never an authority, since anyone may file one; its decision comment's URL
+is. A merge needs no trailer. A file added under `contracts/changes/`, the read-only archive of
+requests filed before they were issues, fails whatever its trailer cites; editing or removing one
+needs a trailer like any other steering change. Whether what the trailer cites decides the change is
+the reviewer's call, not the check's.
 
 ## Land it
 
