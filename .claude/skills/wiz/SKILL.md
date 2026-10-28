@@ -102,7 +102,7 @@ answer governs Stage 0 too. Then, each line after the prelude:
 ```bash
 tools/preflight.sh                       # must end ready; it compares the account with the pin; read its Container engine row
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
-git merge --ff-only origin/main          # a call of its own: the guard admits exactly this form
+git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
 for n in 63 242 236; do
   gh issue view "$n" --json number,state,title,body \
     --jq '"#\(.number) \(.state) \(.title)", (.body | split("\n")[] | select(test("^- \\[ \\]")))'

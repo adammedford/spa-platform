@@ -17,8 +17,8 @@ included (#226 Q16 to Q18). It names the route instead: a worktree of the sessio
 docs/agents/landing-work.md -> "Take a task" says.
 
 **The one merge it admits** is the fast-forward of a clean `main` to what has landed (#226 Q15,
-Q19, Q20): `git merge` with exactly the arguments `--ff-only` and `origin/main`, in either order and
-with no git option before the subcommand but `-C`, while `git symbolic-ref -q HEAD` is
+Q19, Q20): `git merge` with exactly the arguments `--ff-only` and `origin/main`, in either order, with
+`--quiet` or `-q` allowed once beside them (#468) and no git option before the subcommand but `-C`, while `git symbolic-ref -q HEAD` is
 `refs/heads/main` and `git status --porcelain --untracked-files=no` prints nothing. Untracked files
 are allowed: they are Adam's, and `--ff-only` will not overwrite one. Every other merge, ref or
 extra option is refused as before, and so is `git pull`, which reads the configured upstream and
@@ -126,8 +126,10 @@ MOVES = {"rebase", "switch", "checkout", "reset", "commit", "merge", "pull", "ch
 # index; their dry runs too, which belong in the session's worktree like the real run (#226 Q16).
 CHANGES = {"rm", "mv", "add", "restore", "clean", "apply"}
 
-# The one merge admitted, as its arguments in either order (#226 Q20).
+# The one merge admitted, as its arguments in either order (#226 Q20), and the one option allowed
+# beside them, once, which changes what the merge prints and not what it does (#468).
 FAST_FORWARD = ["--ff-only", "origin/main"]
+QUIET = ("--quiet", "-q")
 
 # What a pathspec holding one of these means is git's pattern or magic, not one file: the glob
 # characters and their escape, and a leading colon (https://git-scm.com/docs/gitglossary#def_pathspec).
@@ -476,11 +478,21 @@ def restore_paths(subcommand, args, options):
     return paths
 
 
+def fast_forward(args):
+    """Whether a merge's arguments are the one fast-forward admitted: `--ff-only` and `origin/main`,
+    with at most one `--quiet` or `-q` beside them."""
+    words = [arg or "" for arg in args]
+    quiet = [word for word in words if word in QUIET]
+    if len(quiet) > 1:
+        return False
+    return sorted(word for word in words if word not in QUIET) == FAST_FORWARD
+
+
 def refusal(subcommand, args, options):
     """Whether the main checkout refuses the call: False, True, "fast-forward" when it is the one
     merge admitted, which is refused only on a `main` that is not clean, or "restore" when it is the
     one restore admitted, which is refused unless it would change no content."""
-    if subcommand == "merge" and not options and sorted(arg or "" for arg in args) == FAST_FORWARD:
+    if subcommand == "merge" and not options and fast_forward(args):
         return "fast-forward"
     if restore_paths(subcommand, args, options) is not None:
         return "restore"
