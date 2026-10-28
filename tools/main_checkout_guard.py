@@ -102,7 +102,7 @@ Do branch work in a worktree of your own, and run the command there:
     {route}
 
 Here, read-only git, `git worktree add`, file edits, and `git fetch origin` followed by
-`git merge --ff-only origin/main` (`--quiet` allowed) on a clean `main` still run.
+`git merge --ff-only origin/main` (`--quiet` or `-q` allowed) on a clean `main` still run.
 docs/agents/landing-work.md -> "Take a task" says why.
 """
 

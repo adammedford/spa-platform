@@ -7,7 +7,7 @@ The `wiz` skill pipes every post through tools/wiz_redact.py (#259), so a rule t
 leaks an account id, an authorization code or a secret into a public comment and says nothing. Each
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
-seven rules has at least one case that turns red when that rule is removed from the script; #259's
+eight rules has at least one case that turns red when that rule is removed from the script; #259's
 merge body names the mutation and the case. #468 added the terminal's --stream mode and P-04's
 passing case lines, which a post carries as they are.
 
@@ -247,6 +247,23 @@ class RuleSevenTokenHeaders(Redacts):
             "https://b.s3.amazonaws.com/k?X-Amz-Security-Token=IQoJb3&X-Amz-Expires=60&X-Amz-Signature=abc123\n",
             "https://b.s3.amazonaws.com/k?X-Amz-Security-Token=<elided>&X-Amz-Expires=60&X-Amz-Signature=<elided>\n",
         )
+
+
+class RuleEightTerraformClientIds(Redacts):
+    def test_a_user_pool_clients_terraform_id_is_elided_and_other_ids_are_kept(self) -> None:
+        self.assertRedacts(
+            'aws_cognito_user_pool_client.app["app3"]: Creation complete after 2s [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n'
+            'aws_cognito_user_pool_client.app["app3"]: Refreshing state... [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n'
+            'aws_ssm_parameter.client_secret["app3"]: Creation complete after 1s [id=/spa-platform/poc/app3/client-secret]\n',
+            'aws_cognito_user_pool_client.app["app3"]: Creation complete after 2s [id=<elided>]\n'
+            'aws_cognito_user_pool_client.app["app3"]: Refreshing state... [id=<elided>]\n'
+            'aws_ssm_parameter.client_secret["app3"]: Creation complete after 1s [id=/spa-platform/poc/app3/client-secret]\n',
+        )
+
+    def test_the_stream_elides_a_user_pool_clients_terraform_id(self) -> None:
+        self.assertRedacts('aws_cognito_user_pool_client.app["app3"]: Destruction complete after 1s [id=3n4b5c6d7e8f]\n',
+                           'aws_cognito_user_pool_client.app["app3"]: Destruction complete after 1s [id=<elided>]\n',
+                           "--stream")
 
 
 class AccessDenied(unittest.TestCase):

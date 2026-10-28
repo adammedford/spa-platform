@@ -6,7 +6,7 @@
 
 The `wiz` skill posts each stage's evidence to its ticket from captured output, and every post goes
 through this script first (#259). It used to follow a paragraph of prose, which can fail quietly;
-tools/wiz_redact_tests.py holds each rule to a case. It applies seven rules, in this order:
+tools/wiz_redact_tests.py holds each rule to a case. It applies eight rules, in this order:
 
 1. A twelve-digit number, or one written 1234-5678-9012, becomes `<account>`. With
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
@@ -27,6 +27,9 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies seven rules, in 
    `Bearer` token of sixteen characters or more elsewhere is elided the same way.
 7. The value of an `X-XSRF-TOKEN:`, `X-CSRF-TOKEN:`, `RequestVerificationToken:` or
    `X-Amz-Security-Token:` header line becomes `<elided>`.
+8. The `[id=...]` Terraform prints on a line naming an `aws_cognito_user_pool_client` resource
+   (`Creation complete`, `Refreshing state...`, `Destruction complete`) becomes `[id=<elided>]`: that
+   id is the client id. Other resources keep theirs (#468).
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -37,7 +40,7 @@ One shape is let through (#468): a whole line of P-04's passing cases,
 `pass  <case>: 403 AccessDenied (<the kind of policy>)`, as verify-release-immutability.sh prints
 it, since there the refusal is the evidence. Any other line naming the refusal still stops.
 
---stream is the terminal's mode (#468). Each line goes through the same seven rules as it arrives
+--stream is the terminal's mode (#468). Each line goes through the same eight rules as it arrives
 and is flushed at once, so a long-running command reads live; `AccessDenied` passes through, since
 the human has to see it to stop (the skill's rule 7), and the mode always exits 0. A rule that spans
 lines, a JSON value broken over several, is applied to each line alone.
@@ -114,6 +117,9 @@ AUTHORIZATION = re.compile(r"(?<![\w-])(Authorization\s*:[ \t]*)(?:([A-Za-z]+)[ 
 BEARER = re.compile(r"(?<![\w-])(Bearer[ \t]+)[A-Za-z0-9._~+/=-]{16,}")
 
 TOKEN_HEADER = re.compile(rf"(?<![\w-])((?:{TOKEN_HEADERS})\s*:[ \t]*)[^\s]+", re.IGNORECASE)
+
+# Terraform's progress line for a user pool client, whose resource id is the client id.
+TERRAFORM_CLIENT_ID = re.compile(r"(aws_cognito_user_pool_client[^\n]*\[id=)[^\]\n]+(\])")
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
@@ -216,6 +222,7 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = AUTHORIZATION.sub(authorization, text)
     text = BEARER.sub(lambda m: f"{m.group(1)}<elided>", text)
     text = TOKEN_HEADER.sub(lambda m: f"{m.group(1)}<elided>", text)
+    text = TERRAFORM_CLIENT_ID.sub(r"\1<elided>\2", text)
     return text
 
 

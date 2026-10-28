@@ -27,7 +27,9 @@ serves: #242 (the four scripts), #63 (the deployed gate rows), #236 (seed with t
 3. **Nothing secret is printed or posted:** no authorization code, no client secret, no session
    name, no client id, no ARN, no account id beyond its last four digits. Every AWS read goes to
    the terminal through the stream mode below; every post through the post mode. If a line cannot
-   be redacted with confidence, leave it out and say so.
+   be redacted with confidence, leave it out and say so. The one exception is `a-and-b.md`'s A2,
+   which prints the login URL, carrying the client id, to the terminal only, because the human has
+   to open it; it goes into the record and never into a post.
 4. **Evidence goes to the ticket it serves**, as a comment headed by the stage, carrying the
    commit, the command, its exit code and its key lines. A failed or skipped stage posts "failed"
    or "not run" with the reason, never a sentence that would read the same on success. Each post
@@ -64,12 +66,14 @@ cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . 
 export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
 umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
 shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
+captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; echo "exit=${PIPESTATUS[0]}" >> "$R"; }
 spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
 ```
 
 Shell variables do not survive the call either: read `TD`, `TASK` and the like again in the call
-that uses them, and tee a read captured into a variable to the record (`| tee -a "$R"` inside the
-`$( )`). `shown` writes the command and its whole output to the record, unredacted, and prints it
+that uses them. A read whose value a later command needs runs as `X=$(captured <command>)`: its
+output goes to the variable and the record, its errors to the record and, masked, to the terminal,
+and nothing of it is printed unmasked. `shown` writes the command and its whole output to the record, unredacted, and prints it
 through `tools/wiz_redact.py --stream`, which masks account ids, ARNs and the rest of the script's
 rules line by line and passes `AccessDenied` through for rule 7. The exit printed is the command's,
 not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a bracket, and
@@ -156,9 +160,9 @@ digest's first eight hex digits.
 the suite's F-06 and F-07 need, rebuilt read-only from the running task definition:
 
 ```bash
-TD=$(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].taskDefinition' --output text | tee -a "$R")
-aws ecs describe-task-definition --task-definition "$TD" --output text \
-  --query "taskDefinition.containerDefinitions[?name=='gateway'] | [0].environment[].[name, value]" | tee -a "$R" > "$E/environment.tsv"
+TD=$(captured aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].taskDefinition' --output text)
+captured aws ecs describe-task-definition --task-definition "$TD" --output text \
+  --query "taskDefinition.containerDefinitions[?name=='gateway'] | [0].environment[].[name, value]" > "$E/environment.tsv"
 python3 -I tools/scripts/cell_documents.py config "$E/environment.tsv" contracts/platform-config.schema.json > "$E/platform-config.json"; echo "exit=$? ${TD##*/}"
 ```
 
@@ -169,6 +173,9 @@ export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.j
 shown dotnet test --project tests/e2e --filter-not-class Gateway.E2ETests.Functional.OnboardingTests \
   --report-xunit-junit --results-directory "$E/results-g3g4"
 ```
+
+The e2e host has no `--report-trx`: the flag is `--report-xunit-junit`, and an exit of 5 means a
+bad flag with zero tests run, so a 5 is a failed stage and not a result.
 
 Count toward an id only the test cases whose class is under `Gateway.E2ETests.Functional.` or
 `Gateway.E2ETests.Negative.`, the id read from the method's prefix (`F01_` is F-01). The
@@ -181,10 +188,10 @@ P-04 and P-06 run on the same deploy:
 
 ```bash
 shown tools/scripts/verify-release-immutability.sh --clean-up-as-teardown-role   # show the header's case list first
-TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text | tee -a "$R")
-ENI=$(aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --output text \
-  --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]" | tee -a "$R")
-IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text | tee -a "$R")
+TASK=$(captured aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+ENI=$(captured aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --output text \
+  --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]")
+IP=$(captured aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
 for port in 8080 443; do nc -G 5 -z "$IP" "$port" > /dev/null 2>&1; echo "$port exit=$?"; done | tee -a "$R"   # nc names the address on stderr
 ```
 
@@ -203,20 +210,25 @@ shown dotnet test --project tests/e2e --filter-class Gateway.E2ETests.Functional
   --report-xunit-junit --results-directory "$E/results-f07"
 ```
 
+The report flag and its exit 5 are as in C2.
+
 The test onboards and offboards app 3 in one run, so the platform-plan clause ("the platform plan
 is empty with app 3 served") is a second onboarding by hand, in the test's own steps. #63's F-07
 comment of 2026-10-27 is the worked example; post the same shape.
 
 1. `P=$(mktemp -d)`; print it, since later calls set `P` again by hand. Then the apps root's plan
-   with the onboarding directory, which must exit 2 with exactly app 3's three creates (`aws_cognito_managed_login_branding.app["app3"]`,
-   `aws_cognito_user_pool_client.app["app3"]`, `aws_ssm_parameter.client_secret["app3"]`); show it,
-   and apply the saved plan on confirm:
+   with the onboarding directory, which must exit 2 with exactly app 3's three creates
+   (`aws_cognito_managed_login_branding.app["app3"]`, `aws_cognito_user_pool_client.app["app3"]`,
+   `aws_ssm_parameter.client_secret["app3"]`); show it, and apply the saved plan on confirm:
 
    ```bash
-   terraform -chdir=infra/envs/poc/apps plan -input=false -detailed-exitcode -out="$P/onboard.tfplan" \
-     -var 'definition_dirs=["../../../../fixtures/apps","../../../../fixtures/onboarding"]'; echo "exit=$?"
-   terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
+   shown terraform -chdir=infra/envs/poc/apps plan -input=false -detailed-exitcode -out="$P/onboard.tfplan" \
+     -var 'definition_dirs=["../../../../fixtures/apps","../../../../fixtures/onboarding"]'
+   shown terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
    ```
+
+   The apply's `aws_cognito_user_pool_client` line carries the client id as `[id=...]`; the stream
+   mode's rule 8 masks it.
 
 2. spactl, as the test drives it. `outputs.json` names no client for app 3 until a script rewrites
    it, so `app add` reads a private copy with the apps root's `clients` output for app 3 merged in
@@ -247,10 +259,10 @@ comment of 2026-10-27 is the worked example; post the same shape.
    shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
    ```
 
-4. Offboard: `spactl app remove app3 --config "$E/platform-config.json" --outputs
-   infra/envs/poc/outputs.json` and `wait` on its revision; the apps root's plan without the `-var`,
-   saved under `"$P"`, exactly the three deletes, applied on confirm; a re-plan exits 0; then
-   `rm -rf "$P"`.
+4. Offboard, each command as `shown`: `spactl app remove app3 --config "$E/platform-config.json"
+   --outputs infra/envs/poc/outputs.json` and `wait` on its revision; the apps root's plan without
+   the `-var`, saved under `"$P"`, exactly the three deletes, applied on confirm; a re-plan exits 0;
+   then `rm -rf "$P"`.
 
 Post on #63: the test's run, and the clause's five steps with addresses and actions only.
 
@@ -280,9 +292,9 @@ stays.
 deployment order from the first root that is absent:
 
 1. `shown tools/scripts/certs.sh status`, then `certs.sh import` when ACM holds no `*.spa-poc.test`.
-2. The identity root, then the apps root: `init -backend-config=backend.hcl`, `plan`, `apply` on
-   confirm. Post both apply summaries on #242: this is a new user pool, so new client ids and test
-   user passwords.
+2. The identity root, then the apps root, each command as `shown terraform -chdir=<root> ...`:
+   `init -backend-config=backend.hcl`, `plan`, `apply` on confirm. Post both apply summaries on
+   #242: this is a new user pool, so new client ids and test user passwords.
 3. `infra/envs/poc/platform/terraform.tfvars`: back it up first (`cp -p` to `terraform.tfvars.bak`),
    then rewrite `issuers` from the identity root's outputs (`authority` is its `issuer`,
    `browser_origin` is `https://` plus its `cognito_domain`; the map's key and `profile` stay as
@@ -292,10 +304,12 @@ deployment order from the first root that is absent:
    it only when it matches `sha256:[0-9a-f]{64}`: ECR Public can answer 429, and an empty digest was
    written once. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a plain `terraform
    destroy` leaves it, and it overrides the sample image).
-4. The platform root on the sample image: `plan`, read for the certificate found, no per-app
-   resource, and P-01's counts (one load balancer, one listener, one target group, one service, one
-   bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs wait
-   services-stable`.
+4. The platform root on the sample image, as `shown`: `plan`, read for the certificate found, no
+   per-app resource, and P-01's counts (one load balancer, one listener, one target group, one
+   service, one bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs
+   wait services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
+   before step 5 answers "no such host", because it reads the cell's names from that file, and
+   `seed.sh` is what rewrites it.
 5. `seed.sh` with #236's Q107 capture, in its order: the commit; the names only of the `AWS_*`
    variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`; seed's whole
    output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
@@ -308,7 +322,9 @@ message with the CI run URL and the #63 comment URLs that hold its deployed rows
 human cuts the tag.
 
 **C5, keep the stack or destroy it.** Ask whether the stack stays up (about $30 a month) or is
-destroyed until Phase 2's deployed tier; `teardown.sh --yes` on confirm.
+destroyed until Phase 2's deployed tier; `teardown.sh --yes` on confirm, never a plain `terraform
+destroy` of the platform root, which leaves `images.auto.tfvars` to override the next sample-image
+apply and a stale `infra/envs/poc/outputs.json` on which `tunnel.sh` answers "no such host".
 
 End the sitting by printing what was posted where, what is held, and what the human still owes.
 
