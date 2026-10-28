@@ -90,7 +90,7 @@ const [REQUEST_HUMAN, REQUEST_AGENT] = [
 for (const t of [REQUEST_HUMAN, REQUEST_AGENT]) { tickets.push(t); byId[t.id] = t }
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
 // What the mocked lanes say they did with change requests (#436 Q10), so the report's "Change requests" lists have
-// one entry each: AFTER_CLOSE's implement filed #950 blocking its ticket, TRIAGED's review found #951 open and added
+// one entry each: AFTER_CLOSE's implement filed request 950 blocking its ticket, TRIAGED's review found request 951 open and added
 // an edge, and HELD_BY's grill could not reach GitHub and queued pending line 1. REQUEST_HUMAN's grill posted a
 // draft decision and found no decision comment, so it awaits Adam's decision.
 const FILED = { number: 950, title: 'Name the rotated-key store in contracts/pipeline.md', blocking: AFTER_CLOSE.issue, queued: 0, filed: true }
