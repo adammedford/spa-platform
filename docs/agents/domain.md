@@ -27,7 +27,8 @@ This repo is **single-context**: one glossary and one ADR directory at the root.
 
 ## Two decision surfaces, one of them read-only
 
-Where a decision lives, and in what order to read the layers: `docs/adr/README.md` → "Where a decision lives".
+Where a decision lives, and in what order to read the layers: `docs/adr/README.md` → "Where a
+decision lives".
 
 ## Use the glossary's vocabulary
 

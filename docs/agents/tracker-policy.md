@@ -149,8 +149,8 @@ A scripted session never posts a comment whose first line begins `Decision:`. It
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
 A foreground session may post a decision comment only on Adam's words given in that session, and the
 comment's last line says so ("Posted from a foreground session on Adam's words in it."). Every
-session posts as `@adammedford`, so this is a convention the shared account cannot enforce, as "no
-agent session writes a `Confirm`" is (above): the prompts and the reviewer guard it.
+session posts as `@adammedford`, so this is a convention the shared account cannot enforce, as the
+rule that no agent session writes a `Confirm` is (above): the prompts and the reviewer guard it.
 
 A `Confirm` on the Overnight issue never authorises a change request's edit; only the request's
 decision comment does. `.github/steering.py` reads only a cited comment's author, so it cannot tell

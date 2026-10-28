@@ -362,7 +362,7 @@ that closes it. It is **part-landed** when a merge into `main` advances it witho
 Landed is not done (see **Done**). _Avoid_: "merged" for landed, "landed" for done, and
 "half-landed" for part-landed.
 
-**Done** — the state of a plan row or a ticket, that has landed, whose tests pass in CI, that
+**Done** — the state of a plan row or a ticket that has landed, whose tests pass in CI, that
 touched only its owner's paths, and that no open change request waits on. Landed is not done, and
 merged is not done. _Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn
 is closed and not done.
