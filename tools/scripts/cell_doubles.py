@@ -367,6 +367,14 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             return [td_arn(service["taskDefinition"]), TARGET_GROUP_ARN]
         if query == ("services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, "
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
+            # A rollout still in progress: the primary reads IN_PROGRESS for as many reads as are
+            # left, then settles (#467). These reads also list two deployments, as the "deployments"
+            # fault does, so a case shows that the later checks use the settled read and not the
+            # first. That is a test device, not what #242 saw: the real waiter succeeds only on one
+            # deployment, and this double's waiter does not model that condition.
+            if service.get("inProgressReads", 0) > 0:
+                service["inProgressReads"] -= 1
+                return [td_arn(service["taskDefinition"]), "IN_PROGRESS", 2, TARGET_GROUP_ARN]
             return [td_arn(service["taskDefinition"]), service["rolloutState"], service["deployments"], TARGET_GROUP_ARN]
         raise Unexpected(f"describe-services --query {query!r}")
     if command == "ecs describe-task-definition" and query == "taskDefinition.status":
@@ -785,8 +793,12 @@ def apply_platform(world: dict, variables: dict):
         world["service"] = {"taskDefinition": previous, "rolloutState": "COMPLETED", "deployments": 1}
         return
     # "deployments": the previous deployment not yet drained, so the service lists two.
+    # "rollout_in_progress": the waiter returns while the primary deployment is still IN_PROGRESS,
+    # and it reads so for that many reads before it settles on "rollout" (#467). The waiter does not
+    # wait on rolloutState: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html
     world["service"] = {"taskDefinition": name, "rolloutState": world["faults"].get("rollout", "COMPLETED"),
-                        "deployments": world["faults"].get("deployments", 1)}
+                        "deployments": world["faults"].get("deployments", 1),
+                        "inProgressReads": world["faults"].get("rollout_in_progress", 0)}
     world["next_task"] += 1
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
     # "running_definition": a task running the applied digest under another revision, as one started
@@ -1100,6 +1112,18 @@ class Case:
 
     def remove(self, name: str):
         (self.bin / name).unlink()
+
+    def stub_sleep(self):
+        """Replaces the real sleep with one that records its arguments in sleeps.log and returns at
+        once, so a case can run a script's polling loop to its bound without the wall time (#467).
+        Only the cases that call this lose the real sleep."""
+        log_path = shlex.quote(str(self.dir / "sleeps.log"))
+        self.write_executable("sleep", f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {log_path}\n')
+
+    def sleeps(self) -> list[list[str]]:
+        """Each call to the stubbed sleep, as its arguments, in order."""
+        path = self.dir / "sleeps.log"
+        return [line.split() for line in path.read_text().splitlines()] if path.exists() else []
 
     def save(self):
         save_world(self.dir, self.world)

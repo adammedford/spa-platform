@@ -254,8 +254,47 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
 class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
     """Stable is not deployed. Each way the running service can differ from the apply is exit 1."""
 
-    def failed(self, world: dict, fragment: str):
+    def test_a_rollout_in_progress_after_the_waiter_that_then_completes_passes(self):
+        # #467: services-stable returned while the primary deployment was still IN_PROGRESS, and the
+        # one read that followed failed a deployment that completed a minute later. While it is in
+        # progress the double lists two deployments (a test device, see cell_doubles.py), so the
+        # deployment count is shown to be read after the rollout settles.
+        world = seeded_world()
+        world["faults"]["rollout_in_progress"] = 3
         case = cell.Case(self, outputs=True, world=world)
+        case.stub_sleep()
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual(4, len(self.rollout_reads(case)))
+        self.assertEqual([["15"]] * 3, case.sleeps())
+
+    def test_a_rollout_in_progress_that_then_fails_fails_naming_failed(self):
+        world = seeded_world()
+        world["faults"]["rollout_in_progress"] = 2
+        world["faults"]["rollout"] = "FAILED"
+        case = self.failed(world, "rollout is FAILED, not COMPLETED", stub_sleep=True)
+        self.assertEqual(3, len(self.rollout_reads(case)))
+        self.assertEqual([["15"]] * 2, case.sleeps())
+
+    def test_a_rollout_in_progress_past_the_window_fails_naming_in_progress(self):
+        # The window is the waiter's own cadence: 40 reads 15 seconds apart, within its ten minutes.
+        # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ecs/wait/services-stable.html
+        world = seeded_world()
+        world["faults"]["rollout_in_progress"] = 100
+        case = self.failed(world, "rollout is IN_PROGRESS, not COMPLETED, after 40 reads 15 seconds apart",
+                           stub_sleep=True)
+        self.assertEqual(40, len(self.rollout_reads(case)))
+        self.assertEqual([["15"]] * 39, case.sleeps())
+        self.assertEqual([], case.aws("ecs list-tasks"), "nothing after the rollout is read once it fails")
+
+    def rollout_reads(self, case) -> list[dict]:
+        return [c for c in case.aws("ecs describe-services") if "rolloutState" in c["options"].get("query", "")]
+
+    def failed(self, world: dict, fragment: str, stub_sleep: bool = False):
+        case = cell.Case(self, outputs=True, world=world)
+        if stub_sleep:
+            case.stub_sleep()
         result = case.run(SCRIPT)
         self.assertEqual(1, result.status, result.output)
         self.assertIn(fragment, result.stderr)
@@ -281,7 +320,10 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
     def test_a_rollout_that_did_not_complete(self):
         world = seeded_world()
         world["faults"]["rollout"] = "FAILED"
-        self.failed(world, "rollout is FAILED")
+        case = self.failed(world, "rollout is FAILED", stub_sleep=True)
+        # FAILED on the first read is final: nothing is read again (#467).
+        self.assertEqual(1, len(self.rollout_reads(case)))
+        self.assertEqual([], case.sleeps())
 
     def test_an_unhealthy_target(self):
         world = seeded_world()
