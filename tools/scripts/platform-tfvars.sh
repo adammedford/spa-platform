@@ -326,4 +326,4 @@ PY
   fail "$(root_name "$TFVARS") was not rewritten; it is unchanged."
 
 note "the sample image is pinned at ${SAMPLE_DIGEST}"
-note "pass: $(root_name "$TFVARS") holds the identity root's issuer and the sample image pin. terraform plan in $(root_name "$PLATFORM_ROOT") is next."
+note "pass: $(root_name "$TFVARS") holds the identity root's issuer and the sample image pin. The platform root's first apply is next."

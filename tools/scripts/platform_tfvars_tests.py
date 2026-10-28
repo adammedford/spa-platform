@@ -36,6 +36,10 @@ _spec.loader.exec_module(cell)
 import unittest  # noqa: E402
 
 SCRIPT = "platform-tfvars.sh"
+# The script reads Terraform and Docker and makes no AWS call of its own, so every case takes the aws
+# double off PATH: a call would fail the case rather than be answered. cell_doubles_tests.py reads
+# this to expect no aws call in this companion's harvest.
+NO_AWS_CALLS = True
 EXAMPLE = cell.ROOT / "infra/envs/poc/platform/terraform.tfvars.example"
 TFVARS = "infra/envs/poc/platform/terraform.tfvars"
 
@@ -80,6 +84,7 @@ class Tfvars(cell.CompanionTestCase):
         if digest is not None:
             world["public_images"] = {SAMPLE_REFERENCE: digest}
         case = cell.Case(self, world=world)
+        case.remove("aws")
         if content is not None:
             path = case.repo / TFVARS
             path.write_text(content)
