@@ -380,20 +380,16 @@ public sealed class AccessTokenSourceTests
         // carried the refresh out but answered late, so the retry presents the rotated-out token, which
         // the 10-second grace window honours.
         CapturedLog logs = new();
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], services: services =>
-        {
-            Deadline(TimeSpan.FromMilliseconds(300))(services);
-            services.AddSingleton(logs.Provider);
-        });
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton(logs.Provider), idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         (string key, SessionRecord atLogin) = await gateway.Sessions.SingleAsync();
-        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.FromSeconds(1);
 
-        IdentityGateway.Answer late = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer late = await RefreshPastTheDeadlineAsync(gateway, hold, jar);
         Assert.Equal((503, "idp_unavailable"), (late.Status, late.Body));
         Assert.Equal(atLogin, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
 
-        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.Zero;
         IdentityGateway.Answer retried = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
         Assert.Equal(200, retried.Status);
@@ -409,13 +405,12 @@ public sealed class AccessTokenSourceTests
         // T-D10, the deadline's caveat: the refresh the gateway gave up on was carried out, so the retry
         // replays a rotated-out token. With no grace window it is refused, nothing newer is stored, and
         // the session ends. A deadline is safe only with a grace window that covers the retry.
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], services: Deadline(TimeSpan.FromMilliseconds(300)));
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], idpClock: hold);
         Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
         gateway.Idp.Faults.RefreshRotationGrace = TimeSpan.Zero;
-        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.FromSeconds(1);
 
-        IdentityGateway.Answer gaveUp = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
-        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.Zero;
+        IdentityGateway.Answer gaveUp = await RefreshPastTheDeadlineAsync(gateway, hold, jar);
         IdentityGateway.Answer retried = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
         Assert.Equal((503, "idp_unavailable"), (gaveUp.Status, gaveUp.Body));
@@ -503,8 +498,44 @@ public sealed class AccessTokenSourceTests
             });
     }
 
-    private static Action<IServiceCollection> Deadline(TimeSpan deadline) =>
-        services => services.AddSingleton(new AccessTokenSourceOptions { ProviderDeadline = deadline });
+    /// <summary>
+    /// The provider deadline of the one refresh <see cref="RefreshPastTheDeadlineAsync"/> sends. The
+    /// provider holds that refresh until it is released, so the deadline need only cover the trip there
+    /// on a warm connection and the grant, not race a delay of fixed length (#461).
+    /// </summary>
+    private static readonly TimeSpan StepDeadline = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Asks for app 1's token on a due session under <see cref="StepDeadline"/> while the provider carries
+    /// the refresh out and then holds its answer, and returns the call's answer once the gateway gives
+    /// up. Only this call runs under the short deadline: the login before it and the retry after it run
+    /// under the default one (#461). That rests on the token source reading
+    /// <see cref="AccessTokenSourceOptions.ProviderDeadline"/> for each refresh, as its provider call
+    /// does today; a source that kept the figure from its construction would void it. The held answer is
+    /// released before this returns, with no delay left set, so the next refresh is answered at once.
+    /// </summary>
+    private static async Task<IdentityGateway.Answer> RefreshPastTheDeadlineAsync(
+        IdentityGateway gateway, HeldClock hold, Dictionary<string, string> jar)
+    {
+        AccessTokenSourceOptions options = gateway.Services.GetRequiredService<AccessTokenSourceOptions>();
+        TimeSpan usual = options.ProviderDeadline;
+        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.FromSeconds(1);
+        options.ProviderDeadline = StepDeadline;
+
+        long started = TimeProvider.System.GetTimestamp();
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        TimeSpan took = TimeProvider.System.GetElapsedTime(started);
+
+        options.ProviderDeadline = usual;
+        gateway.Idp.Faults.RefreshAnswerDelay = TimeSpan.Zero;
+        bool refreshHeld = hold.Holding.IsCompleted;
+        hold.Release();
+        Assert.True(refreshHeld, "the provider never held the refresh");
+        // Half the default deadline, which the shared backchannel's timeout still is: a call that gave up
+        // there, and not at the step's deadline, fails here.
+        Assert.True(took < usual / 2, $"the call gave up after {took}");
+        return answer;
+    }
 
     /// <summary>The lines the token source itself wrote, oldest first.</summary>
     private static string[] SourceLines(CapturedLog logs) =>
