@@ -609,5 +609,50 @@ class BrokenTests(unittest.TestCase):
         self.assertEqual(2, done.returncode)
 
 
+def load(name: str):
+    """A tools/ script as a module, loaded by path: `python3 -I` leaves tools/ off sys.path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(f"{name}_under_test", ROOT / "tools" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class RoadmapAgreementTests(unittest.TestCase):
+    # landing_subjects.py copies tools/roadmap.py's subject forms rather than importing them, so the
+    # copy is held to the source here: a subject the roadmap reads one way and the hold another would
+    # pass the check while the roadmap counted the row (CODING_STANDARDS.md, "A guard reads the thing
+    # it guards"; #457 review).
+    SUBJECTS = [
+        "Merge task P2-2: the key ring",
+        "Merge tasks issue-417 and P2-1: the last part",
+        "Merge tasks Issue-338, P2-1 and P2-2: both rows",
+        "Merge part of task issue-338: the store",
+        "merge PART OF tasks 6.7 and 1.6b: runbooks",
+        "Merge tasks I-4,2.1 and P2-12: a list without spaces",
+        "Merge task issue-9x: not an id",
+        "Merge pull request #12 from a/task/p2-1-store",
+        "Task 5.5: a branch commit",
+    ]
+
+    def test_ids_reads_every_subject_as_roadmap_reading_does(self):
+        landing, roadmap = load("landing_subjects"), load("roadmap")
+        for subject in self.SUBJECTS:
+            with self.subTest(subject=subject):
+                read = landing.ids(subject)
+                theirs = roadmap.reading(subject) if roadmap.LANDED_SUBJECT.match(subject) else []
+                ours = [] if read is None else [(name, "part" if read[0] else "landed") for name in read[1]]
+                self.assertEqual(theirs, ours)
+
+    def test_the_copied_forms_are_roadmaps(self):
+        landing, roadmap = load("landing_subjects"), load("roadmap")
+        for theirs, ours in ((roadmap.LANDED_SUBJECT, landing.ANY_LANDING), (roadmap.ID, landing.ID),
+                             (roadmap.TICKET, landing.TICKET_ID)):
+            # TICKET_ID only adds a group around the number, which matches the same strings.
+            self.assertEqual(theirs.pattern, ours.pattern.replace(r"(\d+)", r"\d+"))
+            self.assertEqual(theirs.flags, ours.flags)
+        self.assertIn(f"re.split(r\"{landing.TOKENS.pattern}\"", (ROOT / "tools" / "roadmap.py").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
