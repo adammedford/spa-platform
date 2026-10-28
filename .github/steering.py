@@ -208,7 +208,7 @@ UNCOMPARED = {
     "the code carries no header",
     (
         "Test id register",
-        "Never; a row is added on the integrator's decision (#322)",
+        "Never; a row is added by a decided change request (#322)",
     ): "the register never freezes, so there is no gate to compare its header against (#322)",
 }
 
