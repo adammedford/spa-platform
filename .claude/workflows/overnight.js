@@ -134,7 +134,7 @@ const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
 // depend on the standing answer (#436 Q4): a request asks for a change and decides nothing.
 const REQUEST_LABEL = 'change-request,ready-for-human'
 const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change request is an issue labelled change-request, filed ready-for-human, that asks for a change on an integrator path (OWNERSHIP.md) or to a steering document; it decides nothing, so you file one whether or not a standing answer was granted. Never write it as a file.
-1. Search first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing. File no second one.
+1. Search first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
 2. Only when none asks for it, file one. Write its body to ${LOG}/${t.id}-cr.md (${LOG}/${t.id}-cr2.md for a second, and so on), in this shape:
    **Owner:** integrator
    **Touches:** <each integrator path it changes>
@@ -146,7 +146,7 @@ const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change re
    <the change as it would land, each changed paragraph whole as it will read, with its neighbours when one is inserted or removed>
    Its title is plain prose with no id prefix. File it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing.
 3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, body: $b}' >> ${PENDING}\`. The morning searches for its title, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
-A request blocks ticket #${t.issue} only when the ticket cannot be finished without it; a steering change the ticket does not need blocks nothing. Each request you found, filed or queued is one entry of "changeRequests": {number (0 when queued), title, blocking (#${t.issue}'s number when it blocks it, else 0), queued (its pending line's number, else 0), filed (true only when you filed it tonight; false when you added an edge to an open one, or queued it)}.`
+A request blocks ticket #${t.issue} only when the ticket cannot be finished without it; a steering change the ticket does not need blocks nothing. Each request you filed, queued or added an edge to is one entry of "changeRequests": {number (0 when queued), title, blocking (#${t.issue}'s number when it blocks it, else 0), queued (its pending line's number, else 0), filed (true only when you filed it tonight; false when you added an edge to an open one, or queued it)}.`
 
 // ---------------------------------------------------------------- schemas
 // One entry per change request a lane, review or grill found, filed or queued (#421 Q6, #436 Q10).
@@ -361,11 +361,16 @@ WORKSTREAM 3, read before designing anything:
 `,
 }
 
+// What a decision comment is (#436 Q1, Q7), read alike by the integrator lane and a change request's grill: the
+// comments with their times, and the confirming account's comments whose first line begins "Decision:".
+const COMMENTS_WITH_TIMES = (t) => `\`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${t.issue}/comments --jq '.[] | {html_url, created_at, updated_at, login: .user.login, body}'\``
+const DECISION_COMMENT = 'A decision comment is one written by the account docs/agents/tracker-policy.md names (the repository\'s owner while it names none) whose first line begins "Decision:"'
+
 // The integrator lane on a change request (#436 Q7, Q8; #421 Q4): only Adam's decision comment authorises the build,
 // read from the confirming account's comments whose first line begins "Decision:", latest first. Rendered only for a
 // ticket collect flagged changeRequest, so an ordinary ticket's prompt carries none of it.
 const REQUEST_DECISION = (t) => `
-THE DECISION (#436). Issue #${t.issue} is a change request, labelled change-request. Only Adam's decision comment on it authorises building it: a draft decision, a Confirm on an Overnight issue and a pre-accepted answer never do. Before STEP 1, read its comments with their times: \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${t.issue}/comments --jq '.[] | {html_url, created_at, updated_at, login: .user.login, body}'\`. A decision comment is one written by the account docs/agents/tracker-policy.md names (the repository's owner while it names none) whose first line begins "Decision:". Read those latest first, and act on the latest alone; a comment whose first line is "## Draft decision" is a draft, never a decision. Its first line decides:
+THE DECISION (#436). Issue #${t.issue} is a change request, labelled change-request. Only Adam's decision comment on it authorises building it: a draft decision, a Confirm on an Overnight issue and a pre-accepted answer never do. Before STEP 1, read its comments with their times: ${COMMENTS_WITH_TIMES(t)}. ${DECISION_COMMENT}. Read those latest first, and act on the latest alone; a comment whose first line is "## Draft decision" is a draft, never a decision. Its first line decides:
 - "Decision: accept" or "Decision: accept with changes": build the change as that comment states it, steering paragraphs as quoted there, and commit it with the trailer "Authority: <that comment's html_url>".
 - "Decision: accept as drafted <link>": build the draft the link names, as it stands, with the trailer "Authority: <the accepting comment's html_url>", never the draft's own URL. If the draft's updated_at is later than the accepting comment's created_at, it was edited after Adam accepted it, so stop, as below, saying so.
 - "Decision: decline", no decision comment, or a first line you cannot read as one of those: stop, as below.
@@ -405,7 +410,7 @@ Gap decisions that are not human-owned you may take; list each in delegatedDecis
 
 ${REQUEST_ROUTE(t)}
 
-Return outcome, branch, forkSha, headSha (\`git -C ${WT(t)} rev-parse HEAD\`), complete, outstanding ("" if none), summary (2-4 sentences), question ("" if none), delegatedDecisions, changeRequests (each change request the route above found, filed or queued; [] if none).`
+Return outcome, branch, forkSha, headSha (\`git -C ${WT(t)} rev-parse HEAD\`), complete, outstanding ("" if none), summary (2-4 sentences), question ("" if none), delegatedDecisions, changeRequests (each change request the route above filed, queued or added an edge to; [] if none).`
 
 // The review, and the second review of a ticket sent back to its lane by a conflict at integrate (#279): `back` is
 // {tip, files, notes} from the resolve, and the second review judges the ticket's change and its resolution against
@@ -440,7 +445,7 @@ A human-owned decision of your own: same rule as the implementer, weigh it and r
 
 ${REQUEST_ROUTE(t)}
 
-Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), changeRequests (each change request the route above found, filed or queued, held changes included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
+Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), changeRequests (each change request the route above filed, queued or added an edge to, held changes included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
 }
 
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
@@ -534,7 +539,7 @@ Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse 
 const DRAFT_HEADING = '## Draft decision'
 const requestGrillPrompt = (t, context) => `Grill change request ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}, labelled change-request. Adam is asleep and decides it tomorrow, on the request itself.
 ${context ? `Context from tonight: ${context}\n` : ''}
-STEP 0, do not draft twice. Read the issue once with its comments' times: \`cd ${REPO} && gh issue view ${t.issue} --json title,body\` and \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${t.issue}/comments --jq '.[] | {html_url, created_at, updated_at, login: .user.login, body}'\`. A decision comment is one by the account docs/agents/tracker-policy.md names (the repository's owner while it names none) whose first line begins "Decision:"; a draft is a comment whose first line is "${DRAFT_HEADING}". If a draft or a decision comment already exists, carry it and write nothing: return questions [], changeRequests [], adrCandidates [], draftDecision the latest draft's html_url ("" when there is none), decided the first line of the latest decision comment ("" when there is none), and summary "carried from an earlier night, not re-drafted". Only when context from tonight is given above and it shows that the existing draft or decision cannot be built as written do you draft again below; you never edit a posted draft, since the integrator lane stops on a draft edited after Adam accepted it.
+STEP 0, do not draft twice. Read the issue once with its comments' times: \`cd ${REPO} && gh issue view ${t.issue} --json title,body\` and ${COMMENTS_WITH_TIMES(t)}. ${DECISION_COMMENT}; a draft is a comment whose first line is "${DRAFT_HEADING}". If a draft or a decision comment already exists, carry it and write nothing: return questions [], changeRequests [], adrCandidates [], draftDecision the latest draft's html_url ("" when there is none), decided the first line of the latest decision comment ("" when there is none), and summary "carried from an earlier night, not re-drafted". Only when context from tonight is given above and it shows that the existing draft or decision cannot be built as written do you draft again below; you never edit a posted draft, since the integrator lane stops on a draft edited after Adam accepted it.
 
 The standing answer does not apply to a change request: write no "Answer:" line and no numbered question. The draft is a recommendation, and it decides nothing.
 
@@ -547,7 +552,7 @@ Post no numbered questions and no glossary or ADR proposal comment: the ADR call
 
 ${REQUEST_ROUTE(t)}
 
-Return questions [], changeRequests (each change request the route above found, filed or queued; [] if none), adrCandidates [], draftDecision (the html_url of the draft you posted), decided ("", since a decision found in STEP 0 is carried), and a 2-sentence summary.`
+Return questions [], changeRequests (each change request the route above filed, queued or added an edge to; [] if none), adrCandidates [], draftDecision (the html_url of the draft you posted), decided ("", since a decision found in STEP 0 is carried), and a 2-sentence summary.`
 
 const grillPrompt = (t, context) => t.changeRequest ? requestGrillPrompt(t, context) : `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
 ${context ? `Context from tonight: ${context}\n` : ''}
@@ -569,7 +574,7 @@ Edit nothing in the repo, GLOSSARY.md and docs/adr/ included, even though domain
 
 ${REQUEST_ROUTE(t)}
 
-Return the questions (q, recommendation), changeRequests (each change request the route above found, filed or queued; [] if none), adrCandidates, draftDecision "", decided "", and a 2-sentence summary.`
+Return the questions (q, recommendation), changeRequests (each change request the route above filed, queued or added an edge to; [] if none), adrCandidates, draftDecision "", decided "", and a 2-sentence summary.`
 
 const reportPrompt = (summary) => `Write the overnight report as one GitHub issue. Repo ${REPO}, base ${BASE}, integration branch ${INT_BRANCH} (worktree ${INT_WT}), gate logs in ${LOG}. The tickets are GitHub issues; "tickets" below lists each one's id, issue number and status, and every record a lane wrote tonight is a comment on its issue (\`cd ${REPO} && gh issue view <n> --json title,body,comments\`).
 Run results (JSON): ${JSON.stringify(summary)}
@@ -857,8 +862,8 @@ const finish = async (t, impl, at) => {
           rev2 = await withSlot(() => agent(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
           if (!rev2 || rev2.outcome !== 'committed') {
             conflict = { files, resolved: false }
-            if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
-            return fail(t, 'review', { ...(rev2 || { why: 'agent died' }), impl, conflict })
+            if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, rev1: rev, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
+            return fail(t, 'review', { ...(rev2 || { why: 'agent died' }), impl, rev1: rev, conflict })
           }
           at.stage = 'integrate'
           const second = await merge(true, { ...head, headSha: rev2.headSha }, rev2)
@@ -874,7 +879,7 @@ const finish = async (t, impl, at) => {
         log(`conflict: ${t.id} ${conflict.files.join(', ')} -> ${conflict.resolved ? 'resolved' : 'unresolved'}`)
       }
     }
-    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, flake: integ ? integ.flake : undefined, impl, rev: rev2 || rev })
+    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, flake: integ ? integ.flake : undefined, impl, rev: rev2 || rev, rev1: rev2 ? rev : undefined })
 
     const last = rev2 || rev
     results[t.id] = { stage: 'integrated', outcome: impl.complete ? 'integrated' : 'partial', mergeSha: integ.mergeSha, outstanding: impl.outstanding,
@@ -921,16 +926,20 @@ phase('Report')
 // request ticket grilled tonight awaits a decision until Adam's decision comment exists, and is decided after.
 const requestsOf = (r) => {
   const own = Array.isArray(r.changeRequests) ? r.changeRequests
-    : r.changeRequests ? [...(r.changeRequests.implement || []), ...(r.changeRequests.review || [])] : [] // empty-ok: a result with no changeRequests filed none
-  const grilled = r.grill && typeof r.grill === 'object' ? r.grill.changeRequests || [] : [] // empty-ok: a dead grill filed nothing it reported
-  return [...own, ...((r.impl && r.impl.changeRequests) || []), ...((r.rev && r.rev.changeRequests) || []), ...grilled]
+    : r.changeRequests ? [...(r.changeRequests.implement || []), ...(r.changeRequests.review || [])] : []
+  const grilled = r.grill && typeof r.grill === 'object' ? r.grill.changeRequests || [] : []
+  const kept = [r.impl, r.rev, r.rev1].filter(Boolean).flatMap((x) => x.changeRequests || [])
+  return [...own, ...kept, ...grilled]
 }
-const night = Object.entries(results).flatMap(([id, r]) => requestsOf(r).map((c) => ({ id, issue: byId[id].issue, ...c })))
+// One entry per request and ticket: an implementer and its reviewer may both report the request they share.
+const seen = new Set()
+const nightRequests = Object.entries(results).flatMap(([id, r]) => requestsOf(r).map((c) => ({ id, issue: byId[id].issue, ...c })))
+  .filter((c) => { const key = `${c.id} ${c.number || c.title}`; if (seen.has(key)) return false; seen.add(key); return true })
 const grilledRequests = tickets.filter((t) => t.changeRequest === true && results[t.id] && typeof results[t.id].grill === 'object')
 const changeRequests = {
-  filed: night.filter((c) => c.filed),
-  edges: night.filter((c) => !c.filed && !c.queued),
-  queued: night.filter((c) => !c.filed && c.queued),
+  filed: nightRequests.filter((c) => c.filed),
+  edges: nightRequests.filter((c) => !c.filed && !c.queued && c.blocking),
+  queued: nightRequests.filter((c) => !c.filed && c.queued),
   awaiting: grilledRequests.filter((t) => !results[t.id].grill.decided).map((t) => ({ id: t.id, issue: t.issue, title: t.title, draftDecision: results[t.id].grill.draftDecision })),
   decided: grilledRequests.filter((t) => results[t.id].grill.decided).map((t) => ({ id: t.id, issue: t.issue, title: t.title, decided: results[t.id].grill.decided })),
 }

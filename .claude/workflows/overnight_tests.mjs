@@ -97,7 +97,11 @@ const FILED = { number: 950, title: 'Name the rotated-key store in contracts/pip
 const EDGE = { number: 951, title: 'Add a package for the synthetic proof', blocking: TRIAGED.issue, queued: 0, filed: false }
 const QUEUED = { number: 0, title: 'Define the term Synthetic in GLOSSARY.md', blocking: 0, queued: 1, filed: false }
 const DRAFT_URL = `https://example.invalid/issue-905#issuecomment-1`
-const changeRequestsOf = (kind, id) => (kind === 'implement' && id === AFTER_CLOSE.id) ? [FILED] : (kind === 'review' && id === TRIAGED.id) ? [EDGE] : []
+// AFTER_CLOSE's reviewer reports its implementer's request again, and one it found open but did not wire, which the
+// route says to report not at all: neither may add a line to the report's lists.
+const UNWIRED = { number: 952, title: 'An open request this ticket does not need', blocking: 0, queued: 0, filed: false }
+const changeRequestsOf = (kind, id) => (kind === 'implement' && id === AFTER_CLOSE.id) ? [FILED] : (kind === 'review' && id === AFTER_CLOSE.id) ? [FILED, UNWIRED]
+  : (kind === 'review' && id === TRIAGED.id) ? [EDGE] : []
 const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [QUEUED] : [], adrCandidates: [],
   draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: '', summary: 'companion' })
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
@@ -831,7 +835,7 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
     if (search < 0) { fail(`#436: the ${c.label} prompt does not search the open change-request issues`); continue }
     if (create < 0) { fail(`#436: the ${c.label} prompt does not file a change request ready-for-human, blocking #${issue}`); continue }
     if (search > create) fail(`#436: the ${c.label} prompt files a change request before it searches`)
-    if (!c.prompt.includes(`gh issue edit ${issue} --add-blocked-by <its number>`)) fail(`#436: the ${c.label} prompt adds no edge to a request it finds open`)
+    if (!c.prompt.includes(`gh issue edit ${issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it.`)) fail(`#436: the ${c.label} prompt adds no edge to a request it finds open, or reports one it did not wire`)
     const queue = `jq -cn --arg t "<title>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, body: $b}' >> ${PENDING}`
     if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line when GitHub is unreachable`)
     else if (c.prompt.indexOf(queue) < create) fail(`#436: the ${c.label} prompt queues the create line before it tries to file`)
@@ -847,11 +851,8 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
   else {
     const body = shape.split('\n').map((l) => l.replace(/^   /, '')).filter((l) => !/^\*\*(Rows|Raised by):\*\*/.test(l))
       .map((l) => l.replace('<each integrator path it changes>', '`contracts/pipeline.md`').replace(/^<.*>$/, 'The companion fills this paragraph.')).join('\n') + '\n'
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-request-'))
-    fs.writeFileSync(path.join(dir, 'cr.md'), body)
     const json = JSON.stringify({ number: 0, body, labels: [{ name: 'change-request' }, { name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } })
     const r = spawnSync('python3', ['-I', 'tools/ticket_shape.py', '-'], { cwd: path.resolve(here, '..', '..'), input: json, encoding: 'utf8' })
-    fs.rmSync(dir, { recursive: true, force: true })
     if (r.status !== 0 || !/^ticket-shape: pass:/m.test(r.stdout)) fail(`#436: a change request in the route's shape fails tools/ticket_shape.py: exit ${r.status}, ${(r.stdout + r.stderr).trim()}\n${body}`)
   }
 }
@@ -889,7 +890,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
 }
 
 // 25. The integrator lane on a change request (#436 Q7, Q8; #421 Q4): it reads only the confirming account's comments
-//     whose first line begins "Decision:", latest first, and takes Q20's three outcomes: accept builds and cites that
+//     whose first line begins "Decision:", latest first, and takes #436 Q7's three outcomes (#442 Q20): accept builds and cites that
 //     comment's URL; accept as drafted builds the draft, cites the accepting comment, and stops on a draft edited
 //     after it; decline, none, or a line it cannot read stops with a status note and ready-for-human, never closing.
 //     ADR: yes stops before building. An ordinary ticket's prompt carries none of it.
