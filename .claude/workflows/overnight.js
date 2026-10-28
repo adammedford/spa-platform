@@ -8,7 +8,7 @@ export const meta = {
     { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
-    { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue' },
+    { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
     { title: 'Report', detail: 'one issue, Overnight <date>: the report, then the questions Q1..Qn' },
   ],
 }
@@ -97,14 +97,14 @@ const skill = (name) => `call the Skill tool with "${name}" (if the Skill tool i
 const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 - The main checkout ${REPO} is Adam's. Never commit, checkout, switch, stash, reset or build there. The only files you may write there are under ${LOG}/ and ${RESEARCH}/.
 - Every file you write outside your worktree goes under ${LOG}/ (${RESEARCH}/ for research): a listing, a snapshot, a script, a body file, a draft. A file these instructions do not name by path begins with your task id (collect's with \`collect-\`, the report's with \`report-\`), so no two agents write the same file. The session scratchpad your system prompt names is off limits: every agent of the run is handed the launching session's, and on 2026-10-20 the collect agent's listings overwrote the pre-launch audit's snapshot of the same name there (#202).
-- The tracker is GitHub Issues: read with \`gh issue view\`, write with \`gh issue comment\` / \`gh issue edit\`; never write a ticket file, the directories under .scratch/<slug>/issues/ are an archive. Run every \`gh\` command with \`cd ${REPO} &&\` in front so it resolves this repository. A multi-line comment body goes through stdin: \`gh issue comment <n> --body-file - <<'EOF' ... EOF\`.
-- If \`gh\` fails because GitHub is unreachable, append the comment or label change you meant to make as one JSON line to ${PENDING} ({"issue": <n>, "action": "comment"|"edit"|"close", "body": "<the comment text, or the gh issue edit flags>"}) and continue; the morning session replays it.
-- Never write a comment that begins "Confirm" on any issue: a confirmation is the human's act (docs/agents/tracker-policy.md).
+- The tracker is GitHub Issues: read with \`gh issue view\`, write with \`gh issue comment\` / \`gh issue edit\`, and \`gh issue create\` only for a change request, after the search your prompt's change-request route names; never write a ticket file, the directories under .scratch/<slug>/issues/ are an archive. Run every \`gh\` command with \`cd ${REPO} &&\` in front so it resolves this repository. A multi-line comment body goes through stdin: \`gh issue comment <n> --body-file - <<'EOF' ... EOF\`.
+- If \`gh\` fails because GitHub is unreachable, append the comment or label change you meant to make as one JSON line to ${PENDING} ({"issue": <n>, "action": "comment"|"edit"|"close", "body": "<the comment text, or the gh issue edit flags>"}; a change request you could not file is a "create" line, in the shape your prompt's change-request route gives) and continue; the morning session replays it.
+- Never write a comment that begins "Confirm" or "Decision:" on any issue: a confirmation, and a change request's decision, are the human's act (docs/agents/tracker-policy.md). A draft decision opens with its heading, never with "Decision:" (#436).
 - An ADR you write is a draft: put it under ${LOG}/, name its path in your "## Answer" or "## Review" comment, and leave it uncommitted, because a scripted session drafts an ADR and never commits one (ADR-0021 decision 4). Title it \`ADR draft: <title>\`, cite it by that title, and leave its number to the session that commits it, which takes the next free one then (docs/adr/README.md).
 - Begin every Bash command that touches your worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. To delete a file under tests/, run \`cd <worktree> && git rm tests/<path>\` as ONE Bash call: the shell's directory resets after every call, so a \`git rm\` in a call of its own runs in Adam's main checkout. A bare \`git commit\` lands on Adam's branch.
 - To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under ${LOG}/ and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
 - Worktrees live under ${WTROOT}, outside iCloud Drive. Never create one under the repo.
-- AGENTS.md's rules hold: owner paths only (OWNERSHIP.md); an integrator need is a change request under contracts/changes/, never an edit; never log a secret, token, cookie, code or state value.
+- AGENTS.md's rules hold: owner paths only (OWNERSHIP.md); an integrator need is a change request, an issue labelled change-request (#408), never an edit and never a file; never log a secret, token, cookie, code or state value.
 - Read contracts/pipeline.md before touching the composed gateway. Its stage order changed at G1b (ADR-0018: UsePlatformTelemetry first); outside that table a stage is named by its entry point, never numbered (CODING_STANDARDS.md).
 - Never run \`dotnet build-server shutdown\`, \`dotnet nuget locals --clear\`, or anything that deletes outside your worktree.
 - If you start a process by hand (a gateway, the mock API), bind only the port you are given (ASPNETCORE_HTTP_PORTS), and kill it before you return.
@@ -127,7 +127,32 @@ const TICK = (t, verb) => `To ${verb} acceptance boxes, edit the issue body and 
 // CLOSE_IN_MORNING is the same sentence.
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
 
+// The change-request route (#409, #421, #436): an integrator need, or a steering change, is filed as an issue
+// labelled change-request, never written as a file. The lane searches first, so two lanes needing one change add
+// edges to one request; it files blocking its ticket only when the ticket needs the change; and when GitHub is
+// unreachable it queues a pending create line in the shape morning.js replays (#433; #421 Q2). Filing one does not
+// depend on the standing answer (#436 Q4): a request asks for a change and decides nothing.
+const REQUEST_LABEL = 'change-request,ready-for-human'
+const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change request is an issue labelled change-request, filed ready-for-human, that asks for a change on an integrator path (OWNERSHIP.md) or to a steering document; it decides nothing, so you file one whether or not a standing answer was granted. Never write it as a file.
+1. Search first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
+2. Only when none asks for it, file one. Write its body to ${LOG}/${t.id}-cr.md (${LOG}/${t.id}-cr2.md for a second, and so on), in this shape:
+   **Owner:** integrator
+   **Touches:** <each integrator path it changes>
+   **Rows:** <the plan rows it serves; leave the line out when it serves none>
+   **Raised by:** #${t.issue} <only when it blocks nothing>
+   ## The gap
+   <what is missing, and where ticket #${t.issue} meets it>
+   ## The change
+   <the change as it would land, each changed paragraph whole as it will read, with its neighbours when one is inserted or removed>
+   Its title is plain prose with no id prefix. File it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing.
+3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, body: $b}' >> ${PENDING}\`. The morning searches for its title, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
+A request blocks ticket #${t.issue} only when the ticket cannot be finished without it; a steering change the ticket does not need blocks nothing. Each request you filed, queued or added an edge to is one entry of "changeRequests": {number (0 when queued), title, blocking (#${t.issue}'s number when it blocks it, else 0), queued (its pending line's number, else 0), filed (true only when you filed it tonight; false when you added an edge to an open one, or queued it)}.`
+
 // ---------------------------------------------------------------- schemas
+// One entry per change request a lane, review or grill found, filed or queued (#421 Q6, #436 Q10).
+const CHANGE_REQUESTS = { type: 'array', items: { type: 'object', properties: {
+  number: { type: 'integer' }, title: { type: 'string' }, blocking: { type: 'integer' }, queued: { type: 'integer' }, filed: { type: 'boolean' },
+}, required: ['number', 'title', 'blocking', 'queued', 'filed'] } }
 const TICKET = {
   type: 'object',
   properties: {
@@ -137,13 +162,15 @@ const TICKET = {
     status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning'] },
     owner: { type: 'string' }, blockedBy: { type: 'array', items: { type: 'string' } }, why: { type: 'string' },
     openBoxes: { type: 'integer' },
+    // true when the issue is labelled change-request (#436 Q2): the lane, the grill and the report branch on it.
+    changeRequest: { type: 'boolean' },
     // tools/overnight_collect.py's forecast (#228): why a lane cannot finish this ticket, [] when nothing says so.
     // Since #248 each entry is a tools/ticket_shape.py failure: the rule's name and the line the check prints for it.
     willEndPartial: { type: 'array', items: { type: 'object', properties: {
       rule: { type: 'string' }, reason: { type: 'string' },
     }, required: ['rule', 'reason'] } },
   },
-  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'willEndPartial'],
+  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'changeRequest', 'willEndPartial'],
 }
 const COLLECT = {
   type: 'object',
@@ -173,9 +200,9 @@ const IMPL = {
     complete: { type: 'boolean' }, outstanding: { type: 'string' },
     summary: { type: 'string' }, question: { type: 'string' },
     delegatedDecisions: { type: 'array', items: { type: 'string' } },
-    proposedSteering: { type: 'array', items: { type: 'string' } },
+    changeRequests: CHANGE_REQUESTS,
   },
-  required: ['outcome', 'branch', 'forkSha', 'headSha', 'complete', 'outstanding', 'summary', 'question', 'delegatedDecisions', 'proposedSteering'],
+  required: ['outcome', 'branch', 'forkSha', 'headSha', 'complete', 'outstanding', 'summary', 'question', 'delegatedDecisions', 'changeRequests'],
 }
 const REVIEW = {
   type: 'object',
@@ -185,13 +212,13 @@ const REVIEW = {
     findingsFixed: { type: 'array', items: { type: 'string' } },
     findingsSkipped: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' }, question: { type: 'string' },
-    proposedSteering: { type: 'array', items: { type: 'string' } },
+    changeRequests: CHANGE_REQUESTS,
     // the files the branch changed, read from its diff against the review's fixed point after the review's commit,
     // both sides of a rename included: the integrate step locks them, so two tickets that changed one file
     // integrate in order (#279)
     changedFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['outcome', 'headSha', 'findingsFixed', 'findingsSkipped', 'summary', 'question', 'proposedSteering', 'changedFiles'],
+  required: ['outcome', 'headSha', 'findingsFixed', 'findingsSkipped', 'summary', 'question', 'changeRequests', 'changedFiles'],
 }
 const INT = {
   type: 'object',
@@ -237,11 +264,14 @@ const GRILL = {
   type: 'object',
   properties: {
     questions: { type: 'array', items: { type: 'object', properties: { q: { type: 'string' }, recommendation: { type: 'string' } }, required: ['q', 'recommendation'] } },
-    glossaryProposals: { type: 'array', items: { type: 'string' } },
+    changeRequests: CHANGE_REQUESTS,
     adrCandidates: { type: 'array', items: { type: 'string' } },
+    // A change request's grill (#436 Q10): the draft decision's URL, the existing one's when carried, "" otherwise;
+    // and the first line of Adam's decision comment, "" when there is none. Both "" on any other ticket.
+    draftDecision: { type: 'string' }, decided: { type: 'string' },
     summary: { type: 'string' },
   },
-  required: ['questions', 'glossaryProposals', 'adrCandidates', 'summary'],
+  required: ['questions', 'changeRequests', 'adrCandidates', 'draftDecision', 'decided', 'summary'],
 }
 const REPORT = {
   type: 'object',
@@ -263,7 +293,7 @@ SETUP, in order:
 2. If branch ${INT_BRANCH} exists it must be ${BASE_REF} or a descendant of it (\`git -C ${REPO} merge-base --is-ancestor ${BASE_REF} ${INT_BRANCH}\`); otherwise "dirty-start". If it does not exist, \`git -C ${REPO} worktree add -b ${INT_BRANCH} ${INT_WT} ${BASE_REF}\`. If it exists but ${INT_WT} is not a worktree, \`git -C ${REPO} worktree add ${INT_WT} ${INT_BRANCH}\`.
 3. \`mkdir -p ${LOG} ${RESEARCH}\`, then record what is untracked before the run starts: \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/untracked-at-start.txt\`. The report compares against it. That file is the only thing this step writes to disk.
 
-COLLECT. Read docs/plan/03-workstreams-and-tasks.md in full (every task table and the "Dispatch order" table), docs/plan/01-plan.md's gates table, docs/agents/landing-work.md, docs/agents/issue-tracker.md, docs/agents/tracker-policy.md, OWNERSHIP.md, AGENTS.md, contracts/README.md, and every contracts/changes/*.md.
+COLLECT. Read docs/plan/03-workstreams-and-tasks.md in full (every task table and the "Dispatch order" table), docs/plan/01-plan.md's gates table, docs/agents/landing-work.md, docs/agents/issue-tracker.md, docs/agents/tracker-policy.md, OWNERSHIP.md, AGENTS.md and contracts/README.md. A change request is an issue labelled change-request (#436), listed below with the other tickets; the request files of the archive are not read.
 - LANDED: run \`cd ${REPO} && python3 -I tools/roadmap.py --json\` and read its "rows": a task id is landed when its state is "landed", which is how docs/roadmap.md counts it, merges inside merges included. "part-landed" and "open" are not landed, and "ongoing" (I-7, 6.8) is SKIP. Gates: its "closed_gates". If it exits non-zero, say so in "reason" and stop rather than guess (#70).
 - CLAIMED: a task with a branch \`task/<id>-...\` (local or origin) that is not landed. It is Adam's to merge in the morning; status "claimed", no ticket work.
 - SKIP: rows whose Needs is "Ongoing" (I-7, 6.8) and landed rows. List landed ids in "landed".
@@ -274,6 +304,7 @@ TICKETS come from GitHub Issues, one list per triage label (\`--label a,b\` is a
   cd ${REPO} && gh issue list --state open --label needs-triage --limit 500 --json number,title,body,labels,assignees,url,blockedBy
 An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an Overnight report) is not a ticket. Each listed issue is ONE ticket:
 - issue: its number; url: its url; title: its title.
+- changeRequest: true when its labels include change-request, false otherwise (#436). It is a ticket like any other, with the status the rules below give it; the lane, the grill and the report branch on this field.
 - id: the X of a \`**Plan row:** X\` line in the body, else \`issue-<number>\`; a value of \`none\` (or an empty value) counts as absent, so a spec issue filed with \`**Plan row:** none\` gets \`issue-<number>\`, never the id \`none\`. slug: a short kebab-case slug of the title.
 - owner: the \`**Owner:**\` line mapped to the OWNERSHIP.md role: ws1-infra (workstream 1, AWS and IaC, infra/), ws2-hosting (workstream 2, Registry/Hosting/spactl), ws3-identity (workstream 3, Identity), ws4-proxy (workstream 4, Proxy/Security), ws5-fixtures (workstream 5, fixtures/), ws6-verification (workstream 6, Telemetry, tests/Gateway.*, e2e, runbooks), integrator (everything else, and every I-* row). A body that says "workstream 2 (...)" maps the same way. When it names more than one owner, the ticket's owner is the first named and "why" says the others land in their own PRs.
 - blockedBy: the ids (by the rule above; \`issue-<number>\` for a blocker that is not in tonight's set) of the issues in \`blockedBy.nodes\` whose state is OPEN. Closed blockers do not count.
@@ -301,7 +332,7 @@ NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and no
   - [ ] one box per Done-when clause and per test id
   2. Check its shape under the label and blockers you will file it with, by the rules the ticket-shape workflow holds at creation and tools/overnight_collect.py forecasts from (#248): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' ${LOG}/new-ticket-<id>.md <label> <each --blocked-by number> | python3 -I tools/ticket_shape.py -\` (bare numbers, such as 213; with no blockers, nothing after the label: a word there, such as "none", stops the check on exit 2 and files nothing)
   3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
-Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>"). An open change request (contracts/changes/*.md with Status open) is not a ticket of its own tonight: name it in "reason" and in the "why" of every ticket it holds up.
+Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. A row whose Need is an open change-request issue is filed \`--blocked-by\` that issue. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>").
 
 FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, each ready-for-agent issue's timeline among it, the task branches, the roadmap, OWNERSHIP.md and docs/agents/tracker-policy.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. The status the tool gives is the ticket's (#316): give each ticket in "tickets" the "status" and "why" of the tool's ticket with the same issue number, copied as printed, in place of yours, since the tool alone reads who applied ready-for-agent; a ticket the tool does not list keeps yours. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run; and, since who applied each label then went unread, give every ticket whose status would be "ready-for-agent" the status "blocked", blockedBy [], and the why "tools/overnight_collect.py did not run, so who applied ready-for-agent is unread (#316)", so no lane starts on a label nobody checked.
 
@@ -330,6 +361,23 @@ WORKSTREAM 3, read before designing anything:
 `,
 }
 
+// What a decision comment is (#436 Q1, Q7), read alike by the integrator lane and a change request's grill: the
+// comments with their times, and the confirming account's comments whose first line begins "Decision:".
+const COMMENTS_WITH_TIMES = (t) => `\`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${t.issue}/comments --jq '.[] | {html_url, created_at, updated_at, login: .user.login, body}'\``
+const DECISION_COMMENT = 'A decision comment is one written by the account docs/agents/tracker-policy.md names (the repository\'s owner while it names none) whose first line begins "Decision:"'
+
+// The integrator lane on a change request (#436 Q7, Q8; #421 Q4): only Adam's decision comment authorises the build,
+// read from the confirming account's comments whose first line begins "Decision:", latest first. Rendered only for a
+// ticket collect flagged changeRequest, so an ordinary ticket's prompt carries none of it.
+const REQUEST_DECISION = (t) => `
+THE DECISION (#436). Issue #${t.issue} is a change request, labelled change-request. Only Adam's decision comment on it authorises building it: a draft decision, a Confirm on an Overnight issue and a pre-accepted answer never do. Before STEP 1, read its comments with their times: ${COMMENTS_WITH_TIMES(t)}. ${DECISION_COMMENT}. Read those latest first, and act on the latest alone; a comment whose first line is "## Draft decision" is a draft, never a decision. Its first line decides:
+- "Decision: accept" or "Decision: accept with changes": build the change as that comment states it, steering paragraphs as quoted there, and commit it with the trailer "Authority: <that comment's html_url>".
+- "Decision: accept as drafted <link>": build the draft the link names, as it stands, with the trailer "Authority: <the accepting comment's html_url>", never the draft's own URL. If the draft's updated_at is later than the accepting comment's created_at, it was edited after Adam accepted it, so stop, as below, saying so.
+- "Decision: decline", no decision comment, or a first line you cannot read as one of those: stop, as below.
+Then its "ADR:" line. "ADR: yes" stops before you build anything, as below: a scripted session drafts an ADR and never commits one (ADR-0021 decision 4), so a foreground session lands the change together with its ADR. "ADR: no" goes on. A frozen contract sentence (contracts/README.md, "What G1b froze") you commit only by transcribing the decision, and only when ADR-0021's decision 4, as it reads on your fork, lets a scripted session commit one on a decision comment's URL; while it says a scripted session "drafts, and never commits, a frozen contract's sentence", stop on it, as below.
+To stop: write a comment headed "## Status note" naming what you found (the decision's first line and URL, or that there is none) and what the request waits on; \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human --remove-assignee @me\`; build and commit nothing; and return outcome "needs-human" with that in question. Never close a change request, declined or not: closing one is Adam's (#413 Q4).
+`
+
 const implPrompt = (t) => `Implement ticket ${t.n} (task ${t.id}, owner ${t.owner}): issue #${t.issue}, ${t.url}. Unattended overnight.
 ${HOUSE}
 
@@ -341,7 +389,7 @@ STEP 0 — durable state (this may be a resumed run):
 - If the branch exists without that commit, check it out as above and continue the work on it; read the issue's comments once for what an earlier attempt recorded.
 - Otherwise fork from the integration tip: forkSha = \`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If ${WT(t)} is not a worktree: \`git -C ${REPO} worktree add -b task/${t.id}-${t.slug} ${WT(t)} <forkSha>\`. If it is, it must be clean (\`git -C ${WT(t)} status --porcelain\` empty; if not, return "failed" saying so), then \`git -C ${WT(t)} checkout -b task/${t.id}-${t.slug} <forkSha>\`.
 Claim the issue: \`cd ${REPO} && gh issue edit ${t.issue} --add-assignee @me\`. The branch remains the claim git sees.
-
+${t.changeRequest ? REQUEST_DECISION(t) : ''}
 STEP 1 — build it, following ${SKILLS}/implement/SKILL.md (read it; it is not callable) with two changes: do NOT run its code-review step (a separate reviewer does that next), and the ticket is GitHub issue #${t.issue}: read its body (\`cd ${REPO} && gh issue view ${t.issue} --json title,body\`), which is the spec and the acceptance list; the comments are history and you need them only in the resumed cases of STEP 0.
 - Read the ticket, its plan row (${REPO}/docs/plan/03-workstreams-and-tasks.md), the contracts/ files it names, GLOSSARY.md, docs/agents/domain.md, the ADRs in the area, CODING_STANDARDS.md.
 - Launch every sub-agent with \`run_in_background: false\` and wait for each report: a background sub-agent lets you hand back before it reports.
@@ -352,15 +400,17 @@ ${GATE({ dir: WT(t), log: `${LOG}/${t.id}-implement.txt`, kind: 'task', fork: '<
   Fix and re-run until green, at most three runs in total.
 
 STEP 2 — outcomes. Every record below is a comment on issue #${t.issue} (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`), with the heading named as the comment's first line; nothing is written to a ticket file.
-- Needs an integrator path (a contract, a package, a new project, anything in src/Platform.Abstractions or Platform.Testing): write contracts/changes/${t.id}-<slug>.md in the worktree in the shape of the existing ones (Status: open), build what you can without it, and land partial: complete=false, outstanding says what waits on the request.
-- Human-owned decision (the plan, contracts and ADRs are silent or contradict, and the choice is hard to reverse): ${STANDING ? "Adam's standing answer, granted for this run (" + DATE + "), is that he accepts the implementer's recommendation, so take it and keep going, on one condition: the recommendation is weighed, not asserted. It covers the code on your own branch and nothing else (ADR-0023 decision 1): on it no steering document changes, no ticket body is rewritten beyond its boxes, no ticket is filed and nothing merges." : "No standing answer was granted for this run, so every human-owned decision goes the \"## Status note\" way described at the end of this bullet, and the \"## Decisions taken\" route below is closed tonight."} In a comment headed "## Decisions taken" write, for each: the question; at least two real alternatives, each with what it costs and what it breaks, citing the plan row, contract or ADR that bears on it; the one you took and why it beats the others on those terms; what evidence would show it was wrong, and how it is reversed. A decision whose alternatives are strawmen, or whose choice contradicts a frozen contract or an accepted ADR, is not yours to take: that one goes in a comment headed "## Status note" with the question, the options and your recommendation, then \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\`, a commit with subject "Task ${t.id}: partial, question for Adam", and outcome "needs-human". List every decision taken in delegatedDecisions prefixed "Human-owned:", to tell it from a gap decision.
-- Steering documents (GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/, contracts/; adding a change request under contracts/changes/ is not a change to one): a new term or guide sentence you need is a proposal, not an edit. Put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under a heading "## Proposed steering changes" in your "## Answer" comment and change no steering file for it; the report puts each proposal to Adam, and once he confirms it a session commits it on its own branch (ADR-0023 decision 4). The one steering change you commit is one this ticket's acceptance criteria ask for, in a commit whose message ends with the trailer "Authority: #${t.issue}" (ADR-0023 decision 3); the reviewer holds any other.
+- Needs an integrator path (a contract, a package, a new project, anything in src/Platform.Abstractions or Platform.Testing): take the change-request route below, build what you can without it, and land partial: complete=false, and outstanding and the Answer's "Outstanding:" line cite the request's number (#<n>), or, for one queued for the morning, its title and ${LOG}/${t.id}-cr.md.
+- Human-owned decision (the plan, contracts and ADRs are silent or contradict, and the choice is hard to reverse): ${STANDING ? "Adam's standing answer, granted for this run (" + DATE + "), is that he accepts the implementer's recommendation, so take it and keep going, on one condition: the recommendation is weighed, not asserted. It covers the code on your own branch and nothing else (ADR-0023 decision 1): on it no steering document changes, no ticket body is rewritten beyond its boxes, no ticket is filed except a change request (#409, #436), and nothing merges." : "No standing answer was granted for this run, so every human-owned decision goes the \"## Status note\" way described at the end of this bullet, and the \"## Decisions taken\" route below is closed tonight."} In a comment headed "## Decisions taken" write, for each: the question; at least two real alternatives, each with what it costs and what it breaks, citing the plan row, contract or ADR that bears on it; the one you took and why it beats the others on those terms; what evidence would show it was wrong, and how it is reversed. A decision whose alternatives are strawmen, or whose choice contradicts a frozen contract or an accepted ADR, is not yours to take: that one goes in a comment headed "## Status note" with the question, the options and your recommendation, then \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\`, a commit with subject "Task ${t.id}: partial, question for Adam", and outcome "needs-human". List every decision taken in delegatedDecisions prefixed "Human-owned:", to tell it from a gap decision.
+- Steering documents (GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/, contracts/): a new term or guide sentence you need is a change request, not an edit. File it by the change-request route below, blocking this ticket only when the ticket cannot be finished without it, and change no steering file for it; once Adam decides it, the integrator lands it (#411). ${t.changeRequest ? 'The steering change you commit is the one the decision comment of THE DECISION above states, in a commit whose message ends with the trailer "Authority: <that decision\'s URL, as THE DECISION gives it>", never the request\'s own number, which the steering check refuses (#421 Q4)' : 'The one steering change you commit is one this ticket\'s acceptance criteria ask for, in a commit whose message ends with the trailer "Authority: #' + t.issue + '" (ADR-0023 decision 3)'}; the reviewer holds any other.
 - Cannot get green (or it needs AWS, network the machine refuses, or another owner's path): a comment headed "## Status note" saying what blocks it and what you tried; \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\` (the label stays ready-for-agent); commit what exists with subject "Task ${t.id}: attempt, not green"; return "failed".
 - Green: tick the boxes you can point at (${TICK(t, 'tick')}), then a comment headed "## Answer" (what landed, where, seams, the check's last line, and an "Outstanding:" line if partial), and commit everything in the worktree with subject "Task ${t.id}: <what landed>" and a short body. The Answer says where each part went, the branch and the sha, and that the issue closes when that lands on main. Never close the issue: complete or partial, it stays open and assigned until the landing pull request's \`Closes #${t.issue}\` line closes it on the merge into main (#100; docs/agents/tracker-policy.md). A partial row's Answer carries its Outstanding line.
 - No commit: if the lane makes no commit (\`git -C ${WT(t)} rev-parse HEAD\` equals forkSha), you claimed an issue you did no work on, so remove the assignee before returning: \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`.
 Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "Decided by implementer".
 
-Return outcome, branch, forkSha, headSha (\`git -C ${WT(t)} rev-parse HEAD\`), complete, outstanding ("" if none), summary (2-4 sentences), question ("" if none), delegatedDecisions, proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "## Answer" comment; [] if none).`
+${REQUEST_ROUTE(t)}
+
+Return outcome, branch, forkSha, headSha (\`git -C ${WT(t)} rev-parse HEAD\`), complete, outstanding ("" if none), summary (2-4 sentences), question ("" if none), delegatedDecisions, changeRequests (each change request the route above filed, queued or added an edge to; [] if none).`
 
 // The review, and the second review of a ticket sent back to its lane by a conflict at integrate (#279): `back` is
 // {tip, files, notes} from the resolve, and the second review judges the ticket's change and its resolution against
@@ -386,14 +436,16 @@ ${GATE({ dir: WT(t), log: gateLog, kind: 'task', fork, port: PORT(t.n) })}
 
 STEP 2 — ${skill('code-review')}, fixed point ${fork}, in ${WT(t)}. The spec is issue #${t.issue}'s body plus its plan row and the contracts/ rows naming the task (landing-work.md "Review": there is no per-task spec file). Standards sources include CODING_STANDARDS.md. Tell both axes: the tests have been run and their output is ${gateLog}; read it rather than running dotnet. CODING_STANDARDS.md asks a runtime claim to be verified by a run — that file is the run; a claim it does not cover may run one test project, never the solution.
 Launch every sub-agent with \`run_in_background: false\` and wait until each axis has reported before you write anything: a background sub-agent lets you hand back before it reports. If sub-agents are unavailable, do both axes yourself in turn and keep the two reports separate.
-Steering documents (#103): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/ (contracts/changes/ excepted), read the trailer of the commit that changed it, \`git -C ${WT(t)} log --format='%h %(trailers:key=Authority,valueonly)' ${fork}..HEAD -- <path>\`, and the item it cites. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, or a confirmed answer; a pre-accepted answer, a proposal, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change with no Authority trailer, or one whose cited item does not decide it, is held: take it out of the branch (restore the file to ${fork} when the whole change lacks authority, else edit the sentence out, and commit), put its exact text (each changed paragraph whole, as it will read, with its neighbours when one is inserted or removed) under "## Proposed steering changes" in your "## Review" comment, and list it there under "Held". Make no steering change of your own; propose it the same way.
+Steering documents (#103, #411 Q5): for every path in the diff under GLOSSARY.md, AGENTS.md, CLAUDE.md, OWNERSHIP.md, CODING_STANDARDS.md, docs/agents/, docs/adr/ or contracts/, judge whether the authority the change cites decides it. The check's steering step (.github/steering.py) already reads each commit's Authority trailer, so do not read trailers again: read the item the commit messages you read below cite. Authority is an acceptance criterion of issue #${t.issue} that asks for that change, a confirmed answer, or, on a change request, Adam's decision comment; a pre-accepted answer, a draft decision, a follow-up a night raised and a reviewer's finding are none (ADR-0023 decision 3). A change whose cited item does not decide it is held: take it out of the branch (restore the file to ${fork} when the whole change lacks authority, else edit the sentence out, and commit), file it as a change request by the route below, blocking nothing unless the ticket cannot be finished without it, and list it under "Held" in your "## Review" comment with the request's number. Make no steering change of your own; file it the same way.
 Then read the "## Decisions taken" comment, if any. Each human-owned decision the implementer took is a finding on the Spec axis unless its alternatives were real (not strawmen), its costs were stated against the plan row, contract or ADR that bears on it, and the choice holds against every frozen contract and accepted ADR. Re-weigh each one yourself; where the implementer's choice loses on those terms, reverse it in code and say so in your "## Review" comment under "Decisions reversed".
 Claims are re-run, not read (#202): read every commit message and merge body on the branch, \`git -C ${WT(t)} log --format='%h%n%B' ${fork}..HEAD\`, and the implementer's "## Answer" comment, and re-run every mutation they claim, such as a guard broken on purpose with its test or companion failing each time: apply each mutation in ${WT(t)}, run only the test project or companion the claim names, see it fail, and restore the file with \`git -C ${WT(t)} checkout -- <path>\` before the next. A claimed failure you cannot reproduce is a finding on the Spec axis: on 2026-10-20 a merge body said every guard had been broken on purpose and the companions failed each time, and five of those guards could be removed with every companion green. A promise that something "never prints X" (a token, a secret, a cookie, a path) is unproven until a test plants a canary value of X and asserts that the output lacks it, as N-16 does for every log line; with no such test it is a finding, not a fact. List each claim in your "## Review" comment as reproduced or not. \`git -C ${WT(t)} status --porcelain\` must print nothing before STEP 3, so no mutation reaches the review's commit.
 
 STEP 3 — fix every finding you verify as real; for each one you reject, say why. If you changed files, re-run the gate above into ${gateLog} (at most twice) and keep it green. Untick any acceptance box that is not actually met (${TICK(t, 'untick')}). Post one comment headed "${heading}" on issue #${t.issue} (both axes' findings, what you fixed, what you skipped and why, decisions upheld or reversed). Commit with subject "${subject} <what changed>" (a review with no code change commits nothing; say so). The issue stays open whatever you tick or untick: the landing closes it (#100).
 A human-owned decision of your own: same rule as the implementer, weigh it and record it in a comment headed "## Decisions taken", or hand it over in a comment headed "## Status note" plus \`cd ${REPO} && gh issue edit ${t.issue} --remove-label ready-for-agent --add-label ready-for-human\` and outcome needs-human when it is not yours to take. Cannot get green: a "## Status note" comment, \`cd ${REPO} && gh issue edit ${t.issue} --remove-assignee @me\`, commit what exists, return failed.
 
-Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), proposedSteering (the exact text of each entry under "## Proposed steering changes" in your "${heading}" comment, held ones included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
+${REQUEST_ROUTE(t)}
+
+Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), changeRequests (each change request the route above filed, queued or added an edge to, held changes included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
 }
 
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
@@ -480,9 +532,31 @@ STEP 3 — record it on the issue: one comment headed "## Conflict at integrate"
 
 Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse HEAD\`), tip (the <tip> sha of STEP 0, the run branch's tip the back-merge took in; "" when unresolved), notes (the files and how each was resolved, or why not).`
 
-const grillPrompt = (t, context) => `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
+// A grill on a change request (#436 Q9; #421 Q5) drafts a decision and asks no numbered question: only Adam's
+// decision comment authorises a request, so the standing answer does not apply and nothing is pre-accepted. Its
+// draft opens with its heading, never with "Decision:", which would read as Adam's decision to the integrator lane
+// and to .github/steering.py alike, since every session posts under his account (#436 Q1).
+const DRAFT_HEADING = '## Draft decision'
+const requestGrillPrompt = (t, context) => `Grill change request ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}, labelled change-request. Adam is asleep and decides it tomorrow, on the request itself.
 ${context ? `Context from tonight: ${context}\n` : ''}
-STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), glossaryProposals and adrCandidates read from the "## Proposed glossary / ADR" comment, summary "carried from an earlier night, not re-grilled", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
+STEP 0, do not draft twice. Read the issue once with its comments' times: \`cd ${REPO} && gh issue view ${t.issue} --json title,body\` and ${COMMENTS_WITH_TIMES(t)}. ${DECISION_COMMENT}; a draft is a comment whose first line is "${DRAFT_HEADING}". If a draft or a decision comment already exists, carry it and write nothing: return questions [], changeRequests [], adrCandidates [], draftDecision the latest draft's html_url ("" when there is none), decided the first line of the latest decision comment ("" when there is none), and summary "carried from an earlier night, not re-drafted". Only when context from tonight is given above and it shows that the existing draft or decision cannot be built as written do you draft again below; you never edit a posted draft, since the integrator lane stops on a draft edited after Adam accepted it.
+
+The standing answer does not apply to a change request: write no "Answer:" line and no numbered question. The draft is a recommendation, and it decides nothing.
+
+Follow ${SKILLS}/grill-with-docs/SKILL.md (read it; it is not callable): ${skill('grilling')}, then ${skill('domain-modeling')}. Run the design tree ON PAPER, adopting each recommendation provisionally to reach the next round, until the frontier is empty and nothing is silently assumed. Facts are your job: read the repo (${REPO}: the plan, contracts/, docs/adr/, GLOSSARY.md, the code, \`git log\`), never guess.
+
+Write ONLY to issue #${t.issue}, as two comments in this order (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`, the heading as the first line of each), and to disk nothing but the route's request bodies under ${LOG}/:
+- "## Grilling record": every round, in order.
+- "${DRAFT_HEADING}": its first line is that heading, never "Decision:", and its second "Not a decision: Adam accepts it with \`Decision: accept as drafted <this comment's URL>\`." Then the draft's "Decision: accept|accept with changes|decline" line and its "ADR: yes|no" line (with the title \`ADR draft: <title>\` of the ADR it would need when yes, by docs/adr/README.md's threshold), then the change as it would land, each steering paragraph quoted whole.
+Post no numbered questions and no glossary or ADR proposal comment: the ADR call lives in the draft's ADR line, and a glossary term the draft needs is a change request of its own, filed by the change-request route below (#436 Q9). Never write a comment that begins "Confirm" or "Decision:" (docs/agents/tracker-policy.md). Edit nothing in the repo; do not run dotnet; do not edit the body, the labels (ready-for-human stays) or the assignees.
+
+${REQUEST_ROUTE(t)}
+
+Return questions [], changeRequests (each change request the route above filed, queued or added an edge to; [] if none), adrCandidates [], draftDecision (the html_url of the draft you posted), decided ("", since a decision found in STEP 0 is carried), and a 2-sentence summary.`
+
+const grillPrompt = (t, context) => t.changeRequest ? requestGrillPrompt(t, context) : `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
+${context ? `Context from tonight: ${context}\n` : ''}
+STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), changeRequests [], adrCandidates read from the "## Proposed glossary / ADR" comment, draftDecision "", decided "", summary "carried from an earlier night, not re-grilled", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
 
 ${STANDING ? "ADAM'S STANDING ANSWER, granted for this run (" + DATE + "): he accepts the recommendation on every question. Under each question write the line \"Answer: yes, pre-accepted under the standing answer granted " + DATE + "\", and in later rounds treat the recommendation as decided rather than provisional. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue (docs/agents/tracker-policy.md), so still write the question and the recommendation in full." : "NO STANDING ANSWER was granted for this run. Under each question write the line \"Answer: open\". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers."}
 
@@ -490,17 +564,21 @@ Follow ${SKILLS}/grill-with-docs/SKILL.md (read it; it is not callable): ${skill
 Run the design tree ON PAPER, because nobody can answer: write round 1 in the grilling format (numbered ❓ question with its options, ➡️ your recommendation), ADOPT each recommendation as decided when a standing answer was granted, and as provisional when not (the rule above), recompute the frontier, write the next round; stop when the frontier is empty and nothing is silently assumed. Facts are your job: read the repo (${REPO}: the plan, contracts/, docs/adr/, GLOSSARY.md, the code, \`git log\`), never guess and never ask Adam a fact. Decisions are Adam's: every one goes in the questions.
 Domain modelling: challenge the ticket's terms against GLOSSARY.md, sharpen fuzzy ones, test them on concrete scenarios, cross-check the code.
 
-Write ONLY to issue #${t.issue}, as three comments in this order (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`, the heading as the first line of each), and nothing to disk:
+A glossary term the ticket needs is a change request (#411 Q7, #436 Q10), filed by the change-request route below, blocking this ticket only when it cannot be built without the term.
+
+Write ONLY to issue #${t.issue}, as three comments in this order (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`, the heading as the first line of each), and to disk nothing but the route's request bodies under ${LOG}/:
 - "## Grilling record": every round, in order.
 - "## Questions for Adam": numbered, each worded so "yes" accepts your recommendation, each with the recommendation, a one-line why, and its "Answer:" line as the standing-answer rule above dictates.
-- "## Proposed glossary / ADR": proposed GLOSSARY.md terms; ADR candidates only where all three of domain-modeling's criteria hold. Title each candidate \`ADR draft: <title>\`, cite it by that title, and leave its number to the session that commits it, which takes the next free one then, even though domain-modeling's ADR format numbers one: a scripted session drafts an ADR and never commits one (ADR-0021 decision 4; docs/adr/README.md).
-Edit nothing in the repo, GLOSSARY.md and docs/adr/ included, even though domain-modeling says to update inline: a glossary term or an ADR is a steering change, and a steering change rests on a confirmed answer (ADR-0023 decisions 3 and 4). The route is the "## Proposed glossary / ADR" comment above: the report puts each proposal to Adam, and once he confirms it a session commits it on its own branch with an Authority: trailer naming the confirmation. Do not run dotnet. Do not edit the body, the labels (ready-for-human stays) or the assignees.
+- "## Proposed glossary / ADR": under "Glossary", each change request you filed, found or queued for a term, by number (by title when queued); under "ADR candidates", only those where all three of domain-modeling's criteria hold. Title each candidate \`ADR draft: <title>\`, cite it by that title, and leave its number to the session that commits it, which takes the next free one then, even though domain-modeling's ADR format numbers one: a scripted session drafts an ADR and never commits one (ADR-0021 decision 4; docs/adr/README.md).
+Edit nothing in the repo, GLOSSARY.md and docs/adr/ included, even though domain-modeling says to update inline: a glossary term or an ADR is a steering change, and a steering change rests on a decision. A term goes by the change-request route, which Adam decides on the request; an ADR candidate goes in the comment above. Never write a comment that begins "Confirm" or "Decision:" (docs/agents/tracker-policy.md). Do not run dotnet. Do not edit the body, the labels (ready-for-human stays) or the assignees.
 
-Return the questions (q, recommendation), glossaryProposals, adrCandidates, and a 2-sentence summary.`
+${REQUEST_ROUTE(t)}
+
+Return the questions (q, recommendation), changeRequests (each change request the route above filed, queued or added an edge to; [] if none), adrCandidates, draftDecision "", decided "", and a 2-sentence summary.`
 
 const reportPrompt = (summary) => `Write the overnight report as one GitHub issue. Repo ${REPO}, base ${BASE}, integration branch ${INT_BRANCH} (worktree ${INT_WT}), gate logs in ${LOG}. The tickets are GitHub issues; "tickets" below lists each one's id, issue number and status, and every record a lane wrote tonight is a comment on its issue (\`cd ${REPO} && gh issue view <n> --json title,body,comments\`).
 Run results (JSON): ${JSON.stringify(summary)}
-The results JSON already holds what the lanes returned (#129): each grill's full questions (q, recommendation), glossaryProposals and adrCandidates under results.<id>.grill, and each implementer's and reviewer's proposedSteering (the exact text of every "## Proposed steering changes" entry) under results.<id>.proposedSteering (an integrated ticket keeps it as {implement, review}; any other keeps the stopping stage's list there) and results.<id>.impl.proposedSteering wherever the implementer's result is kept. Take them from there. Read an issue's comments only for what the JSON lacks: a "## Status note" question, the "## Decisions taken" alternatives and the review's verdict on them, or the records of a resumed run.
+The results JSON already holds what the lanes returned (#129): each grill's full questions (q, recommendation), changeRequests, adrCandidates, draftDecision and decided under results.<id>.grill, and each implementer's and reviewer's changeRequests under results.<id>.changeRequests (an integrated ticket keeps them as {implement, review}; any other keeps the stopping stage's list there) and results.<id>.impl.changeRequests wherever the implementer's result is kept. The run results' "changeRequests" already sorts the night's change requests into the five lists the Change requests section gives. Take them from there. Read an issue's comments only for what the JSON lacks: a "## Status note" question, the "## Decisions taken" alternatives and the review's verdict on them, or the records of a resumed run.
 
 0. Run \`python3 -I tools/roadmap.py\` in ${INT_WT}; if it changed README.md or docs/roadmap.md, commit those alone there, subject "Refresh the generated roadmap blocks for the ${DATE} run's merges". That commit is integrator-only, so the per-commit ownership check holds. Nothing else is committed, and nothing is written into ${REPO} outside ${LOG}. Any file you write (a body, a measurement, a script) goes under ${LOG}/ and begins with \`report-\`; the session scratchpad your system prompt names is off limits, as it is to every agent of the run (#202).
 1. The report issue, created once at the end of this step with \`cd ${REPO} && gh issue create --title "Overnight ${DATE}" --body-file - <<'EOF' ... EOF\` (no label, no parent; if an open issue titled "Overnight ${DATE}" already exists from a resumed run, edit its body with \`gh issue edit <n> --body-file -\` instead of creating a second). Its body holds no question text: the questions are comments, step 1b below (#104). The body, for Adam first thing in the morning:
@@ -513,11 +591,12 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
-   - Pending tracker writes: if ${PENDING} exists, how many lines it holds and that the morning session replays them (a comment, label change or close that GitHub refused tonight); otherwise "none";
+   - Change requests (#421 Q7, #436 Q11): five lists, from the run results' "changeRequests", each reading "none" when empty. "Filed tonight" (its "filed"): one line per request, \`#<n> <title> — blocks #<ticket>\`, or \`#<n> <title> — blocks nothing (raised by #<ticket>)\` when its blocking is 0, the ticket being the one whose lane, review or grill filed it. "Edges added to an existing request" (its "edges"): the same line form. "Queued for the morning" (its "queued"): \`queued for the morning: <title> (pending line <k>, body ${LOG}/<task id>-cr.md)\`. "Awaiting a decision" (its "awaiting"): an open change request grilled tonight with no decision comment, each as #<issue>, its title and its draft's link. "Decided, not yet labelled ready-for-agent or closed" (its "decided"): each as #<issue>, its title and its decision's first line. A change request adds no numbered question: Adam decides it on the request itself;
+   - Pending tracker writes: if ${PENDING} exists, how many lines it holds, by action, and that the morning session replays them (a comment, label change or close that GitHub refused tonight, or a change request's create line); otherwise "none";
    - Landing pull request (#100): the description Adam opens the pull request with, as a fenced block ready to paste: a title naming the run, then one line \`Closes #<issue>\` per ticket whose outcome is integrated and whose lane reported complete, and one line \`Ticket: #<issue>\` per partial one. GitHub closes the \`Closes\` issues when \`tools/land.sh\` merges the pull request into main; nothing closes a partial ticket.
    - Morning steps: answer the questions (the comments below) as comments on this issue; \`git -C ${INT_WT} push -u origin ${INT_BRANCH}\` with the pre-push hook running (it reads a branch that merges single-owner lanes commit by commit; never --no-verify); open one PR with the description above; a fresh top-level agent session, never a sub-agent of the session that launched this run, reviews its exact head and posts the review record, and \`tools/land.sh <pr> --subject "..." --body-file <path>\` merges it (ADR-0022; docs/agents/landing-work.md). Each ticket's task merge on ${INT_BRANCH} is that ticket's merge body, so a box asking for something "in the merge body" is met by the task merge: the landing body cites those merges by sha and copies none of their lists; merge the claimed branches in their own PRs; close the issue of every landed row that is still open, the fallback when a \`Closes\` line was missed, and unassign the partial rows' issues once their branches are merged; \`git worktree remove\` each worktree under ${WTROOT}, then \`git -C ${REPO} worktree prune\`.
    - Leftovers: \`lsof -nP -iTCP -sTCP:LISTEN | grep -E 'dotnet|Gateway|MockApi'\` and \`pgrep -fl ${WTROOT}\`; kill nothing, list it.
-1b. The questions, as comments on the report issue (#104), one comment per ticket that has any, \`cd ${REPO} && gh issue comment <report issue> --body-file - <<'EOF' ... EOF\`, posted in the order that puts the questions unblocking the most work first. Each comment is headed "## Questions: #<issue>, <task id>, <title>", and the questions are numbered Q1..Qn continuously across all the comments so that one "Confirm" comment names them as before (ADR-0021 decision 2). Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket's own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note's question, a proposed steering change) opens with the night-wide number alone, as in "**Q95.**". So an answer that cites another question as "#244 Q9" turns into the number a Confirm names without counting down a comment. Each comment lists that ticket's questions from its "## Questions for Adam" and "## Status note" comments tonight, each as the question, "Recommended:", and the "Answer:" line as the comment records it ("Answer: yes, pre-accepted under the standing answer granted <date>" when one was granted; "Answer: open" when none was, and for a status note's question); then every entry under "## Proposed steering changes" in its "## Answer" and "## Review" comments, each as a question whose "yes" commits that exact text, with "Answer: open", because a steering change rests on a confirmed answer alone (ADR-0023; #103). A grill whose summary says "carried from an earlier night" contributes none: name those tickets in one closing comment headed "## Carried, already answered". Before filing anything, measure the body and every comment: GitHub refuses a body or comment over 65,536 characters, so split any that would pass 60,000 into consecutive parts headed "(part k of m)", dropping nothing. "questions" in your return is the count across every comment.
+1b. The questions, as comments on the report issue (#104), one comment per ticket that has any, \`cd ${REPO} && gh issue comment <report issue> --body-file - <<'EOF' ... EOF\`, posted in the order that puts the questions unblocking the most work first. Each comment is headed "## Questions: #<issue>, <task id>, <title>", and the questions are numbered Q1..Qn continuously across all the comments so that one "Confirm" comment names them as before (ADR-0021 decision 2). Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket's own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note's question) opens with the night-wide number alone, as in "**Q95.**". So an answer that cites another question as "#244 Q9" turns into the number a Confirm names without counting down a comment. Each comment lists that ticket's questions from its "## Questions for Adam" and "## Status note" comments tonight, each as the question, "Recommended:", and the "Answer:" line as the comment records it ("Answer: yes, pre-accepted under the standing answer granted <date>" when one was granted; "Answer: open" when none was, and for a status note's question). A steering change is a change request now, listed in the Change requests section and never a question here (#436), and a change request's draft decision adds none either. A grill whose summary says "carried from an earlier night" contributes none: name those tickets in one closing comment headed "## Carried, already answered". Before filing anything, measure the body and every comment: GitHub refuses a body or comment over 65,536 characters, so split any that would pass 60,000 into consecutive parts headed "(part k of m)", dropping nothing. "questions" in your return is the count across every comment.
 2. Check \`git -C ${REPO} status --porcelain --untracked-files=no\` is empty (the lanes write no tracked file in the main checkout any more; a modified tracked file is a finding: list it), that \`git -C ${REPO} status --porcelain --untracked-files=all\` lists nothing ${LOG}/untracked-at-start.txt does not (an untracked file the run left is a finding: list it, and delete nothing; ${LOG} and ${RESEARCH} are not findings when git ignores them), and that \`git -C ${REPO} rev-parse HEAD\` is ${BASE}; record the result in the report body before you create the issue.
 Return questions (the count), mainCheckoutClean, leftovers, issue (the report issue's number) and url.`
 
@@ -600,7 +679,7 @@ let halted = null
 
 const grill = (t, context) => {
   const p = agent(grillPrompt(t, context), { label: `grill:${t.id}`, phase: 'Grill', schema: GRILL })
-    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, glossaryProposals: g.glossaryProposals, adrCandidates: g.adrCandidates, summary: g.summary } : 'grill agent died' } })
+    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, changeRequests: g.changeRequests || [], adrCandidates: g.adrCandidates, draftDecision: g.draftDecision || '', decided: g.decided || '', summary: g.summary } : 'grill agent died' } })
   grillQueue.push(p)
   return p
 }
@@ -783,8 +862,8 @@ const finish = async (t, impl, at) => {
           rev2 = await withSlot(() => agent(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
           if (!rev2 || rev2.outcome !== 'committed') {
             conflict = { files, resolved: false }
-            if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
-            return fail(t, 'review', { ...(rev2 || { why: 'agent died' }), impl, conflict })
+            if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, rev1: rev, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
+            return fail(t, 'review', { ...(rev2 || { why: 'agent died' }), impl, rev1: rev, conflict })
           }
           at.stage = 'integrate'
           const second = await merge(true, { ...head, headSha: rev2.headSha }, rev2)
@@ -800,12 +879,12 @@ const finish = async (t, impl, at) => {
         log(`conflict: ${t.id} ${conflict.files.join(', ')} -> ${conflict.resolved ? 'resolved' : 'unresolved'}`)
       }
     }
-    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, flake: integ ? integ.flake : undefined, impl, rev: rev2 || rev })
+    if (!integ || !integ.ok) return fail(t, 'integrate', { why: integ ? integ.notes : 'agent died', conflict, flake: integ ? integ.flake : undefined, impl, rev: rev2 || rev, rev1: rev2 ? rev : undefined })
 
     const last = rev2 || rev
     results[t.id] = { stage: 'integrated', outcome: impl.complete ? 'integrated' : 'partial', mergeSha: integ.mergeSha, outstanding: impl.outstanding,
       summary: impl.summary, findingsFixed: [...rev.findingsFixed, ...(rev2 ? rev2.findingsFixed : [])], delegatedDecisions: impl.delegatedDecisions, conflict, flake: integ.flake,
-      proposedSteering: { implement: impl.proposedSteering || [], review: [...(rev.proposedSteering || []), ...(rev2 ? rev2.proposedSteering || [] : [])] } }
+      changeRequests: { implement: impl.changeRequests || [], review: [...(rev.changeRequests || []), ...(rev2 ? rev2.changeRequests || [] : [])] } }
     log(`${t.id}: integrated ${integ.mergeSha}${last === rev2 ? ' after a second review' : ''}`)
     return true
 }
@@ -842,6 +921,28 @@ await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, q
 await Promise.all(grillQueue)
 
 phase('Report')
+// The night's change requests (#436 Q11), read from the results, one list per kind, for the report's "Change
+// requests" section. A lane's, a review's and a grill's entries are each gathered wherever its result is kept. A
+// request ticket grilled tonight awaits a decision until Adam's decision comment exists, and is decided after.
+const requestsOf = (r) => {
+  const own = Array.isArray(r.changeRequests) ? r.changeRequests
+    : r.changeRequests ? [...(r.changeRequests.implement || []), ...(r.changeRequests.review || [])] : []
+  const grilled = r.grill && typeof r.grill === 'object' ? r.grill.changeRequests || [] : []
+  const kept = [r.impl, r.rev, r.rev1].filter(Boolean).flatMap((x) => x.changeRequests || [])
+  return [...own, ...kept, ...grilled]
+}
+// One entry per request and ticket: an implementer and its reviewer may both report the request they share.
+const seen = new Set()
+const nightRequests = Object.entries(results).flatMap(([id, r]) => requestsOf(r).map((c) => ({ id, issue: byId[id].issue, ...c })))
+  .filter((c) => { const key = `${c.id} ${c.number || c.title}`; if (seen.has(key)) return false; seen.add(key); return true })
+const grilledRequests = tickets.filter((t) => t.changeRequest === true && results[t.id] && typeof results[t.id].grill === 'object')
+const changeRequests = {
+  filed: nightRequests.filter((c) => c.filed),
+  edges: nightRequests.filter((c) => !c.filed && !c.queued && c.blocking),
+  queued: nightRequests.filter((c) => !c.filed && c.queued),
+  awaiting: grilledRequests.filter((t) => !results[t.id].grill.decided).map((t) => ({ id: t.id, issue: t.issue, title: t.title, draftDecision: results[t.id].grill.draftDecision })),
+  decided: grilledRequests.filter((t) => results[t.id].grill.decided).map((t) => ({ id: t.id, issue: t.issue, title: t.title, decided: results[t.id].grill.decided })),
+}
 const summary = {
   base: BASE, integrationBranch: INT_BRANCH, halted,
   landedBeforeTonight: col.landed,
@@ -851,7 +952,7 @@ const summary = {
   closeInMorning: closeT.map((t) => ({ id: t.id, issue: t.issue })),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
-  conflicts, flakes,
+  conflicts, flakes, changeRequests,
   results,
 }
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
