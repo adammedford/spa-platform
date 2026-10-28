@@ -215,6 +215,19 @@ class ATornDownCellPasses(Verify):
         self.assertEqual([POOL], [call["options"]["user-pool-id"] for call in case.aws("cognito-idp describe-user-pool")])
         self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
 
+    def test_a_retried_tag_query_counts_each_dropped_record_once(self):
+        # #473: a security group EC2 lets go of on the third describe keeps the tag query retrying,
+        # and the summary is that last poll's, not the sum of all three.
+        world = torn_down_world()
+        world["tagged"][4]["describe_knows"] = 2
+        world["tagged"] += [tagged(TABLE_ARN, "dynamodb:table", describe_knows=0),
+                            tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0)]
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(self.index_queries(case)))
+        self.assertIn("1 DynamoDB tables DynamoDB does not know", result.stdout)
+        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+
     def test_the_tagging_index_s_own_lag_is_retried(self):
         world = torn_down_world()
         world["tag_lag"] = 2
