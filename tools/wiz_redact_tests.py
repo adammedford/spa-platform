@@ -7,14 +7,16 @@ The `wiz` skill pipes every post through tools/wiz_redact.py (#259), so a rule t
 leaks an account id, an authorization code or a secret into a public comment and says nothing. Each
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
-seven rules has at least one case that turns red when that rule is removed from the script; #259's
-merge body names the mutation and the case.
+eight rules has at least one case that turns red when that rule is removed from the script; #259's
+merge body names the mutation and the case. #468 added the terminal's --stream mode and P-04's
+passing case lines, which a post carries as they are.
 
 The ids, codes and secrets below are made up for the cases; none is a real account or credential.
 """
 from __future__ import annotations
 
 import pathlib
+import select
 import subprocess
 import sys
 import unittest
@@ -247,6 +249,81 @@ class RuleSevenTokenHeaders(Redacts):
         )
 
 
+class RuleEightTerraformClientIds(Redacts):
+    def test_a_user_pool_clients_terraform_id_is_elided_and_other_ids_are_kept(self) -> None:
+        self.assertRedacts(
+            'aws_cognito_user_pool_client.app["app3"]: Creation complete after 2s [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n'
+            'aws_cognito_user_pool_client.app["app3"]: Refreshing state... [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n'
+            'aws_ssm_parameter.client_secret["app3"]: Creation complete after 1s [id=/spa-platform/poc/app3/client-secret]\n',
+            'aws_cognito_user_pool_client.app["app3"]: Creation complete after 2s [id=<elided>]\n'
+            'aws_cognito_user_pool_client.app["app3"]: Refreshing state... [id=<elided>]\n'
+            'aws_ssm_parameter.client_secret["app3"]: Creation complete after 1s [id=/spa-platform/poc/app3/client-secret]\n',
+        )
+
+    def test_the_stream_elides_a_user_pool_clients_terraform_id(self) -> None:
+        self.assertRedacts('aws_cognito_user_pool_client.app["app3"]: Destroying... [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n',
+                           'aws_cognito_user_pool_client.app["app3"]: Destroying... [id=<elided>]\n',
+                           "--stream")
+
+    def test_a_client_id_in_a_plans_client_id_id_or_value_attribute_is_elided_at_25_or_26_characters(self) -> None:
+        # The cell's two client ids are 25 and 26 characters; the sitting log of 2026-10-27 prints each
+        # as the client's `id`, the branding's `client_id` and the task definition's env `value`.
+        self.assertRedacts(
+            '      - id                                            = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4l5m" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '                          - name  = "MockApi__App1Client"\n'
+            '                          - value = "3n4b5c6d7e8f9g0h1i2j3k4l5"\n',
+            '      - id                                            = "<elided>" -> null\n'
+            '      - client_id                   = "<elided>" -> null\n'
+            '      - client_id                   = "<elided>" -> null\n'
+            '                          - name  = "MockApi__App1Client"\n'
+            '                          - value = "<elided>"\n',
+        )
+
+    def test_other_attributes_of_the_same_plans_are_kept(self) -> None:
+        text = (
+            '      - managed_login_branding_id   = "d44f0937-7779-4298-825d-55f4091f8a57" -> null\n'
+            '      - region                      = "us-east-2" -> null\n'
+            '      - id                          = "spa-platform-poc" -> null\n'
+            '                          - value = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_7PJ6SDHlO"\n'
+            '      - id     = "spa-platform-poc-task:spa-platform-poc-task" -> null\n'
+        )
+        self.assertRedacts(text, text)
+
+    def test_a_plans_client_id_attribute_and_the_outputs_clientid_are_elided(self) -> None:
+        # The shapes a destroy plan and an apply's Outputs block printed in the sitting of 2026-10-27;
+        # a Cognito client id is 26 lowercase letters and digits, which no other id in the roots is.
+        self.assertRedacts(
+            '  - resource "aws_cognito_user_pool_client" "app" {\n'
+            '      - id                                            = "3n4b5c6d7e8f9g0h1i2j3k4l5m" -> null\n'
+            '      - name                                          = "app3" -> null\n'
+            '  - resource "aws_ssm_parameter" "client_secret" {\n'
+            '      - id          = "/spa-platform/poc/app3/client-secret" -> null\n'
+            '      + id                     = (known after apply)\n'
+            'clients = {\n'
+            '  "app3" = {\n'
+            '    "clientId" = "3n4b5c6d7e8f9g0h1i2j3k4l5m"\n'
+            '    "secretParameter" = "/spa-platform/poc/app3/client-secret"\n'
+            '  }\n'
+            '}\n'
+            '    clientId = "3n4b5c6d7e8f9g0h1i2j3k4l5m"\n',
+            '  - resource "aws_cognito_user_pool_client" "app" {\n'
+            '      - id                                            = "<elided>" -> null\n'
+            '      - name                                          = "app3" -> null\n'
+            '  - resource "aws_ssm_parameter" "client_secret" {\n'
+            '      - id          = "/spa-platform/poc/app3/client-secret" -> null\n'
+            '      + id                     = (known after apply)\n'
+            'clients = {\n'
+            '  "app3" = {\n'
+            '    "clientId" = "<elided>"\n'
+            '    "secretParameter" = "/spa-platform/poc/app3/client-secret"\n'
+            '  }\n'
+            '}\n'
+            '    clientId = "<elided>"\n',
+        )
+
+
 class AccessDenied(unittest.TestCase):
     def assertStops(self, text: str) -> None:
         done = redact(text)
@@ -274,6 +351,83 @@ class AccessDenied(unittest.TestCase):
 
     def test_the_words_access_denied_alone_stop(self) -> None:
         self.assertStops("upload failed: Access Denied (account 123456789012 is not authorized)\n")
+
+    def test_a_p04_failure_line_stops(self) -> None:
+        self.assertStops("FAIL  a PUT without If-None-Match gets 403: expected 403 AccessDenied, got succeeded\n")
+
+    def test_a_p04_pass_line_beside_another_access_denied_stops(self) -> None:
+        self.assertStops(
+            "pass  a PUT without If-None-Match gets 403: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "An error occurred (AccessDenied) when calling the PutObject operation: is not authorized\n"
+        )
+
+    def test_a_p04_pass_line_that_is_not_the_whole_line_stops(self) -> None:
+        self.assertStops("  pass  a PUT gets 403: 403 AccessDenied (explicit deny in a resource-based policy) "
+                         "is not authorized\n")
+
+    def test_a_p04_pass_line_whose_case_carries_access_denied_stops(self) -> None:
+        self.assertStops("pass  Access Denied for account 123456789012 is not authorized: "
+                         "403 AccessDenied (explicit deny in a resource-based policy)\n")
+
+    def test_a_p04_pass_line_with_another_reason_stops(self) -> None:
+        self.assertStops("pass  a PUT gets 403: 403 AccessDenied (the spend limit is reached)\n")
+
+
+class P04CaseLines(Redacts):
+    def test_p04s_passing_case_lines_are_posted_as_they_are(self) -> None:
+        # verify-release-immutability.sh's own lines, from #63's P-04 comment of 2026-10-27; both
+        # forms of the kind of policy S3 names.
+        text = (
+            "~~~\n"
+            "pass  a second PUT with If-None-Match: * gets 412: 412 PreconditionFailed\n"
+            "pass  a PUT without If-None-Match gets 403: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "pass  a plain-HTTP request is refused: 403 AccessDenied (explicit deny in a resource-based policy)\n"
+            "pass  the teardown role cannot write: a PUT with If-None-Match: * to a new key gets 403: "
+            "403 AccessDenied (no identity-based policy allows it)\n"
+            "verify-release-immutability: pass: 23 cases as expected.\n"
+            "~~~\n"
+        )
+        self.assertRedacts(text, text)
+
+
+class Stream(Redacts):
+    def test_the_stream_masks_account_ids_and_arns_and_passes_access_denied_through(self) -> None:
+        self.assertRedacts(
+            "taskDefinitionArn arn:aws:ecs:us-east-1:123456789012:task-definition/spa-platform-poc:7\n"
+            "An error occurred (AccessDeniedException) when calling the DescribeServices operation: "
+            "User: arn:aws:sts::123456789012:assumed-role/x/y is not authorized\n"
+            "upload failed: Access Denied (account 123456789012)\n",
+            "taskDefinitionArn task-definition/spa-platform-poc:7\n"
+            "An error occurred (AccessDeniedException) when calling the DescribeServices operation: "
+            "User: assumed-role/x/y is not authorized\n"
+            "upload failed: Access Denied (account <account>)\n",
+            "--stream",
+        )
+
+    def test_the_stream_applies_every_rule_to_each_line(self) -> None:
+        self.assertRedacts('{"clientId": "3n4b5c6d7e8f9g0h"}\n> Authorization: Bearer abc\n',
+                           '{"clientId": "<elided>"}\n> Authorization: Bearer <elided>\n', "--stream")
+
+    def test_the_stream_writes_a_line_before_the_next_one_arrives(self) -> None:
+        process = subprocess.Popen([sys.executable, "-I", str(SCRIPT), "--stream"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(b"account 123456789012\n")
+            process.stdin.flush()
+            # A deadline, so a stream that holds the line fails here instead of hanging the run.
+            ready, _, _ = select.select([process.stdout], [], [], 30)
+            self.assertTrue(ready, "the stream wrote nothing within 30 seconds of a whole line")
+            self.assertEqual(process.stdout.readline(), b"account <account>\n")
+        finally:
+            process.stdin.close()
+            process.wait(timeout=60)
+            process.stdout.close()
+            process.stderr.close()
+        self.assertEqual(process.returncode, 0)
+
+    def test_the_stream_keeps_the_last_four_digits_on_request(self) -> None:
+        self.assertRedacts("account 123456789012\n", "account <account-9012>\n",
+                           "--stream", "--keep-last-four")
 
 
 class Usage(unittest.TestCase):

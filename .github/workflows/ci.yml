@@ -382,7 +382,9 @@ jobs:
         # that stops matching would leak into a public comment without a word. Its companion starts the
         # real script on hand-written input: an account id inside an ARN, a code in a URL, a client id
         # in JSON, the keep-last-four option, text with nothing to redact, and an Access Denied body,
-        # which must write nothing and exit 3 so the sitting stops and names the cause.
+        # which must write nothing and exit 3 so the sitting stops and names the cause; P-04's own
+        # passing case lines are the one shape let through, and the terminal's --stream mode masks
+        # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
 
       - name: A session's tail prints its last text turns and leaves out tool output and task notifications

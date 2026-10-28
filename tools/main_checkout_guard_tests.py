@@ -173,11 +173,15 @@ STAGED = "has a staged change"
 LANDED = "landed\n"
 
 # The one merge the main checkout admits, on a clean `main` (#226 Q15, Q20): exactly the arguments
-# `--ff-only` and `origin/main`, in either order, after the `git fetch origin` that makes it current.
+# `--ff-only` and `origin/main`, in either order, after the `git fetch origin` that makes it current,
+# with `--quiet` or `-q` as the one option allowed beside them (#468).
 FAST_FORWARDS = (
     "git merge --ff-only origin/main",
     "git merge origin/main --ff-only",
     "git fetch origin && git merge --ff-only origin/main",
+    "git merge --ff-only --quiet origin/main",
+    "git merge -q --ff-only origin/main",
+    "git merge --ff-only origin/main -q",
 )
 
 # Every other spelling of a fast-forward, refused on a clean `main` as before (#226 Q15, Q20).
@@ -194,8 +198,15 @@ OTHER_MERGES = (
     "git merge --ff-only task/linked",
     "git merge --ff-only origin/main task/linked",
     "git merge --ff-only --ff-only origin/main",
-    "git merge -q --ff-only origin/main",
+    "git merge -q -q --ff-only origin/main",
+    "git merge --quiet --quiet --ff-only origin/main",
+    "git merge --quiet origin/main",
     "git merge --ff-only --no-edit origin/main",
+    "git merge --ff-only --verbose origin/main",
+    "git merge --ff-only -v origin/main",
+    "git merge --ff-only --quiet=1 origin/main",
+    "git merge --ff-only -qv origin/main",
+    "git merge --ff-only -q --no-edit origin/main",
     "git merge --ff-only --stat origin/main",
     "git merge --ff-only=origin/main",
     "git -c merge.ff=false merge --ff-only origin/main",
@@ -750,7 +761,7 @@ class FastForward(GuardCase):
 
     def test_the_refusal_still_run_line_names_the_fast_forward_and_not_the_path_checkout(self):
         stderr = self.assertRefused("git commit -m 'work'", self.fx.main)
-        self.assertIn("`git merge --ff-only origin/main` on a clean `main`", stderr)
+        self.assertIn("`git merge --ff-only origin/main` (`--quiet` or `-q` allowed) on a clean `main`", stderr)
         self.assertNotIn("git checkout -- <path>", stderr)
 
 

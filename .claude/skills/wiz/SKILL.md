@@ -1,18 +1,18 @@
 ---
 name: wiz
-description: Walk a sitting in the platform project. Reads preflight, the tracker and the cell, says which sitting applies (A the read pass, B the tunnel and the destroy, C the first deployment and the gate runs), runs each stage's commands with the human's approval of each one, posts each stage's evidence to its ticket from captured and redacted output, and stops where only the human can act. Never writes a Confirm comment, never applies or destroys without a confirm on the plan it showed.
+description: Walk a sitting in the platform project. Reads preflight, the tracker and the cell, then runs sitting C from a standing or an absent platform root (deploy, the G3 to G5 rows and P-04 to P-06, rollback, teardown, from nothing), each command on the human's approval, posts each stage's evidence to its ticket from captured and redacted output, and stops where only the human can act. Never writes a Confirm comment, never applies or destroys without a confirm on the plan it showed.
 ---
 
 # /wiz: a sitting in the platform project
 
-Draft of 2026-10-19, from `.scratch/sitting/spec.md`. Install at `.claude/skills/wiz/SKILL.md`
-(git-ignored until #135 decides otherwise). It replaces `aws-sitting-2.sh`.
+Tracked in the repository since #135; #468 rewrote sitting C as the sittings of 2026-10-27 ran it.
+Sittings A and B are done; they, and the H items that no longer fire, are in `a-and-b.md` beside
+this file, for a cell that needs the read pass again.
 
 Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level
 HIGH: explain each step before running it), `tools/aws-project.env`, `GLOSSARY.md` → *Sitting*,
-*Read-back*, *Sample image*, *Platform project*, *Sample project* (the first three are #56's Q24,
-confirmed on #129 on 2026-10-19; use them whether or not they have been committed yet), and the
-tickets this sitting serves.
+*Unattended run*, *Read-back*, *Sample image*, *Platform project*, and the tickets this sitting
+serves: #242 (the four scripts), #63 (the deployed gate rows), #236 (seed with the profile alone).
 
 ## Rules that hold in every stage
 
@@ -20,288 +20,325 @@ tickets this sitting serves.
    human may skip a stage; a skipped stage is recorded as skipped.
 2. **An apply, a destroy, a deletion or a script that deletes runs only on a confirm given after
    the plan or the case list was shown.** An apply whose plan destroys or replaces anything stops
-   the sitting; the human reads the plan and decides outside the wizard.
+   the sitting; the human reads the plan and decides outside the wizard. One replacement is
+   expected: `deploy.sh` and `rollback.sh` replace the task definition with its new revision, and
+   plan and apply with no pause, so their confirm is given on launch, after the preview plan C1
+   shows, and names the expected shape. A plan inside them of any other shape is a stop.
 3. **Nothing secret is printed or posted:** no authorization code, no client secret, no session
-   name, no client id, no ARN, no account id beyond its last four digits. One exception, to the
-   terminal only: A2 prints the login URL, which carries the client id, because the human has to
-   open it; it goes into the log and never into a post. Redact every post with the function below;
-   if a line cannot be redacted with confidence, leave it out and say so.
+   name, no client id, no ARN, no account id beyond its last four digits. Every AWS read goes to
+   the terminal through the stream mode below; every post through the post mode. If a line cannot
+   be redacted with confidence, leave it out and say so. The one exception is `a-and-b.md`'s A2,
+   which prints the login URL, carrying the client id, to the terminal only, because the human has
+   to open it; it goes into the record and never into a post.
 4. **Evidence goes to the ticket it serves**, as a comment headed by the stage, carrying the
-   command, its exit code and its key lines. A failed or skipped stage posts "failed" or "not run"
-   with the reason, never a sentence that would read the same on success. Each post ends with the
-   Claude Code attribution footer.
+   commit, the command, its exit code and its key lines. A failed or skipped stage posts "failed"
+   or "not run" with the reason, never a sentence that would read the same on success. Each post
+   ends with the Claude Code attribution footer.
 5. **No `Confirm` comment, ever** (ADR-0021 decision 2). **No relabel, unblock or close** until a
    `Confirm` comment on the run's `Overnight <date>` issue covers the question that decided it
-   (ADR-0023 decision 1, ADR-0021 decision 1). A comment that is only the word `Confirm` covers every pre-accepted
-   answer of that run and none that read `Answer: open`, which is the rule the report body states;
-   the `Confirm` of 2026-10-19 on #129 is one such. Where none covers a write, print the write you
-   would make under "Held" and go on.
+   (ADR-0023 decision 1, ADR-0021 decision 1). A comment that is only the word `Confirm` covers
+   every pre-accepted answer of that run and none that read `Answer: open`. Where none covers a
+   write, print the write you would make under "Held" and go on.
 6. **The record is `.scratch/sitting/log/<UTC date>.log`** in the main checkout: every command,
-   every output, unredacted, mode 600. Nothing goes to `/tmp`.
+   every output, unredacted, mode 600. A run's evidence bundle (the junit report, the
+   configuration, a script's output) goes under `.scratch/sitting/log/<UTC date>/` (#63's Q75),
+   checked with `git check-ignore` before the first write, and is never uploaded: a post names
+   each file with its SHA-256. A plan that holds secrets (the apps root's carries client secrets)
+   goes to a private directory outside the repository, `P=$(mktemp -d)`, mode 700 as
+   `tests/e2e/Stack/CellOnboarding.cs` makes it, and `rm -rf "$P"` after the apply. Neither the
+   record nor the bundle goes to `/tmp`.
 7. **Stop and name the cause** when preflight is not ready, the account is not the pin, a plan has
-   destroys or replaces, a stage's exit code or a read's values are not what its ticket expects (an
-   exit of 0 reporting an unhealthy target or another image is a failed stage), or AWS answers
-   `AccessDenied` where it did not before (ask about the spend limit: AWS Settings → Billing, per
-   `docs/agents/aws-rules.md`).
+   destroys or replaces beyond rule 2's one, a stage's exit code or a read's values are not what
+   its ticket expects (an exit of 0 reporting an unhealthy target or another image is a failed
+   stage), or AWS answers `AccessDenied` where it did not before (ask about the spend limit: AWS
+   Settings → Billing, per `docs/agents/aws-rules.md`).
 8. **Run from the main checkout on `main`, up to date with `origin/main`**, so the scripts are the
-   landed ones; never commit, switch or rebase there (`tools/main_checkout_guard.py`).
+   landed ones; never commit, switch or rebase there (`tools/main_checkout_guard.py`). Adam lands
+   pull requests mid-sitting: fetch and fast-forward again before a deploy, and name the commit.
 
-### The redaction function
+### The prelude: every Bash call starts with it
 
-The function is `tools/wiz_redact.py`; its rules are in its header and its companion,
-`tools/wiz_redact_tests.py`, holds each to a case (#259). Every post goes through it: write the
-draft to a file under `.scratch/sitting/log/`, beside the record (git-ignored, mode 600, never
-`/tmp`), pipe it through the script, and post the script's output with `--body-file`, never the
-draft.
+The Bash tool's shell is `/bin/bash` (#183) and keeps no state between calls, so each call that
+touches AWS begins with this, and runs each read and script as `shown <command>`:
 
 ```bash
-umask 077; python3 -I tools/wiz_redact.py < .scratch/sitting/log/post.md > .scratch/sitting/log/post.redacted.md; echo "exit=$?"
-gh issue comment <n> --body-file .scratch/sitting/log/post.redacted.md     # only on exit=0
+cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . tools/aws-project.env && set +a
+export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
+umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
+shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
+captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; local rc=${PIPESTATUS[0]}; echo "exit=$rc" | tee -a "$R" >&2; return "$rc"; }
+spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
 ```
 
-Add `--keep-last-four` only where the ticket's grill asks for an account id's last four digits, as
-#125 does. On exit 3 the draft carries `AccessDenied` or `Access Denied` and the script wrote
-nothing: post nothing, stop the sitting and name the cause (rule 7: ask about the spend limit, AWS
-Settings → Billing, per `docs/agents/aws-rules.md`). On any other non-zero exit post nothing and
-say the redaction failed. On exit 0, read the result once as a reviewer would before posting; the
-script catches shapes, not meaning.
+Shell variables do not survive the call either: read `TD`, `TASK` and the like again in the call
+that uses them. A read whose value a later command needs runs as `X=$(captured <command>)`: its
+output goes to the variable and the record, its errors and its exit to the record and, masked, to
+the terminal, and nothing of it is printed unmasked. `shown` writes the command and its whole output
+to the record, unredacted, and prints it through `tools/wiz_redact.py --stream`, which masks account
+ids, ARNs and the rest of the script's rules line by line and passes `AccessDenied` through for rule
+7. The exit printed is the command's, not the redactor's. Mask nothing by hand with `sed`: macOS
+`sed` reads no `\t` inside a bracket, and a task-definition ARN was printed unmasked that way. Name
+a read value with `${x##*/}` when only its last field is shown.
+
+### The post mode
+
+Every post goes through `tools/wiz_redact.py` without `--stream`: write the draft under `"$E"`,
+pipe it through, and post the output with `--body-file`, never the draft.
+
+```bash
+python3 -I tools/wiz_redact.py < "$E/post.md" > "$E/post.redacted.md"; echo "exit=$?"
+gh issue comment <n> --body-file "$E/post.redacted.md"     # only on exit=0
+```
+
+Its rules are in its header, and `tools/wiz_redact_tests.py` holds each to a case (#259). Add
+`--keep-last-four` only where the ticket's grill asks for an account id's last four digits. P-04's
+passing case lines, `pass  <case>: 403 AccessDenied (<the kind of policy>)`, go through as they
+are; post them verbatim. On exit 3 the draft carries any other `AccessDenied` or `Access Denied`
+and the script wrote nothing: post nothing, stop and name the cause (rule 7). On any other non-zero
+exit post nothing and say the redaction failed. On exit 0, read the result once as a reviewer
+would; the script catches shapes, not meaning.
 
 ## Stage 0: where things stand
 
 Ask first whether this is a `--dry-run` (list every command, run nothing, post nothing), so the
-answer governs Stage 0 too. Then run every time, before choosing a sitting.
+answer governs Stage 0 too. Then, each line after the prelude:
 
 ```bash
-set -a; . tools/aws-project.env; set +a
-tools/preflight.sh                              # must end ready; it compares the account with the pin; C reads its Container engine row
-git fetch origin --tags && git status --short   # main checkout clean, on main, at origin/main
-gh issue view 129 --json comments --jq '[.comments[] | select(.body | test("^Confirm")) | .body]'
-aws ecs describe-services --cluster spa-poc --services gateway \
-  --query 'services[0].{status:status,desired:desiredCount,running:runningCount}'
-ls tools/scripts/                               # which of tunnel.sh, verify-tunnel.sh, seed.sh, deploy.sh, teardown.sh have landed
-ls tests/e2e/Stack/DeployedStack.cs             # the browser suite's deployed mode (#209); C2 and C3 need it
+tools/preflight.sh                       # must end ready; it compares the account with the pin; read its Container engine row
+git fetch origin --tags && git status --short --branch   # on main, no tracked change
+git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
+for n in 63 242 236; do
+  gh issue view "$n" --json number,state,title,body \
+    --jq '"#\(.number) \(.state) \(.title)", (.body | split("\n")[] | select(test("^- \\[ \\]")))'
+  gh api "repos/{owner}/{repo}/issues/$n/dependencies/blocked_by" --jq '.[] | select(.state == "open") | "  blocked by #\(.number) \(.state) \(.title)"'
+done
+shown aws ecs describe-services --cluster spa-poc --services gateway \
+  --query 'services[0].{status:status,desired:desiredCount,running:runningCount,taskDefinition:taskDefinition}'
+shown aws ecr describe-images --repository-name spa-poc/gateway --query 'length(imageDetails)'
 ```
 
-Then say which sitting applies and list its stages with the minutes from the spec's inventory:
+The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An open
+`blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
+which rows it holds and offer the rest. Then say which root is standing:
 
-- **A** when the service exists and #56 has no read-back comment yet.
-- **B** when #56's read-back is posted and `tunnel.sh` and `verify-tunnel.sh` are on `main`.
-- **C** when `seed.sh`, `deploy.sh` and `teardown.sh` are on `main`, preflight's `Container engine`
-  row reads `ok` in the shell this sitting runs in, and the platform root is destroyed or absent. A
-  running engine is not enough: a per-user Docker Desktop puts `docker` in `~/.docker/bin`, which
-  that shell may not have on `PATH`, and then preflight and the scripts see no engine. Offer C2
-  and C3 only when `tests/e2e/Stack/DeployedStack.cs`, the browser suite's deployed mode (#209), is
-  on `main`, read from the tree as the scripts are; without it the sitting stops after C1 and says
-  so.
-- If the service is absent in A: the sitting becomes the platform root's re-apply on the sample
-  image (A-alt below) before the read pass.
+- **Standing**, a service with a running task: C1, C2, C3, R, T, N, C4, C5.
+- **Absent**, no service: N first, then C2 onwards; R needs two gateway builds, so after one
+  deploy from nothing it is "not run: one gateway build" (#242's Q70) unless the human deploys again
+  at a later commit that changes `src/`.
 
-Ask the human which to run.
+Offer C2 and C3 only when `tests/e2e/Stack/DeployedStack.cs` (#209) is on `main`. List the stages
+with their tickets, and ask the human which to run.
 
-## Sitting A: the read pass
+## Sitting C: the deploy and the gate runs
 
-The cell stands; nothing is applied or destroyed.
-
-**A2, #125, the login.** Print the URL with the apps README's block
-(`infra/envs/poc/apps/README.md` → "Done when"), after the `describe-user-pool-client` read:
+**C1, the deploy (#242).** From a standing root, preview first:
 
 ```bash
-POOL=$(terraform -chdir=infra/envs/poc/idp output -raw user_pool_id)
-DOMAIN=$(terraform -chdir=infra/envs/poc/idp output -raw cognito_domain)
-CLIENT=$(terraform -chdir=infra/envs/poc/apps output -json clients | jq -r .app1.clientId)
-aws cognito-idp describe-user-pool-client --user-pool-id "$POOL" --client-id "$CLIENT" \
-  --query 'UserPoolClient.{flows:AllowedOAuthFlows,callbacks:CallbackURLs,rotation:RefreshTokenRotation}'
-echo "https://$DOMAIN/oauth2/authorize?response_type=code&client_id=$CLIENT&redirect_uri=https%3A%2F%2Fapp1.spa-poc.test%3A8443%2Fsignin-oidc&scope=openid"
+shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode   # 0: no drift with the current images
 ```
 
-Tell the human: open it, sign in as a test user, and report whether the address bar shows
-`?code=`. Nothing listens on the callback yet, so the browser shows an error page with the code in
-its address bar; that is the proof. Post on #125: the date, "app 1's client, managed login, a test
-user", the `describe-user-pool-client` output with the client id elided, and "the redirect carried
-`?code=`" or "did not". Never the URL with the client id, never the code.
-
-**A3, #55, Q12's evidence.**
+Then ask for the confirm on launch of `deploy.sh`, naming the shape it will apply: `1 to add, 1 to
+change, 1 to destroy` from a standing gateway, `1 to add, 2 to change, 1 to destroy` from the
+sample image, the one replacement being the task definition as its new revision. Run it in the
+background (it builds both images for ARM64, pushes by digest, applies, waits for steady state and
+asserts the running digest), and watch its output for `waiting through`: `deploy.sh` then waits for
+each new task to report the registry revision on `/readyz`, through the tunnel. Start `tunnel.sh`
+in the background at that line, so its hop goes through the new task, and then:
 
 ```bash
-terraform -chdir=infra/envs/poc/platform init -backend-config=backend.hcl -input=false
-terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode; echo "exit=$?"   # 0 means no changes; no -out, so no plan file
-LB=$(aws elbv2 describe-load-balancers --names spa-poc --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-aws elbv2 describe-load-balancers --load-balancer-arns "$LB" --query 'LoadBalancers[0].{scheme:Scheme,type:Type,state:State.Code}'
-aws elbv2 describe-load-balancer-attributes --load-balancer-arn "$LB" \
-  --query "Attributes[?Key=='routing.http.preserve_host_header.enabled' || Key=='routing.http.drop_invalid_header_fields.enabled']"
-aws elbv2 describe-listeners --load-balancer-arn "$LB" \
-  --query 'Listeners[].{port:Port,protocol:Protocol,certificates:length(Certificates),actions:DefaultActions[].Type}'
-aws elbv2 describe-rules --listener-arn "$(aws elbv2 describe-listeners --load-balancer-arn "$LB" --query 'Listeners[0].ListenerArn' --output text)" --query 'length(Rules)'
-aws elbv2 describe-target-groups --load-balancer-arn "$LB" \
-  --query 'TargetGroups[].{type:TargetType,protocol:Protocol,port:Port,path:HealthCheckPath}'
-LISTENER_CERT=$(aws elbv2 describe-listeners --load-balancer-arn "$LB" --query 'Listeners[0].Certificates[0].CertificateArn' --output text)
-IMPORTED_CERT=$(aws acm list-certificates --query "CertificateSummaryList[?DomainName=='*.spa-poc.test' && Type=='IMPORTED' && Status=='ISSUED'].CertificateArn | [0]" --output text)
-if [ -n "$LISTENER_CERT" ] && [ "$LISTENER_CERT" != "None" ] && [ "$LISTENER_CERT" = "$IMPORTED_CERT" ]; then echo "certificate: match"; else echo "certificate: MISMATCH"; fi
+shown tools/scripts/deploy.sh                    # in the background; start the tunnel at "waiting through"
+tools/scripts/tunnel.sh                          # in the background, at that line
+shown tools/scripts/verify-tunnel.sh /healthz
 ```
 
-Before comparing a read, read #55 → "Read-back expectations": it names the load balancer and says
-what each read above must show, the certificate comparison's one word included. If the load
-balancer's name differs, find it by the `Platform` tag: the A5 `get-resources` call with
-`--resource-type-filters elasticloadbalancing:loadbalancer`. Post on #55 under "Read-back, Q12",
-with the ARNs removed. Then,
-under "Held" unless #98's Q13 is confirmed (it is): close #55 with an `## Answer` comment saying
-the apply was recorded on 2026-10-18, the plan and the
-read-back are above, and task 1.6b checks it end to end.
+If `deploy.sh` fails with `rollout is IN_PROGRESS` right after the service is stable (#467), the
+deployment completes anyway: a re-run plans no changes and reaches its pass line. Post the run on
+#242: the commit, the plan's counts, the pass line, the task definition revision and the gateway
+digest's first eight hex digits.
 
-**A4, #56, Q6 to Q8's read-back.** Before comparing a read, read #56 → "Read-back expectations":
-it names the cluster, the service, the task definition, both roles and the log group the commands
-below use, and says what each read must show. Read the pin from the git-ignored
-`infra/envs/poc/platform/terraform.tfvars`.
+**C2, the G3 and G4 rows, P-04 and P-06 (#63, one comment per test id, Q75).** The configuration
+the suite's F-06 and F-07 need, rebuilt read-only from the running task definition:
 
 ```bash
-aws ecs wait services-stable --cluster spa-poc --services gateway; echo "exit=$?"
-aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[].{status:status,rollout:rolloutState},events:events[:3].message,exec:enableExecuteCommand,breaker:deploymentConfiguration.deploymentCircuitBreaker,publicIp:networkConfiguration.awsvpcConfiguration.assignPublicIp}'
-TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --query 'taskArns[0]' --output text)
-aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{status:lastStatus,image:containers[0].image,digest:containers[0].imageDigest,containers:containers[].name,agents:containers[0].managedAgents}'   # the nested managedAgents filter returns null; read the list and expect one ExecuteCommandAgent RUNNING
-aws ecs describe-task-definition --task-definition spa-platform-poc --query 'taskDefinition.{cpu:cpu,memory:memory,arch:runtimePlatform.cpuArchitecture}'
-TG=$(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].loadBalancers[0].targetGroupArn' --output text)
-aws elbv2 describe-target-health --target-group-arn "$TG" --query 'TargetHealthDescriptions[].{port:Target.Port,health:TargetHealth.State}'
-aws logs describe-log-groups --log-group-name-prefix /spa-platform/poc/gateway --query 'logGroups[].{name:logGroupName,retention:retentionInDays}'
-aws iam list-role-policies --role-name spa-platform-poc-task
-aws iam list-attached-role-policies --role-name spa-platform-poc-task --query 'length(AttachedPolicies)'
-aws iam get-role-policy --role-name spa-platform-poc-task --policy-name "$(aws iam list-role-policies --role-name spa-platform-poc-task --query 'PolicyNames[0]' --output text)" --query 'PolicyDocument.Statement[].Sid'
-for r in $(aws ecs describe-clusters --clusters spa-poc --query 'clusters[0].clusterArn' --output text) \
-         $(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].serviceArn' --output text) \
-         $(aws ecs describe-task-definition --task-definition spa-platform-poc --query 'taskDefinition.taskDefinitionArn' --output text); do
-  aws ecs list-tags-for-resource --resource-arn "$r" --query "tags[?key=='Platform'].value"; done
-aws logs list-tags-for-resource --resource-arn "$(aws logs describe-log-groups --log-group-name-prefix /spa-platform/poc/gateway --query 'logGroups[0].logGroupArn' --output text | sed 's/:\*$//')" --query 'tags.Platform'
-aws iam list-role-tags --role-name spa-platform-poc-task --query "Tags[?Key=='Platform'].Value"
-aws iam list-role-tags --role-name spa-platform-poc-task-execution --query "Tags[?Key=='Platform'].Value"
+TD=$(captured aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].taskDefinition' --output text)
+captured aws ecs describe-task-definition --task-definition "$TD" --output text \
+  --query "taskDefinition.containerDefinitions[?name=='gateway'] | [0].environment[].[name, value]" > "$E/environment.tsv"
+python3 -I tools/scripts/cell_documents.py config "$E/environment.tsv" contracts/platform-config.schema.json > "$E/platform-config.json"; echo "exit=$? ${TD##*/}"
 ```
 
-Compare each read with #56 → "Read-back expectations". Post on #56 under "Read-back, Q6 to Q8",
-names and fields only, and add the sentence Q7 asks for: this is what IAM holds for the role, not
-its effective permission under the project's managed SCPs and RCPs. If any read differs, post it
-as it is and say #56 stays open.
-
-**A5, #118, step 1.**
+Then the suite, through the tunnel, in the background (about 18 minutes):
 
 ```bash
-aws resourcegroupstaggingapi get-resources --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN' | sed -E 's/arn:aws:[^:]*:[^:]*:[0-9]{12}:/.../'
-aws resourcegroupstaggingapi get-resources --region us-east-1 --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN' | sed -E 's/arn:aws:[^:]*:[^:]*:[0-9]{12}:/.../'
-aws iam list-roles --query "Roles[?starts_with(RoleName, 'spa-platform-poc')].RoleName"
+export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.json"
+shown dotnet test --project tests/e2e --filter-not-class Gateway.E2ETests.Functional.OnboardingTests \
+  --report-xunit-junit --results-directory "$E/results-g3g4"
 ```
 
-Post both on #118: the query's list, with the two roles absent from it and present by name.
+The e2e host has no `--report-trx`: the flag is `--report-xunit-junit`, and an exit of 5 means a
+bad flag with zero tests run, so a 5 is a failed stage and not a result.
 
-**A6, #122 and #92, P-04.** Show the case list from the script's header, then:
+Count toward an id only the test cases whose class is under `Gateway.E2ETests.Functional.` or
+`Gateway.E2ETests.Negative.`, the id read from the method's prefix (`F01_` is F-01). The
+`Deployed/*` classes are meta-tests whose data carries ids of its own (`N-28` in
+`DeployedSubsetTests`); report their count beside the rows and credit them to no id. Post one
+comment per id on #63, as the F-01 comment of 2026-10-27 does: the deploy it ran on, the command,
+the totals, the id's tests with their results, and the junit file's name and SHA-256.
+
+P-04 and P-06 run on the same deploy:
 
 ```bash
-tools/scripts/verify-release-immutability.sh; echo "exit=$?"
+shown tools/scripts/verify-release-immutability.sh --clean-up-as-teardown-role   # show the header's case list first
+TASK=$(captured aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+ENI=$(captured aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --output text \
+  --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]")
+IP=$(captured aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+for port in 8080 443; do nc -G 5 -z "$IP" "$port" > /dev/null 2>&1; echo "$port exit=$?"; done | tee -a "$R"   # nc names the address on stderr
 ```
 
-Ask whether to run it again with `--clean-up-as-teardown-role` (the recommendation: yes, so the
-bucket is empty for the destroy in sitting B). Post the full output on #122 and the case lines on
-#92; keep the output in the log, since `Merge task 1.5:`'s body carries it later.
+P-04 passes on exit 0; post its whole output on #63. P-06 passes when 8080's probe exits non-zero
+after its five seconds; 443 is the control. On macOS `-G` is the connect timeout, while `-w` is an
+idle timeout that leaves the probe waiting about 75 seconds. The address is never printed or posted.
 
-**A7.** `rm infra/envs/poc/platform/terraform.tfvars.bak`, with approval, and say so on #129's
-thread only if the human wants; it is Q16 there.
-
-**A8, the tracker writes.** Each rests on two things: a `Confirm` covering the question (all four
-below were pre-accepted on #129, which its `Confirm` of 2026-10-19 covers), and the evidence of the
-stage it rests on having held. Print the command, then make the write only when both hold;
-otherwise list it under "Held" with the reason, confirmation or evidence:
-
-- #125: `gh issue close 125 --comment "<## Answer: the apply on 2026-10-18 at 19:17:25Z, the plan
-  and outputs in the grill of 2026-10-19, the login above>"` (#125's Q7), only when A2's login
-  reached `?code=`.
-- #55: the close under A3 (#98's Q13, confirmed), only when every A3 read matched #55 →
-  "Read-back expectations", the certificate comparison included.
-- #56: `gh issue edit 56 --remove-label ready-for-human --add-label ready-for-agent` (#56's Q11),
-  and the blocker removals for #57 and #58 (#56's Q12: "once every read holds") through the
-  dependencies API, as `docs/agents/issue-tracker.md` → Blocking shows, only when every A4 read
-  matched #56 → "Read-back expectations". A differing read is posted as it is, and #56 stays as it was.
-- #125 as #55's blocker (#125's Q6): on the confirmation alone, since the dependency it modelled,
-  the apps root's state, has held since 2026-10-18.
-
-End sitting A by printing: what was posted where, what is held, that the stack stays up until
-sitting B (#55's Q14) at about $1 a day, and the one thing the human still owes by hand (nothing,
-if the login was done).
-
-**A-alt: the cell is gone.** Re-apply the platform root on the sample image before the read pass,
-in #55's Q11 order: `certs.sh status` (import only if ACM has no `*.spa-poc.test`), the apps root's
-plan must be empty, rewrite `terraform.tfvars` from the example with the current digest of
-`public.ecr.aws/nginx/nginx-unprivileged:stable-alpine` (`docker manifest inspect` or
-`crane digest`), `health_check_path = "/"`, the issuers block from the identity root's outputs; then
-`init`, `plan` (read for the certificate found, no per-app resource, and P-01's counts), `apply` on
-confirm. Then `aws ecs wait services-stable` before A3.
-
-## Sitting B: the tunnel on the sample image, then the destroy
-
-**B0.** `tools/preflight.sh` (the Session Manager plugin row), `tools/scripts/certs.sh status`, and
-`grep spa-poc.test /etc/hosts`. Anything missing is the human's: `sudo` for the hosts file,
-`certs.sh trust` for the keychain.
-
-**B1, #57.** Run `tools/scripts/tunnel.sh` in one terminal and `tools/scripts/verify-tunnel.sh /`
-in another, as #57's landed scripts document; the done-when is exit 0 on a clean workstation. Post
-the exit code and the key lines on #57.
-
-**B2, #55's Q14.** With `verify-tunnel.sh` green and #56's read-back posted:
+**C3, F-07 (#63, G5).** On the profile alone (#63's Q80, #236's Q105): only `AWS_PROFILE` and
+`AWS_REGION` set, no `[spa-platform]` section in `~/.aws/credentials`, and `SPACTL` unset, so
+spactl runs as `dotnet run --project tools/spactl`.
 
 ```bash
-terraform -chdir=infra/envs/poc/platform plan -destroy -input=false -out=/dev/null 2>&1 | tail -20   # read it: the platform root only
-terraform -chdir=infra/envs/poc/platform destroy -input=false                                         # on confirm
-aws resourcegroupstaggingapi get-resources --tag-filters Key=Platform,Values=spa-platform --query 'length(ResourceTagMappingList)'
-aws iam list-roles --query "Roles[?starts_with(RoleName, 'spa-platform-poc')].RoleName"
+unset SPACTL; env | grep -o '^AWS_[A-Z_]*' | sort; grep -c '^\[spa-platform\]' ~/.aws/credentials
+export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.json"
+shown dotnet test --project tests/e2e --filter-class Gateway.E2ETests.Functional.OnboardingTests \
+  --report-xunit-junit --results-directory "$E/results-f07"
 ```
 
-Before reading the destroy plan, read #55 → "Read-back expectations" (Q14): it says what the
-destroy may touch and what stays. A6's clean-up empties the bucket; if the destroy refuses on the
-bucket, stop and say so rather than forcing it. Post the
-destroy's exit code and the two reads on #118 as its second data point, and a dated note on #56
-that the cell is down until `deploy.sh`.
+The report flag and its exit 5 are as in C2.
 
-## Sitting C: the first deployment and the gate runs
+The test onboards and offboards app 3 in one run, so the platform-plan clause ("the platform plan
+is empty with app 3 served") is a second onboarding by hand, in the test's own steps. #63's F-07
+comment of 2026-10-27 is the worked example; post the same shape.
 
-Needs #58's scripts on `main`, preflight's `Container engine` row reading `ok` in this sitting's
-shell (Docker Desktop, D-2), and the platform root absent; C2 and
-C3 also need `tests/e2e`'s deployed stack on `main` (#209).
+1. `P=$(mktemp -d)`; print it, since later calls set `P` again by hand. Then the apps root's plan
+   with the onboarding directory, which must exit 2 with exactly app 3's three creates
+   (`aws_cognito_managed_login_branding.app["app3"]`, `aws_cognito_user_pool_client.app["app3"]`,
+   `aws_ssm_parameter.client_secret["app3"]`); show it, and apply the saved plan on confirm:
 
-**C1.** In the plan's First deployment order: the platform root on the sample image (A-alt),
-`tools/scripts/seed.sh`, `tools/scripts/deploy.sh` (builds both images for ARM64, pushes by
-digest, applies with `health_check_path=/readyz`, waits for steady state, asserts the running
-digest), then `tunnel.sh` and `verify-tunnel.sh /healthz`. Each apply on confirm; post each
-script's exit code and key lines on #58.
+   ```bash
+   shown terraform -chdir=infra/envs/poc/apps plan -input=false -detailed-exitcode -out="$P/onboard.tfplan" \
+     -var 'definition_dirs=["../../../../fixtures/apps","../../../../fixtures/onboarding"]'
+   shown terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
+   ```
 
-**C2, #63 for G3.** The browser suite through the tunnel (`SPA_E2E_STACK=deployed dotnet test
---project tests/e2e`, with what `tests/e2e/Stack/DeployedStack.cs`'s summary says a sitting has
-before the run), `verify-release-immutability.sh` as P-04, P-06 (a
-connection from a host outside the VPC to the task's public address on 8080 must time out: `nc -G 5
--z <address> 8080; echo "exit=$?"`, expecting non-zero; on macOS `-G` is the connect timeout,
-while `-w` is an idle timeout that leaves the probe waiting about 75 seconds), then `teardown.sh` and P-05 (the tag query
-empty, the roles gone by name, #118), then seed and deploy again from nothing. Post per test id on
-#63.
+   The plan prints app 3's client id as its `id` attribute and its branding's `client_id`, the apply
+   as `[id=...]` and in its Outputs block as `clientId`; rule 8 of the redactor masks each of these
+   shapes, on the terminal and in a post. A client id in any other shape reaches the terminal, so
+   read the output once for one, as the post mode asks.
 
-**C3, #63 for G4 and G5.** The deployed negative subset (the rows
-`tests/e2e/Deployed/DeployedSubsetTests.cs` names, run by the same `SPA_E2E_STACK=deployed`
-`dotnet test --project tests/e2e`, N-26 in the browser), then F-07: the apps root's plan with `fixtures/onboarding/app3.json`
-shows three resources, `spactl release publish`, `spactl app add`, `spactl wait`, the task id and
-task definition revision unchanged before and after, app 3 served. Post on #63.
+2. spactl, as the test drives it. `outputs.json` names no client for app 3 until a script rewrites
+   it, so `app add` reads a private copy with the apps root's `clients` output for app 3 merged in
+   (`CellOnboarding.cs` does the same). Set `P` to the directory step 1 made, `RELEASE` to the
+   test's release (`onboarding-<twelve hex>`, from the test's output; a second publish of it
+   writes nothing), and `REVISION` to the one `app add` prints, before `wait`:
+
+   ```bash
+   P=<step 1's directory>; RELEASE=<the test's release>
+   terraform -chdir=infra/envs/poc/apps output -json clients > "$P/clients.json"
+   python3 -I -c 'import json, sys; o = json.load(open(sys.argv[1])); o["clients"]["app3"] = json.load(open(sys.argv[2]))["app3"]; json.dump(o, open(sys.argv[3], "w"))' \
+     infra/envs/poc/outputs.json "$P/clients.json" "$P/outputs.json"
+   shown spactl release publish app3 fixtures/spa/app3 "$RELEASE" --outputs "$P/outputs.json"
+   shown spactl app add fixtures/onboarding/app3.json --release "$RELEASE" --config "$E/platform-config.json" --outputs "$P/outputs.json"
+   ```
+
+   Then, in a call of its own, `shown spactl wait --url https://app1.spa-poc.test:8443 --revision
+   <REVISION>`.
+
+3. The task's id, start time and revision, then the platform root's plan, which must exit 0, then
+   the task again, which must be the same:
+
+   ```bash
+   TASK=$(captured aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+   echo "task ${TASK##*/}"
+   shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
+   shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode
+   shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
+   ```
+
+4. Offboard, each command as `shown`: `spactl app remove app3 --config "$E/platform-config.json"
+   --outputs infra/envs/poc/outputs.json` and `wait` on its revision; the apps root's plan without
+   the `-var`, saved under `"$P"`, exactly the three deletes, applied on confirm; a re-plan exits 0;
+   then `rm -rf "$P"`.
+
+Post on #63: the test's run, and the clause's five steps with addresses and actions only.
+
+**R, `rollback.sh` (#242 box 6),** after F-07, so that the G3 to G5 rows share one deploy (#63's
+Q84). It needs two gateway builds in ECR (Stage 0's `describe-images` count); with one, post the box
+as "not run: one gateway build" (Q70). It plans and applies with no pause, so preview as C1 does and
+confirm on launch with the same shape:
+
+```bash
+shown tools/scripts/rollback.sh                  # the previous gateway image; --to-revision N for another
+```
+
+Post on #242: the revision and digest it left, and its pass line.
+
+**T, `teardown.sh --yes` and P-05 (#242 box 4, P-05 on #63).** Show the header's step list as the
+case list; it destroys the platform, apps and identity roots, the imported certificate and the key
+ring, and ends with `verify-teardown.sh`, whose exit is its own. Confirm on launch:
+
+```bash
+shown tools/scripts/teardown.sh --yes
+```
+
+Post the run on #242 and P-05 (the verify-teardown lines and the exit) on #63. The bootstrap root
+stays.
+
+**N, from nothing (#242, Q61 and Q79).** `docs/plan/05-infrastructure-and-cost.md`'s First
+deployment order from the first root that is absent:
+
+1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
+   no `*.spa-poc.test`.
+2. The identity root, then the apps root, each command as `shown terraform -chdir=<root> ...`:
+   `init -backend-config=backend.hcl`, `plan`, `apply` on confirm. Post both apply summaries on
+   #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
+   block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
+   client id in another shape before it goes.
+3. `infra/envs/poc/platform/terraform.tfvars`: back it up first (`cp -p` to `terraform.tfvars.bak`),
+   then rewrite `issuers` from the identity root's outputs (`authority` is its `issuer`,
+   `browser_origin` is `https://` plus its `cognito_domain`; the map's key and `profile` stay as
+   the backed-up file has them), and `gateway_image` to the sample
+   image by digest with `health_check_path = "/"`. Read the digest with
+   `docker buildx imagetools inspect public.ecr.aws/nginx/nginx-unprivileged:stable-alpine` and write
+   it only when it matches `sha256:[0-9a-f]{64}`: ECR Public can answer 429, and an empty digest was
+   written once. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a plain `terraform
+   destroy` leaves it, and it overrides the sample image).
+4. The platform root on the sample image, as `shown`: `plan`, read for the certificate found, no
+   per-app resource, and P-01's counts (one load balancer, one listener, one target group, one
+   service, one bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs
+   wait services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
+   before step 5 answers "no such host", because it reads the cell's names from that file, and
+   `seed.sh` is what rewrites it.
+5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
+   of the `AWS_*` variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`;
+   seed's whole output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
+6. `deploy.sh` as C1 runs it, from the sample image, then `verify-tunnel.sh /healthz`. Post both on
+   #242: this is the second deployment #63's Q79 asks for, and the suite is not run again.
 
 **C4, the gate tags.** For each gate, list the range's merges and their `Reviewed:` lines as
-`docs/agents/landing-work.md` → Gates shows, name any merge no record clears (the five under
-"Review debt from before the check" included), and draft the tag message with the CI run URL. The
+`docs/agents/landing-work.md` → Gates shows, name any merge no record clears, and draft the tag
+message with the CI run URL and the #63 comment URLs that hold its deployed rows (#63's Q76). The
 human cuts the tag.
 
-**C5.** Ask whether the stack stays up (about $30 a month) or is destroyed until Phase 2's
-deployed tier; destroy on confirm.
+**C5, keep the stack or destroy it.** Ask whether the stack stays up (about $30 a month) or is
+destroyed until Phase 2's deployed tier; `teardown.sh --yes` on confirm, never a plain `terraform
+destroy` of the platform root, which leaves `images.auto.tfvars` to override the next sample-image
+apply and a stale `infra/envs/poc/outputs.json` on which `tunnel.sh` answers "no such host".
+
+End the sitting by printing what was posted where, what is held, and what the human still owes.
 
 ## Outside the sittings
 
 - **H1, the open questions on an `Overnight <date>` issue.** A `Confirm` that is the one word
   covers the pre-accepted answers and none that read `Answer: open`. On request, print a digest
-  table of the open ones from the issue's comments (question, recommendation, what it changes), as
-  `.scratch/sitting/open-questions-129.md` did for #129, whose 26 were answered on 2026-10-19. The
-  human writes and posts any comment that names them, or has a session post it at his word.
+  table of the open ones from the issue's comments (question, recommendation, what it changes). The
+  human writes and posts any comment that names them, or has a session post it at their word.
 - **H2, #90.** Print the three pre-checks and the close path (AWS Settings → View all projects →
   the sample project → Close project); after the human reports it closed, `rm` the two local files
   with approval, run preflight, and draft the ADR-0017 clause into the log for the integrator.
-- **H3, #68.** `tools/check.sh --full --both-halves --port 5180` once from `zsh -l` and once from
-  `/bin/bash`, on `main`; post both verdict lines on #68.
-- **H4, #71.** `python3 -I tools/prune_branches.py` from a checkout at `origin/main`; post its
-  output on #71.
