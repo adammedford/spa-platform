@@ -60,19 +60,31 @@ public sealed class InboundTraceContextTests
     [Fact]
     public async Task Without_a_traceparent_the_request_line_has_a_trace_id_of_its_own()
     {
-        // The failing input for the two above: a line found by the client's trace id is found by the
-        // header, not because every line happens to match.
+        // Two requests with no traceparent each get a well-formed trace id, and not the same one: the
+        // trace id on a request line is the request's own, so a line found by a client's trace id is
+        // found by the header and never because every line shares a trace id or carries a stale one.
+        // Mutation: every request line written under one fixed trace id; the two lines are no longer
+        // distinct. A second: no activity started, so trace_id is null; the shape check fails.
         await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
-        (string traceId, _) = Sampled();
+        (string unsent, _) = Sampled();
 
         await browser.NavigateAsync(harness.App("app1").Url("/healthz"), ct: Ct);
         await browser.GetAsync("/bff/session", ct: Ct);
+        await browser.GetAsync("/bff/session", ct: Ct);
 
         await CapturedTelemetry.UntilAsync(
-            () => CapturedTelemetry.RequestLines(harness).Any(line => line.GetProperty("route").GetString() == "bff"),
-            "the request line", Ct);
-        Assert.DoesNotContain(CapturedTelemetry.RequestLines(harness), line => line.GetProperty("trace_id").GetString() == traceId);
+            () => CapturedTelemetry.RequestLines(harness).Count(line => line.GetProperty("route").GetString() == "bff") >= 2,
+            "two bff request lines", Ct);
+        List<string?> traceIds = CapturedTelemetry.RequestLines(harness)
+            .Where(line => line.GetProperty("route").GetString() == "bff")
+            .Select(line => line.GetProperty("trace_id").GetString())
+            .ToList();
+
+        Assert.Equal(2, traceIds.Count);
+        Assert.All(traceIds, traceId => Assert.Matches("^[0-9a-f]{32}$", traceId));
+        Assert.NotEqual(traceIds[0], traceIds[1]);
+        Assert.DoesNotContain(unsent, traceIds);
     }
 
     /// <summary>The one request line carrying the trace id; the line is written after the response, so it is waited for.</summary>
