@@ -25,13 +25,11 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 
 - **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
-- **The integrator's paths are off limits**, even for a one-line fix. The one exception is adding a change request.
-- **Need a contract changed?** Add `contracts/changes/<task-id>-<slug>.md` describing the change, and stop. The integrator decides and edits.
-- **Need a new project, a new package or a different version?** Same route. `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
+- **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
 - **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
-- **A task is done** when its tests pass in CI, it touched only its own paths, and it left no change request open.
+- **A task is done** as `GLOSSARY.md` → "Done" defines it.
 
 ## Who owns what
 

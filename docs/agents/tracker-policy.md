@@ -114,6 +114,63 @@ The archive's `**Status:**` lines (`claimed`, `blocked`, `resolved`, `closed`, `
 are dated records of the tickets filed before ADR-0020. Read them as history; never write one, and
 never take one for the current state of a moved ticket, whose issue holds it.
 
+## Change requests
+
+**What it is for.** A change request asks for a change on an integrator path that the asking
+session's own ticket does not authorise. What one is: `GLOSSARY.md` → "Change request".
+
+**Filing.** Anyone may file one. Search the open `change-request` issues first, and when one already
+asks for the change, add a blocked-by edge to it instead of filing another (#409). Label it
+`change-request` and `ready-for-human`, never `needs-triage`, and title it in plain prose with no id
+prefix. Its body is a `**Touches:**` line, a `**Rows:**` line when it serves plan rows, then
+`## The gap` and `## The change`, with every steering paragraph it changes quoted whole (above). The
+ticket that needs it is blocked by it, and one request may block many tickets as one ticket may wait
+on many requests; a request that nothing waits on carries `**Raised by:** #NNN` and blocks nothing.
+It may be filed from a pre-accepted answer, because filing decides nothing (ADR-0021 as amended).
+
+**Queued filing.** An overnight session that cannot reach GitHub queues the request as a pending
+`create` line, and the morning files it after a title search and comments its number on the blocked
+ticket; the line's shape is `morning.js`'s.
+
+**Waiting.** The session that needs the change adds the edge, merges what it has with an
+`Outstanding:` line citing the request, drops its assignee once that part lands, and stops (#408).
+
+**Deciding.** The human decides a request in a decision comment on the request issue itself. Its
+first line is exactly one of `Decision: accept`, `Decision: accept with changes`,
+`Decision: decline`, or `Decision: accept as drafted <URL of the draft comment>`. Its second line is
+`ADR: yes` or `ADR: no`, on every decision, a decline included. `accept as drafted` covers the draft
+as it stood when the decision was posted: if the draft comment was edited after that (its
+`updated_at` is later than the decision's `created_at`), the decision does not cover it, and the
+integrator asks again. A comment that departs from this form is not a decision comment: the
+integrator lane treats the request as undecided and relabels it `ready-for-human`. No parser reads
+the form; the integrator lane and the reviewer do.
+
+A scripted session never posts a comment whose first line begins `Decision:`. Its draft is headed
+`## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
+A foreground session may post a decision comment only on Adam's words given in that session, and the
+comment's last line says so ("Posted from a foreground session on Adam's words in it."). Every
+session posts as `@adammedford`, so this is a convention the shared account cannot enforce, as "no
+agent session writes a `Confirm`" is (above): the prompts and the reviewer guard it.
+
+A `Confirm` on the Overnight issue never authorises a change request's edit; only the request's
+decision comment does. `.github/steering.py` reads only a cited comment's author, so it cannot tell
+the two apart, and the reviewer holds a commit whose `Authority:` is a `Confirm` on a change request.
+
+**Landing.** The human relabels a decided request `ready-for-agent` when a lane may make the edit.
+The commit that makes it cites the decision comment's URL as its `Authority:`
+(`docs/agents/landing-work.md` → "A commit that changes a steering document"), and
+`Authority: #<n>` naming a change request is refused. With no decision comment, the integrator
+relabels the request `ready-for-human` and stops. When the decision says `ADR: no`, the merge body
+states the why and cites the decision comment (#413).
+
+**Closing.** A request closes when its edit lands. Declined, it is closed as not planned, labelled
+`wontfix`, with a comment saying why; withdrawn, it is closed as not planned. A request decided but
+not yet landed is open.
+
+**The archived requests.** The files under `contracts/changes/` are the requests filed before
+change requests were issues. They are read-only records, cited by their id, and no file is added
+there. Their `**Status:**` lines, `moved to #NNN` included, are history.
+
 ## The archive: tickets filed before ADR-0020
 
 `.scratch/<feature-slug>/issues/<NN>-<slug>.md` holds every ticket filed before the switch, and is

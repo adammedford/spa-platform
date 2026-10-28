@@ -27,18 +27,7 @@ This repo is **single-context**: one glossary and one ADR directory at the root.
 
 ## Two decision surfaces, one of them read-only
 
-`docs/plan/` is an **export** of a Claude Doc, taken 11 October 2026. Its README names the Doc as the
-source of truth, so a plan file is never edited in place: a disagreement means the folder needs a
-fresh export, not a patch.
-
-`docs/adr/` is the **live decision record**. ADR-0001 to ADR-0012 restate decisions D1 to D12 from
-`docs/plan/01-plan.md`, each citing the plan row it came from.
-
-So:
-
-- **Reading a decision?** Either works. The ADR carries the alternatives and consequences in full; the plan's table is the one-line version.
-- **Recording a new or revised decision?** Write an ADR. Never edit `docs/plan/`.
-- **Writing anything else?** `docs/plan/` and `docs/adr/` are both integrator-owned. A workstream that needs a change there files `contracts/changes/<task-id>-<slug>.md` and stops.
+Where a decision lives, and in what order to read the layers: `docs/adr/README.md` → "Where a decision lives".
 
 ## Use the glossary's vocabulary
 
