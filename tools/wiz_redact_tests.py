@@ -265,6 +265,32 @@ class RuleEightTerraformClientIds(Redacts):
                            'aws_cognito_user_pool_client.app["app3"]: Destroying... [id=<elided>]\n',
                            "--stream")
 
+    def test_a_client_id_in_a_plans_client_id_id_or_value_attribute_is_elided_at_25_or_26_characters(self) -> None:
+        # The cell's two client ids are 25 and 26 characters; the sitting log of 2026-10-27 prints each
+        # as the client's `id`, the branding's `client_id` and the task definition's env `value`.
+        self.assertRedacts(
+            '      - id                                            = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4l5m" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '                          - name  = "MockApi__App1Client"\n'
+            '                          - value = "3n4b5c6d7e8f9g0h1i2j3k4l5"\n',
+            '      - id                                            = "<elided>" -> null\n'
+            '      - client_id                   = "<elided>" -> null\n'
+            '      - client_id                   = "<elided>" -> null\n'
+            '                          - name  = "MockApi__App1Client"\n'
+            '                          - value = "<elided>"\n',
+        )
+
+    def test_other_attributes_of_the_same_plans_are_kept(self) -> None:
+        text = (
+            '      - managed_login_branding_id   = "d44f0937-7779-4298-825d-55f4091f8a57" -> null\n'
+            '      - region                      = "us-east-2" -> null\n'
+            '      - id                          = "spa-platform-poc" -> null\n'
+            '                          - value = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_7PJ6SDHlO"\n'
+            '      - id     = "spa-platform-poc-task:spa-platform-poc-task" -> null\n'
+        )
+        self.assertRedacts(text, text)
+
     def test_a_plans_client_id_attribute_and_the_outputs_clientid_are_elided(self) -> None:
         # The shapes a destroy plan and an apply's Outputs block printed in the sitting of 2026-10-27;
         # a Cognito client id is 26 lowercase letters and digits, which no other id in the roots is.

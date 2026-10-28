@@ -66,7 +66,7 @@ cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . 
 export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
 umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
 shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
-captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; echo "exit=${PIPESTATUS[0]}" | tee -a "$R" >&2; }
+captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; local rc=${PIPESTATUS[0]}; echo "exit=$rc" | tee -a "$R" >&2; return "$rc"; }
 spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
 ```
 
@@ -227,9 +227,10 @@ comment of 2026-10-27 is the worked example; post the same shape.
    shown terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
    ```
 
-   The plan prints app 3's client id as its `id` attribute and the apply as `[id=...]` and in its
-   Outputs block as `clientId`; rule 8 of the redactor masks the three shapes, on the terminal and
-   in a post. Read the output once for any other, as the post mode asks.
+   The plan prints app 3's client id as its `id` attribute and its branding's `client_id`, the apply
+   as `[id=...]` and in its Outputs block as `clientId`; rule 8 of the redactor masks each of these
+   shapes, on the terminal and in a post. A client id in any other shape reaches the terminal, so
+   read the output once for one, as the post mode asks.
 
 2. spactl, as the test drives it. `outputs.json` names no client for app 3 until a script rewrites
    it, so `app add` reads a private copy with the apps root's `clients` output for app 3 merged in

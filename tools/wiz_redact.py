@@ -29,10 +29,12 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies eight rules, in 
    `X-Amz-Security-Token:` header line becomes `<elided>`.
 8. A client id Terraform prints (#468): the `[id=...]` on a line naming an
    `aws_cognito_user_pool_client` resource (`Creation complete`, `Refreshing state...`,
-   `Destroying...`) becomes `[id=<elided>]`; a `clientId = "..."` attribute, quoted or not, as an
-   apply's Outputs block prints the apps root's `clients`, becomes `clientId = "<elided>"`; and an
-   `id = "..."` attribute whose value is 26 lowercase letters and digits, a Cognito client id's
-   shape and no other id's in the roots, becomes `id = "<elided>"`, as a plan prints the client.
+   `Destroying...`) becomes `[id=<elided>]`; a `clientId = "..."` attribute, its key quoted or not,
+   as an apply's Outputs block prints the apps root's `clients`, becomes `clientId = "<elided>"`;
+   and an `id`, `client_id` or `value` attribute whose quoted value is 25 or 26 lowercase letters
+   and digits, the two lengths of the cell's client ids and a shape no other id in the roots has,
+   becomes `"<elided>"`, as a plan prints the client, the managed login branding's `client_id` and
+   the mock API's `MockApi__App*Client` environment value.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -122,10 +124,10 @@ BEARER = re.compile(r"(?<![\w-])(Bearer[ \t]+)[A-Za-z0-9._~+/=-]{16,}")
 TOKEN_HEADER = re.compile(rf"(?<![\w-])((?:{TOKEN_HEADERS})\s*:[ \t]*)[^\s]+", re.IGNORECASE)
 
 # Terraform's progress line for a user pool client, whose resource id is the client id; the HCL
-# attribute an Outputs block prints it as; and a plan's `id` attribute in a client's own shape.
+# attribute an Outputs block prints it as; and the attributes a plan prints it in, by its shape.
 TERRAFORM_CLIENT_ID = re.compile(r"(aws_cognito_user_pool_client[^\n]*\[id=)[^\]\n]+(\])")
 HCL_CLIENT_ID = re.compile(r"((?<![\w-])\"?clientId\"?\s*=\s*\")[^\"\n]*(\")")
-HCL_ID_IN_CLIENT_SHAPE = re.compile(r"((?<![\w-])\"?id\"?\s*=\s*\")[a-z0-9]{26}(\")")
+HCL_ID_IN_CLIENT_SHAPE = re.compile(r"((?<![\w-])\"?(?:client_id|id|value)\"?\s*=\s*\")[a-z0-9]{25,26}(\")")
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
