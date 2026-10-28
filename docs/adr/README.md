@@ -84,4 +84,4 @@ Otherwise the merge body states the why and cites the decision comment.
 An ADR is amended only by a new ADR. The new ADR's Plan ref names the decisions it amends, the
 older ADR's Status line gains `**Amended <date> by [ADR-NNNN](<file>):**` and what changes, and the
 older body is not edited. The "amended by change request" notes on ADR-0007, ADR-0009, ADR-0014,
-ADR-0016 and ADR-0024 stay as history.
+ADR-0016 and ADR-0024, and the one in ADR-0014's body, stay as history.

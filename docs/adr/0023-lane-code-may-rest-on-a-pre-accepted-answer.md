@@ -5,7 +5,7 @@
   decision 2's set leaves out the three setup-written guides and no longer exempts an added change
   request; decision 3 counts a decision comment as a confirmed answer and never a change-request
   issue's number; decision 4 is replaced: a proposed steering change is filed as a change request;
-  decision 1 is unchanged.
+  the other decisions are unchanged.
 - **Date:** 2026-10-18
 - **Deciders:** integrator
 - **Plan ref:** No decision row. Amends ADR-0021 decision 1. Decided in the grill of the

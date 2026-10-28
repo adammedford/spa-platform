@@ -99,7 +99,8 @@ An agent identity apart from the human's account is out of scope here, not rejec
 - Decisions 1 to 5 take effect as the spec's tickets land, and until a decision's ticket lands, the
   route the steering documents give still holds:
   - decision 1 when the overnight run files requests as issues (#436), the docs say so (#438) and
-    the open files move (#439), with gate-evidence reading the issues (#435);
+    the open files move (#439), with gate-evidence reading the issues (#435); the morning's replay
+    of a queued request (#433) and review-queue's reading of a ticket's requests (#434) have landed;
   - decision 2 when the steering check refuses a request's own number (#437) and the docs name the
     decision comment (#438);
   - decision 3 when the overnight run's prompts file a proposal as a request (#436);
