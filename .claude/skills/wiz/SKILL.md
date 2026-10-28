@@ -62,17 +62,19 @@ touches AWS begins with this, and runs each read and script as `shown <command>`
 ```bash
 cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . tools/aws-project.env && set +a
 export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
-umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; mkdir -p "$E"
+umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
 shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
+spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
 ```
 
 Shell variables do not survive the call either: read `TD`, `TASK` and the like again in the call
-that uses them. `shown` writes the command and its whole output to the record, unredacted, and
-prints it through `tools/wiz_redact.py --stream`, which masks account ids, ARNs and the rest of the
-script's rules line by line and passes `AccessDenied` through for rule 7. The exit printed is the
-command's, not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a
-bracket, and a task-definition ARN was printed unmasked that way. Name a read value with `${x##*/}`
-when only its last field is shown.
+that uses them, and tee a read captured into a variable to the record (`| tee -a "$R"` inside the
+`$( )`). `shown` writes the command and its whole output to the record, unredacted, and prints it
+through `tools/wiz_redact.py --stream`, which masks account ids, ARNs and the rest of the script's
+rules line by line and passes `AccessDenied` through for rule 7. The exit printed is the command's,
+not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a bracket, and
+a task-definition ARN was printed unmasked that way. Name a read value with `${x##*/}` when only its
+last field is shown.
 
 ### The post mode
 
@@ -154,9 +156,9 @@ digest's first eight hex digits.
 the suite's F-06 and F-07 need, rebuilt read-only from the running task definition:
 
 ```bash
-TD=$(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].taskDefinition' --output text)
+TD=$(aws ecs describe-services --cluster spa-poc --services gateway --query 'services[0].taskDefinition' --output text | tee -a "$R")
 aws ecs describe-task-definition --task-definition "$TD" --output text \
-  --query "taskDefinition.containerDefinitions[?name=='gateway'] | [0].environment[].[name, value]" > "$E/environment.tsv"
+  --query "taskDefinition.containerDefinitions[?name=='gateway'] | [0].environment[].[name, value]" | tee -a "$R" > "$E/environment.tsv"
 python3 -I tools/scripts/cell_documents.py config "$E/environment.tsv" contracts/platform-config.schema.json > "$E/platform-config.json"; echo "exit=$? ${TD##*/}"
 ```
 
@@ -179,10 +181,10 @@ P-04 and P-06 run on the same deploy:
 
 ```bash
 shown tools/scripts/verify-release-immutability.sh --clean-up-as-teardown-role   # show the header's case list first
-TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text | tee -a "$R")
 ENI=$(aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --output text \
-  --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]")
-IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+  --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]" | tee -a "$R")
+IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text | tee -a "$R")
 for port in 8080 443; do nc -G 5 -z "$IP" "$port" > /dev/null 2>&1; echo "$port exit=$?"; done | tee -a "$R"   # nc names the address on stderr
 ```
 
@@ -224,7 +226,6 @@ comment of 2026-10-27 is the worked example; post the same shape.
 
    ```bash
    P=<step 1's directory>; RELEASE=<the test's release>
-   spactl() { dotnet run --project tools/spactl -- "$@"; }
    terraform -chdir=infra/envs/poc/apps output -json clients > "$P/clients.json"
    python3 -I -c 'import json, sys; o = json.load(open(sys.argv[1])); o["clients"]["app3"] = json.load(open(sys.argv[2]))["app3"]; json.dump(o, open(sys.argv[3], "w"))' \
      infra/envs/poc/outputs.json "$P/clients.json" "$P/outputs.json"
@@ -239,7 +240,7 @@ comment of 2026-10-27 is the worked example; post the same shape.
    the task again, which must be the same:
 
    ```bash
-   TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+   TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text | tee -a "$R")
    echo "task ${TASK##*/}"
    shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
    shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode
@@ -284,7 +285,8 @@ deployment order from the first root that is absent:
    user passwords.
 3. `infra/envs/poc/platform/terraform.tfvars`: back it up first (`cp -p` to `terraform.tfvars.bak`),
    then rewrite `issuers` from the identity root's outputs (`authority` is its `issuer`,
-   `browser_origin` is `https://` plus its `cognito_domain`), and `gateway_image` to the sample
+   `browser_origin` is `https://` plus its `cognito_domain`; the map's key and `profile` stay as
+   the backed-up file has them), and `gateway_image` to the sample
    image by digest with `health_check_path = "/"`. Read the digest with
    `docker buildx imagetools inspect public.ecr.aws/nginx/nginx-unprivileged:stable-alpine` and write
    it only when it matches `sha256:[0-9a-f]{64}`: ECR Public can answer 429, and an empty digest was
