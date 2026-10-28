@@ -11,8 +11,8 @@ whole diff. A history containing a merge must keep each ordinary commit and each
 edits within one owner's set; imported parent commits are audited separately, including reverted
 commits. Two-parent merges are supported; octopus merges fail with instructions to split them.
 When it fires, look at what it names: either the change reached somewhere it did not mean to,
-or it needs an integrator path and wants a change request under `contracts/changes/`. Anyone may add
-one of those, which is why the block exempts it.
+or it needs an integrator path, which is a change request (`docs/agents/tracker-policy.md` →
+"Change requests").
 
 ```text
 *                                     integrator

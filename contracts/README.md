@@ -1,15 +1,14 @@
 # Contracts
 
-These files freeze at G1a, and their identity parts at G1b. After that, a change is a written
-request to the integrator, never an edit: add `contracts/changes/<task-id>-<slug>.md` describing the
-change, and stop. Anyone may add one. The integrator decides and edits.
+These files freeze at G1a, and their identity parts at G1b. After that, a change is a change request
+(`docs/agents/tracker-policy.md` → "Change requests"), never an edit.
 
 **What may land between gates.** Prose, and a new type that changes no existing stage, owner or entry
-point's signature, land on the integrator's decision, because nothing already built against the
+point's signature, land on a decided change request, because nothing already built against the
 frozen contract has to change to keep compiling. Anything else waits for the next gate: a changed
-stage, owner or signature, a narrowed schema, a new rule id, a renamed field. The decision is still
-written up beside the request, because the first question anyone asks of a frozen file is why it
-moved. `changes/i-7-pipeline-stub-blocks-later-stages.md` is the prose case and
+stage, owner or signature, a narrowed schema, a new rule id, a renamed field. The merge that moves a
+frozen file says why, and cites the decision, because the first question anyone asks of a frozen
+file is why it moved. `changes/i-7-pipeline-stub-blocks-later-stages.md` is the prose case and
 `changes/6.4-request-telemetry-feature.md` the added-type case.
 
 Written from `docs/plan/02-contracts.md`, which is a frozen export and is never edited in place. A
