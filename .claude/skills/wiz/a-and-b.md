@@ -2,8 +2,9 @@
 
 Moved out of `SKILL.md` by #468: sitting A ran on 2026-10-19 and sitting B on 2026-10-24, and #68
 (H3) and #71 (H4) are closed. Kept as the record of how they ran, for a cell rebuilt from nothing
-that needs the read pass again. The rules, the redaction function and Stage 0 are in `SKILL.md`;
-where a stage below says "A-alt", read `SKILL.md` → N, the platform root on the sample image.
+that needs the read pass again. The rules, the prelude's `shown`, the post mode and Stage 0 are in
+`SKILL.md`, and every read below runs through `shown`; where a stage below says "A-alt", read
+`SKILL.md` → N, the platform root on the sample image.
 
 ## Sitting A: the read pass
 
@@ -89,8 +90,8 @@ as it is and say #56 stays open.
 **A5, #118, step 1.**
 
 ```bash
-aws resourcegroupstaggingapi get-resources --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN' | sed -E 's/arn:aws:[^:]*:[^:]*:[0-9]{12}:/.../'
-aws resourcegroupstaggingapi get-resources --region us-east-1 --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN' | sed -E 's/arn:aws:[^:]*:[^:]*:[0-9]{12}:/.../'
+aws resourcegroupstaggingapi get-resources --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN'
+aws resourcegroupstaggingapi get-resources --region us-east-1 --tag-filters Key=Platform,Values=spa-platform --query 'ResourceTagMappingList[].ResourceARN'
 aws iam list-roles --query "Roles[?starts_with(RoleName, 'spa-platform-poc')].RoleName"
 ```
 

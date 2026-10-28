@@ -16,6 +16,7 @@ The ids, codes and secrets below are made up for the cases; none is a real accou
 from __future__ import annotations
 
 import pathlib
+import select
 import subprocess
 import sys
 import unittest
@@ -338,6 +339,9 @@ class Stream(Redacts):
         try:
             process.stdin.write(b"account 123456789012\n")
             process.stdin.flush()
+            # A deadline, so a stream that holds the line fails here instead of hanging the run.
+            ready, _, _ = select.select([process.stdout], [], [], 30)
+            self.assertTrue(ready, "the stream wrote nothing within 30 seconds of a whole line")
             self.assertEqual(process.stdout.readline(), b"account <account>\n")
         finally:
             process.stdin.close()

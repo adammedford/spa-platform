@@ -70,9 +70,9 @@ Shell variables do not survive the call either: read `TD`, `TASK` and the like a
 that uses them. `shown` writes the command and its whole output to the record, unredacted, and
 prints it through `tools/wiz_redact.py --stream`, which masks account ids, ARNs and the rest of the
 script's rules line by line and passes `AccessDenied` through for rule 7. The exit printed is the
-command's, not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a bracket, and a
-task-definition ARN printed that way. Name a read value with `${x##*/}` when only its last field
-is shown.
+command's, not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a
+bracket, and a task-definition ARN was printed unmasked that way. Name a read value with `${x##*/}`
+when only its last field is shown.
 
 ### The post mode
 
@@ -111,9 +111,9 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
 shown aws ecr describe-images --repository-name spa-poc/gateway --query 'length(imageDetails)'
 ```
 
-The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An
-open `blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78);
-say which rows it holds and offer the rest. Then say which root is standing:
+The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An open
+`blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
+which rows it holds and offer the rest. Then say which root is standing:
 
 - **Standing**, a service with a running task: C1, C2, C3, R, T, N, C4, C5.
 - **Absent**, no service: N first, then C2 onwards; R needs two gateway builds, so after one
@@ -183,7 +183,7 @@ TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-sta
 ENI=$(aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --output text \
   --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value | [0]")
 IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
-for port in 8080 443; do nc -G 5 -z "$IP" "$port"; echo "$port exit=$?"; done | tee -a "$R"
+for port in 8080 443; do nc -G 5 -z "$IP" "$port" > /dev/null 2>&1; echo "$port exit=$?"; done | tee -a "$R"   # nc names the address on stderr
 ```
 
 P-04 passes on exit 0; post its whole output on #63. P-06 passes when 8080's probe exits non-zero
@@ -205,8 +205,8 @@ The test onboards and offboards app 3 in one run, so the platform-plan clause ("
 is empty with app 3 served") is a second onboarding by hand, in the test's own steps. #63's F-07
 comment of 2026-10-27 is the worked example; post the same shape.
 
-1. `P=$(mktemp -d)`, then the apps root's plan with the onboarding directory, which must exit 2
-   with exactly app 3's three creates (`aws_cognito_managed_login_branding.app["app3"]`,
+1. `P=$(mktemp -d)`; print it, since later calls set `P` again by hand. Then the apps root's plan
+   with the onboarding directory, which must exit 2 with exactly app 3's three creates (`aws_cognito_managed_login_branding.app["app3"]`,
    `aws_cognito_user_pool_client.app["app3"]`, `aws_ssm_parameter.client_secret["app3"]`); show it,
    and apply the saved plan on confirm:
 
@@ -216,22 +216,34 @@ comment of 2026-10-27 is the worked example; post the same shape.
    terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
    ```
 
-2. spactl, with the test's release (`onboarding-<twelve hex>`, from the test's output; a second
-   publish of it writes nothing), and the revision `app add` applied:
+2. spactl, as the test drives it. `outputs.json` names no client for app 3 until a script rewrites
+   it, so `app add` reads a private copy with the apps root's `clients` output for app 3 merged in
+   (`CellOnboarding.cs` does the same). Set `P` to the directory step 1 made, `RELEASE` to the
+   test's release (`onboarding-<twelve hex>`, from the test's output; a second publish of it
+   writes nothing), and `REVISION` to the one `app add` prints, before `wait`:
 
    ```bash
+   P=<step 1's directory>; RELEASE=<the test's release>
    spactl() { dotnet run --project tools/spactl -- "$@"; }
-   shown spactl release publish app3 fixtures/spa/app3 "$RELEASE" --outputs infra/envs/poc/outputs.json
-   shown spactl app add fixtures/onboarding/app3.json --release "$RELEASE" --config "$E/platform-config.json" --outputs infra/envs/poc/outputs.json
-   shown spactl wait --url https://app1.spa-poc.test:8443 --revision "$REVISION"
+   terraform -chdir=infra/envs/poc/apps output -json clients > "$P/clients.json"
+   python3 -I -c 'import json, sys; o = json.load(open(sys.argv[1])); o["clients"]["app3"] = json.load(open(sys.argv[2]))["app3"]; json.dump(o, open(sys.argv[3], "w"))' \
+     infra/envs/poc/outputs.json "$P/clients.json" "$P/outputs.json"
+   shown spactl release publish app3 fixtures/spa/app3 "$RELEASE" --outputs "$P/outputs.json"
+   shown spactl app add fixtures/onboarding/app3.json --release "$RELEASE" --config "$E/platform-config.json" --outputs "$P/outputs.json"
    ```
+
+   Then, in a call of its own, `shown spactl wait --url https://app1.spa-poc.test:8443 --revision
+   <REVISION>`.
 
 3. The task's id, start time and revision, then the platform root's plan, which must exit 0, then
    the task again, which must be the same:
 
    ```bash
+   TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
+   echo "task ${TASK##*/}"
    shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
    shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode
+   shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
    ```
 
 4. Offboard: `spactl app remove app3 --config "$E/platform-config.json" --outputs
