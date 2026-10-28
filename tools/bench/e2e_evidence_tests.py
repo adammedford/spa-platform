@@ -230,6 +230,20 @@ class Refusals(TestCase):
         self.assertIn("HostTests.N08_a_host_is_404", run.stderr)
         self.assertNotIn("123456789012", run.stderr + run.stdout)
 
+    def test_a_bad_time_is_refused_without_printing_the_theory_arguments(self):
+        run = self.run_script([case(NEGATIVE + "HostTests", 'N08_a_host_is_404(account: "123456789012")', time="soon")])
+        self.assertEqual(2, run.code, run.stdout)
+        self.assertIn("HostTests.N08_a_host_is_404", run.stderr)
+        self.assertNotIn("123456789012", run.stderr + run.stdout)
+
+    def test_an_out_that_cannot_be_written_is_a_refusal_not_a_failed_run(self):
+        # Exit 1 means a gate test failed; a write that fails must not read as one (#469 review).
+        run = self.run_script([case(NEGATIVE + "HostTests", "N08_an_unknown_host_is_404")],
+                              extra=["--out", "/dev/null/drafts"])
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIn("refused: cannot write the drafts", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
 
 class Drafts(TestCase):
     def test_a_draft_carries_heading_totals_tests_report_and_context(self):

@@ -88,8 +88,8 @@ def read_register(root: pathlib.Path) -> set:
     for name in REGISTERS:
         try:
             text = (root / name).read_text(encoding="utf-8")
-        except OSError as error:
-            raise Refusal(f"cannot read the id register {name}: {error.strerror}") from None
+        except (OSError, UnicodeDecodeError) as error:
+            raise Refusal(f"cannot read the id register {name}: {error}") from None
         defined.update(ROW.findall(text))
     return defined
 
@@ -128,7 +128,9 @@ def read_report(path: pathlib.Path) -> list:
         try:
             time = float(element.get("time", "0"))
         except ValueError:
-            raise Refusal(f"{classname}.{method}: its time {element.get('time')!r} is not a number") from None
+            # The name only up to a theory row's arguments: the sensitive scan in count() has not
+            # run yet, and an argument may carry an account id.
+            raise Refusal(f"{classname}.{method.split('(')[0]}: its time is not a number") from None
         tests.append(Test(classname, method, outcome, time))
     return tests
 
@@ -218,13 +220,22 @@ def run(args: argparse.Namespace) -> int:
     tests = read_report(args.report)
     by_id, meta = count(tests, defined)
     gate = [t for group in by_id.values() for t in group]
-    digest = hashlib.sha256(args.report.read_bytes()).hexdigest()
+    try:
+        digest = hashlib.sha256(args.report.read_bytes()).hexdigest()
+    except OSError as error:
+        raise Refusal(f"cannot read the report {args.report.name}: {error.strerror}") from None
 
     drafts = {test_id: draft(test_id, group, gate, meta, args.report, digest, args.commit, context)
               for test_id, group in by_id.items()}
-    args.out.mkdir(parents=True, exist_ok=True)
+    # A write that fails is a refusal (exit 2), never a traceback's exit 1, which reads as a gate
+    # test that failed (CODING_STANDARDS.md, a check fails closed).
+    try:
+        args.out.mkdir(parents=True, exist_ok=True)
+        for test_id in drafts:
+            (args.out / f"{test_id}.md").write_text(drafts[test_id], encoding="utf-8")
+    except OSError as error:
+        raise Refusal(f"cannot write the drafts under --out {args.out.name}: {error.strerror}") from None
     for test_id in sorted(drafts, key=id_order):
-        (args.out / f"{test_id}.md").write_text(drafts[test_id], encoding="utf-8")
         group = by_id[test_id]
         print(f"{test_id}: {len(group)} test{'' if len(group) == 1 else 's'}, {tally(group)}: {verdict(group)}")
     print(f"e2e-evidence: {len(gate)} gate tests ({tally(gate)}) under {len(by_id)} ids, "
