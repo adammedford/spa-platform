@@ -81,22 +81,26 @@ own -- and the night's reviews held none of them: the report found two, and a la
 reviewers' two. Whether a commit cites an authority is mechanical, so it is this check's; whether
 what it cites decides the change stays the reviewer's. A commit is held when it sits between
 `--base` and HEAD, is not a merge, was made from AUTHORITY_SINCE on, and changes a steering
-document other than by adding an open change request; it then needs an `Authority:` trailer of one of two
-forms, `#<n>` for the ticket whose acceptance criterion asks for the change, or the URL of the
-comment on this repository that holds a confirmed answer. git's own trailer parser reads it, so an
-`Authority:` line inside the prose is not one. With no `--base` every commit HEAD reaches is read,
-so a caller cannot skip the rule by naming nothing. A merge passes because what it brings in is
-commits, each held on its own; a commit made before the starting point passes because it could not
-have known the rule, and rewording one would mean rewriting a branch that has landed. The citation
-is checked the way the `#NNN` rule checks one, in the same single listing, which also says whether
-a number is an issue or a pull request, and a ticket is an issue. The listing can come back short
-with no error (#297), so a number it lacks is asked about alone before it is refused: a 404 or a
-410 refuses it, and any other failure leaves it unchecked with GitHub's reason. A URL is checked
-against the comment GitHub keeps under its id, and that comment's author against the account
-that confirms (#316): the one docs/agents/tracker-policy.md names at the base, or the repository's
-owner while it names none, since a `Confirm` by any other account that can comment confirms
-nothing. Offline, the trailer is still required, and its citations are reported as not checked;
-the line the rule passes prints how many held commits GitHub vouched for.
+document; it then needs an `Authority:` trailer of one of two forms, `#<n>` for the ticket whose
+acceptance criterion asks for the change, or the URL of the comment on this repository that holds
+a confirmed answer. git's own trailer parser reads the trailer, so an `Authority:` line inside the
+prose is not one. A change request's own number is neither form, since anyone may file one: from
+REQUESTS_CLOSED_SINCE on, a `#<n>` naming an issue labelled `change-request` is refused, and so is
+a commit adding any file under `contracts/changes/`, the read-only archive of requests filed
+before they were issues, whatever its trailer cites. With no `--base` every commit HEAD reaches is
+read, so a caller cannot skip the rule by naming nothing. A merge passes because what it brings in
+is commits, each held on its own; a commit made before the starting point passes because it could
+not have known the rule, and rewording one would mean rewriting a branch that has landed. The
+citation is checked the way the `#NNN` rule checks one, in the same single listing, which also
+says whether a number is an issue, a change request or a pull request, and a ticket is an issue.
+The listing can come back short with no error (#297), so a number it lacks is asked about alone
+before it is refused: a 404 or a 410 refuses it, and any other failure leaves it unchecked with
+GitHub's reason. A URL is checked against the comment GitHub keeps under its id, and that
+comment's author against the account that confirms (#316): the one docs/agents/tracker-policy.md
+names at the base, or the repository's owner while it names none, since a `Confirm` by any other
+account that can comment confirms nothing. Offline, the trailer is still required, and its
+citations are reported as not checked; the line the rule passes prints how many held commits
+GitHub vouched for.
 
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py --base origin/main
 """
@@ -284,15 +288,23 @@ ISSUE_CITATION = re.compile(r"(?<![\w/&#])#(?P<number>\d{1,4})\b")
 # Where the numbers come from: one listing of the repository's issues. GitHub's REST API "considers
 # every pull request an issue, but not every issue is a pull request", so the pull requests are in
 # the listing and the two forms share one sequence; --paginate follows the pages and --jq keeps
-# one line per number, saying which of the two it is, from the `pull_request` key the API gives a
-# pull request alone. The `#NNN` rule takes either; the authority rule takes an issue only, since
-# a ticket is an issue, and this listing tells the two apart. gh fills {owner}/{repo} from the
-# remote of the directory it runs in, and signs in from its keyring or from GH_TOKEN, which is what
-# CI hands it.
+# one line per number, saying which of three it is: a pull request, from the `pull_request` key the
+# API gives a pull request alone; a change request, an issue carrying CHANGE_REQUEST_LABEL among the
+# labels the API lists by name; or any other issue. The `#NNN` rule takes all three; the authority
+# rule takes an issue only, since a ticket is an issue, and refuses a change request (#442 Q29).
+# The label is matched whole inside jq, so a label name's spaces or commas cannot split the line.
+# gh fills {owner}/{repo} from the remote of the directory it runs in, and signs in from its keyring
+# or from GH_TOKEN, which is what CI hands it.
 # https://docs.github.com/en/rest/issues/issues#list-repository-issues
+CHANGE_REQUEST_LABEL = "change-request"
+KIND = (
+    r'\(if .pull_request then "pull" '
+    rf'elif any(.labels[]?; .name == "{CHANGE_REQUEST_LABEL}") then "request" '
+    r'else "issue" end)'
+)
 GH_ISSUES = (
     "gh", "api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100",
-    "--jq", r'.[] | "\(.number) \(if .pull_request then "pull" else "issue" end)"',
+    "--jq", rf'.[] | "\(.number) {KIND}"',
 )
 
 # Where one number is looked up when the listing lacks it. The listing can exit 0 with fewer pages
@@ -307,8 +319,11 @@ GH_ISSUES = (
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
 GH_ISSUE = (
     "gh", "api", "repos/{owner}/{repo}/issues/{number}",
-    "--jq", r'"\(.number) \(if .pull_request then "pull" else "issue" end)"',
+    "--jq", rf'"\(.number) {KIND}"',
 )
+
+# The kinds a line of either lookup names a number as.
+KINDS = ("issue", "request", "pull")
 
 # How long to wait for gh before saying so. The hook runs this check on every push, and a check that
 # hangs on a bad connection is a check pushed past with --no-verify the second time.
@@ -329,10 +344,11 @@ TRANSCRIPTS = {
         "the token spike's run; `#N refresh_token` numbers the grants",
 }
 
-# The steering documents, as ADR-0023 decision 2 lists them and GLOSSARY.md's *Steering document*
-# defines them: a file at the repository's root, or anything under a directory, written with its
-# trailing slash. A name is matched whole and only at the root, so `docs/GLOSSARY.md` and
-# `contracts-old/` are not steering documents.
+# The steering documents, as docs/agents/landing-work.md's paragraph "A commit that changes a
+# steering document names its authority" lists them, and as the change-request ADR (#431) records
+# them: a file at the repository's root, or anything under a directory, written with its trailing
+# slash, less STEERING_EXCEPTIONS. A name is matched whole and only at the root, so
+# `docs/GLOSSARY.md` and `contracts-old/` are not steering documents.
 STEERING_DOCUMENTS = (
     "GLOSSARY.md",
     "AGENTS.md",
@@ -344,45 +360,31 @@ STEERING_DOCUMENTS = (
     "contracts/",
 )
 
-# Where a change request goes. ADR-0023 decision 2: adding one is not a change to a steering
-# document, and AGENTS.md gives it to every workstream as the way to ask for a contract change, so
-# holding it would hold every lane that followed the rules. Only an added file passes: a change
-# request edited or removed afterwards is the integrator deciding it, which is a change to
-# contracts/ like any other. An added request that already names any state but open is a decision
-# too, and is held by the rule below (#187).
-CHANGE_REQUESTS = "contracts/changes/"
-
-# A change request's Status line, as every request under CHANGE_REQUESTS writes it:
-# `- **Status:** open`, or `- **Status:** decided, <date>. <prose>`. The first word is the state, and
-# any state but open is a decision: `accepted` decides a request as surely as `decided` does. A
-# file whose Status lines name different states, such as an `open` left above a `decided` added
-# under a Decision heading, cannot say which holds, so it is held as unreadable (the second #188
-# review); one that names the same state twice reads as that state.
-STATUS = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?\*\*Status:\*\*[ \t]*(?P<state>[A-Za-z]+)")
-
-# A line that uses Status as a field's label, in a shape STATUS may not read: after any list marker,
-# number, table pipe, heading, quote, bold, italic or code mark, the word and then a colon, a pipe, a
-# dash, an equals sign or the end of the line. `**Status**: decided`, `- Status: decided`,
-# `- **Status:** _decided_`, `| Status | decided |` and `## Status` are each one. A file that has
-# such a line and no line STATUS reads cannot say whether it is decided, so it is held rather than
-# read as open (#188's review): a decided request in a new shape would otherwise pass as open. A
-# file with no such line names no Status at all, and counts as open. The decoration is matched one
-# character at a time, so a long `|---|---|` row cannot make the match backtrack without end.
-STATUS_LABEL = re.compile(
-    r"(?im)^[ \t]*(?:[-*+>|#_`\d.)][ \t]*)*status[*_`]*[ \t]*(?:[:|=\u2013\u2014-]|$)"
+# The guides under docs/agents/ that a setup skill rewrites when it is run again, and which hold no
+# rule of this repository's, so a re-run is not a steering change (#411, #412, #442 Q26). A guide
+# leaves the set only on both counts: the setup skill writes docs/agents/domain.md and CLAUDE.md's
+# skills block too, and each stays in while it holds a rule of this repository's (#442 Q27). Every
+# one stays the integrator's in OWNERSHIP.md.
+STEERING_EXCEPTIONS = (
+    "docs/agents/issue-tracker.md",
+    "docs/agents/triage-labels.md",
+    "docs/agents/aws-rules.md",
 )
 
-# What state_at() returns for a file whose Status STATUS cannot read: no state word is a `?`.
-UNREADABLE = "?"
+# The read-only archive of change requests filed as files before a change request became an issue
+# labelled CHANGE_REQUEST_LABEL (#410, #442 Q31). A file added here before REQUESTS_CLOSED_SINCE
+# passed with no trailer, since AGENTS.md then gave it to every workstream as the way to ask; from
+# it on, a commit adding any file here is refused whatever its trailer cites, a README and a
+# rename's new path included. Editing or removing one is a change to contracts/ like any other.
+CHANGE_REQUESTS = "contracts/changes/"
 
-# Where the decision rule starts (#187). A commit that sets a change request's Status to decided,
-# by adding it so or by editing it to say so, is the integrator deciding it, and ADR-0021 decision 4
-# says a change request's status line is committed on a confirmed answer. So its Authority: trailer
-# must be the URL of the comment holding that answer; a `#<n>` alone is held, because a ticket's
-# acceptance criterion asking a lane to record a decision is a lane deciding, which is what
-# 9f56729 and 37af894 did on the night of 2026-10-19. Made is the committer date, as for
-# AUTHORITY_SINCE, and set just before the commit that adds the rule.
-DECIDED_SINCE = datetime.datetime(2026, 10, 20, 14, 10, tzinfo=datetime.timezone.utc)
+# Where the two change-request rules start (#442 Q28): from here on, by committer date, a file
+# added under CHANGE_REQUESTS is refused, and so is an `Authority: #<n>` naming an issue labelled
+# CHANGE_REQUEST_LABEL. The label is read as it stands when the check runs, so without a start a
+# label added later to an old issue would fail a landed commit on every run with no base, and a
+# landed commit cannot be reworded; no issue carried the label before this point. Made is the
+# committer date, as for AUTHORITY_SINCE, and set just before the commit that adds the rules.
+REQUESTS_CLOSED_SINCE = datetime.datetime(2026, 10, 28, 22, 20, tzinfo=datetime.timezone.utc)
 
 # Where the authority rule starts. A commit made before it was written could not have known the
 # rule, and rewording one would mean rewriting a branch that has landed. Made is the committer date:
@@ -450,16 +452,15 @@ LOG_FORMAT = (
 
 class Held(typing.NamedTuple):
     """A commit the authority rule holds: the paths that need an authority, the authorities it
-    names, the change requests it sets to a decision with the state each now names, which need a
-    confirmed answer's URL among those authorities, and the change requests whose Status it leaves
-    unreadable, which no authority settles."""
+    names, whether it was made from REQUESTS_CLOSED_SINCE on, and the files it adds under
+    CHANGE_REQUESTS from that point, which no authority settles."""
 
     sha: str
     subject: str
     paths: tuple[str, ...]
     authorities: tuple[str, ...]
-    decides: tuple[tuple[str, str], ...] = ()
-    unreadable: tuple[str, ...] = ()
+    closed: bool = False
+    adds: tuple[str, ...] = ()
 
 
 def progress_claims(root: pathlib.Path) -> list[str]:
@@ -813,9 +814,10 @@ def issue_citations(root: pathlib.Path) -> tuple[list[tuple[str, int, int]], lis
     return cited, untracked
 
 
-def issued_numbers(root: pathlib.Path) -> tuple[set[int], set[int], str]:
-    """The numbers GitHub has issued to this repository's issues, and to its pull requests, or why
-    they could not be read.
+def issued_numbers(root: pathlib.Path) -> tuple[set[int], set[int], set[int], str]:
+    """The numbers GitHub has issued to this repository's issues, to its pull requests, and to the
+    issues among them labelled CHANGE_REQUEST_LABEL, or why they could not be read. A change request
+    is an issue, so its number is in the first set as well as the third.
 
     Empty with a reason when gh is not on PATH, is not signed in, cannot reach GitHub or is refused
     by it. The caller prints the reason and fails nothing: a rule that failed every offline push
@@ -830,23 +832,26 @@ def issued_numbers(root: pathlib.Path) -> tuple[set[int], set[int], str]:
             GH_ISSUES, cwd=root, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT
         )
     except FileNotFoundError:
-        return set(), set(), "gh is not on PATH"
+        return set(), set(), set(), "gh is not on PATH"
     except subprocess.TimeoutExpired:
-        return set(), set(), f"gh did not answer within {GH_TIMEOUT} seconds"
+        return set(), set(), set(), f"gh did not answer within {GH_TIMEOUT} seconds"
     if asked.returncode != 0:
-        return set(), set(), first_complaint(asked)
+        return set(), set(), set(), first_complaint(asked)
     issues: set[int] = set()
     pulls: set[int] = set()
+    requests: set[int] = set()
     for line in asked.stdout.splitlines():
         if not line.strip():
             continue
         number, _, kind = line.strip().partition(" ")
-        if not number.isdigit() or kind not in ("issue", "pull"):
-            return set(), set(), (
+        if not number.isdigit() or kind not in KINDS:
+            return set(), set(), set(), (
                 f"gh answered with something other than numbers: {asked.stdout[:60]!r}"
             )
         (pulls if kind == "pull" else issues).add(int(number))
-    return issues, pulls, ""
+        if kind == "request":
+            requests.add(int(number))
+    return issues, pulls, requests, ""
 
 
 def first_complaint(asked: subprocess.CompletedProcess) -> str:
@@ -896,8 +901,9 @@ def named_account(guide: str | None) -> str | None:
 
 
 def issue_kind(root: pathlib.Path, number: int) -> tuple[str | None, str]:
-    """What GitHub says this one number is on this repository: "issue" or "pull"; None when it
-    never issued the number; or, with None, why GitHub could not say.
+    """What GitHub says this one number is on this repository: "issue", "request" (an issue
+    labelled CHANGE_REQUEST_LABEL) or "pull"; None when it never issued the number; or, with None,
+    why GitHub could not say.
 
     Asked only for a number an `Authority: #<n>` trailer cites and the listing lacks, which is
     none on a run whose listing came back whole. A 404 or a 410 is an answer, the one the rule
@@ -924,7 +930,7 @@ def issue_kind(root: pathlib.Path, number: int) -> tuple[str | None, str]:
         gone = "(HTTP 404)" in said or "(HTTP 410)" in said
         return (None, "") if gone else (None, said)
     answered, _, kind = asked.stdout.strip().partition(" ")
-    if answered != str(number) or kind not in ("issue", "pull"):
+    if answered != str(number) or kind not in KINDS:
         return None, (
             f"gh answered #{number} with something other than its line: {asked.stdout[:60]!r}"
         )
@@ -966,74 +972,39 @@ def resolved(root: pathlib.Path, revision: str) -> str | None:
 
 def is_steering(path: str) -> bool:
     """Whether a path is a steering document: a STEERING_DOCUMENTS file, or under one of its
-    directories."""
-    return any(
+    directories, and not one of STEERING_EXCEPTIONS."""
+    return path not in STEERING_EXCEPTIONS and any(
         path == document or (document.endswith("/") and path.startswith(document))
         for document in STEERING_DOCUMENTS
     )
 
 
-def steering_changes(root: pathlib.Path, sha: str) -> list[str]:
-    """The steering documents a commit changes, less any change request it adds.
+def steering_changes(root: pathlib.Path, sha: str) -> tuple[list[str], list[str]]:
+    """The steering documents a commit changes, less any file it adds under CHANGE_REQUESTS, and
+    those added files apart.
 
     Against the commit's parent, or the empty tree for a root commit, which is what --root asks
     for: a root commit is a change like any other. No rename detection, so a rename is the delete
-    of one path and the add of another, and a change request renamed is a change request removed.
+    of one path and the add of another, and a change request renamed is one removed and one added.
     NUL-separated, so a path is read as git stores it rather than as git would quote it.
     """
     found = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
                 "--root", sha)
     fields = found.stdout.split("\0")
-    return [
-        path
-        for status, path in zip(fields[0::2], fields[1::2])
-        if is_steering(path) and not (status == "A" and path.startswith(CHANGE_REQUESTS))
-    ]
-
-
-def state_at(root: pathlib.Path, revision: str, path: str) -> str | None:
-    """The first word of a change request's Status line at a revision, lower-cased, such as "open"
-    or "decided"; UNREADABLE when its Status lines name different states, or when a line labels a
-    Status that STATUS cannot read and none it can; "open" when no line names a Status at all; None
-    when the file is absent there."""
-    shown = git(root, "show", f"{revision}:{path}")
-    if shown.returncode != 0:
-        return None
-    states = {found.group("state").lower() for found in STATUS.finditer(shown.stdout)}
-    if len(states) == 1:
-        return states.pop()
-    if states:
-        return UNREADABLE
-    return UNREADABLE if STATUS_LABEL.search(shown.stdout) else "open"
-
-
-def request_changes(root: pathlib.Path, sha: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """The change requests a commit sets to a decision, each with the state it now names, and the
-    ones whose Status it leaves unreadable. A request is set to a decision when it is added naming
-    any state but open, or edited to name one it did not name before, so an edit from `accepted` to
-    `decided` is a decision as much as one from `open`; an edit that leaves the state as it was
-    decides nothing new."""
-    found = git(root, "diff-tree", "--no-commit-id", "-r", "-z", "--no-renames", "--name-status",
-                "--root", sha)
-    fields = found.stdout.split("\0")
-    decides, unreadable = [], []
+    changed, added = [], []
     for status, path in zip(fields[0::2], fields[1::2]):
-        if status not in ("A", "M") or not path.startswith(CHANGE_REQUESTS) \
-                or not path.endswith(".md"):
-            continue
-        state = state_at(root, sha, path)
-        if state == UNREADABLE:
-            unreadable.append(path)
-        elif state not in (None, "open") and state != state_at(root, f"{sha}^", path):
-            decides.append((path, state))
-    return decides, unreadable
+        if status == "A" and path.startswith(CHANGE_REQUESTS):
+            added.append(path)
+        elif is_steering(path):
+            changed.append(path)
+    return changed, added
 
 
 def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
     """The commits the authority rule holds, newest first: between base and HEAD, or every commit
     HEAD reaches when no base is named, that are not merges, were made from AUTHORITY_SINCE on, and
-    change a steering document other than by adding an open change request. From DECIDED_SINCE on,
-    a commit that sets a change request to any state but open is held too, adding it or not.
+    change a steering document other than by adding a file under CHANGE_REQUESTS. From
+    REQUESTS_CLOSED_SINCE on, a commit adding such a file is held too, for the file alone.
 
     The starting point is compared here, commit by commit, and not given to `git log --since`:
     git's manual says of `--since-as-filter` that it "visits all commits in the range, rather than
@@ -1050,7 +1021,7 @@ def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
     if log.returncode != 0:
         raise SystemExit(f"steering: git log could not read {revisions}: {log.stderr.strip()}")
     since = AUTHORITY_SINCE.timestamp()
-    decided_since = DECIDED_SINCE.timestamp()
+    closed_since = REQUESTS_CLOSED_SINCE.timestamp()
     held = []
     for record in log.stdout.split("\0"):
         if not record:
@@ -1058,23 +1029,23 @@ def held_commits(root: pathlib.Path, base: str | None) -> list[Held]:
         sha, made, subject, trailers = record.split("\x1f", 3)
         if int(made) < since:
             continue
-        paths = steering_changes(root, sha)
-        decides, unreadable = request_changes(root, sha) if int(made) >= decided_since else ([], [])
-        if not paths and not decides and not unreadable:
+        closed = int(made) >= closed_since
+        paths, added = steering_changes(root, sha)
+        adds = tuple(added) if closed else ()
+        if not paths and not adds:
             continue
         authorities = tuple(value.strip() for value in trailers.split("\x1e") if value.strip())
-        named = tuple(paths) + tuple(path for path, _ in decides if path not in paths)
-        held.append(Held(sha, subject, named, authorities, tuple(decides), tuple(unreadable)))
+        held.append(Held(sha, subject, tuple(paths), authorities, closed, adds))
     return held
 
 
-def unreadable_statuses(held: list[Held]) -> list[str]:
-    """The change requests a held commit leaves with a Status the decision rule cannot read."""
+def closed_additions(held: list[Held]) -> list[str]:
+    """The held commits that add a file under CHANGE_REQUESTS from REQUESTS_CLOSED_SINCE on, one
+    line each, whatever their trailers cite."""
     return [
-        f'commit {commit.sha[:12]} ("{commit.subject}") leaves {path} with a Status this check '
-        "cannot read"
+        f'commit {commit.sha[:12]} ("{commit.subject}") adds {", ".join(commit.adds)}'
         for commit in held
-        for path in commit.unreadable
+        if commit.adds
     ]
 
 
@@ -1088,24 +1059,37 @@ def judged(
     authority: str,
     issues: set[int],
     pulls: set[int],
+    requests: set[int],
     numbers_unread: str,
     looked_up: dict[int, tuple[str | None, str]],
     comments: dict[str, tuple[Comment | None, str]],
     account: str | None = None,
+    closed: bool = False,
 ) -> tuple[str, str]:
     """What one Authority: value comes to: ("vouched", ""), ("refused", why it resolves to
-    nothing), ("unconfirmed", who wrote the comment it cites, when that is not the account that
-    confirms), or ("unchecked", why GitHub could not say). account is the one the tracker policy
-    names, None when it names none, which leaves the repository's owner.
+    nothing), ("request", why a change request's number authorises nothing), ("unconfirmed", who
+    wrote the comment it cites, when that is not the account that confirms), or ("unchecked", why
+    GitHub could not say). account is the one the tracker policy names, None when it names none,
+    which leaves the repository's owner; closed says the commit was made from
+    REQUESTS_CLOSED_SINCE on, before which a change request's number was an issue like any other.
 
     A number the listing lacks is judged on what issue_kind() said of it alone, in `looked_up`:
-    the listing may have stopped short, so its silence is not GitHub's 404."""
+    the listing may have stopped short, so its silence is not GitHub's 404.
+
+    A change request is refused on its label alone, whatever its state or other labels: closed,
+    landed, or labelled `ready-for-agent` (#442 Q29). Whether the human labelled a cited ticket
+    `ready-for-agent` is the reviewer's judgement and not this check's, so nothing here reads who
+    applied a label: that would mean each issue's timeline, would refuse every landed commit citing
+    a foreground ticket, and on one shared account proves no more than the author check (#442
+    Q30). Do not add that check here."""
     issue = ISSUE_AUTHORITY.fullmatch(authority)
     if issue:
         if numbers_unread:
             return "unchecked", numbers_unread
         number = int(issue.group("number"))
-        if number in issues:
+        if number in requests:
+            kind, why = "request", ""
+        elif number in issues:
             kind, why = "issue", ""
         elif number in pulls:
             kind, why = "pull", ""
@@ -1113,7 +1097,11 @@ def judged(
             kind, why = looked_up[number]
         if why:
             return "unchecked", why
-        if kind == "issue":
+        if kind == "request" and closed:
+            return "request", (
+                "is a change request, which asks for a decision rather than recording one"
+            )
+        if kind in ("issue", "request"):
             return "vouched", ""
         if kind == "pull":
             return "refused", "names a pull request, not an issue"
@@ -1147,6 +1135,7 @@ def unauthorised(
     held: list[Held],
     issues: set[int],
     pulls: set[int],
+    requests: set[int],
     numbers_unread: str,
     looked_up: dict[int, tuple[str | None, str]],
     comments: dict[str, tuple[Comment | None, str]],
@@ -1154,42 +1143,39 @@ def unauthorised(
 ) -> tuple[list[str], list[str], list[str], int, list[str], list[str]]:
     """The held commits naming no authority, the authorities that resolve to nothing, why each
     authority GitHub could not be asked about went unchecked, how many held commits GitHub
-    vouched for every authority of, the commits that decide a change request on no confirmed
-    answer's URL, and the authorities citing a comment someone other than the account wrote.
+    vouched for every authority of, the authorities citing a change request's own number, and the
+    authorities citing a comment someone other than the account wrote.
 
     Every authority a commit names is judged, not the first that resolves: a second trailer citing
-    nothing is a pointer at nothing, which every other rule here fails.
+    nothing is a pointer at nothing, which every other rule here fails, and a change request's
+    number beside a decision comment's URL still names the request.
     """
-    missing, refused, unchecked, vouched, undecided, unconfirmed = [], [], [], 0, [], []
+    missing, refused, unchecked, vouched, requested, unconfirmed = [], [], [], 0, [], []
     for commit in held:
         if not commit.paths:
-            continue  # held only for a Status it cannot read, which unreadable_statuses() says
+            continue  # held only for a request file it adds, which closed_additions() says
         named = f'commit {commit.sha[:12]} ("{commit.subject}") changes {", ".join(commit.paths)}'
         if not commit.authorities:
             missing.append(f"{named} and carries no {AUTHORITY}: trailer")
             continue
-        answered = any(COMMENT_AUTHORITY.fullmatch(value) for value in commit.authorities)
-        if commit.decides and not answered:
-            sets = ", ".join(f"{path} to {state}" for path, state in commit.decides)
-            undecided.append(
-                f"{named}, sets {sets}, and cites no confirmed answer: "
-                f"{AUTHORITY}: {', '.join(commit.authorities)}"
-            )
         verdicts = [
             (authority,
-             *judged(authority, issues, pulls, numbers_unread, looked_up, comments, account))
+             *judged(authority, issues, pulls, requests, numbers_unread, looked_up, comments,
+                     account, commit.closed))
             for authority in commit.authorities
         ]
         for authority, verdict, why in verdicts:
             if verdict == "refused":
                 refused.append(f"{named}, and {AUTHORITY}: {authority} {why}")
+            elif verdict == "request":
+                requested.append(f"{named}, and {AUTHORITY}: {authority} {why}")
             elif verdict == "unconfirmed":
                 unconfirmed.append(f"{named}, and {AUTHORITY}: {authority} {why}")
             elif verdict == "unchecked":
                 unchecked.append(why)
         if all(verdict == "vouched" for _, verdict, _ in verdicts):
             vouched += 1
-    return missing, refused, unchecked, vouched, undecided, unconfirmed
+    return missing, refused, unchecked, vouched, requested, unconfirmed
 
 
 def report(lines: list[str], headline: str, *advice: str) -> bool:
@@ -1244,7 +1230,9 @@ def main(argv: list[str] | None = None) -> int:
     cites_issues = cited or any(
         ISSUE_AUTHORITY.fullmatch(value) for commit in held for value in commit.authorities
     )
-    issues, pulls, unchecked = issued_numbers(root) if cites_issues else (set(), set(), "")
+    issues, pulls, requests, unchecked = (
+        issued_numbers(root) if cites_issues else (set(), set(), set(), "")
+    )
     unissued = [] if unchecked else dangling_issues(cited, issues | pulls)
     # A number a trailer cites and the listing lacks is asked about alone before it is refused,
     # since the listing can come back short (#297); none is asked when the listing itself failed,
@@ -1264,10 +1252,10 @@ def main(argv: list[str] | None = None) -> int:
         # base resolved above, so a failure here is a guide the base does not have.
         shown = git(root, "show", f"{base}:{GUIDE}")
         account = named_account(shown.stdout if shown.returncode == 0 else None)
-    nameless, refused, unverified, vouched, undecided, unconfirmed = unauthorised(
-        held, issues, pulls, unchecked, looked_up, comments, account
+    nameless, refused, unverified, vouched, requested, unconfirmed = unauthorised(
+        held, issues, pulls, requests, unchecked, looked_up, comments, account
     )
-    unread = unreadable_statuses(held)
+    added = closed_additions(held)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -1294,8 +1282,8 @@ def main(argv: list[str] | None = None) -> int:
             disagreements,
             "STEERING FAILED: the contracts index and a contract's own freeze header disagree.",
             "One of the two is wrong, and a freeze cell is frozen state: decide which side the",
-            "gate actually froze at, and correct that side through a change request under",
-            "contracts/changes/ rather than editing the other to match.",
+            "gate actually froze at, and correct that side through a change-request issue",
+            "rather than editing the other to match.",
         ),
         report(
             unreadable,
@@ -1362,26 +1350,23 @@ def main(argv: list[str] | None = None) -> int:
             "trailers. Authority: #<n> names the ticket whose acceptance criterion asks for the",
             "change; Authority: <URL> names the comment on this repository holding a confirmed",
             "answer. Amend the message to add one; docs/agents/landing-work.md has the forms.",
-            "Adding an open change request under contracts/changes/ needs none.",
         ),
         report(
-            undecided,
-            "STEERING FAILED: a commit sets a change request to a decision on no confirmed answer.",
-            "ADR-0021 decision 4: a change request's status line is committed on a confirmed",
-            "answer, so the commit that says decided names the comment holding it, in an",
-            "Authority: <URL> trailer. A #<n> alone does not decide a request: a ticket asking a",
-            "lane to record a decision is a lane deciding. Any Status but open is a decision,",
-            "accepted as much as decided. Leave the Status open and stop, or cite the human's",
-            "answer.",
+            added,
+            "STEERING FAILED: a commit adds a file under contracts/changes/, which is closed to "
+            "new files.",
+            "contracts/changes/ is the read-only archive of change requests filed before they",
+            "were issues, and no Authority: trailer reopens it. File the request as an issue",
+            f"labelled {CHANGE_REQUEST_LABEL} instead, and drop the file from the commit; the",
+            "archive's rules are in docs/agents/tracker-policy.md.",
         ),
         report(
-            unread,
-            "STEERING FAILED: a change request's Status cannot be read.",
-            "The decision rule reads a Status written `- **Status:** open` or `- **Status:**",
-            "decided, <date>. ...`, as every change request has written it. Another shape could",
-            "say decided, and two Status lines naming different states cannot say which holds, so",
-            "either is held rather than read as open, whatever the Authority: trailer cites. Write",
-            "one Status line, in one of those two shapes, and edit it in place to decide.",
+            requested,
+            "STEERING FAILED: an Authority: trailer cites a change request's own number.",
+            "Anyone may file a change request, so its number asks for a decision and records",
+            "none. Cite its decision comment's URL instead, as GitHub links it:",
+            "https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>. Drop the number even",
+            "beside a URL that resolves, since every Authority: trailer is judged.",
         ),
         report(
             refused,
