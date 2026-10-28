@@ -370,18 +370,18 @@ public sealed class ContinuityObserverTests
         new("d00dd00dd00dd00dd00dd00dd00dd00d", T0.AddMinutes(3), null, "sha256:bbbb"),
     ];
 
-    private static (ContinuityObserver.RollingDeploy Deploy, CloudWatch Log) Rolling(int refreshMinute = 4, int refreshes = 1, int status = 200, string callbackTask = TaskC)
+    private static (ContinuityObserver.RollingDeploy Deploy, CloudWatch Log) Rolling(int refreshMinute = 4, int refreshes = 1, int status = 200, string callbackTask = TaskC, string startTask = TaskB, int callbackSecond = 480)
     {
         Step[] calls = [.. Enumerable.Range(0, 5).Select(i => Sent($"call-{i}", 60 + (i * 60), status, expect: null))];
         Step start = Sent("login-start", 150, 302, route: "bff");
-        Step callback = Sent("callback", 480, 302, 302, "callback");
+        Step callback = Sent("callback", callbackSecond, 302, 302, "callback");
         CloudWatch log = new();
         foreach (Step call in calls)
         {
             log.Request(call.At < T0.AddMinutes(5) ? TaskA : TaskC, call);
         }
 
-        log.Request(TaskB, start).Request(callbackTask, callback);
+        log.Request(startTask, start).Request(callbackTask, callback);
         for (int r = 0; r < refreshes; r++)
         {
             log.Refreshed(TaskA, T0.AddMinutes(refreshMinute).AddSeconds(r));
@@ -410,6 +410,28 @@ public sealed class ContinuityObserverTests
         (ContinuityObserver.RollingDeploy deploy, CloudWatch log) = Rolling(refreshMinute: minute);
 
         Assert.Equal(Verdict.NotProved, ContinuityObserver.Rolling(deploy, await log.CaptureAsync(Deadline)).Verdict);
+    }
+
+    [Fact]
+    public async Task Row6_a_login_started_on_a_new_task_held_past_the_timeout_or_never_finished_is_not_proved()
+    {
+        // Q150: the start's lines on an old task, the callback's on a new one, within the remote
+        // authentication timeout, or the row is not proved; each recording satisfies every rule but one.
+        (ContinuityObserver.RollingDeploy deploy, CloudWatch log) = Rolling(startTask: TaskC);
+        RowResult onNew = ContinuityObserver.Rolling(deploy, await log.CaptureAsync(Deadline));
+        Assert.Equal(Verdict.NotProved, onNew.Verdict);
+        Assert.Contains("start is not on an old task", onNew.Reason, StringComparison.Ordinal);
+
+        int late = 150 + (int)ContinuityBounds.RemoteAuthenticationTimeout.TotalSeconds + 60;
+        (deploy, log) = Rolling(callbackSecond: late);
+        RowResult held = ContinuityObserver.Rolling(deploy, await log.CaptureAsync(Deadline));
+        Assert.Equal(Verdict.NotProved, held.Verdict);
+        Assert.Contains("remote authentication timeout", held.Reason, StringComparison.Ordinal);
+
+        (deploy, log) = Rolling();
+        RowResult unfinished = ContinuityObserver.Rolling(deploy with { LoginCallback = null }, await log.CaptureAsync(Deadline));
+        Assert.Equal(Verdict.NotProved, unfinished.Verdict);
+        Assert.Contains("did not reach its callback", unfinished.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

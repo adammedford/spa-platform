@@ -130,11 +130,24 @@ public sealed class ContinuityTests
                 Ct);
             result.Assert();
         }
-        finally
+        catch (Exception failure)
         {
-            // F-07's offboarding leaves the registry as it was (#348 row 7), on its own bound.
-            await driver.OffboardAsync("app3");
+            // F-07's offboarding leaves the registry as it was (#348 row 7), on its own bound, and runs
+            // when the row fails too. A clean-up that fails as well is reported beside the row's own
+            // failure, not in place of it, as F-07 does (CODING_STANDARDS.md "A check fails closed", f234abc).
+            try
+            {
+                await driver.OffboardAsync("app3");
+            }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException(failure, cleanup);
+            }
+
+            throw;
         }
+
+        await driver.OffboardAsync("app3");
     }
 
     [Fact]

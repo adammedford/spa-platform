@@ -108,6 +108,37 @@ public sealed class ContinuityRunTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rerun_stops_attempting_once_the_wall_time_left_is_spent()
+    {
+        // The earlier file leaves 8 attempts and 0.2 s: one attempt of 0.3 s spends the wall time, so the
+        // loop stops there rather than at the attempts (Q144, Q148).
+        RowEvidence earlier = new("row3", 2, ContinuityBounds.MaxWall.TotalSeconds - 0.2, Verdict.NotProved, "earlier", [], []);
+        await File.WriteAllTextAsync(Path.Combine(directory, "row3.json"), JsonSerializer.Serialize(earlier), Ct);
+
+        JsonArray lines = [];
+        Step control = Sent("control", route: "health");
+        lines.Add(Line(TaskA, control));
+        int made = 0;
+
+        RowResult result = await Run(Runner(true, () => (JsonArray)lines.DeepClone())).TwoTaskRowAsync("row3", control, null,
+            async (n, ct) =>
+            {
+                made++;
+                await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+                Attempt attempt = new(n, [Sent("session-1"), Sent("session-2")]);
+                lines.Add(Line(TaskA, attempt.Steps[0]));
+                lines.Add(Line(TaskA, attempt.Steps[1]));
+                return attempt;
+            },
+            (attempts, capture) => ContinuityObserver.Crossing(attempts, capture, [("session-1", "session-2")]),
+            Ct);
+
+        Assert.Equal(1, made);
+        Assert.Equal(Verdict.NotProved, result.Verdict);
+        Assert.True(ContinuityEvidence.Left(JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row3.json"), Ct))).Spent);
+    }
+
+    [Fact]
     public async Task A_fresh_directory_is_a_full_budget_and_a_passing_attempt_ends_the_row()
     {
         JsonArray lines = [];
