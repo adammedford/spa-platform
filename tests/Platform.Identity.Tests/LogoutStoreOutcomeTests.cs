@@ -21,7 +21,7 @@ public sealed class LogoutStoreOutcomeTests
     private static readonly AppDefinition App1 = TestApps.Entry("app1", issuer: IdentityGateway.IssuerName);
 
     [Fact]
-    public async Task A_logout_whose_remove_is_unknown_at_StoreDeadline_redirects_as_usual_clears_both_cookies_and_logs_one_line()
+    public async Task P2_1_F11_a_logout_whose_remove_is_unknown_at_StoreDeadline_redirects_as_usual_clears_both_cookies_and_logs_one_line()
     {
         // Q187. The DeleteItem is held, unapplied, until the table's clock passes StoreDeadline; the
         // store's retry runs inside the same deadline, so the remove ends "not confirmed". The table's
@@ -32,14 +32,16 @@ public sealed class LogoutStoreOutcomeTests
         await using FakeDynamoDbServer fake = await FakeDynamoDbServer.StartAsync(Ct);
         FakeTimeProvider clock = new(DateTimeOffset.UtcNow);
         CapturedLog log = new();
+        // The recording wrapper hands the test the session key itself, so the key is a canary below.
+        RecordingSessionStore sessions = new(new DynamoDbSessionStore(
+            DynamoDbTables.Over(fake, clock, log.CreateLogger<DynamoDbSessionStore>())));
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
             [App1],
-            services => services
-                .AddSingleton(log.Provider)
-                .AddSingleton<ISessionStore>(new DynamoDbSessionStore(
-                    DynamoDbTables.Over(fake, clock, log.CreateLogger<DynamoDbSessionStore>()))),
-            stubProfile: false);
+            services => services.AddSingleton(log.Provider),
+            stubProfile: false,
+            sessions: sessions);
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
+        string key = Assert.Single(sessions.Created);
         string pk = Assert.Single(fake.Items.Keys);
         fake.Next("DeleteItem", Fault.HoldBeforeCommit);
 
@@ -64,6 +66,7 @@ public sealed class LogoutStoreOutcomeTests
         Assert.Contains("remove (DeleteItem)", line.Text, StringComparison.Ordinal);
         Assert.Contains("not confirmed", line.Text, StringComparison.Ordinal);
         string all = string.Join("\n", log.Lines.Select(l => l.Text));
+        Assert.DoesNotContain(key, all, StringComparison.Ordinal);
         Assert.DoesNotContain(pk, all, StringComparison.Ordinal);
         Assert.DoesNotContain(login.Callback.SessionCookie.Value.Value!, all, StringComparison.Ordinal);
         TokenSearch.AssertNoTokens(gateway.Idp, all);
@@ -77,7 +80,7 @@ public sealed class LogoutStoreOutcomeTests
     [Theory]
     [InlineData(1, "the cookie handler's read")]
     [InlineData(2, "the read under the session's gate")]
-    public async Task A_logout_whose_earlier_store_read_fails_keeps_F17s_500_with_both_cookies_intact(int failingRead, string which)
+    public async Task P2_1_F11_a_logout_whose_earlier_store_read_fails_keeps_F17s_500_with_both_cookies_intact(int failingRead, string which)
     {
         // Q188. Only the end's remove is caught: a read that fails before it, whether the cookie handler's
         // or SessionEnd's under the gate, still ends on the server's generic 500 with no cookie set or
@@ -114,7 +117,7 @@ public sealed class LogoutStoreOutcomeTests
     }
 
     [Fact]
-    public async Task Once_the_end_has_run_the_cookie_handlers_sign_out_makes_no_store_call_of_its_own()
+    public async Task P2_1_F11_once_the_end_has_run_the_cookie_handlers_sign_out_makes_no_store_call_of_its_own()
     {
         // Q192. A logout's store calls are the cookie handler's read of the session, the read under the
         // session's gate and the end's remove, and nothing after it. Mutation: drop the check in
