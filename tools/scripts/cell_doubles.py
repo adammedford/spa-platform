@@ -883,6 +883,33 @@ def destroy_root(world: dict, root: str, stdout):
         stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
+def imagetools_inspect(world: dict, args: list[str], record: dict) -> int:
+    """`docker buildx imagetools inspect --format '{{json .Manifest}}' <reference>`, which
+    platform-tfvars.sh reads the sample image's current digest with (#470). The format prints the
+    reference's top-level descriptor as JSON, whose digest is the index's for a multi-platform image:
+    https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/
+
+    world["public_images"] maps a reference to the digest the registry answers, which a case may set
+    to an empty or a short one. faults["imagetools"] is the status the registry answers instead: 429
+    is what ECR Public answered twice on 2026-10-27 (#242)."""
+    if len(args) != 3 or args[0] != "--format" or args[1] != "{{json .Manifest}}":
+        raise Unexpected(f"docker buildx imagetools inspect {args}")
+    reference = args[2]
+    record["reference"] = reference
+    refused = world["faults"].get("imagetools")
+    if refused:
+        sys.stderr.write(f"ERROR: unexpected status from HEAD request to https://public.ecr.aws/v2/"
+                         f"{reference.split('/', 1)[1].replace(':', '/manifests/')}: {refused} Too Many Requests\n")
+        return 1
+    images = world.get("public_images", {})
+    if reference not in images:
+        sys.stderr.write(f"ERROR: {reference}: not found\n")
+        return 1
+    sys.stdout.write(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                                 "digest": images[reference], "size": 10229}, indent=2) + "\n")
+    return 0
+
+
 def docker_double(argv: list[str], case: pathlib.Path) -> int:
     world = json.loads((case / "world.json").read_text())
     record = {"tool": "docker", "argv": argv}
@@ -916,6 +943,13 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         else:
             world["repositories"][name][image_tag] = digest_of(tag)
             sys.stdout.write(f"#12 pushing {tag} with docker\n#12 DONE 4.2s\n")
+    elif argv[:3] == ["buildx", "imagetools", "inspect"]:
+        try:
+            status = imagetools_inspect(world, argv[3:], record)
+        except Unexpected as error:
+            record["unexpected"] = str(error)
+            sys.stderr.write(f"docker double: unexpected call: {error}\n")
+            status = 97
     else:
         record["unexpected"] = True
         sys.stderr.write(f"docker double: unexpected call: {argv}\n")

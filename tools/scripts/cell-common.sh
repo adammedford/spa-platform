@@ -252,9 +252,12 @@ need_terraform() { need_tool terraform "brew install hashicorp/tap/terraform"; }
 root_name() { printf '%s' "${1#"${REPO_ROOT}"/}"; }
 
 # One output of a root, raw, from its state, or nothing when the root has none: never initialised,
-# never applied, or destroyed. teardown.sh's alone: contracts/infra-outputs.schema.json says the
-# scripts read outputs.json and none of them reads Terraform state, and the one exception among
-# these four is teardown.sh's (change request 1.5a, decision 2; Q49 on #129, confirmed).
+# never applied, or destroyed. contracts/infra-outputs.schema.json says the scripts read
+# outputs.json and none of them reads Terraform state, and the one exception among these four is
+# teardown.sh's (change request 1.5a, decision 2; Q49 on #129, confirmed). platform-tfvars.sh calls
+# it too, as a writer upstream of that document rather than a reader of it, like write_outputs below:
+# it writes the platform root's inputs before that root's first apply, when outputs.json, which is
+# written from all three roots, cannot exist yet (#470).
 tf_output() {
   terraform -chdir="$1" output -no-color -raw "$2" 2> "$ERR" || true
 }

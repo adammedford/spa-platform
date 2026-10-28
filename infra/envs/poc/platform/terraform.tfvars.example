@@ -18,7 +18,9 @@ certificate_domain = "spa-poc.test"
 # nginx image listens on 80 and its target would never turn healthy:
 # https://github.com/nginx/docker-nginx-unprivileged
 # The tag moves to each new build, so pin the image by the digest the tag
-# points to when you apply: put it in place of <digest> and uncomment the line.
+# points to when you apply: tools/scripts/platform-tfvars.sh writes the pin
+# below this line, with the issuers block from the identity root's outputs,
+# and leaves this file unchanged if a lookup fails (#470).
 # gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>"
 
 # / on the sample image, /readyz once the gateway runs.
