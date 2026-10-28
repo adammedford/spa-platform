@@ -1417,6 +1417,98 @@ run "each_container_image_is_the_variable_it_was_given_with_no_tag_naming_defaul
   }
 }
 
+# #470: each image is <repository>@sha256:<64 lowercase hex> or the plan stops. The empty digest is
+# what a rewrite of terraform.tfvars wrote on 2026-10-27 when ECR Public answered its lookup with a
+# 429 (#242); the tag is the sample image's own name before it is pinned; the short digest is the
+# 8-character form the contract's example abbreviates to, which its gatewayImage pattern admits.
+run "a_gateway_image_with_an_empty_digest_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+run "a_gateway_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+run "a_gateway_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123abcd"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+# The client ids are given, so the image's own rule is the only one that can stop these plans.
+run "a_mock_api_image_with_an_empty_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api:latest"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef01"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+# And the full form passes for both, in the two registries the cell pulls from: ECR Public for the
+# sample image, the cell's own repositories afterwards.
+run "full_digest_references_pass_for_both_images" {
+  command = plan
+
+  variables {
+    gateway_image           = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.image])
+      == toset([var.gateway_image, var.mock_api_image])
+    )
+    error_message = "A full digest reference for each image passes the plan, and each container runs the reference it was given."
+  }
+}
+
 # --- Outputs and names -----------------------------------------------------------------------
 
 run "the_new_outputs_match_the_infrastructure_outputs_contract" {

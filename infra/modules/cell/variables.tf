@@ -140,9 +140,21 @@ variable "gateway_image" {
   EOT
   type        = string
 
+  # A digest reference and nothing else: <repository>@sha256:<64 lowercase hex>. The repository half
+  # is the contract's own gatewayImage pattern, read rather than copied; the digest half is held to
+  # its full 64 characters here because that pattern admits 8, for its abbreviated example
+  # (contracts/infra-outputs.schema.json -> gatewayImage). A SHA-256 digest is 64 lowercase hex:
+  # https://github.com/opencontainers/image-spec/blob/v1.1.1/descriptor.md#sha-256
+  #
+  # #470: on 2026-10-27 a rewrite of the platform root's terraform.tfvars, its digest lookup answered
+  # 429 by ECR Public, wrote gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@", and the
+  # length check this replaces would have passed it to the plan (#242).
   validation {
-    condition     = length(var.gateway_image) > 0
-    error_message = "gateway_image is the image the task runs. Pass the sample image on the first apply, and a digest afterwards."
+    condition = (
+      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.gateway_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.gateway_image))
+    )
+    error_message = "gateway_image is a digest reference, <repository>@sha256:<64 lowercase hex>, such as public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest> for the sample image on the first apply. A tag, an empty digest or a short one is refused."
   }
 }
 
@@ -157,6 +169,15 @@ variable "mock_api_image" {
   EOT
   type        = string
   default     = ""
+
+  # gateway_image's rule, when there is an image at all (#470).
+  validation {
+    condition = var.mock_api_image == "" || (
+      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.mock_api_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.mock_api_image))
+    )
+    error_message = "mock_api_image is empty, or a digest reference, <repository>@sha256:<64 lowercase hex>. A tag, an empty digest or a short one is refused."
+  }
 }
 
 variable "mock_api_app1_client_id" {
