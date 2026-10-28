@@ -1451,6 +1451,18 @@ run "a_gateway_image_with_a_short_digest_is_refused" {
   expect_failures = [var.gateway_image]
 }
 
+# A full digest with no repository in front of it: the 64-hex rule alone would pass it, so this is
+# the run that holds the repository half, the contract's gatewayImage pattern, in place.
+run "a_gateway_image_with_no_repository_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
 # The client ids are given, so the image's own rule is the only one that can stop these plans.
 run "a_mock_api_image_with_an_empty_digest_is_refused" {
   command = plan

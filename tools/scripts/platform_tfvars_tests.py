@@ -108,6 +108,12 @@ class Tfvars(cell.CompanionTestCase):
         self.assertEqual(before, self.tfvars(case), "the file changed although the run failed")
         self.assertEqual(["terraform.tfvars"], self.neighbours(case), "the run left a file beside terraform.tfvars")
         self.assertNoUnexpectedCall(case)
+        # A refusal names keys and lookups, never a value: the identity root's outputs, as the world
+        # holds them for this case, and the values already in the file.
+        idp = case.world["roots"]["idp"]
+        for value in (idp["issuer"], idp["cognito_domain"], OLD_AUTHORITY, OLD_ORIGIN, OLD_IMAGE):
+            if value:
+                self.assertNotIn(value, result.output)
 
 
 class AFailedOrMalformedLookupLeavesTheFileAsItWas(Tfvars):
