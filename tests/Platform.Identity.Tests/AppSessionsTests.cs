@@ -277,10 +277,10 @@ public sealed class AppSessionsTests
         string otherApp = await store.CreateAsync(Record(TestApps.Entry("app2")), Ct);
         string otherClient = await store.CreateAsync(Record(App1, clientId: "client-before-rotation"), Ct);
 
-        await sessions.RemoveAsync(App1, own, Ct);
-        await sessions.RemoveAsync(App1, own, Ct);
-        await sessions.RemoveAsync(App1, otherApp, Ct);
-        await sessions.RemoveAsync(App1, otherClient, Ct);
+        await sessions.RemoveAsync(new DefaultHttpContext(), App1, own, Ct);
+        await sessions.RemoveAsync(new DefaultHttpContext(), App1, own, Ct);
+        await sessions.RemoveAsync(new DefaultHttpContext(), App1, otherApp, Ct);
+        await sessions.RemoveAsync(new DefaultHttpContext(), App1, otherClient, Ct);
 
         Assert.Null(await store.GetAsync(own, Ct));
         Assert.NotNull(await store.GetAsync(otherApp, Ct));
@@ -299,7 +299,7 @@ public sealed class AppSessionsTests
         string key = await store.CreateAsync(Record(App1), Ct);
         using AppSessions.Turn turn = await sessions.EnterAsync(App1, key);
 
-        await sessions.RemoveAsync(App1, key, Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await sessions.RemoveAsync(new DefaultHttpContext(), App1, key, Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
         Assert.Null(await store.GetAsync(key, Ct));
     }
