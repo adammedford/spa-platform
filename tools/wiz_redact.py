@@ -27,9 +27,12 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies eight rules, in 
    `Bearer` token of sixteen characters or more elsewhere is elided the same way.
 7. The value of an `X-XSRF-TOKEN:`, `X-CSRF-TOKEN:`, `RequestVerificationToken:` or
    `X-Amz-Security-Token:` header line becomes `<elided>`.
-8. The `[id=...]` Terraform prints on a line naming an `aws_cognito_user_pool_client` resource
-   (`Creation complete`, `Refreshing state...`, `Destruction complete`) becomes `[id=<elided>]`: that
-   id is the client id. Other resources keep theirs (#468).
+8. A client id Terraform prints (#468): the `[id=...]` on a line naming an
+   `aws_cognito_user_pool_client` resource (`Creation complete`, `Refreshing state...`,
+   `Destroying...`) becomes `[id=<elided>]`; a `clientId = "..."` attribute, quoted or not, as an
+   apply's Outputs block prints the apps root's `clients`, becomes `clientId = "<elided>"`; and an
+   `id = "..."` attribute whose value is 26 lowercase letters and digits, a Cognito client id's
+   shape and no other id's in the roots, becomes `id = "<elided>"`, as a plan prints the client.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -118,8 +121,11 @@ BEARER = re.compile(r"(?<![\w-])(Bearer[ \t]+)[A-Za-z0-9._~+/=-]{16,}")
 
 TOKEN_HEADER = re.compile(rf"(?<![\w-])((?:{TOKEN_HEADERS})\s*:[ \t]*)[^\s]+", re.IGNORECASE)
 
-# Terraform's progress line for a user pool client, whose resource id is the client id.
+# Terraform's progress line for a user pool client, whose resource id is the client id; the HCL
+# attribute an Outputs block prints it as; and a plan's `id` attribute in a client's own shape.
 TERRAFORM_CLIENT_ID = re.compile(r"(aws_cognito_user_pool_client[^\n]*\[id=)[^\]\n]+(\])")
+HCL_CLIENT_ID = re.compile(r"((?<![\w-])\"?clientId\"?\s*=\s*\")[^\"\n]*(\")")
+HCL_ID_IN_CLIENT_SHAPE = re.compile(r"((?<![\w-])\"?id\"?\s*=\s*\")[a-z0-9]{26}(\")")
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
@@ -223,6 +229,8 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = BEARER.sub(lambda m: f"{m.group(1)}<elided>", text)
     text = TOKEN_HEADER.sub(lambda m: f"{m.group(1)}<elided>", text)
     text = TERRAFORM_CLIENT_ID.sub(r"\1<elided>\2", text)
+    text = HCL_CLIENT_ID.sub(r"\1<elided>\2", text)
+    text = HCL_ID_IN_CLIENT_SHAPE.sub(r"\1<elided>\2", text)
     return text
 
 

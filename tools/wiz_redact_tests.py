@@ -261,9 +261,41 @@ class RuleEightTerraformClientIds(Redacts):
         )
 
     def test_the_stream_elides_a_user_pool_clients_terraform_id(self) -> None:
-        self.assertRedacts('aws_cognito_user_pool_client.app["app3"]: Destruction complete after 1s [id=3n4b5c6d7e8f]\n',
-                           'aws_cognito_user_pool_client.app["app3"]: Destruction complete after 1s [id=<elided>]\n',
+        self.assertRedacts('aws_cognito_user_pool_client.app["app3"]: Destroying... [id=3n4b5c6d7e8f9g0h1i2j3k4l5m]\n',
+                           'aws_cognito_user_pool_client.app["app3"]: Destroying... [id=<elided>]\n',
                            "--stream")
+
+    def test_a_plans_client_id_attribute_and_the_outputs_clientid_are_elided(self) -> None:
+        # The shapes a destroy plan and an apply's Outputs block printed in the sitting of 2026-10-27;
+        # a Cognito client id is 26 lowercase letters and digits, which no other id in the roots is.
+        self.assertRedacts(
+            '  - resource "aws_cognito_user_pool_client" "app" {\n'
+            '      - id                                            = "3n4b5c6d7e8f9g0h1i2j3k4l5m" -> null\n'
+            '      - name                                          = "app3" -> null\n'
+            '  - resource "aws_ssm_parameter" "client_secret" {\n'
+            '      - id          = "/spa-platform/poc/app3/client-secret" -> null\n'
+            '      + id                     = (known after apply)\n'
+            'clients = {\n'
+            '  "app3" = {\n'
+            '    "clientId" = "3n4b5c6d7e8f9g0h1i2j3k4l5m"\n'
+            '    "secretParameter" = "/spa-platform/poc/app3/client-secret"\n'
+            '  }\n'
+            '}\n'
+            '    clientId = "3n4b5c6d7e8f9g0h1i2j3k4l5m"\n',
+            '  - resource "aws_cognito_user_pool_client" "app" {\n'
+            '      - id                                            = "<elided>" -> null\n'
+            '      - name                                          = "app3" -> null\n'
+            '  - resource "aws_ssm_parameter" "client_secret" {\n'
+            '      - id          = "/spa-platform/poc/app3/client-secret" -> null\n'
+            '      + id                     = (known after apply)\n'
+            'clients = {\n'
+            '  "app3" = {\n'
+            '    "clientId" = "<elided>"\n'
+            '    "secretParameter" = "/spa-platform/poc/app3/client-secret"\n'
+            '  }\n'
+            '}\n'
+            '    clientId = "<elided>"\n',
+        )
 
 
 class AccessDenied(unittest.TestCase):

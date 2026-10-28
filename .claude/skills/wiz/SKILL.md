@@ -66,19 +66,19 @@ cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . 
 export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
 umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
 shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
-captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; echo "exit=${PIPESTATUS[0]}" >> "$R"; }
+captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; echo "exit=${PIPESTATUS[0]}" | tee -a "$R" >&2; }
 spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
 ```
 
 Shell variables do not survive the call either: read `TD`, `TASK` and the like again in the call
 that uses them. A read whose value a later command needs runs as `X=$(captured <command>)`: its
-output goes to the variable and the record, its errors to the record and, masked, to the terminal,
-and nothing of it is printed unmasked. `shown` writes the command and its whole output to the record, unredacted, and prints it
-through `tools/wiz_redact.py --stream`, which masks account ids, ARNs and the rest of the script's
-rules line by line and passes `AccessDenied` through for rule 7. The exit printed is the command's,
-not the redactor's. Mask nothing by hand with `sed`: macOS `sed` reads no `\t` inside a bracket, and
-a task-definition ARN was printed unmasked that way. Name a read value with `${x##*/}` when only its
-last field is shown.
+output goes to the variable and the record, its errors and its exit to the record and, masked, to
+the terminal, and nothing of it is printed unmasked. `shown` writes the command and its whole output
+to the record, unredacted, and prints it through `tools/wiz_redact.py --stream`, which masks account
+ids, ARNs and the rest of the script's rules line by line and passes `AccessDenied` through for rule
+7. The exit printed is the command's, not the redactor's. Mask nothing by hand with `sed`: macOS
+`sed` reads no `\t` inside a bracket, and a task-definition ARN was printed unmasked that way. Name
+a read value with `${x##*/}` when only its last field is shown.
 
 ### The post mode
 
@@ -227,8 +227,9 @@ comment of 2026-10-27 is the worked example; post the same shape.
    shown terraform -chdir=infra/envs/poc/apps apply -input=false "$P/onboard.tfplan"
    ```
 
-   The apply's `aws_cognito_user_pool_client` line carries the client id as `[id=...]`; the stream
-   mode's rule 8 masks it.
+   The plan prints app 3's client id as its `id` attribute and the apply as `[id=...]` and in its
+   Outputs block as `clientId`; rule 8 of the redactor masks the three shapes, on the terminal and
+   in a post. Read the output once for any other, as the post mode asks.
 
 2. spactl, as the test drives it. `outputs.json` names no client for app 3 until a script rewrites
    it, so `app add` reads a private copy with the apps root's `clients` output for app 3 merged in
@@ -252,7 +253,7 @@ comment of 2026-10-27 is the worked example; post the same shape.
    the task again, which must be the same:
 
    ```bash
-   TASK=$(aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text | tee -a "$R")
+   TASK=$(captured aws ecs list-tasks --cluster spa-poc --service-name gateway --desired-status RUNNING --query 'taskArns[0]' --output text)
    echo "task ${TASK##*/}"
    shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" --query 'tasks[0].{started:startedAt,revision:taskDefinitionArn}'
    shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode
@@ -291,10 +292,13 @@ stays.
 **N, from nothing (#242, Q61 and Q79).** `docs/plan/05-infrastructure-and-cost.md`'s First
 deployment order from the first root that is absent:
 
-1. `shown tools/scripts/certs.sh status`, then `certs.sh import` when ACM holds no `*.spa-poc.test`.
+1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
+   no `*.spa-poc.test`.
 2. The identity root, then the apps root, each command as `shown terraform -chdir=<root> ...`:
    `init -backend-config=backend.hcl`, `plan`, `apply` on confirm. Post both apply summaries on
-   #242: this is a new user pool, so new client ids and test user passwords.
+   #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
+   block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
+   client id in another shape before it goes.
 3. `infra/envs/poc/platform/terraform.tfvars`: back it up first (`cp -p` to `terraform.tfvars.bak`),
    then rewrite `issuers` from the identity root's outputs (`authority` is its `issuer`,
    `browser_origin` is `https://` plus its `cognito_domain`; the map's key and `profile` stay as
@@ -310,9 +314,9 @@ deployment order from the first root that is absent:
    wait services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
    before step 5 answers "no such host", because it reads the cell's names from that file, and
    `seed.sh` is what rewrites it.
-5. `seed.sh` with #236's Q107 capture, in its order: the commit; the names only of the `AWS_*`
-   variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`; seed's whole
-   output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
+5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
+   of the `AWS_*` variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`;
+   seed's whole output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
 6. `deploy.sh` as C1 runs it, from the sample image, then `verify-tunnel.sh /healthz`. Post both on
    #242: this is the second deployment #63's Q79 asks for, and the suite is not run again.
 
