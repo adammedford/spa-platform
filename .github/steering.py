@@ -1255,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     nameless, refused, unverified, vouched, requested, unconfirmed = unauthorised(
         held, issues, pulls, requests, unchecked, looked_up, comments, account
     )
-    closed = closed_additions(held)
+    added = closed_additions(held)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -1352,7 +1352,7 @@ def main(argv: list[str] | None = None) -> int:
             "answer. Amend the message to add one; docs/agents/landing-work.md has the forms.",
         ),
         report(
-            closed,
+            added,
             "STEERING FAILED: a commit adds a file under contracts/changes/, which is closed to "
             "new files.",
             "contracts/changes/ is the read-only archive of change requests filed before they",

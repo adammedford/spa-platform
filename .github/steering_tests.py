@@ -272,7 +272,7 @@ def refuses(sha: str, subject: str, paths: tuple[str, ...], authority: str, why:
             f"{authority} {why}")
 
 
-def requests(sha: str, subject: str, paths: tuple[str, ...], authority: str) -> str:
+def cites_request(sha: str, subject: str, paths: tuple[str, ...], authority: str) -> str:
     """The line the authority rule prints for an `Authority:` trailer citing a change request."""
     return refuses(sha, subject, paths, authority,
                    "is a change request, which asks for a decision rather than recording one")
@@ -284,8 +284,8 @@ def adds(sha: str, subject: str, *paths: str) -> str:
 
 
 REQUESTED_HEADLINE = "STEERING FAILED: an Authority: trailer cites a change request's own number."
-CLOSED_HEADLINE = ("STEERING FAILED: a commit adds a file under contracts/changes/, which is closed "
-                   "to new files.")
+CLOSED_HEADLINE = ("STEERING FAILED: a commit adds a file under contracts/changes/, which is "
+                   "closed to new files.")
 NAMELESS_HEADLINE = ("STEERING FAILED: a commit changes a steering document and cites no "
                      "authority.")
 
@@ -1409,7 +1409,7 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("docs/agents/landing-work.md has the forms", out)
 
     def test_a_change_to_each_steering_document_is_held(self):
-        """One commit per place ADR-0023 decision 2 names: five root files and three directories.
+        """One commit per place the landing guide names: five root files and three directories.
 
         Each judged alone, from the commit before it, so a line naming the wrong path or a place
         the rule stopped reading shows up as that place's subtest and no other.
@@ -1880,7 +1880,7 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
         self.assertIn(REQUESTED_HEADLINE, out)
-        self.assertIn(requests(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
         self.assertIn("Cite its decision comment's URL instead", out)
         self.assertNotIn("names no issue and no comment", out)
 
@@ -1904,7 +1904,7 @@ class SteeringTests(unittest.TestCase):
         sha = self.commit(message(subject, COMMENT, issue(150)), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn(requests(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
         self.assertNotIn(f"Authority: {COMMENT} ", out)
 
     def test_a_closed_change_request_past_the_listing_is_refused(self):
@@ -1919,7 +1919,7 @@ class SteeringTests(unittest.TestCase):
         sha = self.commit(message(subject, issue(150)), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn(requests(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
 
     def test_a_change_request_cited_before_the_closing_date_passes(self):
         """#442 Q28: the label is read as it stands now, so a commit made before the rule is
@@ -2071,8 +2071,10 @@ class SteeringTests(unittest.TestCase):
         request; a label whose name holds a space or a comma is matched whole; a pull request is a
         pull request whatever its labels."""
         jq = shutil.which("jq")
-        if jq is None:
-            self.skipTest("jq is not on PATH; gh runs the same filter with its own jq")
+        # CODING_STANDARDS.md -> "An assertion must be able to fail": a missing tool fails here,
+        # named, rather than skipping the one case that runs the filter. jq ships on macOS and on
+        # GitHub's Ubuntu runners.
+        self.assertIsNotNone(jq, "jq is not on PATH; install it to run the label filter's case")
         served = [
             {"number": 150, "state": "open", "labels": [{"name": "change-request"}]},
             {"number": 151, "state": "closed", "labels": [{"name": "change-request"}]},
