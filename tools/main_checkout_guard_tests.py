@@ -761,7 +761,7 @@ class FastForward(GuardCase):
 
     def test_the_refusal_still_run_line_names_the_fast_forward_and_not_the_path_checkout(self):
         stderr = self.assertRefused("git commit -m 'work'", self.fx.main)
-        self.assertIn("`git merge --ff-only origin/main` on a clean `main`", stderr)
+        self.assertIn("`git merge --ff-only origin/main` (`--quiet` allowed) on a clean `main`", stderr)
         self.assertNotIn("git checkout -- <path>", stderr)
 
 

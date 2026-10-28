@@ -17,12 +17,13 @@ included (#226 Q16 to Q18). It names the route instead: a worktree of the sessio
 docs/agents/landing-work.md -> "Take a task" says.
 
 **The one merge it admits** is the fast-forward of a clean `main` to what has landed (#226 Q15,
-Q19, Q20): `git merge` with exactly the arguments `--ff-only` and `origin/main`, in either order, with
-`--quiet` or `-q` allowed once beside them (#468) and no git option before the subcommand but `-C`, while `git symbolic-ref -q HEAD` is
-`refs/heads/main` and `git status --porcelain --untracked-files=no` prints nothing. Untracked files
-are allowed: they are Adam's, and `--ff-only` will not overwrite one. Every other merge, ref or
-extra option is refused as before, and so is `git pull`, which reads the configured upstream and
-merge settings rather than one named ref; a session runs `git fetch origin` and then the merge.
+Q19, Q20): `git merge` with exactly the arguments `--ff-only` and `origin/main`, in either order,
+with `--quiet` or `-q` allowed once beside them (#468) and no git option before the subcommand but
+`-C`, while `git symbolic-ref -q HEAD` is `refs/heads/main` and
+`git status --porcelain --untracked-files=no` prints nothing. Untracked files are allowed: they are
+Adam's, and `--ff-only` will not overwrite one. Every other merge, ref or extra option is refused as
+before, and so is `git pull`, which reads the configured upstream and merge settings rather than
+one named ref; a session runs `git fetch origin` and then the merge.
 
 **The one restore it admits** is one that changes no content once `main` is fast-forwarded (#376):
 on 2026-10-23 the checkout was behind with two tracked files changed to exactly origin/main's
@@ -101,8 +102,8 @@ Do branch work in a worktree of your own, and run the command there:
     {route}
 
 Here, read-only git, `git worktree add`, file edits, and `git fetch origin` followed by
-`git merge --ff-only origin/main` on a clean `main` still run. docs/agents/landing-work.md ->
-"Take a task" says why.
+`git merge --ff-only origin/main` (`--quiet` allowed) on a clean `main` still run.
+docs/agents/landing-work.md -> "Take a task" says why.
 """
 
 # The line a refused fast-forward adds, naming the condition of a clean `main` that failed (#226 Q22).
