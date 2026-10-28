@@ -128,22 +128,38 @@ internal sealed class AppSessions(ISessionStore store)
     /// <summary>
     /// Removes the session when it is <paramref name="app"/>'s and its client's, and leaves a foreign or
     /// absent one alone, so a second call does nothing. The cookie handler's removals reach this through
-    /// the ticket store: its sign-out after a gated end on the refresh and logout paths and after the
-    /// re-login discard, which finds the record already gone, and its own removal of a ticket it read and
-    /// found expired (#141, Q12).
+    /// the ticket store: its sign-out after a gated end on the refresh path and after the re-login
+    /// discard, which finds the record already gone, and its own removal of a ticket it read and found
+    /// expired (#141, Q12). After logout's end, which <see cref="MarkEnded"/> records on the request, it
+    /// makes no store call at all, not even the read: a remove the store could not confirm is not tried
+    /// a second time, and a store that has just failed is not asked again (#386 Q192).
     ///
     /// Ungated by necessity, and so the exception to "every end runs under the session gate" is this
     /// writer, the framework's cookie handler: the gate is not re-entrant, and the token source ends a
     /// session and then signs out while it still holds the turn, so a gated remove reached through that
     /// sign-out would wait on itself. It takes the caller's token, which is the request's.
     /// </summary>
-    public async Task RemoveAsync(AppDefinition app, string sessionKey, CancellationToken cancellationToken)
+    public async Task RemoveAsync(HttpContext httpContext, AppDefinition app, string sessionKey, CancellationToken cancellationToken)
     {
+        if (httpContext.Features.Get<EndedChannel>()?.Key == sessionKey)
+        {
+            return;
+        }
+
         if (await ReadAsync(app, sessionKey, cancellationToken) is not null)
         {
             await store.RemoveAsync(sessionKey, cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Records on the request that a gated end has run on <paramref name="sessionKey"/>, whether or not
+    /// the store confirmed its remove, so the cookie handler's sign-out that follows makes no store call
+    /// (<see cref="RemoveAsync"/>, #386 Q192). Logout's end calls it. A request feature, not the gate: the
+    /// gate's in-process semantics stay as they are, and the mark lives and dies with the request.
+    /// </summary>
+    public void MarkEnded(HttpContext httpContext, string sessionKey) =>
+        httpContext.Features.Set(new EndedChannel(sessionKey));
 
     /// <summary>
     /// The key of the session this request's cookie authenticated with, or null. Null unless
@@ -236,6 +252,17 @@ internal sealed class AppSessions(ISessionStore store)
         public string Key { get; } = key;
 
         public override string ToString() => nameof(KeyChannel);
+    }
+
+    /// <summary>
+    /// The key of the session a gated end has run on in this request, left by <see cref="MarkEnded"/> and
+    /// read only by <see cref="RemoveAsync"/>. Private to the module for <see cref="KeyChannel"/>'s reasons.
+    /// </summary>
+    private sealed class EndedChannel(string key)
+    {
+        public string Key { get; } = key;
+
+        public override string ToString() => nameof(EndedChannel);
     }
 
     internal sealed class Gate
