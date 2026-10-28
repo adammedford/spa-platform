@@ -46,11 +46,20 @@ FINISHED = """## Acceptance criteria
 """
 
 # The fake gh. `issue view <n> ...` prints $GH_ISSUES/<n>.md, or says what gh says of a number the
-# repository has no issue for; GH_FAIL makes every call fail as gh does with no network. Each call
-# is logged to $GH_LOG, so a case can see which issues were asked about.
+# repository has no issue for; `issue list ...` prints every issue there not marked closed, as the
+# JSON array `--json number,body` asks for; GH_FAIL makes every call fail as gh does with no network,
+# and GH_LIST_FAIL only the listing. Each call is logged to $GH_LOG, so a case can see which issues
+# were asked about.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+if [ "$1 $2" = "issue list" ]; then
+  if [ -n "$GH_LIST_FAIL" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
+  exec python3 -I -c 'import json, os, pathlib
+d = pathlib.Path(os.environ["GH_ISSUES"])
+print(json.dumps([{"number": int(p.stem), "body": p.read_text()} for p in sorted(d.glob("*.md"))
+                  if not (d / (p.stem + ".closed")).exists()]))'
+fi
 if [ "$1 $2" = "issue view" ] && [ -f "$GH_ISSUES/$3.md" ]; then cat "$GH_ISSUES/$3.md"; exit 0; fi
 echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2
 exit 1
@@ -110,8 +119,10 @@ class Case:
         self.git("commit", "-q", "--allow-empty", "-m", message)
         return self.git("rev-parse", "--short", "HEAD")
 
-    def issue(self, number: int, body: str):
+    def issue(self, number: int, body: str, *, closed: bool = False):
         (self.issues / f"{number}.md").write_text(body)
+        if closed:
+            (self.issues / f"{number}.closed").write_text("")
 
     def run(self, *arguments: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-I", str(SCRIPT), *(arguments or ("--base", "base"))],
@@ -325,6 +336,251 @@ class UncheckedTests(unittest.TestCase):
         self.assertEqual(1, done.returncode, done.stdout)
         self.assertIn("held:", done.stdout)
         self.assertIn("could not be read", done.stdout)
+
+
+# A carrier, finished, and part tickets in the forms the live ones used (#388): #338 and #417 as they
+# read when P2-1 and P2-2 landed, #341 as P2-3's part, and a `none` line that is no part ticket.
+CARRIER_P2_1 = "**Owner:** ws3-identity\n**Plan row:** P2-1\n\n## Acceptance criteria\n\n- [x] The store.\n"
+PART_338 = ("**Owner:** ws1-infra\n**Plan row:** none (part of P2-1 and P2-2; the carriers are the store and "
+            "key-ring tickets)\n\n## Acceptance criteria\n\n- [ ] The table.\n")
+PART_417 = "**Owner:** ws1-infra\n**Plan row:** none (part of P2-1 and P2-2, as #338 is)\n\n- [x] Done.\n"
+PART_341 = "**Owner:** ws3-identity\n**Plan row:** none (part of P2-3; the carrier is the composed P2-3 ticket)\n"
+PART_342 = "**Owner:** ws3-identity\n**Plan row:** none (part of P2-2)\n"
+NO_PART = "**Owner:** ws6-verification\n**Plan row:** none (the gate run's own ticket, P2-1 named in prose)\n"
+P2_1_HELD_FAIL = ('landing-subjects: fail: 1 full-landing merge names a plan row an open part ticket declares; '
+                  'land it as "Merge part of task" with an Outstanding line naming the part tickets, '
+                  'or land them first.')
+
+
+class PartTicketTests(unittest.TestCase):
+    """#388 Q4 and Q5: a full landing that names a plan row is held while an open issue, other than
+    the merge's own Ticket issue, declares itself part of that row."""
+
+    def test_a_row_landed_whole_while_its_part_ticket_is_open_is_held(self):
+        # fa96201, "Merge task P2-1" over #344, while #338 declared itself part of P2-1.
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(338, PART_338)
+        sha = case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: held: {sha} "Merge task P2-1: the session store" lands P2-1 whole, '
+                      'but #338 is open and declares itself part of P2-1', done.stdout.splitlines())
+        self.assertEqual(P2_1_HELD_FAIL, last_line(done))
+
+    def test_the_2026_10_24_case_merge_task_p2_2_after_a_part_of_338_is_held_on_both_parts(self):
+        # 8a4ec5f "Merge part of task issue-338" then 98e2317 "Merge task P2-2" over #340, with
+        # #338 and #342 open.
+        case = Case(self)
+        case.issue(340, "**Plan row:** P2-2\n\n- [x] The key ring.\n")
+        case.issue(338, PART_338)
+        case.issue(342, PART_342)
+        case.commit("Merge part of task issue-338: the ring prefix", "Ticket: #338", "Outstanding: the table.",
+                    "Outstanding test ids: P-01.")
+        sha = case.commit("Merge task P2-2: the key ring", "Ticket: #340")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout)
+        lines = done.stdout.splitlines()
+        for number in (338, 342):
+            self.assertIn(f'landing-subjects: held: {sha} "Merge task P2-2: the key ring" lands P2-2 whole, '
+                          f'but #{number} is open and declares itself part of P2-2', lines)
+
+    def test_the_merges_own_ticket_is_not_its_own_open_part(self):
+        # #388 Q6: the last open part names the row too, "Merge tasks issue-417 and P2-1".
+        case = Case(self)
+        case.issue(417, PART_417)
+        case.commit("Merge tasks issue-417 and P2-1: the table", "Ticket: #417")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout)
+
+    def test_a_closed_part_ticket_holds_nothing(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(338, PART_338.replace("- [ ]", "- [x]"), closed=True)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        self.assertEqual(0, case.run().returncode)
+
+    def test_a_part_ticket_landed_whole_below_the_merge_holds_nothing(self):
+        # Within one run a part's issue stays open until the morning's pull request lands it on
+        # main; its own full landing on the run branch, below the carrier's, is what counts.
+        case = Case(self)
+        case.issue(340, "**Plan row:** P2-2\n\n- [x] The key ring.\n")
+        case.issue(342, PART_342)
+        case.commit("Merge task issue-342: the ring's tests", "Ticket: #342")
+        case.commit("Merge task P2-2: the key ring", "Ticket: #340")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout)
+
+    def test_a_part_ticket_landed_only_in_part_still_holds(self):
+        case = Case(self)
+        case.issue(340, "**Plan row:** P2-2\n\n- [x] The key ring.\n")
+        case.issue(342, PART_342)
+        case.commit("Merge part of task issue-342: half", "Ticket: #342", "Outstanding: half.",
+                    "Outstanding test ids: none.")
+        case.commit("Merge task P2-2: the key ring", "Ticket: #340")
+        self.assertEqual(1, case.run().returncode)
+
+    def test_a_none_line_without_part_of_declares_nothing(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(425, NO_PART)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        self.assertEqual(0, case.run().returncode)
+
+    def test_row_ids_are_read_up_to_the_first_semicolon(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(341, "**Plan row:** none (part of P2-3; unlike P2-1, which has no part)\n")
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        self.assertEqual(0, case.run().returncode)
+
+    def test_a_part_of_mentioned_off_the_plan_row_line_declares_nothing(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(426, "**Plan row:** 6.8\n\nThis is part of P2-1 in spirit (part of P2-1).\n")
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        self.assertEqual(0, case.run().returncode)
+
+    def test_prose_after_a_comma_does_not_hide_the_second_row(self):
+        # #417's line: "none (part of P2-1 and P2-2, as #338 is)".
+        case = Case(self)
+        case.issue(340, "**Plan row:** P2-2\n\n- [x] The key ring.\n")
+        case.issue(417, PART_417)
+        case.commit("Merge task P2-2: the key ring", "Ticket: #340")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("but #417 is open and declares itself part of P2-2", done.stdout)
+
+    def test_a_subject_naming_no_plan_row_lists_no_issues(self):
+        case = Case(self)
+        case.issue(338, PART_338.replace("- [ ]", "- [x]"))
+        case.commit("Merge task issue-338: the table", "Ticket: #338")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout)
+        self.assertEqual(["issue view 338 --json body --jq .body"], case.asked())
+
+    def test_the_open_issues_are_listed_once_for_every_merge(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(346, "**Plan row:** P2-3\n\n- [x] Composed.\n")
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        case.commit("Merge task P2-3: composed", "Ticket: #346")
+        self.assertEqual(0, case.run().returncode)
+        self.assertEqual(1, len([call for call in case.asked() if call.startswith("issue list ")]), case.asked())
+
+    def test_an_unreadable_listing_is_unchecked_and_passes(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(338, PART_338)
+        sha = case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run(GH_LIST_FAIL="1")
+        self.assertEqual(0, done.returncode, done.stdout)
+        self.assertIn(f'landing-subjects: unchecked: {sha} "Merge task P2-1: the session store": the open part '
+                      'tickets of P2-1 could not be listed: error connecting to api.github.com',
+                      done.stdout.splitlines())
+        self.assertEqual("landing-subjects: pass: 1 full-landing merge from base to HEAD: 0 clear, 1 unchecked, "
+                         "0 with no Ticket line.", last_line(done))
+
+    def test_an_open_box_and_an_open_part_are_both_named(self):
+        case = Case(self)
+        case.issue(344, "**Plan row:** P2-1\n\n- [ ] The store.\n")
+        case.issue(338, PART_338)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run()
+        self.assertEqual(1, done.returncode)
+        self.assertIn('#344 has 1 open box: box 1 "The store."', done.stdout)
+        self.assertIn("but #338 is open and declares itself part of P2-1", done.stdout)
+        self.assertEqual('landing-subjects: fail: 1 full-landing merge held: 1 on an open box, 1 on an open part '
+                         'ticket; land it as "Merge part of task" with its Outstanding lines.', last_line(done))
+
+
+class SubjectForTests(unittest.TestCase):
+    """The question overnight.js's integrate step asks before it writes a complete lane's subject
+    (#388 Q4 and Q6): `--subject-for <id> --ticket <n>` prints the subject's head, judged on HEAD's
+    history and the open issues by the same rule as the range."""
+
+    def ask(self, case: Case, id_: str, number: int, **env: str) -> subprocess.CompletedProcess:
+        return case.run("--subject-for", id_, "--ticket", str(number), **env)
+
+    def test_a_carrier_with_no_open_part_lands_whole(self):
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n")
+        done = self.ask(case, "P2-3", 346)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("landing-subjects: subject: Merge task P2-3", last_line(done))
+
+    def test_a_carrier_with_an_open_part_lands_in_part_and_names_it(self):
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n")
+        case.issue(341, PART_341)
+        done = self.ask(case, "P2-3", 346)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("landing-subjects: open part: #341 declares itself part of P2-3", done.stdout.splitlines())
+        self.assertEqual("landing-subjects: subject: Merge part of task P2-3", last_line(done))
+
+    def test_the_last_open_part_of_a_part_landed_row_names_the_row(self):
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n")
+        case.issue(341, PART_341)
+        case.commit("Merge part of task P2-3: composed", "Ticket: #346", "Outstanding: #341.",
+                    "Outstanding test ids: none.")
+        done = self.ask(case, "issue-341", 341)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("landing-subjects: subject: Merge tasks issue-341 and P2-3", last_line(done))
+
+    def test_a_part_names_no_row_already_landed_whole(self):
+        # Forward only (#388 Q6): P2-1 landed whole at fa96201, so #417 merges as issue-417 alone.
+        case = Case(self)
+        case.issue(417, PART_417)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        case.commit("Merge task P2-2: the key ring", "Ticket: #340")
+        done = self.ask(case, "issue-417", 417)
+        self.assertEqual("landing-subjects: subject: Merge task issue-417", last_line(done))
+
+    def test_a_part_names_no_row_whose_carrier_has_not_landed(self):
+        case = Case(self)
+        case.issue(341, PART_341)
+        done = self.ask(case, "issue-341", 341)
+        self.assertEqual("landing-subjects: subject: Merge task issue-341", last_line(done))
+
+    def test_a_part_names_no_row_while_another_part_is_open(self):
+        case = Case(self)
+        case.issue(341, PART_341)
+        case.issue(337, PART_341)
+        case.commit("Merge part of task P2-3: composed", "Ticket: #346", "Outstanding: #341.",
+                    "Outstanding test ids: none.")
+        done = self.ask(case, "issue-341", 341)
+        self.assertEqual("landing-subjects: subject: Merge task issue-341", last_line(done))
+
+    def test_the_last_part_of_two_rows_names_both(self):
+        case = Case(self)
+        case.issue(338, PART_338)
+        case.commit("Merge part of task P2-1: the store", "Ticket: #344", "Outstanding: #338.",
+                    "Outstanding test ids: none.")
+        case.commit("Merge part of task P2-2: the ring", "Ticket: #340", "Outstanding: #338.",
+                    "Outstanding test ids: none.")
+        done = self.ask(case, "issue-338", 338)
+        self.assertEqual("landing-subjects: subject: Merge tasks issue-338, P2-1 and P2-2", last_line(done))
+
+    def test_an_unreachable_github_answers_as_before_and_says_so(self):
+        case = Case(self)
+        done = self.ask(case, "P2-3", 346, GH_FAIL="1")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertTrue(any(line.startswith("landing-subjects: unchecked: ") for line in done.stdout.splitlines()),
+                        done.stdout)
+        self.assertEqual("landing-subjects: subject: Merge task P2-3", last_line(done))
+
+    def test_the_answer_passes_the_range_check_once_merged(self):
+        # One rule (#388 Q4): the subject it gives is one the range check does not hold.
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n\n- [x] Composed.\n")
+        case.issue(341, PART_341)
+        case.commit("Merge part of task P2-3: composed", "Ticket: #346", "Outstanding: #341.",
+                    "Outstanding test ids: none.")
+        head = last_line(self.ask(case, "issue-341", 341)).removeprefix("landing-subjects: subject: ")
+        case.commit(f"{head}: the last part", "Ticket: #341")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout)
 
 
 class BrokenTests(unittest.TestCase):
