@@ -20,9 +20,9 @@ lands between gates as prose, under [`README.md`](README.md)'s rule, except that
 waits for a gate (one needing a new rule id, say) lands in that gate's integrator commit.
 
 **Numbering.** A new id continues its prefix's sequence: F-12, N-28, P-08 and A-06 are next. A number
-is given only when the integrator decides the row, is never reused and never takes a letter suffix.
-A dropped check keeps its row, marked retired, so old merge bodies, tags and review records stay
-true.
+is given only when the row's change request is decided, is never reused and never takes a letter
+suffix. A dropped check keeps its row, marked retired, so old merge bodies, tags and review records
+stay true.
 
 **Row shape.** The export's columns for the prefix, plus Tier (`H` hermetic, `D` deployed) on every
 table and a Recorded by column naming the ADR, change request or confirmed answer that named the id.
