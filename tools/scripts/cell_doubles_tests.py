@@ -169,9 +169,11 @@ class Harvest:
         self.secrets = tuple(cell.SECRETS)
         harvest = self.file
         constructed = cell.Case.__init__
+        self.installed = 0
 
         def recorded(case, *args, **kwargs):
             constructed(case, *args, **kwargs)
+            self.installed += 1
             double = case.dir / "aws-double"
             (case.bin / "aws").rename(double)
             case.write_executable("aws", (
@@ -235,7 +237,12 @@ class EveryCredentialTheDoublesHandOutIsSearchedFor(unittest.TestCase):
         for path in found:
             with self.subTest(companion=path.name):
                 held = harvest(path)
-                self.assertTrue(held.calls, f"{path.name}: no aws call was recorded, so the recorder was not in place")
+                self.assertTrue(held.installed, f"{path.name}: no case was constructed, so the recorder was never in place")
+                # A companion whose script makes no aws call records none, and says so with NO_AWS_CALLS
+                # (platform_tfvars_tests.py, #470, whose cases take the aws double off PATH, so a call
+                # fails them); every other one must record one, or the recorder missed them.
+                if not getattr(held.module, "NO_AWS_CALLS", False):
+                    self.assertTrue(held.calls, f"{path.name}: no aws call was recorded, so the recorder was not in place")
                 missing = [f"  {value!r}, from {name}" for name, value in held.handed_out() if value not in held.secrets]
                 if missing:
                     self.fail(f"{path.name}: its doubles hand out credentials that its search list, "

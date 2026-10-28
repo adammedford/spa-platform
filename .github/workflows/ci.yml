@@ -657,9 +657,10 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          # The S3 backend's native lock file, which is why no DynamoDB table exists anywhere in
-          # this platform, first shipped in 1.10.0 and became generally available in 1.11.0, which
-          # is the floor: https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
+          # The S3 backend's native lock file, which is why Terraform state locking needs no DynamoDB
+          # lock table (the cell's session table holds sessions, not locks), first shipped in 1.10.0
+          # and became generally available in 1.11.0, which is the floor:
+          # https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
           terraform_version: ${{ steps.terraform-floor.outputs.version }}
           terraform_wrapper: false
 

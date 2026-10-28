@@ -29,6 +29,11 @@ public static class RawClient
             UseProxy = false,
             UseCookies = false,
             AllowAutoRedirect = false,
+
+            // "Exactly the headers given": no trace context of the test process's own, which an
+            // in-process listener (the local stack's gateway) would otherwise have the handler write
+            // over a continuity row's client traceparent (#358 Q137).
+            ActivityHeadersPropagator = null,
             ConnectCallback = async (_, ct) =>
             {
                 Socket socket = new(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };

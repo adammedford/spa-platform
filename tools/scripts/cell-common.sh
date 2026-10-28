@@ -252,9 +252,12 @@ need_terraform() { need_tool terraform "brew install hashicorp/tap/terraform"; }
 root_name() { printf '%s' "${1#"${REPO_ROOT}"/}"; }
 
 # One output of a root, raw, from its state, or nothing when the root has none: never initialised,
-# never applied, or destroyed. teardown.sh's alone: contracts/infra-outputs.schema.json says the
-# scripts read outputs.json and none of them reads Terraform state, and the one exception among
-# these four is teardown.sh's (change request 1.5a, decision 2; Q49 on #129, confirmed).
+# never applied, or destroyed. contracts/infra-outputs.schema.json says the scripts read
+# outputs.json and none of them reads Terraform state, and the one exception among these four is
+# teardown.sh's (change request 1.5a, decision 2; Q49 on #129, confirmed). platform-tfvars.sh calls
+# it too, as a writer upstream of that document rather than a reader of it, like write_outputs below:
+# it writes the platform root's inputs before that root's first apply, when outputs.json, which is
+# written from all three roots, cannot exist yet (#470).
 tf_output() {
   terraform -chdir="$1" output -no-color -raw "$2" 2> "$ERR" || true
 }
@@ -364,6 +367,11 @@ apply_images() {
   write_outputs
 }
 
+# How wait_and_assert reads the primary deployment's rollout after the waiter: at most this many
+# reads, this many seconds apart (#467).
+ROLLOUT_READS=40
+ROLLOUT_POLL_SECONDS=15
+
 # Wait for a steady service, then assert that what runs is what was applied: $1 the gateway image
 # by digest, repository@sha256:<hex>.
 wait_and_assert() {
@@ -381,10 +389,28 @@ wait_and_assert() {
   # definition, and the service is then stable on that one. The primary deployment has to be the
   # applied task definition, completed.
   # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html
-  aws_read "the service ${SERVICE}" ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-    --query 'services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, length(deployments), loadBalancers[0].targetGroupArn]'
-  local definition rollout count group
-  IFS="$(printf '\t')" read -r definition rollout count group < "$OUT" || true
+  #
+  # The waiter succeeds on one deployment with its running count at the desired count, and does not
+  # read the primary's rolloutState, which can still be IN_PROGRESS when it returns: one read then
+  # failed a deployment that completed a minute later (#467).
+  # https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ecs/wait/services-stable.html
+  # So it is read again, every
+  # ROLLOUT_POLL_SECONDS, until it is COMPLETED or FAILED, at most ROLLOUT_READS times: 40 reads 15
+  # seconds apart, the waiter's own cadence, span 585 seconds, within its ten minutes. Every other
+  # value fails at once. Everything after this loop reads the service as the last read found it.
+  # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html (rolloutState)
+  local definition="" rollout="" count="" group="" reads=0
+  while :; do
+    aws_read "the service ${SERVICE}" ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+      --query 'services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, length(deployments), loadBalancers[0].targetGroupArn]'
+    IFS="$(printf '\t')" read -r definition rollout count group < "$OUT" || true
+    reads=$((reads + 1))
+    if [ "$rollout" != "IN_PROGRESS" ] || [ "$reads" -ge "$ROLLOUT_READS" ]; then break; fi
+    sleep "$ROLLOUT_POLL_SECONDS"
+  done
+  if [ "$rollout" = "IN_PROGRESS" ]; then
+    fail "the primary deployment's rollout is IN_PROGRESS, not COMPLETED, after ${reads} reads ${ROLLOUT_POLL_SECONDS} seconds apart. Read the service's events: it may yet complete, or the circuit breaker may roll it back."
+  fi
   [ "$rollout" = "COMPLETED" ] || fail "the primary deployment's rollout is ${rollout}, not COMPLETED."
   [ "$count" = "1" ] || fail "${SERVICE} has ${count} deployments; the previous one has not drained."
 

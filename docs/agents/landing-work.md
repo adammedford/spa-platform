@@ -91,8 +91,8 @@ One branch per task, one pull request, merged with a merge commit. CI must be gr
 The merge subject names every task id it lands. Two forms, because a row can outlive one session:
 
 ```
-Merge task(s) <id...>: <what landed>      the row is done
-Merge part of task <id>: <what landed>    more to come on the same branch
+Merge task(s) <id...>: <what landed>      the row is landed (landed is not done)
+Merge part of task <id>: <what landed>    more of the row to come, on this branch or a part ticket's
 ```
 
 The subject is read by a check: `tools/roadmap.py` derives the roadmap's state from these

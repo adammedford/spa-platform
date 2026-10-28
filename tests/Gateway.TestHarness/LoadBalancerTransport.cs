@@ -55,6 +55,13 @@ public sealed class LoadBalancerTransport : HttpMessageHandler
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.None,
             PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+
+            // An ALB passes a client's traceparent through and writes none of its own (it adds
+            // X-Amzn-Trace-Id: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-request-tracing.html).
+            // The gateway's HttpClient instrumentation listens process-wide, so without this the
+            // handler would put the test process's own trace context on every request and the
+            // gateway would log that trace id instead of the client's (#358 Q143).
+            ActivityHeadersPropagator = null,
         });
     }
 

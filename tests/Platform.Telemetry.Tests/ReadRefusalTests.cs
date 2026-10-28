@@ -66,7 +66,7 @@ public sealed class ReadRefusalTests
         await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
         using HttpClient client = new();
 
-        await SendAsync(client, host, "/assets/gone.0badf00d.js", "shell");
+        await SendAsync(client, host, "/", "shell");
         await SendAsync(client, host, "/index.html", refused: null);
 
         // The field is written only when the read was refused (issue #429: "omits the field when it is
@@ -75,7 +75,10 @@ public sealed class ReadRefusalTests
         // are, puts a null on the second line.
         IReadOnlyList<JsonElement> lines = RequestLines(host);
         Assert.Equal(2, lines.Count);
-        Assert.Equal("shell", Assert.Single(lines, l => l.GetProperty("status").GetInt32() == 404).GetProperty("read_refused").GetString());
+
+        // A refused shell answers 500 shell_unavailable, as Assets.cs does since #428 (issue #465).
+        // Mutation that turns it red: the double answering 404 for every class leaves no line at 500.
+        Assert.Equal("shell", Assert.Single(lines, l => l.GetProperty("status").GetInt32() == 500).GetProperty("read_refused").GetString());
         JsonElement plain = Assert.Single(lines, l => l.GetProperty("status").GetInt32() == 200);
         Assert.False(plain.TryGetProperty("read_refused", out _), "a request whose read was not refused carries read_refused.");
     }

@@ -367,6 +367,14 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             return [td_arn(service["taskDefinition"]), TARGET_GROUP_ARN]
         if query == ("services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, "
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
+            # A rollout still in progress: the primary reads IN_PROGRESS for as many reads as are
+            # left, then settles (#467). These reads also list two deployments, as the "deployments"
+            # fault does, so a case shows that the later checks use the settled read and not the
+            # first. That is a test device, not what #242 saw: the real waiter succeeds only on one
+            # deployment, and this double's waiter does not model that condition.
+            if service.get("inProgressReads", 0) > 0:
+                service["inProgressReads"] -= 1
+                return [td_arn(service["taskDefinition"]), "IN_PROGRESS", 2, TARGET_GROUP_ARN]
             return [td_arn(service["taskDefinition"]), service["rolloutState"], service["deployments"], TARGET_GROUP_ARN]
         raise Unexpected(f"describe-services --query {query!r}")
     if command == "ecs describe-task-definition" and query == "taskDefinition.status":
@@ -785,8 +793,12 @@ def apply_platform(world: dict, variables: dict):
         world["service"] = {"taskDefinition": previous, "rolloutState": "COMPLETED", "deployments": 1}
         return
     # "deployments": the previous deployment not yet drained, so the service lists two.
+    # "rollout_in_progress": the waiter returns while the primary deployment is still IN_PROGRESS,
+    # and it reads so for that many reads before it settles on "rollout" (#467). The waiter does not
+    # wait on rolloutState: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html
     world["service"] = {"taskDefinition": name, "rolloutState": world["faults"].get("rollout", "COMPLETED"),
-                        "deployments": world["faults"].get("deployments", 1)}
+                        "deployments": world["faults"].get("deployments", 1),
+                        "inProgressReads": world["faults"].get("rollout_in_progress", 0)}
     world["next_task"] += 1
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
     # "running_definition": a task running the applied digest under another revision, as one started
@@ -871,6 +883,33 @@ def destroy_root(world: dict, root: str, stdout):
         stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
+def imagetools_inspect(world: dict, args: list[str], record: dict) -> int:
+    """`docker buildx imagetools inspect --format '{{json .Manifest}}' <reference>`, which
+    platform-tfvars.sh reads the sample image's current digest with (#470). The format prints the
+    reference's top-level descriptor as JSON, whose digest is the index's for a multi-platform image:
+    https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/
+
+    world["public_images"] maps a reference to the digest the registry answers, which a case may set
+    to an empty or a short one. faults["imagetools"] is the status the registry answers instead: 429
+    is what ECR Public answered twice on 2026-10-27 (#242)."""
+    if len(args) != 3 or args[0] != "--format" or args[1] != "{{json .Manifest}}":
+        raise Unexpected(f"docker buildx imagetools inspect {args}")
+    reference = args[2]
+    record["reference"] = reference
+    refused = world["faults"].get("imagetools")
+    if refused:
+        sys.stderr.write(f"ERROR: unexpected status from HEAD request to https://public.ecr.aws/v2/"
+                         f"{reference.split('/', 1)[1].replace(':', '/manifests/')}: {refused} Too Many Requests\n")
+        return 1
+    images = world.get("public_images", {})
+    if reference not in images:
+        sys.stderr.write(f"ERROR: {reference}: not found\n")
+        return 1
+    sys.stdout.write(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                                 "digest": images[reference], "size": 10229}, indent=2) + "\n")
+    return 0
+
+
 def docker_double(argv: list[str], case: pathlib.Path) -> int:
     world = json.loads((case / "world.json").read_text())
     record = {"tool": "docker", "argv": argv}
@@ -904,6 +943,13 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         else:
             world["repositories"][name][image_tag] = digest_of(tag)
             sys.stdout.write(f"#12 pushing {tag} with docker\n#12 DONE 4.2s\n")
+    elif argv[:3] == ["buildx", "imagetools", "inspect"]:
+        try:
+            status = imagetools_inspect(world, argv[3:], record)
+        except Unexpected as error:
+            record["unexpected"] = str(error)
+            sys.stderr.write(f"docker double: unexpected call: {error}\n")
+            status = 97
     else:
         record["unexpected"] = True
         sys.stderr.write(f"docker double: unexpected call: {argv}\n")
@@ -1100,6 +1146,18 @@ class Case:
 
     def remove(self, name: str):
         (self.bin / name).unlink()
+
+    def stub_sleep(self):
+        """Replaces the real sleep with one that records its arguments in sleeps.log and returns at
+        once, so a case can run a script's polling loop to its bound without the wall time (#467).
+        Only the cases that call this lose the real sleep."""
+        log_path = shlex.quote(str(self.dir / "sleeps.log"))
+        self.write_executable("sleep", f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {log_path}\n')
+
+    def sleeps(self) -> list[list[str]]:
+        """Each call to the stubbed sleep, as its arguments, in order."""
+        path = self.dir / "sleeps.log"
+        return [line.split() for line in path.read_text().splitlines()] if path.exists() else []
 
     def save(self):
         save_world(self.dir, self.world)

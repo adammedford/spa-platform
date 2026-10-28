@@ -95,10 +95,17 @@ internal static class Bff
     }
 
     /// <summary>
-    /// <c>POST /bff/logout</c>: ends the session at the gateway (revocation attempted, removal certain:
+    /// <c>POST /bff/logout</c>: ends the session at the gateway (revocation attempted, removal made:
     /// <see cref="SessionEnd"/>), clears the antiforgery cookie and the session cookie, then hands the
     /// browser to the issuer's profile for the provider's logout, which comes back to <c>/</c> (task 3.7).
     /// A request with no session is still signed out of the provider and still clears both cookies.
+    ///
+    /// The F11 exception to contracts/http-contract.md's "always removes the session" (#386, recorded on
+    /// #332): a remove the session store cannot confirm by <c>StoreDeadline</c> is reported on one line by
+    /// <see cref="SessionEnd"/> as not confirmed, and this logout still clears both cookies and redirects
+    /// as usual (#386 Q187, Q191). A store read that fails before the remove keeps F17's 500 with both
+    /// cookies intact (Q188). <c>GET /bff/login</c>'s discard and the token source's end on
+    /// <c>invalid_grant</c> take no such exception and keep F17's 500 (Q189).
     /// </summary>
     private static async Task LogoutAsync(HttpContext context)
     {
@@ -109,12 +116,13 @@ internal static class Bff
         // cookies still cleared, so the request ends in no rejection and carries no rule id.
         if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
-            await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(app, key);
+            await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(context, app, key);
         }
 
         context.RequestServices.GetRequiredService<ICsrfTokens>().Clear(context);
 
-        // The cookie handler's sign-out expires the cookie. The OpenID Connect handler's then authenticates
+        // The cookie handler's sign-out expires the cookie, and makes no store call once SessionEnd has
+        // marked the session ended (#386 Q192). The OpenID Connect handler's then authenticates
         // its sign-out scheme, the app's cookie scheme, for the ID token it sends as id_token_hint, and the
         // cookie handler answers from the result it read earlier in this request, which it keeps although
         // the record has gone (OpenIdConnectHandler.SignOutAsync and AuthenticationHandler.AuthenticateAsync:

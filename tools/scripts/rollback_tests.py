@@ -98,6 +98,21 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
         self.assertIn('name = "MockApi__App2Client", value = "<client-id:app2>"', result.stdout)
 
+    def test_a_rollout_in_progress_after_the_waiter_that_then_completes_passes(self):
+        # #467: rollback.sh shares deploy.sh's wait_and_assert, which reads the primary's
+        # rolloutState again until it settles rather than failing on its first IN_PROGRESS.
+        world = deployed_twice()
+        world["faults"]["rollout_in_progress"] = 2
+        case = cell.Case(self, outputs=True, world=world)
+        case.stub_sleep()
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertIn("pass:", result.stdout)
+        reads = [c for c in case.aws("ecs describe-services") if "rolloutState" in c["options"].get("query", "")]
+        self.assertEqual(3, len(reads))
+        self.assertEqual([["15"]] * 2, case.sleeps())
+
     def test_a_revision_with_the_running_image_is_passed_over(self):
         world = deployed_twice()
         # Revision 4: an apply that changed something other than the image.

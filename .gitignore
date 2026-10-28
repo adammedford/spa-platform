@@ -64,11 +64,11 @@ spikes/g0/real-handler/vendor/idm/
 spikes/g0/real-handler/vendor/lib/
 spikes/g0/real-handler/vendor/ref/
 
-# Agent issue tracker (docs/agents/issue-tracker.md), tracked rather than ignored: it holds the spec
-# every review's spec axis is held to, and the tickets that merge bodies, ADRs and contracts cite by
-# path. While it was ignored those citations resolved on one machine and nowhere else -- ADR-0015
-# promised three adoption tickets no second session could open. Only the session logs stay out, a
-# transcript rather than a spec.
+# Agent issue tracker archive (docs/agents/tracker-policy.md, "The archive: tickets filed before
+# ADR-0020"), tracked rather than ignored: it holds the tickets filed before ADR-0020 and their specs,
+# which merge bodies, ADRs and contracts cite by path. While the tracker was ignored those citations
+# resolved on one machine and nowhere else -- ADR-0015 promised three adoption tickets no second
+# session could open. Only the session logs stay out, a transcript rather than a spec.
 .scratch/*/log/
 
 # Agent session scratch: worktrees and anything else a session leaves behind. Three exceptions:

@@ -261,6 +261,17 @@ spec.
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
 frozen export, and a spec is one feature's working statement.
 
+**Plan row** — one row of the plan's task tables, `docs/plan/03-workstreams-and-tasks.md` or the
+Phase 2 package table (I-4, 2.1, P2-1), and the unit the roadmap counts. Not a ticket: one row may be
+built by several. _Avoid_: bare "task" where a ticket could be meant.
+
+**Carrier** — the one ticket whose `Plan row` line names a row that several tickets build; its merge
+is the one that can name the row. _Avoid_: "the row's ticket", when the row has parts.
+
+**Part ticket** — a ticket that builds part of a plan row it does not carry, and declares that in its
+`Plan row` line as `none (part of <row>...)`. _Avoid_: "sibling", "sub-ticket" (a sub-issue is
+GitHub's relation to a spec, not to a row).
+
 **Standing answer** — a launch-time instruction that a night's lanes and grills take each
 recommendation as decided instead of stopping for the human. Given per run, and recorded in that
 run's `Overnight <date>` issue. Not "approval".
