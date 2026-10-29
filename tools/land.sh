@@ -10,6 +10,13 @@
 # roadmap is derived from the tree the merge commit makes:
 #
 #     git worktree add --detach ../spa-land origin/main
+#     git worktree remove ../spa-land        # done for you when the landing succeeds
+#
+# That worktree is disposable (#490). Once the merge, the roadmap refresh and its push have all
+# succeeded, a landing run from a linked worktree that is detached and clean, untracked files
+# included, removes it as its last act and names it. From a worktree on a branch, or one with an
+# untracked file, it leaves it and prints the `git worktree remove` that removes it; a landing that
+# fails anywhere leaves it for inspection. The repository's own working tree is never removed.
 #
 # --subject is the merge subject a check reads. --body-file names the merge body, which reaches the
 # merge commit followed by the review trailer below: a file, or a pipe -- a named pipe, or a
@@ -294,26 +301,71 @@ name_main_checkout() {
 }
 
 restore_file_line="prune_branches: these commands are also in "
+pruned=0
+restore_file=""
 prune_finished() {
   [ "$base" = main ] || return 0
   name_main_checkout
   echo "--- deleting the branches this landing finished"
-  pruned=0
   listing="$(python3 -I "$here/prune_branches.py" --delete)" || pruned=$?
   [ -z "$listing" ] || printf '%s\n' "$listing"
-  [ "$pruned" -eq 0 ] \
-    || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
   last="${listing##*"$newline"}"
   case "$last" in
-    "$restore_file_line"?*)
-      restore_file="${last#"$restore_file_line"}"
-      echo "land: the commands that restore what the cleanup deleted are in $restore_file" ;;
+    "$restore_file_line"?*) restore_file="${last#"$restore_file_line"}" ;;
   esac
+}
+
+# The worktree the landing ran in is disposable once the landing has happened (#490): eighteen were
+# left behind by earlier landings before this. It is removed only when it is a linked worktree, on
+# a detached HEAD, with nothing uncommitted and no untracked file -- the one `git worktree add
+# --detach` made for this landing. A worktree on a branch is somebody's work, and an untracked file
+# is something nobody has looked at, so either is left and the command that removes it is printed.
+# The repository's own working tree is never removed, and git cannot remove it anyway. Ignored
+# files do not count, and `git worktree remove` deletes them with the tree without --force:
+# https://git-scm.com/docs/git-worktree#_commands. It runs after the cleanup, which needs a checkout
+# at origin/main to read the roadmap from, and nothing here fails the landing, which has happened.
+release_worktree() {
+  local git_dir common at reason changes
+  git_dir="$(CDPATH= cd -- "$(git rev-parse --git-dir)" && pwd -P)" \
+    && common="$(CDPATH= cd -- "$(git rev-parse --git-common-dir)" && pwd -P)" \
+    || { echo "land: git could not name this worktree's git directories, so $root is left as it is."; return 0; }
+  [ "$git_dir" != "$common" ] || return 0
+  # The printed command names the main checkout when the common directory is its .git.
+  at="$common"
+  case "$at" in */.git) at="${at%/.git}" ;; esac
+  if git symbolic-ref -q HEAD >/dev/null; then
+    reason="it is on the branch $(git symbolic-ref --short HEAD)"
+  elif ! changes="$(git status --porcelain)"; then
+    reason="git could not read its status"
+  elif [ -n "$changes" ]; then
+    reason="it has uncommitted or untracked files"
+  else
+    # Out of the tree before removing it, so nothing after this runs in a directory that is gone.
+    cd -- "$common"
+    if git worktree remove -- "$root" && git worktree prune; then
+      echo "land: removed the worktree this landing ran in, $root, which was detached and clean."
+      return 0
+    fi
+    reason="git refused to remove it"
+  fi
+  echo "land: the worktree this landing ran in, $root, stays: $reason. To remove it, run:"
+  printf '      git -C %q worktree remove %q\n' "$at" "$root"
+}
+
+# The landing's last act and its last lines: the branch cleanup, then the worktree, then what the
+# cleanup left to say, so the line naming the restore file stays last (#115).
+finish_landing() {
+  prune_finished
+  release_worktree
+  [ "$pruned" -eq 0 ] \
+    || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
+  [ -z "$restore_file" ] \
+    || echo "land: the commands that restore what the cleanup deleted are in $restore_file"
 }
 
 if git diff --quiet -- README.md docs/roadmap.md; then
   echo "land: the generated blocks did not move, so there is nothing to refresh."
-  prune_finished
+  finish_landing
   exit 0
 fi
 
@@ -329,4 +381,4 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 echo "--- pushing the refresh"
 git push origin "HEAD:$base"
 echo "land: #$pr is in and the roadmap says so."
-prune_finished
+finish_landing
