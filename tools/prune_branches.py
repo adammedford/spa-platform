@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Deletes the branches of finished work, locally and on origin, and lists every one it keeps and
-why. Owner: integrator.
+"""Deletes the branches of finished work, locally and on origin, and says why it keeps the rest.
+Owner: integrator.
 
-    tools/prune_branches.py            say what --delete would do, and delete nothing
-    tools/prune_branches.py --delete   delete the finished branches locally and on origin
+    tools/prune_branches.py                      say what --delete would do, and delete nothing
+    tools/prune_branches.py --delete             delete the finished branches locally and on origin
+    tools/prune_branches.py --delete --verbose   and list each kept branch, not only a count
 
 docs/agents/landing-work.md makes a task's branch its claim and says the claim is deleted when the
 task is done, and nothing deleted it (#71). On 17 October 2026 this repository held 44 `task/*`
@@ -55,6 +56,13 @@ landed as patch-equivalents, has no other copy here once git's garbage collectio
 Rule 3 uses `git merge-tree --write-tree`, which Git 2.38 introduced, so the floor
 docs/dependencies.md gives git is 2.38.
 
+A dry run lists every copy with its verdict and reason. A --delete run lists each copy it deletes
+or fails to delete, and counts the copies it keeps under a short reason each -- the claim of an
+unfinished row, a worktree, work main lacks -- commonest first, for land.sh runs it after every
+merge and most branches are kept for the same few reasons every time: the landing of #507 printed
+48 kept lines and deleted nothing (#524). --verbose lists each kept copy with its full reason, as a
+dry run does.
+
 HEAD must be origin/main or behind it: the roadmap reads HEAD's merge subjects as well as main's, and
 one only HEAD has would call a row landed that main has not landed. It exits 0 once every branch is
 judged, whatever it kept; 1, deleting nothing, when it cannot judge, and 1 when it cannot write the
@@ -98,6 +106,17 @@ class Verdict(NamedTuple):
     copy: Copy
     delete: bool
     reason: str
+    # A kept copy's reason in the words a --delete run counts it under: the reason without what
+    # differs between branches, such as the id, the worktree's path or the number of commits.
+    group: str = ""
+
+
+class Judged(NamedTuple):
+    """One answer about a branch: whether it passes, the reason either way, and the reason's group
+    when it does not."""
+    ok: bool
+    reason: str
+    group: str = ""
 
 
 class Refused(Exception):
@@ -159,7 +178,11 @@ def id_state(id_: str, states: dict) -> tuple[str, str]:
     return "unknown", id_
 
 
-def merged_pull_request(branch: str) -> tuple[bool, str]:
+# The group of an overnight branch GitHub could not be asked about.
+UNASKED = "nothing says whether a pull request from it merged"
+
+
+def merged_pull_request(branch: str) -> Judged:
     """Whether a pull request from the branch into main has merged, as GitHub says.
 
     An overnight branch names no row, and its merge subject is the run's own, so only the pull
@@ -173,20 +196,24 @@ def merged_pull_request(branch: str) -> tuple[bool, str]:
             capture_output=True, text=True, check=False,
         )
     except OSError:
-        return False, "gh is not on PATH, so nothing says whether a pull request from it merged"
+        return Judged(False, "gh is not on PATH, so nothing says whether a pull request from it "
+                      "merged", UNASKED)
     if done.returncode != 0:
-        return False, f"gh could not say whether a pull request from it merged: {last_line(done)}"
+        return Judged(False, "gh could not say whether a pull request from it merged: "
+                      f"{last_line(done)}", UNASKED)
     numbers = done.stdout.split()
     if not numbers:
-        return False, "no pull request from it into main has merged"
-    return True, f"pull request #{numbers[0]} from it merged"
+        return Judged(False, "no pull request from it into main has merged",
+                      "no pull request from it into main has merged")
+    return Judged(True, f"pull request #{numbers[0]} from it merged")
 
 
-def finished(branch: str, states: dict) -> tuple[bool, str]:
+def finished(branch: str, states: dict) -> Judged:
     """Whether the branch's work is finished by its kind's rule, and the reason either way."""
     if branch.startswith("overnight/"):
         if not OVERNIGHT.match(branch):
-            return False, "its name is no overnight/<date>, so nothing says which run it is"
+            reason = "its name is no overnight/<date>, so nothing says which run it is"
+            return Judged(False, reason, reason)
         return merged_pull_request(branch)
     # A name that carries no id the roadmap knows is no claim a session could take: ADR-0020 made
     # every ticket a GitHub issue, so a live claim names a plan row, a split of one or issue-<n>, and
@@ -194,7 +221,7 @@ def finished(branch: str, states: dict) -> tuple[bool, str]:
     # its work alone decides it.
     match = TASK.match(branch)
     if not match:
-        return True, "its name carries no task id, so it claims nothing a session could take"
+        return Judged(True, "its name carries no task id, so it claims nothing a session could take")
     ids = [normal(id_) for id_ in re.split(r"-and-", match.group(1))]
     claimed = []
     for id_ in ids:
@@ -202,24 +229,32 @@ def finished(branch: str, states: dict) -> tuple[bool, str]:
         if state == "unknown":
             continue
         if state != "landed":
-            return False, f"{named} is {state}, so the branch is its claim"
+            article = "an" if state[0] in "aeiou" else "a"
+            return Judged(False, f"{named} is {state}, so the branch is its claim",
+                          f"it is the claim of {article} {state} row, split or ticket")
         claimed.append(named)
     if not claimed:
-        return True, (f"{' and '.join(ids)} {'names' if len(ids) == 1 else 'name'} no plan row, "
-                      f"split or ticket, so it claims nothing a session could take")
-    return True, " and ".join(claimed) + (" is" if len(claimed) == 1 else " are") + " landed"
+        return Judged(True, f"{' and '.join(ids)} {'names' if len(ids) == 1 else 'name'} no plan "
+                      f"row, split or ticket, so it claims nothing a session could take")
+    return Judged(True, " and ".join(claimed) + (" is" if len(claimed) == 1 else " are") + " landed")
 
 
 # --- whether a tip's work is on main -----------------------------------------------------------
 
 
-def on_main(tip: str) -> tuple[bool, str]:
+# The groups of a tip whose work is not on main, and of one whose work git could not tell.
+NOT_ON_MAIN = "its tip has commits with no equivalent on origin/main"
+UNCERTAIN = "git cannot tell whether its tip's work is on origin/main"
+
+
+def on_main(tip: str) -> Judged:
     """Whether the tip's work is on origin/main, and how, or why it is not or cannot be told."""
     ancestor = git("merge-base", "--is-ancestor", tip, MAIN, check=False).returncode
     if ancestor == 0:
-        return True, "its tip is an ancestor of origin/main"
+        return Judged(True, "its tip is an ancestor of origin/main")
     if ancestor != 1:
-        return False, "git could not compare its tip with origin/main, so its work is uncertain"
+        return Judged(False, "git could not compare its tip with origin/main, so its work is "
+                      "uncertain", UNCERTAIN)
     # `git cherry` marks each commit the tip has and main lacks: `-` when main has a commit with the
     # same patch id, `+` when it has none (https://git-scm.com/docs/git-cherry). It leaves merge
     # commits out, which its manual does not say and its source does: cmd_cherry walks with
@@ -227,12 +262,13 @@ def on_main(tip: str) -> tuple[bool, str]:
     # case in prune_branches_tests.py asserts it as its premise. So the merges are read below.
     cherry = git("cherry", MAIN, tip, check=False)
     if cherry.returncode != 0:
-        return False, "git cherry could not compare it with origin/main, so its work is uncertain"
+        return Judged(False, "git cherry could not compare it with origin/main, so its work is "
+                      "uncertain", UNCERTAIN)
     unmatched = [line for line in cherry.stdout.splitlines() if line.startswith("+")]
     if unmatched:
         count = len(unmatched)
-        return False, (f"{count} commit{'' if count == 1 else 's'} on it "
-                       f"{'has' if count == 1 else 'have'} no equivalent on origin/main")
+        return Judged(False, f"{count} commit{'' if count == 1 else 's'} on it "
+                      f"{'has' if count == 1 else 'have'} no equivalent on origin/main", NOT_ON_MAIN)
     # A merge's own changes -- a conflict resolved by hand, an edit made while merging -- are in no
     # patch `git cherry` reads, and nothing can find them on main by patch id. So each merge the tip
     # has and main lacks must be the merge git makes unaided: `git merge-tree --write-tree` prints
@@ -241,20 +277,24 @@ def on_main(tip: str) -> tuple[bool, str]:
     # https://git-scm.com/docs/git-merge-tree). Any other merge leaves the work uncertain.
     merges = git("rev-list", "--min-parents=2", f"{MAIN}..{tip}", check=False)
     if merges.returncode != 0:
-        return False, "git could not list the merges on it, so its work is uncertain"
+        return Judged(False, "git could not list the merges on it, so its work is uncertain",
+                      UNCERTAIN)
     for merge in merges.stdout.split():
         parents = git("rev-list", "--parents", "-n", "1", merge).stdout.split()[1:]
         if len(parents) != 2:
-            return False, f"merge {merge[:12]} has {len(parents)} parents, so its work is uncertain"
+            return Judged(False, f"merge {merge[:12]} has {len(parents)} parents, so its work is "
+                          "uncertain", UNCERTAIN)
         unaided = git("merge-tree", "--write-tree", *parents, check=False)
         if unaided.returncode not in (0, 1):
-            return False, (f"git could not re-make merge {merge[:12]} (merge-tree --write-tree "
-                           f"needs git 2.38): {last_line(unaided)}, so its work is uncertain")
+            return Judged(False, f"git could not re-make merge {merge[:12]} (merge-tree "
+                          f"--write-tree needs git 2.38): {last_line(unaided)}, so its work is "
+                          "uncertain", UNCERTAIN)
         made = git("rev-parse", f"{merge}^{{tree}}").stdout.strip()
         if unaided.returncode != 0 or unaided.stdout.split()[:1] != [made]:
-            return False, (f"merge {merge[:12]} has changes of its own, which nothing finds on "
-                           f"origin/main, so its work is uncertain")
-    return True, "every commit on it has an equivalent on origin/main"
+            return Judged(False, f"merge {merge[:12]} has changes of its own, which nothing finds "
+                          "on origin/main, so its work is uncertain",
+                          "a merge on it has changes of its own, which nothing finds on origin/main")
+    return Judged(True, "every commit on it has an equivalent on origin/main")
 
 
 # --- the branches ------------------------------------------------------------------------------
@@ -299,16 +339,16 @@ def worktrees() -> dict[str, str]:
     return found
 
 
-def judge(copy: Copy, kind: tuple[bool, str], trees: dict[str, str]) -> Verdict:
+def judge(copy: Copy, kind: Judged, trees: dict[str, str]) -> Verdict:
     """The verdict on one copy: its kind's answer, then the worktrees, then its own tip's work."""
-    done, why = kind
-    if not done:
-        return Verdict(copy, False, why)
+    if not kind.ok:
+        return Verdict(copy, False, kind.reason, kind.group)
     if copy.branch in trees:
         # The origin copy too: a session working there pushes to it.
-        return Verdict(copy, False, f"it is checked out in the worktree at {trees[copy.branch]}")
-    merged, how = on_main(copy.tip)
-    return Verdict(copy, merged, f"{why}, and {how}")
+        return Verdict(copy, False, f"it is checked out in the worktree at {trees[copy.branch]}",
+                       "it is checked out in a worktree")
+    work = on_main(copy.tip)
+    return Verdict(copy, work.ok, f"{kind.reason}, and {work.reason}", work.group)
 
 
 def remove(copy: Copy) -> str | None:
@@ -375,7 +415,11 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--delete", action="store_true",
                         help="delete what the listing marks; without it nothing is deleted")
+    parser.add_argument("--verbose", action="store_true",
+                        help="with --delete, list each kept branch rather than a count per reason")
     arguments = parser.parse_args(argv)
+    # A --delete run counts what it keeps unless asked to list it; a dry run lists everything.
+    counting = arguments.delete and not arguments.verbose
 
     try:
         root = git("rev-parse", "--show-toplevel").stdout.strip()
@@ -410,6 +454,8 @@ def main(argv: list[str]) -> int:
     # which is git seeing a worktree use the branch where the porcelain listing does not, keeps
     # origin's copy too: a session working there pushes to it.
     held: set[str] = set()
+    # The copies a counting run kept by their verdict, by group, in the order first met.
+    counted: dict[str, int] = {}
     for verdict in verdicts:
         copy, reason = verdict.copy, verdict.reason
         if not arguments.delete:
@@ -432,9 +478,16 @@ def main(argv: list[str]) -> int:
                     add_restore_line(restore_path, line)
                 except OSError as error:
                     unwritten = f"could not write {restore_path}: {error}"
+        elif counting:
+            counted[verdict.group] = counted.get(verdict.group, 0) + 1
+            continue
         else:
             word = "kept"
         print(f"{word:<8} {copy.where:<7} {copy.branch}  {copy.tip[:12]}  {reason}")
+
+    # Commonest first; sorted() is stable, so a tie keeps the order the groups were met in.
+    for group, count in sorted(counted.items(), key=lambda item: -item[1]):
+        print(f"prune_branches: kept {count} because {group}; --verbose names each.")
 
     gone = sum(1 for verdict in verdicts if verdict.delete) if not arguments.delete else len(restore)
     if arguments.delete:

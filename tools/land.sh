@@ -53,8 +53,9 @@
 # commit, run tools/roadmap.py on it, and push the refresh as its own commit when the blocks moved.
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
 # see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
-# this script deletes the branches the merge finished and lists the ones it keeps (#71), and when it
-# deleted any, this script's last line names the file of the commands that restore them (#115).
+# this script deletes the branches the merge finished and counts the ones it keeps by reason (#71,
+# #524), and when it deleted any, this script's last line names the file of the commands that
+# restore them (#115).
 # Just before the cleanup it names the repository's main checkout, says whether it is behind the
 # merge, and prints the fast-forward to run there when docs/agents/landing-work.md allows one; it
 # never moves that checkout itself (#281). Its companion, tools/prune_branches_tests.py, runs this
@@ -224,9 +225,9 @@ python3 -I tools/roadmap.py
 # finishes its integration branch: docs/agents/landing-work.md -> "Land it" says each is deleted
 # then, and this is where (#71). The cleanup beside this script reads which rows the roadmap now
 # calls landed, so it runs once the merge is fetched, from this checkout, which sits at origin/main.
-# It deletes only what its rules allow and lists every branch it keeps and why. A cleanup that stops
-# leaves finished branches behind, not a wrong merge, so it warns rather than failing a landing that
-# has already happened.
+# It deletes only what its rules allow and counts the branches it keeps under each reason, which
+# its --verbose lists one by one (#524). A cleanup that stops leaves finished branches behind, not a
+# wrong merge, so it warns rather than failing a landing that has already happened.
 #
 # A cleanup that deleted anything ends on a line naming the file it wrote the restore lines to, in
 # the words below, which tools/prune_branches.py keeps as RESTORE_FILE_LINE; the two change

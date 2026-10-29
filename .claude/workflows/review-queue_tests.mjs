@@ -37,6 +37,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
   candidates: [], statedMutations: [], reviewCommits: [], statedHeads: [],
+  description: '', commitMessages: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -216,6 +217,17 @@ async function execute() {
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
   return await new Function('return (async () => {' + src + '\n})()')()
 }
+// The script's meta, evaluated alone, as the Workflow tool reads it before any run.
+const loadMeta = () => {
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  const m = /^export const meta = ([\s\S]*?\n})\n/m.exec(src)
+  return m ? new Function(`return (${m[1]})`)() : null
+}
+// What whenToUse lacks of the working launch (#522): scriptPath, the script's path, and the three
+// required arguments, each a whole word. Empty when it names them all.
+const LAUNCH_WORDS = ['scriptPath', '.claude/workflows/review-queue.js', 'repo', 'date', 'wt']
+const launchGaps = (whenToUse) => LAUNCH_WORDS.filter((w) =>
+  !new RegExp(`(^|[^\\w.])${w.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?![\\w])`).test(whenToUse || ''))
 
 const failures = []
 const fail = (msg) => failures.push(msg)
@@ -1130,6 +1142,50 @@ try {
     if (!(env.prompts['verdict:301'] || '').includes('ed8d063')) fail('PR 301: the verdict prompt does not carry the stale-head finding it is to weigh')
   }
 
+  // A date later than the run's (#525): #507's description said "#44's was re-checked on 2026-10-29"
+  // on a review run dated 2026-10-28, and neither axis noticed. The inventory hands over the
+  // description and each commit message since the fork point as written; the script finds every
+  // YYYY-MM-DD date in them later than the run's date (2026-10-21 here) and makes each a verified low
+  // Spec finding quoting its sentence, which the comment carries and the verdict does not hold on. A
+  // date on or before the run's date, or none, yields nothing. The review of #525 found the rules the
+  // search states untested: the quote is the sentence, not the line; the same date in one sentence
+  // counts once; a month past 12 or a day past 31 is no date; and a date inside a longer run of
+  // digits is none. PR 515 breaks each, and the quote is matched whole.
+  checks++
+  {
+    const C1 = sha('e')
+    const LATER = '#44\'s was re-checked on 2026-10-22, a day after the run.'
+    const SERVED = {
+      511: pr(511, ['docs/z.md'], { description: `Lands the fix.\n\nThe record holds. ${LATER} Nothing else changed.` }),
+      512: pr(512, ['docs/z.md'], { description: 'Checked on 2026-10-21, the run\'s own date. Filed 2026-10-20.', commitMessages: [{ sha: C1, message: 'Task x: done on 2026-10-19\n\nCo-Authored-By: t' }] }),
+      513: pr(513, ['docs/z.md'], { commitMessages: [{ sha: C1, message: 'Task x: lands it\n\nVerified green on 2027-01-02 by the check.\n' }] }),
+      514: pr(514, ['docs/z.md'], { description: 'No date at all.' }),
+      515: pr(515, ['docs/z.md'], { description: 'Ran it on 2026-10-25 and again on 2026-10-25. Not dates: 2026-13-01, 2026-11-32, 12026-10-30 and 2026-10-301.' }),
+    }
+    const env = run({ prs: [511, 512, 513, 514, 515] }, SERVED)
+    const result = await execute(env)
+    const want = { 511: [['2026-10-22', LATER, 'description']], 512: [], 513: [['2027-01-02', 'Verified green on 2027-01-02 by the check.', C1]], 514: [], 515: [['2026-10-25', 'Ran it on 2026-10-25 and again on 2026-10-25.', 'description']] }
+    for (const [n, list] of Object.entries(want).map(([k, v]) => [Number(k), v])) {
+      const r = resultOf(n, result)
+      const verified = (r.findings || { verified: [] }).verified
+      if (verified.length !== list.length) fail(`PR ${n}: ${verified.length} verified finding(s), expected ${list.length} from dates later than the run's`)
+      for (const [i, [date, quote, where]] of list.entries()) {
+        const f = verified[i] || {}
+        if (f.axis !== 'Spec' || f.status !== 'verified' || f.severity !== 'low') fail(`PR ${n}: the later-date finding is ${f.axis} ${f.status} ${f.severity}, expected a verified low Spec finding`)
+        if (!String(f.title).includes(date) || !String(f.title).includes('2026-10-21')) fail(`PR ${n}: the later-date finding ${JSON.stringify(f.title)} does not name both ${date} and the run's date`)
+        if (!String(f.checked).endsWith(JSON.stringify(quote))) fail(`PR ${n}: the later-date finding does not quote its sentence ${JSON.stringify(quote)}: ${JSON.stringify(f.checked)}`)
+        if (!String(f.where).includes(where)) fail(`PR ${n}: the later-date finding is at ${JSON.stringify(f.where)}, expected it to name ${where}`)
+      }
+      if (r.verdict !== 'merge') fail(`PR ${n}: verdict ${r.verdict}; a later date is carried, not held on`)
+      const lines = commentOf(env, n).split('\n')
+      const spec = lines.slice(lines.indexOf('## Spec') + 1, lines.indexOf("The author's claims:")).filter((l) => l.startsWith('- '))
+      if (list.length ? !(spec.length === list.length && list.every(([date, quote], i) => spec[i].includes(date) && spec[i].includes('(verified, low)') && spec[i].includes(quote))) : !(spec.length === 1 && spec[0] === '- None.')) fail(`PR ${n}: the comment's Spec section reads ${JSON.stringify(spec)}`)
+    }
+    const inv = env.prompts['inventory:511'] || ''
+    if (!/description/.test(inv) || !/commitMessages/.test(inv)) fail('the inventory prompt does not ask for the description and the commit messages')
+    if (!(env.prompts['verdict:511'] || '').includes('2026-10-22')) fail('PR 511: the verdict prompt does not carry the later-date finding it is to weigh')
+  }
+
   // The return leads with one line per request (#294): the completion notice cuts the return short,
   // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
   // field, one line per pull request with its number, head, verdict, record URL, verified finding and
@@ -1233,6 +1289,24 @@ try {
     if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
+
+  // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a
+  // session's snapshot with no arguments and halts as a bad launch. whenToUse names the working one:
+  // by scriptPath, with the required repo, date and wt. The check is held to itself: a whenToUse with
+  // any one of those words taken out is reported as lacking it.
+  checks++
+  {
+    const meta = loadMeta()
+    if (!meta) fail('meta could not be read from the script')
+    else {
+      const gaps = launchGaps(meta.whenToUse)
+      if (gaps.length) fail(`meta.whenToUse does not name ${gaps.join(', ')} of the scriptPath launch`)
+      for (const w of LAUNCH_WORDS) {
+        const cut = String(meta.whenToUse || '').split(w).join('')
+        if (!launchGaps(cut).includes(w)) fail(`the whenToUse check misses a whenToUse with ${w} taken out`)
+      }
+    }
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)
