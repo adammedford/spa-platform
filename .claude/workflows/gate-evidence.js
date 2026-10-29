@@ -510,9 +510,10 @@ const idVerdict = (tier, tests) => {
 // filter so that a closed or unlabelled one served anyway holds nothing. A row waits on a request
 // in two ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
 // expanded, split on commas, whitespace and the word "and", a token that is no plan row
-// withholding the tag (Q4). A served rowsLine that does not begin **Rows:** names nothing and
-// withholds nothing: the prompt asks only for a line that begins so, no confirmed answer covers
-// one that does not, and check 18 pins the behaviour; (b) the request blocks an OPEN issue whose
+// withholding the tag (Q4). A served rowsLine that is not empty and does not begin **Rows:**
+// names no row and withholds the tag, quoting the line: the prompt asks only for a line that
+// begins so, and Adam decided on 2026-10-29, in a foreground session, that such a line fails
+// closed (CODING_STANDARDS.md, "A check fails closed"); (b) the request blocks an OPEN issue whose
 // title names the row as a whole token (Q3): bodies name neighbouring rows, so a body mention keeps
 // only the "open issue #n carries it" annotation. A title's tokens split on everything but letters,
 // digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a.
@@ -521,22 +522,24 @@ const ROWS_LINE = /^\*\*Rows:\*\*/
 const rowTokens = (text) => text.split(/[^A-Za-z0-9.\-]+/).filter(Boolean)
 const rowsLineOf = (c, rowIds) => {
   const line = (c.rowsLine || '').trim()
-  if (!ROWS_LINE.test(line)) return { rows: [], unknown: [] }
+  if (!line) return { rows: [], unknown: [], stray: '' }
+  if (!ROWS_LINE.test(line)) return { rows: [], unknown: [], stray: line }
   const tokens = line.replace(ROWS_LINE, '').replace(/`/g, '').split(/[,\s]+|\band\b/).map((t) => t.trim()).filter(Boolean)
-  return { rows: tokens.filter((t) => rowIds.has(t)), unknown: tokens.filter((t) => !rowIds.has(t)) }
+  return { rows: tokens.filter((t) => rowIds.has(t)), unknown: tokens.filter((t) => !rowIds.has(t)), stray: '' }
 }
 const isOpenRequest = (c) => c.state === 'OPEN' && (c.labels || []).includes(REQUEST_LABEL)
-// Each open request, with the rows it waits on and how, and the Rows-line tokens that are no row.
+// Each open request, with the rows it waits on and how, the Rows-line tokens that are no row, and
+// a served rowsLine that does not begin **Rows:** ("" when none).
 const requestsOf = (crs, openIssues, rowIds) => {
   const titled = new Map(openIssues.map((i) => [i.number, rowTokens(i.title)]))
   return crs.filter(isOpenRequest).map((c) => {
-    const { rows, unknown } = rowsLineOf(c, rowIds)
+    const { rows, unknown, stray } = rowsLineOf(c, rowIds)
     const waits = rows.map((row) => ({ row, via: `its Rows line names ${row}` }))
     for (const b of c.blocking || []) {
       if (b.state !== 'OPEN' || !titled.has(b.number)) continue
       for (const row of titled.get(b.number)) if (rowIds.has(row)) waits.push({ row, via: `it blocks ${'#' + b.number}, whose title names ${row}` })
     }
-    return { number: c.number, title: c.title, waits, unknown }
+    return { number: c.number, title: c.title, waits, unknown, stray }
   })
 }
 // A row is done when its merges name it as landed, nothing it merged is Outstanding, its diffs stayed
@@ -880,6 +883,7 @@ for (const r of g.rows) {
 const reasons = [...failedAgents]
 if (!requestsRead.ok) reasons.push(`the open change requests could not be read (${requestsRead.why || 'no reason given'})`)
 for (const c of requests) for (const t of c.unknown) reasons.push(`change request ${'#' + c.number}'s Rows line names ${t}, which is no plan row`)
+for (const c of requests) if (c.stray) reasons.push(`change request ${'#' + c.number}'s Rows line "${c.stray}" does not begin **Rows:**, so it names no row`)
 for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reasons.push(`${r.id} is not proved at ${p.tier === 'H' ? 'the hermetic' : 'the deployed'} tier: ${p.verdict}`)
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)

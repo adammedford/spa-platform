@@ -815,10 +815,10 @@ try {
   //     unlabelled one, an unlabelled open issue and a blocked ticket that is closed each hold
   //     nothing; a Rows-line token that is no plan row withholds the tag; an unread listing withholds
   //     it and marks every stage row; the "carries it" annotation skips a request the row already
-  //     waits on. A served rowsLine without the **Rows:** prefix names nothing and withholds nothing,
-  //     pinned here because no confirmed answer covers it. The archive under contracts/changes/ is
-  //     not read: that is proved by absence, since no prompt names it and the schema has no field a
-  //     served file could ride in.
+  //     waits on; a served rowsLine without the **Rows:** prefix names no row and withholds the
+  //     tag, quoting the line (Adam's decision of 2026-10-29: it fails closed). The archive under
+  //     contracts/changes/ is not read: that is proved by absence, since no prompt names it and the
+  //     schema has no field a served file could ride in.
   checks++
   {
     const base = { gates: { G3: READY } }
@@ -849,7 +849,6 @@ try {
       ['an open unlabelled issue among openIssues naming the row', { openIssues: [ticket(903, '4.2 — a sibling', ['4.2'], '')] }],
       ['a request blocking a CLOSED ticket whose title names the row', { changeRequests: [CR({ blocking: [{ number: 901, state: 'CLOSED' }] })], openIssues: [ticket(901, '4.2 — the proxy rules', ['4.2'])] }],
       ['a Rows line naming a plan row outside the stage', { changeRequests: [CR({ rowsLine: '**Rows:** 6.9' })] }],
-      ['a rowsLine served without the **Rows:** prefix', { changeRequests: [CR({ rowsLine: 'Rows: 4.2' })] }],
       ['a Rows line naming a longer row id sharing the prefix', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ rowsLine: '**Rows:** P2-10' })] }],
       ['a request blocking a ticket whose title names the longer row id', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ blocking: [{ number: 901, state: 'OPEN' }] })], openIssues: [ticket(901, 'continuity 12/13 (P2-10): export', ['P2-10'])] }],
     ]) {
@@ -862,6 +861,12 @@ try {
     const mrWhy = `change request ${cite(900)}'s Rows line names MR-4, which is no plan row`
     if (mr.result.verdict !== 'tag withheld' || !mr.result.reasons.includes(mrWhy) || !mr.result.report.text.includes(mrWhy)) fail(`a Rows line naming MR-4: verdict ${mr.result.verdict}, reasons ${JSON.stringify(mr.result.reasons)}`)
     if (whyOf(mr).length) fail(`a Rows line naming MR-4 made row 4.2 not done: ${JSON.stringify(whyOf(mr))}`)
+    // A served rowsLine without the **Rows:** prefix names no row and withholds the tag, quoting the
+    // line (Adam, 2026-10-29: it fails closed).
+    const stray = await run({ changeRequests: [CR({ rowsLine: 'Rows: 4.2' })] })
+    const strayWhy = `change request ${cite(900)}'s Rows line "Rows: 4.2" does not begin **Rows:**, so it names no row`
+    if (stray.result.verdict !== 'tag withheld' || !stray.result.reasons.includes(strayWhy) || !stray.result.report.text.includes(strayWhy)) fail(`a rowsLine without the prefix: verdict ${stray.result.verdict}, reasons ${JSON.stringify(stray.result.reasons)}`)
+    if (whyOf(stray).length) fail(`a rowsLine without the prefix made row 4.2 not done: ${JSON.stringify(whyOf(stray))}`)
     // An unread listing withholds the tag and marks every stage row (Q2).
     const unread = await run({ changeRequestsRead: { ok: false, why: 'the label change-request does not exist' }, changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })] })
     if (unread.result.verdict !== 'tag withheld' || !unread.result.reasons.includes('the open change requests could not be read (the label change-request does not exist)')) fail(`an unread listing: verdict ${unread.result.verdict}, reasons ${JSON.stringify(unread.result.reasons)}`)
