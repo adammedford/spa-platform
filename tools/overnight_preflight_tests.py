@@ -112,8 +112,10 @@ def view_call(number: int) -> list[str]:
     return ["issue", "view", str(number), "--json", SHAPE_FIELDS]
 
 
-def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2) -> dict:
-    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes}
+def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2,
+           blocked_by: tuple = ()) -> dict:
+    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes,
+            "blockedBy": list(blocked_by)}
 
 
 def issue_json(number: int, label: str, body: str) -> dict:
@@ -962,6 +964,21 @@ class FixtureTests(PreflightTestCase):
         written = json.loads(fixture.read_text())
         self.assertEqual(["issue-14"], written["args"]["skip"])
         self.assertEqual(["issue-10", "2.1", "issue-12"], written["expect"]["integrated"])
+
+    def test_a_ready_ticket_a_skipped_one_blocks_is_skipped_for_the_blocker(self):
+        # overnight.js gives a skipped ticket no lane, so issue-15, which waits on issue-12, and
+        # issue-16, which waits on issue-15, skip on the blocker; 2.1 waits on issue-10, which runs.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("2.1", 11, "ws2-hosting", "ready-for-agent", blocked_by=("issue-10",)),
+                   ticket("issue-12", 12, "integrator", "ready-for-agent"),
+                   ticket("issue-16", 16, "integrator", "ready-for-agent", blocked_by=("issue-15",)),
+                   ticket("issue-15", 15, "integrator", "ready-for-agent", blocked_by=("issue-12",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), "--skip", "issue-12", DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "2.1"], expect["integrated"])
+        self.assertEqual(["issue-16", "issue-15"], expect["skippedForBlocker"])
 
     def test_without_the_flag_no_fixture_is_written(self):
         case = Case(self)

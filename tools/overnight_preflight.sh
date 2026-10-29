@@ -13,12 +13,13 @@
 # input of the overnight harness (.claude/workflows/overnight_harness.mjs, git-ignored), which each
 # prep used to build by hand from collect's JSON (#485): `{args, tickets, expect}`, with args the
 # printed arguments, their skip joined by the tickets the claims line lists as held, tickets the
-# forecast's, verbatim, and expect.integrated the forecast's ready-for-agent ids outside that skip.
-# A held ticket is in the fixture's skip and not the printed one: the forecast reads it as claimed,
-# so no lane takes it either way, but a rename before launch frees it for the run (#484).
-# expect.skippedForBlocker and expect.startsBefore are written empty, as is standingAnswer left out
-# of args: the harness reads all three, and they are the human's to fill. A failed forecast writes
-# no fixture: one with no tickets would pass the harness and prove nothing.
+# forecast's, verbatim, and expect.integrated the forecast's ready-for-agent ids outside that skip,
+# less expect.skippedForBlocker: the ready ones a skipped ticket blocks, directly or through another
+# of them, which overnight.js skips on the blocker. A held ticket is in the fixture's skip and not
+# the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
+# before launch frees it for the run (#484). expect.startsBefore is written empty, as is
+# standingAnswer left out of args: the harness reads both, and they are the human's to fill. A
+# failed forecast writes no fixture: one with no tickets would pass the harness and prove nothing.
 #
 # Why (#378). Before #349's launch the preconditions were checked by hand, from memory notes, over
 # about eight separate commands. Each is a refusal or a wasted night when missed: collect refuses a
@@ -551,15 +552,28 @@ if fixture:
     tickets = json.load(open(collect))["tickets"]
     held = [line.strip() for line in open(held) if line.strip()]
     skip = list(dict.fromkeys(named + held + given))
-    integrated = [t["id"] for t in tickets if t["status"] == "ready-for-agent" and t["id"] not in skip]
+    ready = [t for t in tickets if t["status"] == "ready-for-agent" and t["id"] not in skip]
+    # overnight.js gives a skipped ticket no lane, so a ready ticket it blocks, directly or through
+    # another such ticket, settles as skipped on the blocker and never integrates (#485 review).
+    stopped = set(skip)
+    grew = True
+    while grew:
+        grew = False
+        for t in ready:
+            if t["id"] not in stopped and stopped & set(t["blockedBy"]):
+                stopped.add(t["id"])
+                grew = True
+    integrated = [t["id"] for t in ready if t["id"] not in stopped]
+    blocked = [t["id"] for t in ready if t["id"] in stopped]
     written = {"args": {**args, "skip": skip}, "tickets": tickets,
-               "expect": {"integrated": integrated, "skippedForBlocker": [], "startsBefore": []}}
+               "expect": {"integrated": integrated, "skippedForBlocker": blocked, "startsBefore": []}}
     with open(fixture, "w") as out:
         json.dump(written, out, indent=1)
         out.write("\n")
     print(f"overnight_preflight: wrote the harness fixture {os.path.abspath(fixture)}: {len(tickets)} "
-          f"tickets, {len(integrated)} expected to integrate, {len(skip)} skipped; add standingAnswer to "
-          "its args, and skippedForBlocker and startsBefore to its expect, before the harness runs it",
+          f"tickets, {len(integrated)} expected to integrate, {len(blocked)} skipped for a blocker, "
+          f"{len(skip)} skipped; add standingAnswer to its args, and startsBefore to its expect, before "
+          "the harness runs it",
           file=sys.stderr)
 ' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
   "$scratch/held" "$given_skip" "$forecast_ok" "$fixture" ||
