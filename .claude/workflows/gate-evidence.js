@@ -512,8 +512,8 @@ const idVerdict = (tier, tests) => {
 // expanded, split on commas, whitespace and the word "and", a token that is no plan row
 // withholding the tag (Q4). A served rowsLine that is not empty and does not begin **Rows:**
 // names no row and withholds the tag, quoting the line: the prompt asks only for a line that
-// begins so, and Adam decided on 2026-10-29, in a foreground session, that such a line fails
-// closed (CODING_STANDARDS.md, "A check fails closed"); (b) the request blocks an OPEN issue whose
+// begins so, and Adam decided on 2026-10-29 that such a line fails closed (#435's decision
+// comment, 6509327875; CODING_STANDARDS.md, "A check fails closed"); (b) the request blocks an OPEN issue whose
 // title names the row as a whole token (Q3): bodies name neighbouring rows, so a body mention keeps
 // only the "open issue #n carries it" annotation. A title's tokens split on everything but letters,
 // digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a.
