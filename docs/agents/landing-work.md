@@ -70,8 +70,8 @@ Authority: <URL>    the comment on this repository that holds a confirmed answer
 ```
 
 A change request, or a frozen contract's sentence, lands only on a decision comment's URL or on an
-integrator ticket the human labelled `ready-for-agent`; `Authority: #<n>` naming a `change-request`
-issue is refused, since anyone may file one (`docs/agents/tracker-policy.md` → "Change requests").
+integrator ticket the human labelled `ready-for-agent`; which `#<n>` the check refuses, and why:
+`docs/agents/tracker-policy.md` → "Change requests".
 A pre-accepted answer, a follow-up a night raised, an archived ticket's proposal and a reviewer's
 finding are not authority. `git commit --amend --no-edit --trailer "Authority: #<n>"` adds the
 trailer to the last commit. git reads trailers from the message's last paragraph alone, and an
