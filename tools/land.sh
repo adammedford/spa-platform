@@ -341,9 +341,13 @@ release_worktree() {
     reason="it has uncommitted or untracked files"
   else
     # Out of the tree before removing it, so nothing after this runs in a directory that is gone.
-    cd -- "$common"
-    if git worktree remove -- "$root" && git worktree prune; then
+    # A cd that fails is a reason to keep the tree, not an exit under set -e after the landing.
+    if cd -- "$common" && git worktree remove -- "$root"; then
       echo "land: removed the worktree this landing ran in, $root, which was detached and clean."
+      # The tree is gone whatever the prune says, so a failed prune is named, not reported as a
+      # tree that stays.
+      git worktree prune \
+        || echo "land: git worktree prune failed after the removal; run git -C $(printf %q "$at") worktree prune."
       return 0
     fi
     reason="git refused to remove it"
