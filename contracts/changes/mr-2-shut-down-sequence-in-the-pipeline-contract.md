@@ -5,7 +5,7 @@
 - **Tasks:** MR-2; P2-4 (two or more tasks), P2-2 (the shared key ring), P2-1 (durable sessions);
   2.3 (health), 1.4 (the ECS service, #56), 6.9 (the deployed gate runs, #63)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** moved to #541, 2026-10-29, by the cutover #439
 
 ## What is defined, and what is not
 

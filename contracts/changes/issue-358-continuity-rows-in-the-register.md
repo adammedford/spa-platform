@@ -6,7 +6,7 @@
   #322; #402 Q7 and Q8 as amended by #439 Q8, and #442 Q158 and Q159, which route these ids through
   a request
 - **Date:** 2026-10-28
-- **Status:** open
+- **Status:** moved to #539, 2026-10-29, by the cutover #439
 
 ## What changed
 

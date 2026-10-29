@@ -4,7 +4,7 @@
   security), whose proxy the code is, for the Phase 2 spec issue (to be filed)
 - **Tasks:** MR-4; 4.1 (the YARP configuration), 4.6 (request limits); 6.3 (the negative suite)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** moved to #542, 2026-10-29, by the cutover #439
 
 ## What the proxy bounds today, and what it does not
 

@@ -4,7 +4,7 @@
   of plan row P2-5)
 - **Tasks:** P2-5; #345; #332 (the `continuity` spec, T7); the register decided on #322
 - **Date:** 2026-10-25
-- **Status:** open
+- **Status:** moved to #538, 2026-10-29, by the cutover #439
 
 ## What changed
 
