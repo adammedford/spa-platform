@@ -323,7 +323,7 @@ class ARowsStateDecidesItsClaim(Case):
         self.commit("task/3.1-scheme", "scheme.txt")
         self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -424,7 +424,7 @@ class ATipsWorkMustBeOnMain(Case):
         self.land("Merge task 2.1: the registry", "task/2.1-registry")
         self.commit("task/2.1-registry", "afterwards.txt")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -495,7 +495,7 @@ class AMergesOwnChangesMustBeOnMainToo(Case):
     def test_a_merge_with_changes_of_its_own_keeps_the_branch(self):
         tip = self.build("made only in the merge\n")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -520,7 +520,7 @@ class AMergesOwnChangesMustBeOnMainToo(Case):
         )
         (self.bin / "git").chmod(0o755)
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         for where in ("local", "origin"):
@@ -637,7 +637,7 @@ class AnOvernightBranchGoesAfterItsPullRequestMerges(Case):
         self.git("branch", self.NIGHT, "main")
         self.git("push", "-q", "origin", self.NIGHT)
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         for where in ("local", "origin"):
@@ -664,7 +664,7 @@ class AnOvernightBranchGoesAfterItsPullRequestMerges(Case):
                 else:
                     (self.fixtures / "gh-fails").write_text("")
 
-                code, out, err = self.prune("--delete")
+                code, out, err = self.prune("--delete", "--verbose")
 
                 self.assertEqual(0, code, err)
                 for where in ("local", "origin"):
@@ -766,7 +766,7 @@ class AWorktreeKeepsItsBranch(Case):
         tree = self.scratch / "spa-2.1"
         self.git("worktree", "add", "-q", str(tree), "task/2.1-registry")
 
-        for args, word in (((), "keep"), (("--delete",), "kept")):
+        for args, word in (((), "keep"), (("--delete", "--verbose"), "kept")):
             with self.subTest(args=args):
                 code, out, err = self.prune(*args)
                 self.assertEqual(0, code, err)
@@ -807,6 +807,93 @@ class AWorktreeKeepsItsBranch(Case):
         self.assertIn("task/2.1-registry", self.local())
         self.assertIn("task/2.1-registry", self.remote())
         self.assertIn("prune_branches: deleted 0 and kept 2.", out)
+
+
+class ADeletingRunCountsWhatItKeeps(Case):
+    """With --delete, a branch it keeps is counted under its reason, not listed (#524): the landing
+    of #507 printed 48 kept lines and deleted nothing. --verbose lists each one again, and a dry run
+    always does. What it deletes, or fails to, is listed as before."""
+
+    def build(self):
+        """Two finished branches checked out in worktrees, a part-landed row's claim, and a landed
+        row's claim to delete. Returns the deleted claim's tip."""
+        for branch, row in (("task/2.1-registry", "2.1"), ("task/2.2-hosting", "2.2")):
+            self.commit(branch, f"{row}.txt")
+            self.land(f"Merge task {row}: {branch}", branch)
+            self.git("worktree", "add", "-q", str(self.scratch / f"spa-{row}"), branch)
+        self.commit("task/3.1-scheme", "scheme.txt")
+        self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
+        tip = self.commit("task/1.8-first", "first.txt")
+        self.land("Merge task 1.8: the first", "task/1.8-first")
+        return tip
+
+    KEPT = ("task/2.1-registry", "task/2.2-hosting", "task/3.1-scheme")
+    # The commonest reason first.
+    COUNTS = [
+        "prune_branches: kept 4 because it is checked out in a worktree; --verbose names each.",
+        "prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+        "--verbose names each.",
+    ]
+
+    def count_lines(self, out):
+        return [line for line in out.splitlines() if line.startswith("prune_branches: kept ")]
+
+    def test_a_deleting_run_prints_one_count_per_reason_and_no_kept_branch(self):
+        tip = self.build()
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual(self.COUNTS, self.count_lines(out), out)
+        verdicts = self.verdicts(out)
+        for branch in self.KEPT:
+            for where in ("local", "origin"):
+                self.assertNotIn((branch, where), verdicts, out)
+                self.assertNotIn(branch, out)
+        # What it deleted is listed, then the counts, the totals and the restore lines as before.
+        for where in ("local", "origin"):
+            self.assertEqual("deleted", verdicts[("task/1.8-first", where)][0], out)
+        lines = out.splitlines()
+        totals = lines.index("prune_branches: deleted 2 and kept 6.")
+        self.assertEqual(self.COUNTS, lines[totals - 2:totals], out)
+        self.assertEqual([f"git branch task/1.8-first {tip}",
+                          f"git push origin {tip}:refs/heads/task/1.8-first"],
+                         self.restore_lines(out))
+        self.assertEqual(self.restore_files()[0], self.named_file(out))
+
+    def test_verbose_lists_every_kept_branch_and_a_dry_run_always_does(self):
+        self.build()
+
+        for args, word in ((("--delete", "--verbose"), "kept"), ((), "keep")):
+            with self.subTest(args=args):
+                code, out, err = self.prune(*args)
+                self.assertEqual(0, code, err)
+                self.assertEqual([], self.count_lines(out), out)
+                verdicts = self.verdicts(out)
+                for branch in self.KEPT:
+                    for where in ("local", "origin"):
+                        self.assertEqual(word, verdicts[(branch, where)][0], out)
+                self.assertIn("3.1 is part-landed, so the branch is its claim",
+                              verdicts[("task/3.1-scheme", "local")][1])
+
+    def test_a_refused_deletion_is_still_listed(self):
+        # The mid-rebase worktree of AWorktreeKeepsItsBranch, which only git's own refusal sees.
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        tree = self.scratch / "spa-2.1"
+        self.git("worktree", "add", "-q", str(tree), "task/2.1-registry")
+        subprocess.run(["git", "rebase", "-q", "--exec", "false", "HEAD~1"], cwd=tree,
+                       env=self.env, capture_output=True, text=True, check=False)
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        verdicts = self.verdicts(out)
+        self.assertEqual("kept", verdicts[("task/2.1-registry", "local")][0], out)
+        self.assertIn("used by worktree", verdicts[("task/2.1-registry", "local")][1])
+        self.assertEqual(("kept", "the copy here was not deleted, so origin's is kept with it"),
+                         verdicts[("task/2.1-registry", "origin")])
+        self.assertEqual([], self.count_lines(out), out)
 
 
 class ADeletionLeavesItsRestoreCommandsInAFile(Case):
@@ -1040,7 +1127,9 @@ class LandingDeletesWhatItFinished(LandingCase):
         self.assertNotIn("task/2.1-registry", self.remote(), out)
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
-        self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        # land.sh runs --delete, which counts what it keeps (#524).
+        self.assertIn("prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+                      "--verbose names each.", out)
         self.assert_the_last_line_names_the_restore_file(out)
 
     def test_a_part_landed_rows_claim_survives_its_own_landing(self):
@@ -1050,7 +1139,9 @@ class LandingDeletesWhatItFinished(LandingCase):
 
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
-        self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        # land.sh runs --delete, which counts what it keeps (#524).
+        self.assertIn("prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+                      "--verbose names each.", out)
         # A landing whose cleanup deleted nothing writes no file and names none.
         self.assertEqual([], self.restore_files(), out)
         self.assertNotIn("pruned-branches", out)
