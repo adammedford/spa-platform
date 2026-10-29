@@ -808,14 +808,17 @@ try {
     }
   }
 
-  // 18. #435 (confirmed as #442 Q56 to Q60): a plan row waits on an open change-request issue, read
-  //     from the tracker by the Scope agent and decided in code. (a) its Rows line names the row;
+  // 18. #435 Q1 to Q6 (confirmed as #442 Q55 to Q60): a plan row waits on an open change-request
+  //     issue, read from the tracker by the Scope agent and decided in code. (a) its Rows line names
+  //     the row;
   //     (b) it blocks an open issue whose title names the row as a whole token. A closed request, an
   //     unlabelled one, an unlabelled open issue and a blocked ticket that is closed each hold
   //     nothing; a Rows-line token that is no plan row withholds the tag; an unread listing withholds
   //     it and marks every stage row; the "carries it" annotation skips a request the row already
-  //     waits on. The archive under contracts/changes/ is not read: that is proved by absence, since
-  //     no prompt names it and the schema has no field a served file could ride in.
+  //     waits on. A served rowsLine without the **Rows:** prefix names nothing and withholds nothing,
+  //     pinned here because no confirmed answer covers it. The archive under contracts/changes/ is
+  //     not read: that is proved by absence, since no prompt names it and the schema has no field a
+  //     served file could ride in.
   checks++
   {
     const base = { gates: { G3: READY } }
@@ -825,7 +828,8 @@ try {
     const rowsWhy = `change request ${cite(900)} is open (Number the rows): its Rows line names 4.2`
     const blocksWhy = `change request ${cite(900)} is open (Number the rows): it blocks ${cite(901)}, whose title names 4.2`
     const run = (served) => execute(newRepo(), { gate: 'G3' }, { ...base, ...served })
-    // (a) and (b), each with Q5's reason, in the return and in the report.
+    // (a) and (b), each with Q5's reason, in the return and in the report, and no Rows-line token
+    // read as no plan row: the backticks and the word "and" are separators, not tokens (Q4).
     for (const [label, served, want] of [
       ['a Rows line naming the row', { changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })] }, rowsWhy],
       ['a Rows line naming the row among others, in backticks and with "and"', { changeRequests: [CR({ rowsLine: '**Rows:** `4.1`, `6.9` and `4.2`' })] }, rowsWhy],
@@ -834,6 +838,8 @@ try {
       const r = await run(served)
       if (r.result.verdict !== 'tag withheld' || !whyOf(r).includes(want)) fail(`${label}: verdict ${r.result.verdict}, row 4.2 reads ${JSON.stringify(whyOf(r))}`)
       if (!r.result.report.text.includes(want) || !r.result.reasons.includes('row 4.2 is not done')) fail(`${label}: the report or the reasons do not say why 4.2 is not done`)
+      const unknown = r.result.reasons.filter((w) => /which is no plan row/.test(w))
+      if (unknown.length) fail(`${label}: a separator was read as a token: ${JSON.stringify(unknown)}`)
     }
     // Each of these leaves 4.2 done, and the tag ready (Q3, AC 3).
     for (const [label, served] of [
@@ -843,6 +849,7 @@ try {
       ['an open unlabelled issue among openIssues naming the row', { openIssues: [ticket(903, '4.2 — a sibling', ['4.2'], '')] }],
       ['a request blocking a CLOSED ticket whose title names the row', { changeRequests: [CR({ blocking: [{ number: 901, state: 'CLOSED' }] })], openIssues: [ticket(901, '4.2 — the proxy rules', ['4.2'])] }],
       ['a Rows line naming a plan row outside the stage', { changeRequests: [CR({ rowsLine: '**Rows:** 6.9' })] }],
+      ['a rowsLine served without the **Rows:** prefix', { changeRequests: [CR({ rowsLine: 'Rows: 4.2' })] }],
       ['a Rows line naming a longer row id sharing the prefix', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ rowsLine: '**Rows:** P2-10' })] }],
       ['a request blocking a ticket whose title names the longer row id', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ blocking: [{ number: 901, state: 'OPEN' }] })], openIssues: [ticket(901, 'continuity 12/13 (P2-10): export', ['P2-10'])] }],
     ]) {

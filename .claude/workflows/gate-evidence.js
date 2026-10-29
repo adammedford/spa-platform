@@ -503,13 +503,16 @@ const idVerdict = (tier, tests) => {
   if (st.includes('could-not-run')) return 'not proved: could not run'
   return 'not mutated this run'
 }
-// The change requests a row waits on (#435, confirmed as #442 Q56 to Q60). A change request is an
-// open issue labelled change-request (ADR-0032 decision 1); the Scope agent serves each one raw and
-// the code decides, so the companion can hold it (Q1). A request is counted only when its state is
-// OPEN and its labels include change-request, which repeats the listing's own filter so that a
-// closed or unlabelled one served anyway holds nothing. A row waits on a request in two ways:
-// (a) the request's **Rows:** line names the row, parsed to exact row ids, no range expanded, a
-// token that is no plan row withholding the tag (Q4); (b) the request blocks an OPEN issue whose
+// The change requests a row waits on (#435 Q1 to Q6, confirmed as #442 Q55 to Q60). A change
+// request is an open issue labelled change-request (ADR-0032 decision 1); the Scope agent serves
+// each one raw and the code decides, so the companion can hold it (Q1). A request is counted only
+// when its state is OPEN and its labels include change-request, which repeats the listing's own
+// filter so that a closed or unlabelled one served anyway holds nothing. A row waits on a request
+// in two ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
+// expanded, split on commas, whitespace and the word "and", a token that is no plan row
+// withholding the tag (Q4). A served rowsLine that does not begin **Rows:** names nothing and
+// withholds nothing: the prompt asks only for a line that begins so, no confirmed answer covers
+// one that does not, and check 18 pins the behaviour; (b) the request blocks an OPEN issue whose
 // title names the row as a whole token (Q3): bodies name neighbouring rows, so a body mention keeps
 // only the "open issue #n carries it" annotation. A title's tokens split on everything but letters,
 // digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a.
