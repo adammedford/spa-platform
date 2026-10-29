@@ -395,8 +395,7 @@ public static class ContinuityObserver
                 {
                     observed.Add($"session {s + 1}: {call.Name}: a connection error, missing coverage");
                 }
-                else if (call.Status is { } status && (status >= 500
-                    || status == Contract.Error("unauthenticated").Status || status == Contract.Error("session_ended").Status))
+                else if (call.Status is { } status && (status >= 500 || status == Contract.Error("unauthenticated").Status))
                 {
                     return RowResult.Failed($"session {s + 1}: {call.Name} answered {call.Status}", observed);
                 }

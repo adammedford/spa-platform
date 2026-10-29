@@ -460,7 +460,8 @@ public sealed class ContinuityObserverTests
     {
         // The observer sees a status and no problem code, so a planted session_ended would be caught by
         // the unauthenticated check and prove nothing of its own (#529). If the contract splits the two
-        // rows, plant session_ended in the theory above as a case of its own.
+        // rows, plant session_ended in the theory above as a case of its own and give Rolling its
+        // session_ended check back, which it drops while the statuses are equal.
         Assert.Equal(Contract.Error("unauthenticated").Status, Contract.Error("session_ended").Status);
     }
 
