@@ -196,7 +196,7 @@ function stub(env, scriptArgs, served) {
           rowStates: served.rowStates || { '1.5': 'part-landed', '1.7': 'open', '6.9': 'open', '6.3': 'part-landed', '6.7': 'open', '4.1': 'landed', '4.2': 'landed' },
           idTables: served.idTables || ID_TABLES,
           gateRegister: served.gateRegister || GATE_REGISTER,
-          changeRequests: served.changeRequests || [], openIssues: served.openIssues || [],
+          changeRequests: served.changeRequests || [], changeRequestsRead: served.changeRequestsRead || { ok: true, why: '' }, openIssues: served.openIssues || [],
           ci: served.ci || { url: 'https://github.com/adammedford/spa-platform/actions/runs/1', sha: base, jobs: [{ name: 'Documents', conclusion: 'success' }, { name: 'Build and test', conclusion: 'skipped' }] },
           lastFull: { sha: 'd'.repeat(40), url: 'https://github.com/adammedford/spa-platform/actions/runs/0' },
           merges: served.merges || [{ sha: 'e'.repeat(40), subject: 'Merge task 6.2: the composed suite', pr: 47, head: 'f'.repeat(40), cleared: true, record: 'https://github.com/adammedford/spa-platform/pull/47#issuecomment-1' }],
@@ -483,7 +483,7 @@ try {
       ['an id the Scope agent returned malformed', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-4', tiers: ['H'] }] } } }, {}, /"N-4" .*was not judged/],
       ['a row is not done', { ...base, audit: { '4.1': [{ sha: '2'.repeat(40), subject: 'Merge task 4.1: x', form: 'landed', outstanding: ['Outstanding test ids: N-01 (4.1)'], ownership: 'pass', ownershipDetail: '' }] } }, {}, /row 4\.1 is not done/],
       ['a row whose merge crosses owners', { ...base, audit: { '4.2': [{ sha: '3'.repeat(40), subject: 'Merge task 4.2: x', form: 'landed', outstanding: [], ownership: 'fail', ownershipDetail: 'src/Platform.Identity/X.cs is ws3-oauth' }] } }, {}, /row 4\.2 is not done/],
-      ['a row with an open change request', { ...base, changeRequests: [{ file: 'contracts/changes/4.2-x.md', rows: ['4.2'], status: '**Status:** proposed' }] }, {}, /row 4\.2 is not done/],
+      ['a row with an open change request', { ...base, changeRequests: [{ number: 900, title: 'x', state: 'OPEN', labels: ['change-request', 'ready-for-human'], rowsLine: '**Rows:** 4.2', blocking: [] }] }, {}, /row 4\.2 is not done/],
       ['trunk differs from origin', base, { base: 'feature' }, /trunk differs from origin/],
       ['a merge since the previous tag has an open review', { ...base, merges: [{ sha: '9'.repeat(40), subject: 'Merge task 4.2: x', pr: 70, head: '8'.repeat(40), cleared: false, record: 'no record names the head' }] }, {}, /merge 999999999999 since g2-local-slice has an open review/],
       ['a part-landed row', { ...base, rowStates: { '4.1': 'landed', '4.2': 'part-landed' } }, {}, /row 4\.2 is not done/],
@@ -806,6 +806,80 @@ try {
       if (!/contracts\/test-ids\.md/.test(subset)) fail(`the Scope prompt reads the deployed subset only from the export: ${subset}`)
       if (/\b[HD] for\b[^.;)]*\bP-07\b/.test(step)) fail(`the Scope prompt tiers P-07 by number: ${step.match(/\b[HD] for\b[^.;)]*\bP-07\b/)[0]}`)
     }
+  }
+
+  // 18. #435 (confirmed as #442 Q56 to Q60): a plan row waits on an open change-request issue, read
+  //     from the tracker by the Scope agent and decided in code. (a) its Rows line names the row;
+  //     (b) it blocks an open issue whose title names the row as a whole token. A closed request, an
+  //     unlabelled one, an unlabelled open issue and a blocked ticket that is closed each hold
+  //     nothing; a Rows-line token that is no plan row withholds the tag; an unread listing withholds
+  //     it and marks every stage row; the "carries it" annotation skips a request the row already
+  //     waits on. The archive under contracts/changes/ is not read: that is proved by absence, since
+  //     no prompt names it and the schema has no field a served file could ride in.
+  checks++
+  {
+    const base = { gates: { G3: READY } }
+    const CR = (extra = {}) => ({ number: 900, title: 'Number the rows', state: 'OPEN', labels: ['change-request', 'ready-for-human'], rowsLine: '', blocking: [], ...extra })
+    const ticket = (number, title, rows, label = 'ready-for-agent') => ({ number, title, rows, label, assignee: '' })
+    const whyOf = (r, row = '4.2') => (r.result.rowsNotDone.find((x) => x.row === row) || { why: [] }).why
+    const rowsWhy = `change request ${cite(900)} is open (Number the rows): its Rows line names 4.2`
+    const blocksWhy = `change request ${cite(900)} is open (Number the rows): it blocks ${cite(901)}, whose title names 4.2`
+    const run = (served) => execute(newRepo(), { gate: 'G3' }, { ...base, ...served })
+    // (a) and (b), each with Q5's reason, in the return and in the report.
+    for (const [label, served, want] of [
+      ['a Rows line naming the row', { changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })] }, rowsWhy],
+      ['a Rows line naming the row among others, in backticks and with "and"', { changeRequests: [CR({ rowsLine: '**Rows:** `4.1`, `6.9` and `4.2`' })] }, rowsWhy],
+      ['a request blocking an open ticket whose title names the row', { changeRequests: [CR({ blocking: [{ number: 901, state: 'OPEN' }] })], openIssues: [ticket(901, '4.2 — the proxy rules', ['4.2'])] }, blocksWhy],
+    ]) {
+      const r = await run(served)
+      if (r.result.verdict !== 'tag withheld' || !whyOf(r).includes(want)) fail(`${label}: verdict ${r.result.verdict}, row 4.2 reads ${JSON.stringify(whyOf(r))}`)
+      if (!r.result.report.text.includes(want) || !r.result.reasons.includes('row 4.2 is not done')) fail(`${label}: the report or the reasons do not say why 4.2 is not done`)
+    }
+    // Each of these leaves 4.2 done, and the tag ready (Q3, AC 3).
+    for (const [label, served] of [
+      ['a request blocking a ticket that names the row only in its body', { changeRequests: [CR({ blocking: [{ number: 901, state: 'OPEN' }] })], openIssues: [ticket(901, 'stage-host 5/10: the move', ['4.2'])] }],
+      ['a CLOSED request', { changeRequests: [CR({ state: 'CLOSED', rowsLine: '**Rows:** 4.2' })] }],
+      ['an open issue served without the change-request label', { changeRequests: [CR({ labels: ['ready-for-human'], rowsLine: '**Rows:** 4.2' })] }],
+      ['an open unlabelled issue among openIssues naming the row', { openIssues: [ticket(903, '4.2 — a sibling', ['4.2'], '')] }],
+      ['a request blocking a CLOSED ticket whose title names the row', { changeRequests: [CR({ blocking: [{ number: 901, state: 'CLOSED' }] })], openIssues: [ticket(901, '4.2 — the proxy rules', ['4.2'])] }],
+      ['a Rows line naming a plan row outside the stage', { changeRequests: [CR({ rowsLine: '**Rows:** 6.9' })] }],
+      ['a Rows line naming a longer row id sharing the prefix', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ rowsLine: '**Rows:** P2-10' })] }],
+      ['a request blocking a ticket whose title names the longer row id', { gates: { G3: { ...READY, rows: [row('P2-1', 'ws6-verification')] } }, rowStates: { '4.1': 'landed', 'P2-1': 'landed', 'P2-10': 'landed' }, changeRequests: [CR({ blocking: [{ number: 901, state: 'OPEN' }] })], openIssues: [ticket(901, 'continuity 12/13 (P2-10): export', ['P2-10'])] }],
+    ]) {
+      const r = await run(served)
+      const held = r.result.rowsNotDone.filter((x) => /change request/.test(x.why.join(' ')))
+      if (r.result.verdict !== 'tag ready' || held.length) fail(`${label}: verdict ${r.result.verdict}, reasons ${JSON.stringify(r.result.reasons)}, rows ${JSON.stringify(held)}`)
+    }
+    // A token that is no plan row withholds the tag, naming the request and the token (Q4).
+    const mr = await run({ changeRequests: [CR({ rowsLine: '**Rows:** MR-4' })] })
+    const mrWhy = `change request ${cite(900)}'s Rows line names MR-4, which is no plan row`
+    if (mr.result.verdict !== 'tag withheld' || !mr.result.reasons.includes(mrWhy) || !mr.result.report.text.includes(mrWhy)) fail(`a Rows line naming MR-4: verdict ${mr.result.verdict}, reasons ${JSON.stringify(mr.result.reasons)}`)
+    if (whyOf(mr).length) fail(`a Rows line naming MR-4 made row 4.2 not done: ${JSON.stringify(whyOf(mr))}`)
+    // An unread listing withholds the tag and marks every stage row (Q2).
+    const unread = await run({ changeRequestsRead: { ok: false, why: 'the label change-request does not exist' }, changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })] })
+    if (unread.result.verdict !== 'tag withheld' || !unread.result.reasons.includes('the open change requests could not be read (the label change-request does not exist)')) fail(`an unread listing: verdict ${unread.result.verdict}, reasons ${JSON.stringify(unread.result.reasons)}`)
+    for (const row of ['4.1', '4.2']) if (!whyOf(unread, row).includes('change requests unread')) fail(`an unread listing left row ${row} reading ${JSON.stringify(whyOf(unread, row))}`)
+    if (whyOf(unread).some((w) => /is open/.test(w))) fail(`an unread listing still judged a request: ${JSON.stringify(whyOf(unread))}`)
+    if (!/change requests unread/.test(section(unread.result.report.text, 'Rows not done') || '')) fail('the report of an unread listing does not say change requests unread')
+    // The "carries it" annotation skips a request the row already waits on, and keeps the rest (Q6).
+    const dup = await run({ changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })], openIssues: [ticket(900, 'Number the rows', ['4.2'], 'change-request'), ticket(902, 'a ticket whose body names 4.2', ['4.2'])] })
+    const dupWhy = whyOf(dup)
+    if (dupWhy.filter((w) => w === rowsWhy).length !== 1 || dupWhy.some((w) => w.startsWith(`open issue ${cite(900)} carries it`))) fail(`the annotation repeats a request the row waits on: ${JSON.stringify(dupWhy)}`)
+    if (!dupWhy.some((w) => w.startsWith(`open issue ${cite(902)} carries it`))) fail(`the annotation dropped a ticket that is no request: ${JSON.stringify(dupWhy)}`)
+    // Proof by absence (AC "reads no file under contracts/changes/" and "an archived moved-to file
+    // holds nothing"): no prompt of any run names the archive, and the Scope schema has no field a
+    // served file, or its Status line, could ride in. The prompt reads the requests as issues, in
+    // the shape the other workflow scripts use, and asks for the three checks of Q2.
+    for (const c of allCalls) if (/contracts\/changes/.test(c.prompt)) fail(`the ${c.label} prompt names contracts/changes`)
+    const scope = dup.calls.find((c) => c.label === 'scope')
+    const item = (((scope.schema.properties || {}).changeRequests || {}).items || {}).properties || {}
+    for (const k of ['file', 'status']) if (k in item) fail(`the Scope schema's changeRequests carry a ${k} field`)
+    for (const k of ['number', 'title', 'state', 'labels', 'rowsLine', 'blocking']) if (!(k in item)) fail(`the Scope schema's changeRequests carry no ${k} field`)
+    if (!('changeRequestsRead' in (scope.schema.properties || {}))) fail('the Scope schema has no changeRequestsRead')
+    const cmds = commands(scope.prompt)
+    if (!cmds.some((c) => /^cd \S+ && gh issue list --state open --label change-request --limit 500 --json number,title,state,labels,body,blocking$/.test(c))) fail('the Scope prompt does not list the open change-request issues with the listing the other scripts use')
+    if (!cmds.some((c) => /^cd \S+ && gh label list --search change-request --json name$/.test(c))) fail('the Scope prompt does not check the change-request label exists')
+    if (!cmds.some((c) => /gh api graphql .*labels: \["change-request"\].*totalCount/.test(c))) fail('the Scope prompt does not ask GraphQL for the open change-request count')
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
