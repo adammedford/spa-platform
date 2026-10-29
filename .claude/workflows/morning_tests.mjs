@@ -944,7 +944,11 @@ try {
     const refusedD = (runD.result.followUps || {}).refused || []
     if (!refusedD.some((r) => r.title === FINDING_DEADLINE && /owner-line/.test(r.why))) fail(`#479: the return does not list the shape-failed follow-up as refused: ${JSON.stringify(refusedD)}`)
     if (!runD.result.refusals.some((r) => r.includes(FINDING_DEADLINE) && /ticket_shape/.test(r))) fail(`#479: the refusals do not name the shape-failed follow-up: ${JSON.stringify(runD.result.refusals)}`)
-    if (!runD.result.handover.text.includes(FINDING_DEADLINE)) fail('#479: the hand-over does not name the follow-up the shape check refused')
+    // Under its own heading: the refusals the hand-over also carries would name it without the list.
+    const notFiled = runD.result.handover.text.split(/^### /m).find((s) => s.startsWith('Follow-ups not filed: tools/ticket_shape.py failed them')) || ''
+    if (!notFiled.includes(FINDING_DEADLINE)) fail(`#479: the hand-over does not list the follow-up the shape check refused under "Follow-ups not filed":\n${runD.result.handover.text}`)
+    // A refused follow-up is accounted for: it is not reported again as one the filer lost.
+    if (runD.result.refusals.some((r) => /neither filed nor skipped/.test(r))) fail(`#479: a follow-up the shape check refused is reported as lost by the filer: ${JSON.stringify(runD.result.refusals)}`)
     const fp = runD.prompt('followups-file')
     const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
     if (!spans.some((x) => /tools\/ticket_shape\.py -/.test(x))) fail('#479: the filer prompt does not check each body with tools/ticket_shape.py')

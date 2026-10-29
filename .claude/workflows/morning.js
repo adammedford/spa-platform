@@ -470,7 +470,10 @@ const placeOf = (rules, where) => {
   const touches = pathsOf(where)
   if (!touches.length) return { owner: 'integrator', touches, label: 'ready-for-human', why: `the finding names no repository path (its place: ${where || 'none named'}), so no owner is derived from it; give it a path and an owner, then relabel it` }
   const byOwner = {}
-  for (const p of touches) (byOwner[ownerOfPath(rules, p) || 'no owner'] = byOwner[ownerOfPath(rules, p) || 'no owner'] || []).push(p)
+  for (const p of touches) {
+    const owner = ownerOfPath(rules, p) || 'no owner'
+    ;(byOwner[owner] = byOwner[owner] || []).push(p)
+  }
   const owners = Object.keys(byOwner).sort()
   const listed = owners.map((o) => `${o}: ${byOwner[o].join(', ')}`).join('; ')
   if (owners.length > 1) return { owner: 'integrator', touches, label: 'ready-for-human', why: `the finding names paths of two owners or more (${listed}), and a ticket has one owner (docs/agents/tracker-policy.md); split it, one ticket per owner, then relabel each` }
