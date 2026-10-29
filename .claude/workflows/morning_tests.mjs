@@ -1551,6 +1551,76 @@ try {
     if (!/a glossary or steering proposal there is never an answer/.test(read)) fail(`#433: Classify may still classify a proposal as an answer: ${read}`)
   }
 
+  // 26. The morning's launch lines have one home (#489). On 2026-10-28 the arguments of the after pass
+  //     were found only by reading badArguments, and a search for "morning" found an unrelated synced
+  //     skill first. docs/agents/landing-work.md carries the three launches, whenToUse points there,
+  //     and the doc's lines are held to the checker itself: an argument it requires that a line
+  //     lacks, or one a line carries that it does not take, fails here. Then each drift is made on
+  //     purpose, to the doc and to the checker, and must be caught.
+  checks++
+  {
+    const LANDING = path.join(top, 'docs', 'agents', 'landing-work.md')
+    const HEADING = "## The morning's launches"
+    const checkerOf = (src) => {
+      const m = /^const KNOWN_ARGS = [\s\S]*?\n {2}return bad\n}\n/m.exec(src)
+      return m ? new Function(`${m[0]}\nreturn badArguments`)() : null
+    }
+    const launchProblems = (doc, src, meta) => {
+      const bad = []
+      const badArgs = checkerOf(src)
+      if (!badArgs) return ['morning.js has no KNOWN_ARGS ... badArguments span to hold the doc against']
+      const at = doc.indexOf(`\n${HEADING}\n`)
+      if (at < 0) return [`docs/agents/landing-work.md has no "${HEADING}" section`]
+      const rest = doc.slice(at + 1)
+      const next = rest.indexOf('\n## ', HEADING.length)
+      const section = next < 0 ? rest : rest.slice(0, next)
+      const lines = [...section.matchAll(/^Workflow\(\{ scriptPath: ("[^"\n]*"), args: (\{[^\n]*\}) \}\)$/gm)]
+      if (lines.length !== 3) bad.push(`the section carries ${lines.length} Workflow({ scriptPath, args }) line(s), expected 3`)
+      const launches = []
+      for (const [whole, sp, a] of lines) {
+        try { launches.push({ whole, scriptPath: JSON.parse(sp), args: JSON.parse(a) }) } catch (e) { bad.push(`a launch line is not JSON in its scriptPath and args: ${whole} (${e.message})`) }
+      }
+      const modes = ['the morning pass', 'the draft check', 'the after pass']
+      launches.forEach((l, i) => {
+        const a = l.args
+        const name = modes[i] || `launch ${i + 1}`
+        for (const r of badArgs(a)) bad.push(`${name}: the checker refuses its arguments: ${r}`)
+        if (a.repo === undefined || a.wt === undefined || (a.date === undefined && a.issue === undefined)) bad.push(`${name}: it lacks one of repo, wt, and date or issue`)
+        if (typeof a.repo === 'string' && l.scriptPath !== `${a.repo.replace(/\/+$/, '')}/.claude/workflows/morning.js`) bad.push(`${name}: scriptPath ${l.scriptPath} is not the repo's .claude/workflows/morning.js`)
+        if (i === 0 && !(a.after === false && a.confirmFile === undefined)) bad.push(`${name}: expected "after": false and no confirmFile, got ${JSON.stringify(a)}`)
+        if (i === 1 && !(typeof a.confirmFile === 'string' && a.after === undefined)) bad.push(`${name}: expected a confirmFile and no after, got ${JSON.stringify(a)}`)
+        if (i === 2 && !(a.after === true && a.confirmFile === undefined)) bad.push(`${name}: expected "after": true and no confirmFile, got ${JSON.stringify(a)}`)
+        for (const k of ['repo', 'date', 'issue', 'wt']) if (launches[0] && a[k] !== launches[0].args[k]) bad.push(`${name}: its ${k} differs from the morning pass's`)
+      })
+      if (!section.includes('`<wt>/overnight`')) bad.push('the section does not say which worktree root wt means (`<wt>/overnight` is the integration worktree)')
+      if (!section.includes('~/.claude/skills/synced') || !/unrelated/.test(section)) bad.push('the section does not say the morning skill under ~/.claude/skills/synced is an unrelated one')
+      const w = (meta && meta.whenToUse) || ''
+      if (!w.includes('docs/agents/landing-work.md') || !w.includes(HEADING.replace(/^## /, ''))) bad.push(`whenToUse does not point at docs/agents/landing-work.md -> "${HEADING.replace(/^## /, '')}": ${w}`)
+      const known = (/^const KNOWN_ARGS = (\[.*\])$/m.exec(src) || [])[1]
+      for (const k of known ? JSON.parse(known.replace(/'/g, '"')) : []) if (new RegExp(`\\b${k}:`).test(w)) bad.push(`whenToUse lists the argument ${k}, which the doc's launch lines carry`)
+      return bad
+    }
+    const doc = fs.readFileSync(LANDING, 'utf8')
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    for (const p of launchProblems(doc, src, loadMeta())) fail(`#489: ${p}`)
+    // Each drift the ticket names is caught: a required argument dropped from a line, an argument the
+    // checker does not take added to one, a new argument the checker starts requiring, and a
+    // whenToUse that lists arguments again.
+    const fromWt = doc.replace(/, "wt": "[^"\n]*"(?=, "after": false)/, '')
+    const extra = doc.replace(/"after": true \}/, '"after": true, "dryRun": true }')
+    const stricter = src.replace("const KNOWN_ARGS = ['date',", "const KNOWN_ARGS = ['night', 'date',").replace('  const bad = []\n', "  const bad = []\n  if (a.night === undefined) bad.push('night: required')\n")
+    const listing = { ...loadMeta(), whenToUse: 'The morning after an overnight run; once the pull request lands, again with after: true' }
+    for (const [label, d, s, m] of [
+      ['wt dropped from the morning pass', fromWt, src, loadMeta()],
+      ['an unknown argument on the after pass', extra, src, loadMeta()],
+      ['a checker that requires a new argument', doc, stricter, loadMeta()],
+      ['a whenToUse that lists after: true', doc, src, listing],
+    ]) {
+      if (d === doc && s === src && m.whenToUse === loadMeta().whenToUse) { fail(`#489: the mutation "${label}" changed nothing`); continue }
+      if (!launchProblems(d, s, m).length) fail(`#489: the launch-line check missed ${label}`)
+    }
+  }
+
   // 16. Every agent call passes a schema and every stub's return satisfies it.
   checks++
   for (const c of allPrompts) if (!c.schema || c.schema.type !== 'object') fail(`${c.label}: called without a schema`)
