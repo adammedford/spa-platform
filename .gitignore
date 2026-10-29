@@ -79,11 +79,13 @@ spikes/g0/real-handler/vendor/ref/
 # other integrator change (ADR-0026, ADR-0027). The companions are the overnight script's (#213),
 # the review-queue script's (#83), the retro script's (#260), the morning script's (#263), the
 # truth-audit script's (#267), the pins-sweep script's (#269) and the gate-evidence script's (#265).
-# The user-level skills under ~/.agents/skills are not in this repository.
+# The user-level skills under ~/.agents/skills are not in this repository. One command sits beside
+# the scripts: confirm_draft.mjs, which runs the morning script's draft check from the command line
+# (#491).
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
-# for the scripts, their companions and the fixtures alone; anything else there, a .bak or the old
-# overnight_harness.mjs, stays ignored.
+# for the scripts, their companions, that command and the fixtures alone; anything else there, a
+# .bak or the old overnight_harness.mjs, stays ignored.
 .claude/*
 !.claude/settings.json
 !.claude/workflows/
@@ -96,6 +98,7 @@ spikes/g0/real-handler/vendor/ref/
 !.claude/workflows/truth-audit_tests.mjs
 !.claude/workflows/pins-sweep_tests.mjs
 !.claude/workflows/gate-evidence_tests.mjs
+!.claude/workflows/confirm_draft.mjs
 !.claude/workflows/fixtures/
 !.claude/skills/
 

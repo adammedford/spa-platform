@@ -1432,6 +1432,15 @@ try {
       fs.writeFileSync(BADJSON, 'not json')
       if (cli(PASS, { comments: BADJSON }).status !== 2) fail('#491: a comments file that is not JSON did not exit 2')
       if (spawnSync(process.execPath, [CLI], { encoding: 'utf8' }).status !== 2) fail('#491: the command with no arguments did not exit 2')
+      // Comments with no questions comment among them are no input: exit 2, not "0 of 0" passed.
+      const NOQS = path.join(dir, 'no-questions.json')
+      fs.writeFileSync(NOQS, JSON.stringify(ghShape([outsider])))
+      const noqs = cli('Confirm.\n', { comments: NOQS })
+      if (noqs.status !== 2 || !/no "## Questions:" comment/.test(noqs.err)) fail(`#491: comments with no questions comment exited ${noqs.status}, expected 2: ${noqs.err}${noqs.out}`)
+      // The command is in the repository: .gitignore closes .claude/workflows/ to all but the files it
+      // names, and on the branch that added it the command sat untracked beside a green local check.
+      const ignored = spawnSync('git', ['-C', top, 'check-ignore', '-q', path.join('.claude', 'workflows', 'confirm_draft.mjs')], { encoding: 'utf8' })
+      if (ignored.status !== 1) fail(`#491: .gitignore ${ignored.status === 0 ? 'ignores' : 'could not be asked about'} .claude/workflows/confirm_draft.mjs, so a clone has no command${ignored.error ? `: ${ignored.error.message}` : ''}`)
 
       // The command's output is morning.js's draftCheck, called directly on the same input.
       const src = fs.readFileSync(scriptPath, 'utf8')
@@ -1459,7 +1468,7 @@ try {
       fs.writeFileSync(path.join(mdir, 'morning.js'), src.replace(rule, rule.replace('/^no\\b/i', '/^nope\\b/i')))
       fs.copyFileSync(CLI, path.join(mdir, 'confirm_draft.mjs'))
       const mut = cli(NO, { json: true, cliPath: path.join(mdir, 'confirm_draft.mjs') })
-      if (!rule || (mut.json && (mut.json.no || []).some((n) => n.q === 2))) fail('#491: the first-word mutation of morning.js did not change the command\'s result, so it does not run the script\'s parser')
+      if (!rule || !mut.json || (mut.json.no || []).some((n) => n.q === 2)) fail('#491: the first-word mutation of morning.js did not change the command\'s result, so it does not run the script\'s parser')
 
       // The guide shows the command and states the rules these fixtures hold.
       const guide = fs.readFileSync(path.join(top, 'docs', 'agents', 'landing-work.md'), 'utf8')
