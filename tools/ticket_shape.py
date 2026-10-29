@@ -22,8 +22,9 @@ partial instead of never starting. This reads one issue and fails it, naming the
   must name exactly one; the tickets filed before #227 have none, and they are judged by what they
   have rather than failed wholesale;
 - sitting-or-landing: under `ready-for-agent`, an open `- [ ]` box using a word of SITTING_OR_LANDING
-  (rules 2 and 3). A word list misfires; the escape is to reword the box, or to move it to a
-  ready-for-human ticket blocked by the one that builds what it runs;
+  (rules 2 and 3), as a word of prose only: not in a code span, a file name, a path or a
+  hyphenated compound (#482). A word list still misfires on prose; the escape is to reword the box,
+  or to move it to a ready-for-human ticket blocked by the one that builds what it runs;
 - shared-commit: under `ready-for-agent`, an open `- [ ]` box that requires another ticket's commit
   on this ticket's branch or in its pull request, by SHARED_COMMIT (#295). A lane integrates its
   ticket alone, so such a box cannot go green: on 2026-10-22 #145 failed the build that only #146's
