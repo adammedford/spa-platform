@@ -160,9 +160,9 @@ the two apart, and the reviewer holds a commit whose `Authority:` is a `Confirm`
 **Landing.** The human relabels a decided request `ready-for-agent` when a lane may make the edit.
 The commit that makes it cites the decision comment's URL as its `Authority:`
 (`docs/agents/landing-work.md` → "A commit that changes a steering document"), and
-`Authority: #<n>` naming a change request is refused. With no decision comment, the integrator
-relabels the request `ready-for-human` and stops. When the decision says `ADR: no`, the merge body
-states the why and cites the decision comment (#413).
+`Authority: #<n>` naming a change request is refused, since anyone may file one. With no decision
+comment, the integrator relabels the request `ready-for-human` and stops. When the decision says
+`ADR: no`, the merge body states the why and cites the decision comment (#413).
 
 **Closing.** A request closes when its edit lands. Declined, it is closed as not planned, labelled
 `wontfix`, with a comment saying why; withdrawn, it is closed as not planned. A request decided but
