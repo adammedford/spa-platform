@@ -979,32 +979,46 @@ class LandingCase(Case):
     covers.
     """
 
-    def land_pull_request(self, branch, subject, cwd=None):
-        """Lands `branch` through land.sh, run from `cwd`, which is sat at origin/main detached; by
-        default the clone, and a case that puts the clone somewhere of its own passes a linked
-        worktree, as land.sh's header asks."""
+    def land_tree(self, *how):
+        """A linked worktree at origin/main, detached unless `how` says otherwise (`-b <name>`),
+        as land.sh's header asks for one."""
+        tree = self.scratch / "spa-land"
+        self.git("worktree", "add", "-q", *(how or ("--detach",)), str(tree), "origin/main")
+        return tree
+
+    def run_land(self, branch, subject, cwd=None, detach=True):
+        """Runs land.sh on `branch` from `cwd`, by default the clone, first detaching it at
+        origin/main unless `detach` is false; returns the finished process."""
         (self.fixtures / "head").write_text(self.git("rev-parse", branch) + "\n")
         (self.fixtures / "head-name").write_text(branch)
         (self.fixtures / "number").write_text("5\n")
         cwd = cwd or self.work
-        self.git("checkout", "-q", "--detach", "origin/main", cwd=cwd)
-        done = subprocess.run(
+        if detach:
+            self.git("checkout", "-q", "--detach", "origin/main", cwd=cwd)
+        # One stream, in the order a terminal shows it, so its last line is the one a session
+        # reading `tools/land.sh ... 2>&1 | tail -1` would see.
+        return subprocess.run(
             [BASH, str(LAND), "5", "--subject", subject,
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
             cwd=cwd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False,
         )
-        # One stream, in the order a terminal shows it, so its last line is the one a session
-        # reading `tools/land.sh ... 2>&1 | tail -1` would see.
+
+    def land_pull_request(self, branch, subject, cwd=None, detach=True):
+        """Lands `branch` through land.sh, run from `cwd`, which is sat at origin/main, detached
+        unless `detach` is false; by default the clone, and a case that puts the clone somewhere of
+        its own passes a linked worktree, as land.sh's header asks."""
+        done = self.run_land(branch, subject, cwd=cwd, detach=detach)
         self.assertEqual(0, done.returncode, done.stdout)
         self.assertIn(subject, self.git("log", "-3", "--format=%s", "origin/main"))
         return done.stdout
 
-    def assert_the_last_line_names_the_restore_file(self, out, cwd=None):
+    def assert_the_last_line_names_the_restore_file(self, out):
         """land.sh's own last line names the file of the cleanup's restore lines (#115)."""
         files = self.restore_files()
         self.assertEqual(1, len(files), out)
-        head = self.git("rev-parse", "HEAD", cwd=cwd)
+        # The landing ends sat at origin/main, in a worktree it may since have removed (#490).
+        head = self.git("rev-parse", "origin/main")
         self.assertTrue(files[0].name.endswith(f"-{head[:12]}.txt"),
                         files[0].name)
         self.assertEqual(self.restore_lines(out), files[0].read_text().splitlines())
@@ -1097,11 +1111,6 @@ class LandingNamesTheMainCheckout(LandingCase):
 
     FAST_FORWARD = "merge --ff-only origin/main"
 
-    def land_tree(self):
-        tree = self.scratch / "spa-land"
-        self.git("worktree", "add", "-q", "--detach", str(tree), "origin/main")
-        return tree
-
     def checkout_lines(self, out):
         """The lines between the roadmap and the cleanup that speak of the main checkout."""
         return [line for line in out.splitlines() if "main checkout" in line]
@@ -1138,7 +1147,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         self.assertEqual("main", self.git("branch", "--show-current"))
         # The cleanup still has the last line.
         self.assertNotIn("task/2.1-registry", self.remote(), "the premise: the cleanup deleted")
-        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+        self.assert_the_last_line_names_the_restore_file(out)
 
     def assert_named_with_no_command(self, out, says):
         named = self.checkout_lines(out)
@@ -1183,7 +1192,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         self.assert_named_with_no_command(out, "behind origin/main and has changes to tracked files")
         self.assertEqual(index, (self.work / ".git" / "index").read_bytes(),
                          "reading the checkout's status wrote its index")
-        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+        self.assert_the_last_line_names_the_restore_file(out)
 
     def test_a_main_checkout_already_at_the_merge_is_given_no_command(self):
         # Landed from the main checkout itself, on main: the script's own fast-forward moves it.
@@ -1223,6 +1232,138 @@ class LandingNamesTheMainCheckout(LandingCase):
         out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
 
         self.assertEqual(f"git -C {holder} {self.FAST_FORWARD}", self.command_line(out))
+
+
+class LandingRemovesItsWorktree(LandingCase):
+    """A landing that merged, refreshed the roadmap and pushed, run from a linked worktree that is
+    detached and has nothing uncommitted, removes that worktree as its last act and names it; from
+    any other linked worktree it leaves it and prints the command that removes it; a landing that
+    fails leaves it for inspection (#490). Before the last act, so the restore file's line stays
+    last (#115).
+    """
+
+    def listed(self):
+        """The paths `git worktree list` names, read from the clone."""
+        return [line[len("worktree "):] for line in
+                self.git("worktree", "list", "--porcelain").splitlines()
+                if line.startswith("worktree ")]
+
+    def test_a_clean_detached_worktree_is_removed_once_the_landing_has_pushed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertIn("land: #5 is in and the roadmap says so.", out, "the premise: it pushed")
+        self.assertFalse(tree.exists(), out)
+        self.assertNotIn(str(tree), self.listed(), out)
+        self.assertIn(f"land: removed the worktree this landing ran in, {tree}", out)
+        self.assertNotIn("worktree remove", out)
+        self.assertNotIn("task/2.1-registry", self.remote(), "the premise: the cleanup ran")
+        self.assert_the_last_line_names_the_restore_file(out)
+
+    def test_a_landing_with_no_refresh_to_push_removes_it_too(self):
+        # land.sh's other way out: the blocks are current before the merge, so nothing is pushed.
+        self.git("checkout", "-q", "main")
+        subprocess.run([sys.executable, "-I", "tools/roadmap.py"], cwd=self.work, env=self.env,
+                       capture_output=True, check=True)
+        self.git("commit", "-q", "-am", "Refresh the generated roadmap blocks")
+        self.git("push", "-q", "origin", "main")
+        self.git("checkout", "-q", "--detach", "main")
+        self.commit("overnight/2026-10-17", "lane.txt")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("overnight/2026-10-17",
+                                     "Merge the 2026-10-17 overnight run: one lane", cwd=tree)
+
+        self.assertIn("land: the generated blocks did not move", out, "the premise: no refresh")
+        self.assertFalse(tree.exists(), out)
+        self.assertNotIn(str(tree), self.listed(), out)
+        self.assert_the_last_line_names_the_restore_file(out)
+
+    def assert_kept_with_its_command(self, out, tree, says):
+        """The tree is still there, and the lines before the restore file's say why and give the
+        command, which, once the tree is clean, removes it."""
+        self.assertTrue(tree.exists(), out)
+        self.assertIn(str(tree), self.listed(), out)
+        lines = out.splitlines()
+        said = [n for n, line in enumerate(lines)
+                if line.startswith(f"land: the worktree this landing ran in, {tree}, stays: ")]
+        self.assertEqual(1, len(said), out)
+        self.assertIn(says, lines[said[0]])
+        command = lines[said[0] + 1].strip()
+        self.assertEqual(f"git -C {self.work} worktree remove {tree}", command)
+        # Nothing but the restore file's line comes after them.
+        self.assertEqual(len(lines) - 3, said[0], out)
+        self.assert_the_last_line_names_the_restore_file(out)
+        return command
+
+    def test_a_worktree_on_a_branch_stays_and_its_remove_command_is_printed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree("-b", "landing")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree,
+                                     detach=False)
+
+        command = self.assert_kept_with_its_command(out, tree, "it is on the branch landing")
+        ran = subprocess.run(["/bin/sh", "-c", command], cwd=self.scratch, env=self.env,
+                             capture_output=True, text=True, check=False)
+        self.assertEqual(0, ran.returncode, ran.stderr)
+        self.assertFalse(tree.exists())
+
+    def test_a_worktree_with_an_untracked_file_stays_and_its_remove_command_is_printed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree()
+        # The body file a caller often leaves beside the landing, which land.sh's own check of
+        # uncommitted changes does not see.
+        (tree / "body.md").write_text("What was verified.\n")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_kept_with_its_command(out, tree, "it has uncommitted or untracked files")
+        self.assertEqual("What was verified.\n", (tree / "body.md").read_text())
+
+    def test_a_merge_that_fails_leaves_the_worktree(self):
+        # The head never reached origin, so the merge on GitHub's side has nothing to merge.
+        self.commit("task/2.1-registry", "registry.txt", push=False)
+        tree = self.land_tree()
+
+        done = self.run_land("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertNotEqual(0, done.returncode, done.stdout)
+        self.assertNotIn("Merge task 2.1", self.git("log", "-3", "--format=%s", "origin/main"),
+                         "the premise: nothing merged")
+        self.assertTrue(tree.exists(), done.stdout)
+        self.assertIn(str(tree), self.listed(), done.stdout)
+        self.assertNotIn("removed the worktree", done.stdout)
+
+    def test_a_push_the_hook_refuses_leaves_the_worktree(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        hooks = self.scratch / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-push").write_text("#!/bin/sh\necho 'pre-push: refused' >&2\nexit 1\n")
+        (hooks / "pre-push").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        tree = self.land_tree()
+
+        done = self.run_land("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertNotEqual(0, done.returncode, done.stdout)
+        self.assertIn("pre-push: refused", done.stdout, "the premise: the hook refused the push")
+        self.assertIn("Merge task 2.1", self.git("log", "-3", "--format=%s", "origin/main"),
+                      "the premise: the merge happened")
+        self.assertTrue(tree.exists(), done.stdout)
+        self.assertIn(str(tree), self.listed(), done.stdout)
+        self.assertNotIn("removed the worktree", done.stdout)
+
+    def test_the_repositorys_own_working_tree_is_left_and_given_no_command(self):
+        self.commit("task/2.1-registry", "registry.txt")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry")
+
+        self.assertTrue(self.work.exists())
+        self.assertNotIn("worktree this landing ran in", out)
+        self.assertNotIn("worktree remove", out)
 
 
 def require_bash():
