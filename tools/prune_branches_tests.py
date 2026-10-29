@@ -876,6 +876,25 @@ class ADeletingRunCountsWhatItKeeps(Case):
                 self.assertIn("3.1 is part-landed, so the branch is its claim",
                               verdicts[("task/3.1-scheme", "local")][1])
 
+    def test_the_commonest_reason_comes_first_even_when_met_last(self):
+        # The worktree's branch sorts first, so its group is met first; the two part-landed claims
+        # outnumber it. Without the sort the worktree's count would lead (#524's review).
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.git("worktree", "add", "-q", str(self.scratch / "spa-2.1"), "task/2.1-registry")
+        for branch, row in (("task/3.1-scheme", "3.1"), ("task/3.2-sessions", "3.2")):
+            self.commit(branch, f"{row}.txt")
+            self.land(f"Merge part of task {row}: the first half", branch)
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual([
+            "prune_branches: kept 4 because it is the claim of a part-landed row, split or ticket; "
+            "--verbose names each.",
+            "prune_branches: kept 2 because it is checked out in a worktree; --verbose names each.",
+        ], self.count_lines(out), out)
+
     def test_a_refused_deletion_is_still_listed(self):
         # The mid-rebase worktree of AWorktreeKeepsItsBranch, which only git's own refusal sees.
         self.commit("task/2.1-registry", "registry.txt")
