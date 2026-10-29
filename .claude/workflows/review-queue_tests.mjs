@@ -37,6 +37,7 @@ const pr = (number, changedFiles, extra = {}) => ({
   ci: [{ name: 'Documents', state: 'success' }, { name: 'Build and test', state: 'skipped' }],
   cites: { planRow: '', issues: [], mergeSubject: '' }, bodyClaims: [],
   candidates: [], statedMutations: [], reviewCommits: [], statedHeads: [],
+  description: '', commitMessages: [],
   comments: [], reviews: [], error: '', ...extra,
 })
 
@@ -1128,6 +1129,46 @@ try {
     }
     if (!/statedHeads/.test(env.prompts['inventory:301'] || '')) fail('the inventory prompt does not ask for statedHeads')
     if (!(env.prompts['verdict:301'] || '').includes('ed8d063')) fail('PR 301: the verdict prompt does not carry the stale-head finding it is to weigh')
+  }
+
+  // A date later than the run's (#525): #507's description said "#44's was re-checked on 2026-10-29"
+  // on a review run dated 2026-10-28, and neither axis noticed. The inventory hands over the
+  // description and each commit message since the fork point as written; the script finds every
+  // YYYY-MM-DD date in them later than the run's date (2026-10-21 here) and makes each a verified low
+  // Spec finding quoting its sentence, which the comment carries and the verdict does not hold on. A
+  // date on or before the run's date, or none, yields nothing.
+  checks++
+  {
+    const C1 = sha('e')
+    const LATER = '#44\'s was re-checked on 2026-10-22, a day after the run.'
+    const SERVED = {
+      511: pr(511, ['docs/z.md'], { description: `Lands the fix.\n\nThe record: ${LATER} Nothing else changed.` }),
+      512: pr(512, ['docs/z.md'], { description: 'Checked on 2026-10-21, the run\'s own date. Filed 2026-10-20.', commitMessages: [{ sha: C1, message: 'Task x: done on 2026-10-19\n\nCo-Authored-By: t' }] }),
+      513: pr(513, ['docs/z.md'], { commitMessages: [{ sha: C1, message: 'Task x: lands it\n\nVerified green on 2027-01-02 by the check.\n' }] }),
+      514: pr(514, ['docs/z.md'], { description: 'No date at all.' }),
+    }
+    const env = run({ prs: [511, 512, 513, 514] }, SERVED)
+    const result = await execute(env)
+    const want = { 511: [['2026-10-22', LATER, 'description']], 512: [], 513: [['2027-01-02', 'Verified green on 2027-01-02 by the check.', C1]], 514: [] }
+    for (const [n, list] of Object.entries(want).map(([k, v]) => [Number(k), v])) {
+      const r = resultOf(n, result)
+      const verified = (r.findings || { verified: [] }).verified
+      if (verified.length !== list.length) fail(`PR ${n}: ${verified.length} verified finding(s), expected ${list.length} from dates later than the run's`)
+      for (const [i, [date, quote, where]] of list.entries()) {
+        const f = verified[i] || {}
+        if (f.axis !== 'Spec' || f.status !== 'verified' || f.severity !== 'low') fail(`PR ${n}: the later-date finding is ${f.axis} ${f.status} ${f.severity}, expected a verified low Spec finding`)
+        if (!String(f.title).includes(date) || !String(f.title).includes('2026-10-21')) fail(`PR ${n}: the later-date finding ${JSON.stringify(f.title)} does not name both ${date} and the run's date`)
+        if (!String(f.checked).includes(quote)) fail(`PR ${n}: the later-date finding does not quote its sentence ${JSON.stringify(quote)}: ${JSON.stringify(f.checked)}`)
+        if (!String(f.where).includes(where)) fail(`PR ${n}: the later-date finding is at ${JSON.stringify(f.where)}, expected it to name ${where}`)
+      }
+      if (r.verdict !== 'merge') fail(`PR ${n}: verdict ${r.verdict}; a later date is carried, not held on`)
+      const lines = commentOf(env, n).split('\n')
+      const spec = lines.slice(lines.indexOf('## Spec') + 1, lines.indexOf("The author's claims:")).filter((l) => l.startsWith('- '))
+      if (list.length ? !(spec.length === list.length && list.every(([date, quote], i) => spec[i].includes(date) && spec[i].includes('(verified, low)') && spec[i].includes(quote))) : !(spec.length === 1 && spec[0] === '- None.')) fail(`PR ${n}: the comment's Spec section reads ${JSON.stringify(spec)}`)
+    }
+    const inv = env.prompts['inventory:511'] || ''
+    if (!/description/.test(inv) || !/commitMessages/.test(inv)) fail('the inventory prompt does not ask for the description and the commit messages')
+    if (!(env.prompts['verdict:511'] || '').includes('2026-10-22')) fail('PR 511: the verdict prompt does not carry the later-date finding it is to weigh')
   }
 
   // The return leads with one line per request (#294): the completion notice cuts the return short,
