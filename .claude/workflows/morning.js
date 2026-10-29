@@ -1,7 +1,7 @@
 export const meta = {
   name: 'morning',
   description: 'Land the mechanical half of an overnight run: replay its pending tracker writes, verify and push its integration branch, open its one pull request, apply the confirmed answers, and hand over what only Adam runs',
-  whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath with the night\'s date or its Overnight <date> issue; once Adam has landed the pull request, again with after: true',
+  whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath; copy the launch line, with every argument, from docs/agents/landing-work.md -> "The morning\'s launches": the morning pass, the draft Confirm check, and the pass once Adam has landed the pull request',
   phases: [
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
     { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
@@ -23,11 +23,9 @@ export const meta = {
 // appliers run and which run together, and the hand-over's text. The judgement and every tool call
 // stay in the agents. Test companion: morning_tests.mjs beside this file.
 //
-// Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
-//   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js
-//   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-21",
-//           "wt": "/Users/adammedford/.worktrees/overnight-2026-10-21" }
-// then, once tools/land.sh has merged the pull request, the same arguments with "after": true.
+// Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot: the
+// three launch lines, each complete, are in docs/agents/landing-work.md -> "The morning's launches"
+// (#489), and morning_tests.mjs holds them to badArguments below, so they are not copied here.
 // Arguments (#78 -> "Arguments"), and no others: an unknown one is refused, so a misspelt `after`
 // can never run the wrong mode.
 //   date         YYYY-MM-DD, the night's date as its Overnight issue's title carries it. One of date

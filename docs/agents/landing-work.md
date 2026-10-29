@@ -187,6 +187,46 @@ rule, and when it deletes anything its own last line names that file.
 A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
 request open. Merged is not done.
 
+## The morning's launches
+
+An overnight run lands through the morning workflow, `.claude/workflows/morning.js` (#78), which a
+session launches with the Workflow tool by `scriptPath`, so the landed file runs and not a session's
+snapshot of it. It has three launches, below in the order a session meets them. Each line is
+complete: copy it and change the night's date. `repo` is the main checkout. `wt` is the worktree
+root the overnight run used, the one its own launch was given, outside the repository:
+`<wt>/overnight` is the integration worktree and `<wt>/<owner>-<task id>` each ticket's. The
+Overnight issue's number, as `"issue": <n>`, may stand for `date`.
+
+The morning pass, the morning after the run: it replays the night's pending tracker writes,
+verifies and pushes the integration branch, opens its one pull request, applies the confirmed
+answers and posts the hand-over. A re-run, after a Confirm comment is posted, takes the same line.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": false } })
+```
+
+The draft check, before a Confirm comment is posted: `confirmFile` is the draft's absolute path.
+The run sorts the questions the way the morning pass would, prints the result and writes nothing.
+It reads no worktree, so `wt` may be left out, and `after` is refused beside it.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "confirmFile": "/Users/adammedford/Projects/spa-platform/.scratch/overnight/log/confirm-2026-10-29.md" } })
+```
+
+The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
+contains the integration tip, then closes the landed tickets, unassigns, removes the worktrees whose
+tips are on `origin/main`, the integration worktree last, and prunes.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
+```
+
+The script's `badArguments` is the arguments' checker, and `morning_tests.mjs` beside it holds these
+three lines to it: a line here missing an argument the checker requires, or carrying one it does
+not take, fails that test. The `morning` skill under `~/.claude/skills/synced` is a different,
+unrelated skill of the same name, a personal morning brief; a search for this workflow's launch
+stops here.
+
 ## Review
 
 Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
