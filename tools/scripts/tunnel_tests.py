@@ -283,6 +283,8 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
             # A line on the session's stderr in no shape the CLI's errors take, for the one case that
             # holds tunnel.sh's filter to what it does with such a line.
             sys.stderr.write(world.get("start_session_stderr", ""))
+            if "ctrl_c_then_stderr" in world:
+                interrupted(world["ctrl_c_then_stderr"])
             status = world["start_session_status"]
         else:
             sys.stdout.write(text(value))
@@ -299,6 +301,23 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
     with open(case / "aws-calls.jsonl", "a") as log:
         log.write(json.dumps(record) + "\n")
     return status
+
+
+def interrupted(last_line: str):
+    """Ctrl-C at a terminal: SIGINT to the whole foreground process group, which is the session (the
+    CLI and the plugin) and tunnel.sh's stderr filter alike. The session ignores it, as the CLI does
+    while the plugin holds a session, and the plugin prints its last line after it; the case runs
+    the script in a process group of its own, so nothing outside the case receives the signal.
+    https://www.gnu.org/software/bash/manual/html_node/Signals.html"""
+    import signal
+    import time
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    sys.stderr.flush()
+    os.killpg(os.getpgrp(), signal.SIGINT)
+    # Long enough for an unprotected filter to have died of the signal before the line reaches it.
+    time.sleep(0.3)
+    sys.stderr.write(last_line)
+    sys.stderr.flush()
 
 
 def plugin_double(argv: list[str], case: pathlib.Path) -> int:
@@ -425,10 +444,14 @@ class Case:
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 
-    def run(self, script: pathlib.Path, *args: str, env: dict[str, str] | None = None) -> Result:
+    def run(self, script: pathlib.Path, *args: str, env: dict[str, str] | None = None,
+            own_group: bool = False) -> Result:
+        """own_group runs the script as the leader of a process group of its own, so a signal the
+        case sends to the group, as a terminal's Ctrl-C does, never reaches this test runner."""
         copy = self.repo / script.relative_to(ROOT)
         completed = subprocess.run([BASH, str(copy), *args], cwd=self.dir, env=env or self.env(),
-                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+                                   start_new_session=own_group)
         result = Result(completed)
         for secret in SECRETS:
             self.test.assertNotIn(secret, result.output, "the script printed the account id")
@@ -562,6 +585,40 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertIn(f":task/{CLUSTER}/0123456789abcdef0123456789abcdef", result.stderr)
         # And the session's stdout, the plugin's progress, is not filtered at all.
         self.assertIn("Waiting for connections...", result.stdout)
+
+    def test_ctrl_c_leaves_the_filter_to_pass_the_session_s_last_line(self):
+        # #505 (#186's S9). Ctrl-C reaches the whole foreground group, the filter among it. The
+        # filter ignores it, so the line the plugin prints after it still reaches the terminal, and
+        # through the filter: a denial as its code, any other line with the account masked. Its
+        # trap '' INT states what bash already does for a process substitution in a script, which
+        # runs without job control: "asynchronous commands ignore SIGINT"
+        # (https://www.gnu.org/software/bash/manual/html_node/Signals.html). So this case holds the
+        # behaviour, not the trap line: it turns red if the filter is ever started in a way that
+        # takes the signal, or stops passing a line that arrives after it.
+        world = default_world()
+        world["ctrl_c_then_stderr"] = (
+            f"plugin: closing the session on arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/0123456789abcdef0123456789abcdef\n"
+            "\nAn error occurred (TargetNotConnected) when calling the TerminateSession operation: "
+            f"arn:aws:sts::{ACCOUNT}:assumed-role/spa-platform-operator/operator\n")
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), own_group=True)
+        self.assertEqual(0, result.status, result.output)
+        lines = result.stderr.splitlines()
+        self.assertIn(f"plugin: closing the session on arn:aws:ecs:{REGION}:<account id>:task/{CLUSTER}/"
+                      "0123456789abcdef0123456789abcdef", lines)
+        # The filter's last line is the code, the last thing the session printed, and nothing after it.
+        self.assertEqual("tunnel: the session through task 0123456789abcdef0123456789abcdef: TargetNotConnected",
+                         lines[-1])
+        for principal in ("assumed-role", "spa-platform-operator", "arn:aws:sts"):
+            self.assertNotIn(principal, result.stderr)
+
+    def test_the_header_says_the_filter_s_last_line_can_follow_the_prompt(self):
+        # The session is exec'd, so nothing is left to wait for the filter: once the CLI exits, the
+        # shell's prompt can print before the filter's last line. The header says so (#505).
+        case = Case(self)
+        result = case.run(TUNNEL, "--help")
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("after the shell's prompt", " ".join(result.stdout.split()))
 
 
 class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):

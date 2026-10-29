@@ -13,8 +13,18 @@
 # The previous task definition is the newest revision below the service's own whose gateway image
 # differs from the one running: an apply that changed something else made a new revision with the
 # same image, and rolling back to it would change nothing. Its mock API image comes with it, since
-# the two were deployed together. Each revision is read by family:revision, so a deregistered one,
-# which every revision the platform root replaced is, is read as well as an active one.
+# the two were deployed together. Each revision is read by family:revision, so a deregistered
+# (INACTIVE) one, which every revision the platform root replaced is, is asked for as an active one
+# is. That rests on ECS still describing it, which its API reference words two ways.
+# DeregisterTaskDefinition: "At this time, INACTIVE task definitions remain discoverable in your
+# account indefinitely", though not to "rely on INACTIVE task definitions persisting beyond the
+# lifecycle of any associated tasks and services"
+# (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeregisterTaskDefinition.html).
+# DescribeTaskDefinition: "You can only describe INACTIVE task definitions while an active task or
+# service references them"
+# (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTaskDefinition.html).
+# A revision ECS does not describe is passed over in the search, and refused when --to-revision
+# names it.
 #
 # It refuses a revision whose gateway image is not a build in the cell's gateway repository: the
 # sample image of the first apply answers / and not /readyz, so going back to it is a platform-root
@@ -128,7 +138,7 @@ if [ -n "$TO_REVISION" ]; then
   [ "$TO_REVISION" != "$REVISION" ] || fail "the service already runs revision ${TO_REVISION}."
   TARGET="$TO_REVISION"
   TARGET_IMAGE="$(gateway_of_revision "$TARGET")"
-  [ -n "$TARGET_IMAGE" ] || fail "ECS does not describe ${FAMILY}:${TARGET}: it was deleted, or never registered."
+  [ -n "$TARGET_IMAGE" ] || fail "ECS does not describe ${FAMILY}:${TARGET}: it was deleted, never registered, or deregistered with nothing left running it (the header's two ECS references)."
 else
   candidate=$((REVISION - 1))
   floor=$((REVISION - LOOKBACK))
