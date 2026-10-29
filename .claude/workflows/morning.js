@@ -6,8 +6,8 @@ export const meta = {
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
     { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
     { title: 'Apply', detail: 'one reader of the Overnight issue\'s comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
-    { title: 'Follow-ups', detail: 'one agent reads every open pull request into main and the follow-ups already filed; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
-    { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue' },
+    { title: 'Follow-ups', detail: 'one agent reads every open pull request into main, the follow-ups already filed and the open Apply tickets of every night; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
+    { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
     { title: 'After', detail: 'after: true only, one agent: refuses until origin/main contains the integration tip, then closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes' },
   ],
@@ -74,6 +74,10 @@ export const meta = {
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not. Each
 // carries the "**Owner:**" and "**Touches:**" lines its place derives, or is filed ready-for-human
 // saying why it has none, and is filed only when tools/ticket_shape.py passes its body (#479).
+//
+// Open Apply tickets (#481). The same reader lists the open "Apply Q<n> of Overnight <date> to #<m>"
+// tickets of every night, and the hand-over lists each, with this morning's, oldest first, as a step
+// of its own: its target and its Confirm URL. See "open Apply tickets" below.
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
 const badArguments = (a) => {
@@ -283,10 +287,11 @@ const FOLLOWUPS = {
   properties: {
     prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: ENTRY }, reviews: { type: 'array', items: ENTRY } }, required: ['number', 'comments', 'reviews'] } },
     filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
+    applyTickets: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' }, author: { type: 'object', properties: { login: { type: 'string' } }, required: ['login'] } }, required: ['number', 'title', 'body', 'url', 'state', 'author'] } },
     ownership: { type: 'string' },
     error: { type: 'string' },
   },
-  required: ['prs', 'filed', 'ownership', 'error'],
+  required: ['prs', 'filed', 'applyTickets', 'ownership', 'error'],
 }
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
 const SHAPE_REFUSED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
@@ -514,6 +519,35 @@ const followUpsToFile = (read, mdir) => {
     })
   }
   return { toFile, already }
+}
+
+// ---------------------------------------------------------------- open Apply tickets (#481)
+// An answer the morning cannot state as an edit is filed as "Apply Q<n> of Overnight <date> to #<m>",
+// and the part an edit leaves unstated as "The rest of Q<n> of Overnight <date> on #<m>" (planOf).
+// Each waited for a launch prep to find it: on 2026-10-28 #476's found nine open, three of them three
+// days old. So the hand-over lists every open one, from any night, as a step of its own, oldest first
+// (by number, which GitHub gives in filing order), each with its target and the Confirm comment its
+// Raised-by line names (followUpTicket). Two sources, one parser: the follow-ups reader's listing of
+// the open issues, and the tickets this morning's appliers filed, which a listing taken minutes later
+// may not show yet. A ticket the listing names as closed is not listed. A listed ticket counts only when
+// Adam's account opened it, as the morning's appliers do: a title and a Raised-by line are all it takes
+// to read as a step, so an issue anyone else opened in that shape is never handed over as one
+// (CODING_STANDARDS.md -> "An authorisation is read from its author").
+const APPLY_TITLE = /^(?:Apply Q(\d+) of Overnight (\d{4}-\d{2}-\d{2}) to|The rest of Q(\d+) of Overnight (\d{4}-\d{2}-\d{2}) on) #(\d+)$/
+const applyTicketOf = (i) => {
+  const m = i && Number.isInteger(i.number) ? APPLY_TITLE.exec(String(i.title || '').trim()) : null
+  if (!m) return null
+  const c = /^\*\*Raised by:\*\*[^\n]*, confirmed at (https:\/\/\S+)/m.exec(String(i.body || ''))
+  return { number: i.number, title: String(i.title).trim(), url: i.url || '', target: Number(m[5]), confirm: c ? c[1] : '' }
+}
+const openApplyTickets = (listed, filedToday) => {
+  const closed = new Set((listed || []).filter((i) => i && String(i.state).toUpperCase() !== 'OPEN').map((i) => i.number))
+  const byNumber = new Map()
+  for (const i of [...(listed || []).filter((x) => x && x.author && x.author.login === ADAM), ...filedToday]) {
+    const t = applyTicketOf(i)
+    if (t && !closed.has(t.number) && !(byNumber.get(t.number) || {}).confirm) byNumber.set(t.number, t)
+  }
+  return [...byNumber.values()].sort((a, b) => a.number - b.number)
 }
 
 // ---------------------------------------------------------------- the questions, read here
@@ -1003,8 +1037,9 @@ OUTPUT FILE: ${p.mdir}/followups-read.txt
 1. \`cd ${REPO} && gh pr list --state open --base main --limit 500 --json number\`.
 2. For each pull request it lists: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served; reviews = the same for \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads the records and their follow-ups tables from them.
 3. filed: for each pull request, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
-4. ownership: OWNERSHIP.md as the main checkout holds it, \`cat ${REPO}/OWNERSHIP.md\`, verbatim (#479): the script derives each follow-up's owner from it, and tools/ticket_shape.py checks the result against the same file. "" when it cannot be read, which files nothing.
-5. If GitHub cannot be reached, error says so and prs and filed are []. error is "" when nothing stopped you.
+4. applyTickets, the open Apply tickets of every night (#481): \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,url,state,author --jq '[.[] | select(.title | test("^(Apply|The rest of) Q[0-9]+ of Overnight "))]'\`, each issue as served, its body verbatim and its author as {login}. It lists without --search, whose index can miss an issue filed minutes ago.
+5. ownership: OWNERSHIP.md as the main checkout holds it, \`cat ${REPO}/OWNERSHIP.md\`, verbatim (#479): the script derives each follow-up's owner from it, and tools/ticket_shape.py checks the result against the same file. "" when it cannot be read, which files nothing.
+6. If GitHub cannot be reached, error says so and prs, filed and applyTickets are []. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it. It is named .txt so that a later morning's Replay, which reads every .json file there as a phase file, passes over it.`
 }
 
@@ -1114,6 +1149,12 @@ const handoverText = (s) => {
   const mb = s.apply.morning
   list('Morning branch', mb.commits ? [`${p.morningBranch}: ${mb.commits} commit(s), ${mb.pushed ? 'pushed' : `not pushed (${mb.reason})`}. Its pull request is yours to open: gh pr create --base main --head ${p.morningBranch}`] : [], 'no commits')
   list('Applied', s.apply.done, 'nothing')
+  // #481: each open Apply ticket, from any night, a step of its own for the session that holds the context.
+  const at = s.applyTickets || { unread: 'not passed to the hand-over', open: [] }
+  list('Open Apply tickets, oldest first: apply each, then close it', [
+    ...(at.unread ? [`earlier nights' Apply tickets not read: ${at.unread}; only this morning's are listed`] : []),
+    ...at.open.map((t) => `#${t.number}: ${t.title}: apply it to #${t.target}, as the answer confirmed at ${t.confirm || 'no Confirm URL on its Raised-by line'} says (${t.url})`),
+  ])
   list('Would do, once confirmed', s.apply.wouldDo, 'nothing')
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
@@ -1295,7 +1336,7 @@ const dry = conf.confirms.length === 0
 // missed something: nothing is applied over it, and the hand-over says which.
 const unread = unreadOf(read.questions, conf)
 if (unread.length) refusals.push(`the Confirm comments name ${unread.map((q) => 'Q' + q).join(', ')}, which no "## Questions:" comment yielded; nothing is applied until every confirmed question is read`)
-const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answers: {}, morning: { commits: 0, pushed: false, reason: '' } }
+const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answers: {}, filed: [], morning: { commits: 0, pushed: false, reason: '' } }
 // Without a Confirm comment the pre-accepted answers are classified for the would-do list and acted
 // on by nobody (#78 grill Q1); with one, only what it confirms is classified and applied.
 const sorted = sortAnswers(read.questions, conf, dry)
@@ -1351,9 +1392,13 @@ if (commentsRefusal) {
       return out
     }
     const results = await parallel([runChain,...units.tracker.map((u) => () => runUnit(u))])
+    // The body each follow-up was filed with, by title, so the hand-over reads a ticket filed this
+    // morning by the same parser as one the follow-ups reader lists (#481).
+    const bodies = new Map([...units.chain, ...units.tracker].flatMap((u) => u.followUps).map((f) => [f.title, f.body]))
     for (const r of results.flat().filter(Boolean)) {
       for (const c of r.commits) apply.done.push(`commit ${c.sha} on ${P.morningBranch}: ${c.subject} (${c.questions.map((q) => 'Q' + q).join(', ')})`)
       for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
+      for (const i of r.issues) apply.filed.push({ number: i.number, title: i.title, url: i.url, body: bodies.get(i.title) || '' })
       for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
       for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the old body is at ${w.preserved}`)
       for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the old body is at ${e.preserved} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
@@ -1372,6 +1417,12 @@ phase('Follow-ups')
 // Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
 const followUps = { filed: [], already: [], refused: [], forHuman: [] }
 const fr = await run(followupsPrompt(DATE), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
+// The open Apply tickets (#481), read whatever Verify or Apply did: a reader that failed leaves the
+// earlier nights' unread, which the hand-over says, never "none" (CODING_STANDARDS.md -> "A check fails closed").
+const applyTickets = {
+  unread: !fr ? 'the follow-ups agent returned nothing' : fr.error ? `the follow-ups agent could not read them: ${fr.error}` : '',
+  open: openApplyTickets(fr && !fr.error ? fr.applyTickets : [], apply.filed),
+}
 if (!fr) refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
 else if (fr.error) refusals.push(`the follow-ups agent could not read the open pull requests: ${fr.error}; none was filed`)
 else {
@@ -1406,7 +1457,7 @@ else {
 }
 
 phase('Hand-over')
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps, refresh })
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps, refresh, applyTickets })
 log(text)
 const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
@@ -1417,7 +1468,7 @@ return {
   pr: v ? v.pr : null, head: v ? v.head : '', ci: v ? v.ci : 'none', record: v ? v.record : null,
   apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
   handover: { url: handed ? handed.url : '', posted: handed ? handed.posted : false, text },
-  followUps,
+  followUps, applyTickets,
   refresh: { state: refresh.state, named: refresh.named || '', edited: !!refresh.edited, rewrote: refresh.rewrote || [], reason: refresh.reason || '', body: refresh.body || '' },
   agents: agentsRun, reused,
 }

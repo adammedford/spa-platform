@@ -354,8 +354,9 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'followups') {
         // The open pull requests into main with their comments and reviews as gh serves them, and the
         // issues already filed: those the fixture serves, then those an earlier run's filer filed.
+        // served.applyTickets: the open Apply tickets as the reader's listing returns them (#481).
         const f = served.followUps || { prs: [], filed: [] }
-        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], ownership: f.ownership === undefined ? OWNERSHIP_MD : f.ownership, error: f.error || '' }
+        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], applyTickets: served.applyTickets || [], ownership: f.ownership === undefined ? OWNERSHIP_MD : f.ownership, error: f.error || '' }
       } else if (label === 'followups-file') {
         // The filer checks each follow-up's body with the real tools/ticket_shape.py under the label it
         // is given (#479), files each that passes, as gh issue create would, and remembers it in env, so
@@ -758,6 +759,67 @@ try {
     const refusedRun = await execute(newRepo(), { date: DATE }, { issue: bare, kinds: {}, classes: { 1: { ...classes[1], followUp: { ...classes[1].followUp, touches: [] } } } })
     if (!refusedRun.result.refusals.some((r) => /^Q1 asks for a follow-up that names no path/.test(r))) fail(`#320: a follow-up naming no path is not refused: ${JSON.stringify(refusedRun.result.refusals)}`)
     if (APPLIERS(refusedRun.labels).length) fail(`#320: a ticket whose only follow-up was refused was sent an applier: ${refusedRun.labels.join(', ')}`)
+  }
+
+  // 11c. Every open Apply ticket is handed over (#481). An answer the morning cannot state as an edit
+  //      is filed as "Apply Q<n> of Overnight <date> to #<m>", and on 2026-10-28 #476's launch prep
+  //      found nine such tickets open, three of them three days old. The hand-over lists each open
+  //      one, from any night, as a step of its own, oldest first, with its target and the Confirm
+  //      comment that confirmed it; a closed one is not listed.
+  checks++
+  {
+    const q = (n, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+    const night = issueWith([
+      comment(50, `## Questions: ${cite(244)}, issue-244, Walk the runbooks\n\n${q(1, 'Bring #62\'s acceptance in line with the move?')}`, '2026-10-21T06:40:00Z'),
+      comment(94, 'Confirm Q1 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const CONFIRM_TODAY = `${URL(ISSUE)}#issuecomment-94`
+    const CONFIRM_OLD = 'https://github.com/adammedford/spa-platform/issues/286#issuecomment-6300000001'
+    const ticket = (number, title, state, confirm, login = 'adammedford') => ({ number, title, url: URL(number), state, author: { login }, createdAt: '2026-10-19T09:00:00Z', body: `**Raised by:** ${cite(240)}, Q7 of Overnight 2026-10-18 (${cite(286)}), confirmed at ${confirm}\n**Owner:** integrator\n` })
+    const OLD = ticket(455, 'Apply Q7 of Overnight 2026-10-18 to #248', 'OPEN', CONFIRM_OLD)
+    const SHUT = ticket(456, 'Apply Q8 of Overnight 2026-10-18 to #249', 'CLOSED', CONFIRM_OLD)
+    // An issue in the same shape that another account opened is no step (CODING_STANDARDS.md ->
+    // "An authorisation is read from its author").
+    const FORGED = ticket(457, 'Apply Q9 of Overnight 2026-10-18 to #250', 'OPEN', CONFIRM_OLD, 'someone-else')
+    const classes = { 1: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 } }
+    const { result } = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [SHUT, OLD, FORGED] })
+    const ho = result.handover.text
+    const sec = (/^### Open Apply tickets[^\n]*\n\n([\s\S]*?)(?=\n\n###|(?![\s\S]))/m.exec(ho) || [])[1]
+    if (!sec) fail(`#481: the hand-over has no Open Apply tickets section:\n${ho}`)
+    else {
+      const lines = sec.split('\n').filter((l) => l.startsWith('- '))
+      const today = lines.findIndex((l) => l.includes(`Apply Q1 of Overnight ${DATE} to #62`))
+      const old = lines.findIndex((l) => l.startsWith('- #455'))
+      if (old < 0) fail(`#481: the open Apply ticket of an earlier night is not listed:\n${sec}`)
+      if (today < 0) fail(`#481: the Apply ticket filed this morning is not listed:\n${sec}`)
+      if (old >= 0 && today >= 0 && old > today) fail(`#481: the Apply tickets are not oldest first:\n${sec}`)
+      if (old >= 0 && (!/\bto #248\b/.test(lines[old]) || !lines[old].includes(CONFIRM_OLD))) fail(`#481: the earlier night's line lacks its target or Confirm URL: ${lines[old]}`)
+      if (today >= 0 && (!/\bto #62\b/.test(lines[today]) || !lines[today].includes(CONFIRM_TODAY))) fail(`#481: this morning's line lacks its target or Confirm URL: ${lines[today]}`)
+      if (/#456\b/.test(sec)) fail(`#481: a closed Apply ticket is listed:\n${sec}`)
+      if (/#457\b/.test(sec)) fail(`#481: an Apply ticket another account opened is listed:\n${sec}`)
+      if (lines.length !== 2) fail(`#481: ${lines.length} Apply tickets listed, expected 2:\n${sec}`)
+    }
+    // The reader's listing may hold the ticket filed this morning too; it is listed once.
+    const filedToday = (result.apply.done.join('\n').match(/^filed #(\d+) Apply Q1 /m) || [])[1]
+    const twice = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'OPEN', CONFIRM_TODAY)] })
+    const n = (twice.result.handover.text.match(new RegExp(`^- #${filedToday}\\b`, 'gm')) || []).length
+    if (n !== 1) fail(`#481: the Apply ticket the reader also listed appears ${n} times`)
+    // One closed in the listing by the time it was read is not listed, though this morning filed it.
+    const shut = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'CLOSED', CONFIRM_TODAY)] })
+    if (new RegExp(`^- #${filedToday}\\b`, 'm').test(shut.result.handover.text)) fail('#481: an Apply ticket filed this morning and served as closed is listed')
+    // A dead reader leaves earlier nights unread, which the hand-over says rather than "none".
+    const dead = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], nothingFrom: ['followups'] })
+    if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(dead.result.handover.text)) fail(`#481: a dead reader's Apply tickets read as none:\n${dead.result.handover.text}`)
+    // A reader that reports an error says so, and whatever partial listing it returned beside the
+    // error is not handed over as steps (CODING_STANDARDS.md -> "A check fails closed").
+    const erred = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], followUps: { prs: [], filed: [], error: 'GitHub could not be reached' } })
+    if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(erred.result.handover.text)) fail(`#481: an erring reader's Apply tickets read as none:\n${erred.result.handover.text}`)
+    if (/^- #455\b/m.test(erred.result.handover.text)) fail('#481: an erring reader\'s partial listing is handed over as steps')
+    // This morning's line takes its Confirm URL from the body followUpTicket wrote, so the one parser
+    // reads both sources; a morning that filed none still lists the earlier night's, from the reader.
+    const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
+    if (!/^- #455\b/m.test(listed.result.handover.text)) fail('#481: an earlier night\'s Apply ticket is not listed on a morning that filed none')
+    if (!/gh issue list --state open --limit 500 --json number,title,body,url,state,author /.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
