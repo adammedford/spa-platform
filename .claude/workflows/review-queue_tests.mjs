@@ -1136,20 +1136,24 @@ try {
   // description and each commit message since the fork point as written; the script finds every
   // YYYY-MM-DD date in them later than the run's date (2026-10-21 here) and makes each a verified low
   // Spec finding quoting its sentence, which the comment carries and the verdict does not hold on. A
-  // date on or before the run's date, or none, yields nothing.
+  // date on or before the run's date, or none, yields nothing. The review of #525 found the rules the
+  // search states untested: the quote is the sentence, not the line; the same date in one sentence
+  // counts once; a month past 12 or a day past 31 is no date; and a date inside a longer run of
+  // digits is none. PR 515 breaks each, and the quote is matched whole.
   checks++
   {
     const C1 = sha('e')
     const LATER = '#44\'s was re-checked on 2026-10-22, a day after the run.'
     const SERVED = {
-      511: pr(511, ['docs/z.md'], { description: `Lands the fix.\n\nThe record: ${LATER} Nothing else changed.` }),
+      511: pr(511, ['docs/z.md'], { description: `Lands the fix.\n\nThe record holds. ${LATER} Nothing else changed.` }),
       512: pr(512, ['docs/z.md'], { description: 'Checked on 2026-10-21, the run\'s own date. Filed 2026-10-20.', commitMessages: [{ sha: C1, message: 'Task x: done on 2026-10-19\n\nCo-Authored-By: t' }] }),
       513: pr(513, ['docs/z.md'], { commitMessages: [{ sha: C1, message: 'Task x: lands it\n\nVerified green on 2027-01-02 by the check.\n' }] }),
       514: pr(514, ['docs/z.md'], { description: 'No date at all.' }),
+      515: pr(515, ['docs/z.md'], { description: 'Ran it on 2026-10-25 and again on 2026-10-25. Not dates: 2026-13-01, 2026-11-32, 12026-10-30 and 2026-10-301.' }),
     }
-    const env = run({ prs: [511, 512, 513, 514] }, SERVED)
+    const env = run({ prs: [511, 512, 513, 514, 515] }, SERVED)
     const result = await execute(env)
-    const want = { 511: [['2026-10-22', LATER, 'description']], 512: [], 513: [['2027-01-02', 'Verified green on 2027-01-02 by the check.', C1]], 514: [] }
+    const want = { 511: [['2026-10-22', LATER, 'description']], 512: [], 513: [['2027-01-02', 'Verified green on 2027-01-02 by the check.', C1]], 514: [], 515: [['2026-10-25', 'Ran it on 2026-10-25 and again on 2026-10-25.', 'description']] }
     for (const [n, list] of Object.entries(want).map(([k, v]) => [Number(k), v])) {
       const r = resultOf(n, result)
       const verified = (r.findings || { verified: [] }).verified
@@ -1158,7 +1162,7 @@ try {
         const f = verified[i] || {}
         if (f.axis !== 'Spec' || f.status !== 'verified' || f.severity !== 'low') fail(`PR ${n}: the later-date finding is ${f.axis} ${f.status} ${f.severity}, expected a verified low Spec finding`)
         if (!String(f.title).includes(date) || !String(f.title).includes('2026-10-21')) fail(`PR ${n}: the later-date finding ${JSON.stringify(f.title)} does not name both ${date} and the run's date`)
-        if (!String(f.checked).includes(quote)) fail(`PR ${n}: the later-date finding does not quote its sentence ${JSON.stringify(quote)}: ${JSON.stringify(f.checked)}`)
+        if (!String(f.checked).endsWith(JSON.stringify(quote))) fail(`PR ${n}: the later-date finding does not quote its sentence ${JSON.stringify(quote)}: ${JSON.stringify(f.checked)}`)
         if (!String(f.where).includes(where)) fail(`PR ${n}: the later-date finding is at ${JSON.stringify(f.where)}, expected it to name ${where}`)
       }
       if (r.verdict !== 'merge') fail(`PR ${n}: verdict ${r.verdict}; a later date is carried, not held on`)
