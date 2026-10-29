@@ -885,8 +885,8 @@ class SteeringTests(unittest.TestCase):
 
     def test_a_target_whose_header_cannot_be_read_fails(self):
         """#493 and #512: each of these was passed over in silence, and the check still said the
-        index agreed. A row naming a contract that does not exist is the reproduction from #44's review:
-        `ghost.md`, at a gate no contract names."""
+        index agreed. A row naming a contract that does not exist is the reproduction from #44's
+        review: `ghost.md`, at a gate no contract names."""
         for shape, target, write, message in (
             ("a target that does not exist", "[`ghost.md`](ghost.md)", lambda: None,
              "ghost.md exists neither beside contracts/README.md nor at the repository root"),
