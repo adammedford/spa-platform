@@ -810,6 +810,11 @@ try {
     // A dead reader leaves earlier nights unread, which the hand-over says rather than "none".
     const dead = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], nothingFrom: ['followups'] })
     if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(dead.result.handover.text)) fail(`#481: a dead reader's Apply tickets read as none:\n${dead.result.handover.text}`)
+    // A reader that reports an error says so, and whatever partial listing it returned beside the
+    // error is not handed over as steps (CODING_STANDARDS.md -> "A check fails closed").
+    const erred = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], followUps: { prs: [], filed: [], error: 'GitHub could not be reached' } })
+    if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(erred.result.handover.text)) fail(`#481: an erring reader's Apply tickets read as none:\n${erred.result.handover.text}`)
+    if (/^- #455\b/m.test(erred.result.handover.text)) fail('#481: an erring reader\'s partial listing is handed over as steps')
     // This morning's line takes its Confirm URL from the body followUpTicket wrote, so the one parser
     // reads both sources; a morning that filed none still lists the earlier night's, from the reader.
     const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
