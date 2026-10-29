@@ -108,6 +108,20 @@ roadmap — and a merge made through the GitHub API or the web UI is created on 
 hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
 commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
+**It runs from a worktree of its own, which is disposable.** The roadmap is derived from the tree
+the merge makes, so the script runs where `HEAD` sits at the base with nothing uncommitted:
+
+```bash
+git worktree add --detach ../spa-land origin/main
+git worktree remove ../spa-land        # the script does this when the landing succeeds
+```
+
+Once the merge, the roadmap refresh and its push have all succeeded, a landing run from a linked
+worktree that is detached and clean, untracked files included, removes that worktree as its last
+act and names it (#490). A worktree on a branch, or one holding an untracked file such as a body
+file, stays, and the script prints the `git worktree remove` line for it; a landing that fails
+leaves its worktree for inspection. The repository's own working tree is never removed.
+
 **It merges only a reviewed head.** Before merging, `tools/land.sh` reads the pull request's review
 records and refuses unless the latest record naming its current head says `merge`
 (`docs/agents/review.md` → "The review record"). It then merges pinned to that head, so a push that
@@ -189,6 +203,46 @@ rule, and when it deletes anything its own last line names that file.
 
 A task is **done** as `GLOSSARY.md` → "Done" defines it.
 
+## The morning's launches
+
+An overnight run lands through the morning workflow, `.claude/workflows/morning.js` (#78), which a
+session launches with the Workflow tool by `scriptPath`, so the landed file runs and not a session's
+snapshot of it. It has three launches, below in the order a session meets them. Each line is
+complete: copy it and change the night's date. `repo` is the main checkout. `wt` is the worktree
+root the overnight run used, the one its own launch was given, outside the repository:
+`<wt>/overnight` is the integration worktree and `<wt>/<owner>-<task id>` each ticket's. The
+Overnight issue's number, as `"issue": <n>`, may stand for `date`.
+
+The morning pass, the morning after the run: it replays the night's pending tracker writes,
+verifies and pushes the integration branch, opens its one pull request, applies the confirmed
+answers and posts the hand-over. A re-run, after a Confirm comment is posted, takes the same line.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": false } })
+```
+
+The draft check, before a Confirm comment is posted: `confirmFile` is the draft's absolute path.
+The run sorts the questions the way the morning pass would, prints the result and writes nothing.
+It reads no worktree, so `wt` may be left out, and `after` is refused beside it.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "confirmFile": "/Users/adammedford/Projects/spa-platform/.scratch/overnight/log/confirm-2026-10-29.md" } })
+```
+
+The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
+contains the integration tip, then closes the landed tickets, unassigns, removes the worktrees whose
+tips are on `origin/main`, the integration worktree last, and prunes.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
+```
+
+The script's `badArguments` is the arguments' checker, and `morning_tests.mjs` beside it holds these
+three lines to it: a line here missing an argument the checker requires, or carrying one it does
+not take, fails that test. The `morning` skill under `~/.claude/skills/synced` is a different,
+unrelated skill of the same name, a personal morning brief; a search for this workflow's launch
+stops here.
+
 ## Review
 
 Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
@@ -210,6 +264,62 @@ Only one kind of change reaches `main` without a pull request: a generated roadm
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives
 through a pull request whose head a review record names. This is a rule in prose, not a check, until
 the first time it is broken.
+
+### Reading the records
+
+To ask whether a pull request `<n>` is cleared, ask the record reader by its number. It gives the
+verdict `tools/land.sh` would act on, from the repository the working directory is in:
+
+```bash
+python3 -I tools/review_record.py --pr <n>                       # its current head
+python3 -I tools/review_record.py --pr <n> --head <40-hex head>  # a head you name, such as a merged head
+```
+
+It looks up the head itself unless `--head` names one, and lists the pull request's comments and
+reviews with gh, every page. It prints the URL of the record that clears the head and exits 0;
+otherwise it says on standard error why not, the latest record naming the head saying `hold` or no
+record naming it, and exits 1. A wrong argument, a gh call that fails or a listing it cannot read
+exits 2. `tools/land.sh` runs the `--head` form with the head it pins the merge to.
+
+A caller already holding the two listings, each as `gh api --paginate --slurp` gives it, hands
+them over on standard input instead, with the head as the one argument:
+
+```bash
+python3 -I tools/review_record.py <40-hex head> < listings.json   # {"comments": <pages>, "reviews": <pages>}
+```
+
+Both forms give the same answer for the same pull request. A number where the head belongs, or a
+head after `--pr`, is refused with both forms named.
+
+## Drafting a Confirm comment
+
+A `Confirm` comment on an `Overnight <date>` issue is Adam's act, and no agent session posts one
+(`docs/agents/tracker-policy.md`). A session that drafts one for him writes the draft to a file and
+runs the morning's own parser over it and the issue's comments before handing it over:
+
+```bash
+gh issue view <n> --json comments > .scratch/overnight/log/confirm-<date>-comments.json
+node .claude/workflows/confirm_draft.mjs .scratch/overnight/log/confirm-<date>.md .scratch/overnight/log/confirm-<date>-comments.json
+```
+
+It prints the questions the draft covers, those it overrides, those answered no and those left
+open, then one verdict line. It exits 0 when every question is confirmed and none is answered no by
+an override, 1 when a question is left open, an override opens "no", the draft names a number no
+questions comment yields or does not begin `Confirm`, and 2 when it cannot judge, such as on an
+issue that already has a `Confirm` comment. `--json` prints the sort as JSON. It reads the parser
+out of `.claude/workflows/morning.js`, so it runs the code the morning runs, and needs no agent.
+The morning workflow's `confirmFile` argument is the full check, with an agent reading the issue;
+its verdict fails only on a number no questions comment yields.
+
+The rules it holds, which the morning applies:
+
+- The first sentence sets the range: the questions named on the draft's first line, up to its
+  first full stop (`Confirm Q1 to Q57.`, `Q1-Q3`, `Q58`), are the ones it confirms; a question named
+  after that stop is not, and a bare `Confirm` confirms only its own override lines.
+- An override is a line `Q<n>: <answer>`; the last one for a question wins, and it confirms that
+  question even when the first sentence does not name it.
+- An override opening "no" applies nothing: the question is recorded as answered no, and nothing is
+  done for it. One opening "open" leaves it open.
 
 ## Gates
 
@@ -245,13 +355,10 @@ A `Reviewed:` line names the record the merge was checked against. An `Unreviewe
 line at all, is a merge to check by hand: its pull request must carry a record naming the merged
 head with `merge`. Before the check landed, a review naming the merged head in full counts in
 whatever shape it was written, as #41 to #43 do; after, only the record line does. To ask the record
-reader about a merged pull request `<n>` and its merged head:
+reader about a merged pull request `<n>`, name its merged head ("Reading the records" above):
 
 ```bash
-printf '{"comments": %s, "reviews": %s}\n' \
-  "$(gh api "repos/{owner}/{repo}/issues/<n>/comments" --paginate --slurp)" \
-  "$(gh api "repos/{owner}/{repo}/pulls/<n>/reviews" --paginate --slurp)" \
-  | python3 -I tools/review_record.py <merged head>
+python3 -I tools/review_record.py --pr <n> --head <merged head>
 ```
 
 Whether a review is still running is in no record: the tagger checks that none they or anyone else

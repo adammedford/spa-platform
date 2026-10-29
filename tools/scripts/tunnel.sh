@@ -28,7 +28,9 @@
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
 # stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code
-# alone, and any other line with every twelve-digit run masked.
+# alone, and any other line with every twelve-digit run masked. The session replaces this script, so
+# nothing is left to wait for that filter: when the session ends, Ctrl-C or not, the filter's last
+# line can print after the shell's prompt.
 #
 # Exit status: the AWS CLI's once the session is handed to it, 254 when StartSession itself is
 # refused (`aws help return-codes`); 1 when the cell has no task a session can reach; 2 when it did
@@ -190,7 +192,11 @@ note "Ctrl-C ends the session"
 # becomes its code, as aws_read's does. Any other line, the plugin's own among them, is passed on
 # with every twelve-digit run masked, which an account id always is. It ignores Ctrl-C, which goes
 # to the whole foreground group: the plugin prints its last lines after it, and the filter ends
-# when they do, at end of input. Written out rather than as {12}, which not every awk reads.
+# when they do, at end of input. bash already starts a process substitution with SIGINT ignored,
+# since a script runs without job control and "asynchronous commands ignore SIGINT" then
+# (https://www.gnu.org/software/bash/manual/html_node/Signals.html); the trap says so where the
+# filter is written. Nothing waits for it once the session exits, so its last line can follow the
+# prompt (#505). Written out rather than as {12}, which not every awk reads.
 session_errors() {
   trap '' INT
   awk -v program="$PROGRAM" -v what="the session through task ${TARGET_TASK}" '

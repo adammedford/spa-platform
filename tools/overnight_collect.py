@@ -33,7 +33,10 @@ The rules, as the collect step states them:
   OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
   they land in their own pull requests.
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
-- status, in this order: ready-for-human; needs-triage; needs-triage again for a ready-for-agent
+- status, in this order: foreground (#480) for a `**Touches:** none` line under any of the three
+  labels, a tracker edit no lane can make and a grill adds nothing to, so it gets no lane, no
+  Route and no grill, and a ticket waiting on it is blocked; ready-for-human; needs-triage;
+  needs-triage again for a ready-for-agent
   label some other account applied (#316); claimed (an assignee, or a `task/<id>-` branch on a row
   not landed); close-in-morning (#379) when every acceptance box is ticked (openBoxes 0), so the
   ticket gets no lane and the report lists it with the issues to close, whatever it waits on;
@@ -124,6 +127,10 @@ GH_TIMELINE = (
 # Why a ticket with every acceptance box ticked gets no lane (#379). overnight.js's report prompt
 # finds those tickets by this sentence, so the two say it alike.
 CLOSE_IN_MORNING = "every acceptance box is ticked; close it in the morning"
+# Why a ticket whose Touches line says `none` gets no lane, no Route and no grill (#480): it is a
+# tracker edit, such as "Apply Qn of Overnight <date> to #m", whose answer is already confirmed.
+# overnight.js says it alike, and its report lists the ticket under "## Foreground".
+FOREGROUND = "**Touches:** none, a tracker edit no lane can make; work it in the foreground"
 # The statuses a dependant may wait on and still be ready: a ticket a lane runs first tonight, and
 # one with nothing left to build, which the workflow settles as met before any lane starts.
 MET_TONIGHT = ("ready-for-agent", "close-in-morning")
@@ -490,7 +497,9 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             timelines[issue.number] = timeline(root, issue.number)
         unlabelled = (unauthorised_label(issue, timelines[issue.number], named)
                       if issue.label == "ready-for-agent" else None)
-        if issue.label == "ready-for-human":
+        if ticket_shape().writes_nothing(issue.body):
+            status[issue.number], why[issue.number] = "foreground", FOREGROUND
+        elif issue.label == "ready-for-human":
             status[issue.number], why[issue.number] = "ready-for-human", "labelled ready-for-human"
         elif issue.label == "needs-triage":
             status[issue.number], why[issue.number] = "needs-triage", "labelled needs-triage"

@@ -275,11 +275,13 @@ public sealed class ContinuityObserverTests
 
     private static readonly (string, string)[] LogoutPair = [("logout", "replay")];
 
-    private static Attempt Row9Attempt(int seconds, int controlStatus = 200, int replayStatus = 401) => new(1,
+    private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
+
+    private static Attempt Row9Attempt(int seconds, int controlStatus = 200, int? replayStatus = null) => new(1,
     [
         Sent("control", seconds, controlStatus, expect: null),
         Sent("logout", seconds + 1, 302, 302),
-        Sent("replay", seconds + 2, replayStatus, 401, "bff"),
+        Sent("replay", seconds + 2, replayStatus ?? Unauthenticated, Unauthenticated, "bff"),
     ]);
 
     [Fact]
@@ -443,13 +445,24 @@ public sealed class ContinuityObserverTests
     }
 
     [Theory]
-    [InlineData(401)]
-    [InlineData(502)]
-    public async Task Row6_a_401_or_a_5xx_on_any_call_fails_it(int status)
+    [InlineData("unauthenticated", null)]
+    [InlineData(null, 502)] // Not an Errors row: any 5xx, which the observer judges by range.
+    public async Task Row6_a_lost_session_or_a_5xx_on_any_call_fails_it(string? refusal, int? other)
     {
+        int status = refusal is null ? other!.Value : Contract.Error(refusal).Status;
         (ContinuityObserver.RollingDeploy deploy, CloudWatch log) = Rolling(status: status);
 
         Assert.Equal(Verdict.Failed, ContinuityObserver.Rolling(deploy, await log.CaptureAsync(Deadline)).Verdict);
+    }
+
+    [Fact]
+    public void Row6s_unauthenticated_case_stands_for_session_ended_while_the_two_rows_share_a_status()
+    {
+        // The observer sees a status and no problem code, so a planted session_ended would be caught by
+        // the unauthenticated check and prove nothing of its own (#529). If the contract splits the two
+        // rows, plant session_ended in the theory above as a case of its own and give Rolling its
+        // session_ended check back, which it drops while the statuses are equal.
+        Assert.Equal(Contract.Error("unauthenticated").Status, Contract.Error("session_ended").Status);
     }
 
     [Fact]

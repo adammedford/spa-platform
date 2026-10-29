@@ -35,7 +35,7 @@ public sealed class InboundTraceContextTests
         await browser.NavigateAsync(harness.App("app1").Url("/healthz"), ct: Ct);
         BrowserResponse response = await browser.GetAsync("/bff/session", RequestOptions.With(("traceparent", traceparent)), Ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, response.StatusCode);
         JsonElement line = await LineAsync(harness, traceId);
         Assert.Equal("bff", line.GetProperty("route").GetString());
         Assert.Equal(JsonValueKind.Null, line.GetProperty("session_ref").ValueKind);

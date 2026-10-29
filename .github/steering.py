@@ -33,8 +33,10 @@ row it names, against which its own target's header is compared. A cell naming n
 holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
 by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
 and so does a target it cannot read a header from: one that does not exist, a markdown contract
-with no freeze bullet, a schema stating no freeze, or JSON that does not parse. Only code, a
-directory and a schema's example are passed over, since none of them carries a header (#493).
+with no freeze bullet, a header naming no gate, a schema stating no freeze, JSON that does not
+parse, or a file that is none of those nor code. Only code, named by its suffix in CODE_SUFFIXES,
+a directory and a schema's `*.example.json` are passed over, since none of them carries a header
+(#493, #511).
 The line it passes prints how many headers it compared: a rule that quietly compares nothing is
 the defect it was written to catch, one level up.
 
@@ -225,6 +227,11 @@ MD_FREEZE = re.compile(
     r"^-\s+\*\*Freezes at:\*\*(?P<freeze>[^\n]*(?:\n[ \t]+[^\n]*)*)", re.MULTILINE
 )
 SCHEMA_FREEZE = re.compile(r"[Ff]reezes at\s+(?P<freeze>G\d[a-z]?[^.]*)\.")
+# The suffixes an index target is passed over as code by, since source code carries no freeze
+# header (#511). Named rather than inferred from "not markdown and not JSON", which once passed an
+# `openapi.yaml` as code: a contract in a format this rule cannot read fails, and a new language
+# the index points at is one entry here.
+CODE_SUFFIXES = frozenset({".cs", ".csproj", ".js", ".mjs", ".py", ".sh", ".tf", ".ts"})
 
 # The file column names each target as a markdown link, or as a backticked path when there is
 # nothing to link to, as `src/Gateway/Program.cs`.
@@ -547,15 +554,25 @@ def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
     A link in the index is relative to the index, and a backticked path is relative to the root,
     so both are tried. A row may point at source code, a directory of it or a schema's example, and
     none of those carries a header: absence there is not a disagreement, since this rule compares
-    two claims about a gate and where there is no header there is only the index's. Every other
-    absence is a problem, because it is the same silence one step earlier (#493): a target that
-    exists at neither reading, a markdown contract with no freeze bullet, a schema whose
-    description states no freeze, and JSON that does not parse each left a row compared with
-    nothing while the line this check prints still counted it as agreeing.
+    two claims about a gate and where there is no header there is only the index's. Each is known
+    by its shape, which is all a path says: code by a suffix in CODE_SUFFIXES, and an example by
+    the name `*.example.json`. Every other absence is a problem, because it is the same silence one
+    step earlier (#493): a target that exists at neither reading, a markdown contract with no
+    freeze bullet, a header naming no gate, a schema whose description states no freeze, JSON that
+    does not parse, JSON that states no freeze under any other name, and a file in any other format
+    each left a row compared with nothing while the line this check prints still counted it as
+    agreeing (#511). The header naming no gate is the one of these this function cannot see: it
+    returns that header as read, and freeze_disagreements() fails the row when it finds no gate in
+    it.
     """
     # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
     # the file, not another file.
     path = target.split("#", 1)[0]
+    # A link that is only a fragment, `#frag`, leaves nothing before the '#', and the empty path
+    # joined to the index's directory is contracts/ itself, which would pass as a directory of code
+    # carrying no header by design (#512). It names a heading of the index, not a file to compare.
+    if not path:
+        return Freeze(target, problem="is only a fragment, and names no file")
     for candidate in (root / INDEX).parent / path, root / path:
         if candidate.is_dir():
             return None
@@ -583,7 +600,18 @@ def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
             # A schema states its freeze; the example beside it is sample data and states none.
             if candidate.name.endswith(".schema.json"):
                 return Freeze(where, problem="is a schema whose description states no freeze")
-        return None
+            if candidate.name.endswith(".example.json"):
+                return None
+            return Freeze(
+                where,
+                problem="is JSON that states no freeze and is not a schema's *.example.json",
+            )
+        if candidate.suffix in CODE_SUFFIXES:
+            return None
+        return Freeze(
+            where,
+            problem="is neither a markdown contract, JSON nor code, so no header is read from it",
+        )
     return Freeze(path, problem=f"exists neither beside {INDEX} nor at the repository root")
 
 
@@ -1329,9 +1357,10 @@ def main(argv: list[str] | None = None) -> int:
             "STEERING FAILED: a contracts index target has no readable freeze header.",
             "A row's freeze cell is compared against each target's own header, so a target that",
             "does not exist, a markdown contract with no '- **Freezes at:**' bullet naming a gate,",
-            "a schema stating no freeze, or JSON that does not parse is a claim nothing compared.",
-            "Fix the path or write the header. Code, a directory and a schema's example carry no",
-            "header by design and are not read.",
+            "a schema stating no freeze, JSON that does not parse, or a file that is none of those",
+            "nor code is a claim nothing compared. Fix the path or write the header. Code (by its",
+            "suffix in CODE_SUFFIXES), a directory and a schema's *.example.json carry no header",
+            "by design and are not read.",
         ),
         report(
             nowhere,

@@ -97,11 +97,12 @@ public sealed class RefreshAcrossHostsTests
     /// B's outcome, and A's rotated token never reaches an upstream.
     /// </summary>
     [Theory]
-    [InlineData("inside", 200)]
-    [InlineData("after", 401)]
+    [InlineData("inside", null)]
+    [InlineData("after", "session_ended")]
     public async Task P2_3_F3_a_host_killed_after_the_rotation_and_before_its_write_is_recovered_by_the_other_inside_rotation_plus_grace_and_ended_once_after(
-        string retry, int expected)
+        string retry, string? refusal)
     {
+        int expected = refusal is null ? (int)HttpStatusCode.OK : Contract.Error(refusal).Status;
         SteppedClock clock = new();
         await using GatewayHarness harness = await GatewayHarness.StartAsync(GatewayHarnessOptions.TwoHosts with { Clock = clock }, Ct);
         GatewayHost a = harness.Hosts[0], b = harness.Hosts[1];

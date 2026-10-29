@@ -14,7 +14,8 @@ export const meta = {
 }
 
 // ---------------------------------------------------------------- args and paths
-// Launch (Workflow tool). Pass scriptPath, so the file as edited runs and not a session's snapshot:
+// Launch (Workflow tool). Pass scriptPath, so the file as edited runs and not a session's snapshot. A sample, with
+// one machine's paths; put your own checkout, worktree root and skills directory in their places:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/overnight.js
 //   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-19",
 //           "wt": "/Users/adammedford/.worktrees/overnight-2026-10-19", "standingAnswer": true, "maxParallel": 3 }
@@ -32,6 +33,9 @@ export const meta = {
 //                             per launch, default off). The string "true" is refused, not read as false.
 //   base            optional  the full 40-hex sha of origin/main; absent, collect takes the main checkout's
 //                             HEAD and checks it against origin.
+//   skills          optional  the skills directory, an absolute path holding <name>/SKILL.md for each skill a
+//                             prompt names (implement, ask-matt, grill-with-docs, and the fallbacks of the Skill
+//                             tool); default SKILLS_DEFAULT below, one machine's ~/.agents/skills (#501).
 //   maxParallel     optional  positive integer, default 3.      maxFailures  optional  positive integer, default 4.
 //   only            optional  array of task ids to run.         skip         optional  array of task ids to
 //                             leave out of this run.
@@ -39,17 +43,21 @@ export const meta = {
 // Claude Code process started after that setting merged honours it; collect reports the shell, and the run halts
 // before Route, with no lane started, when it is not bash. Restart Claude Code before a launch if in doubt.
 const A = args || {}
+// The skills argument's documented default (#501): the one home path the script reads, and only when a launch
+// passes no skills directory of its own.
+const SKILLS_DEFAULT = '/Users/adammedford/.agents/skills'
 const badArguments = (a) => {
   const bad = []
   const abs = (p) => typeof p === 'string' && p.startsWith('/') && p.length > 1
   const ids = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.length > 0)
   const count = (v) => Number.isInteger(v) && v > 0
-  if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /Users/adammedford/Projects/spa-platform')
+  if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /path/to/spa-platform')
   if (typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) bad.push('date: YYYY-MM-DD, the morning the run ends (an evening launch on the 18th uses 2026-10-19)')
-  if (!abs(a.wt)) bad.push('wt: the worktree root as an absolute path outside repo, e.g. /Users/adammedford/.worktrees/overnight-<date>')
+  if (!abs(a.wt)) bad.push('wt: the worktree root as an absolute path outside repo, e.g. <home>/.worktrees/overnight-<date>')
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; the house rules forbid a worktree under the repository')
   if (typeof a.standingAnswer !== 'boolean') bad.push('standingAnswer: true or false, a boolean (the string "true" is refused); it grants the standing answer for this run (ADR-0021 decision 3)')
   if (a.base !== undefined && !/^[0-9a-f]{40}$/.test(String(a.base))) bad.push('base: when given, the full 40-hex sha of origin/main')
+  if (a.skills !== undefined && !abs(a.skills)) bad.push('skills: when given, the skills directory as an absolute path, the one holding <name>/SKILL.md')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
   if (a.maxFailures !== undefined && !count(a.maxFailures)) bad.push('maxFailures: a positive integer (default 4)')
   if (a.only !== undefined && a.only !== null && !ids(a.only)) bad.push('only: an array of task ids, e.g. ["2.1b", "issue-96"]')
@@ -90,7 +98,7 @@ const INT_WT = `${WTROOT}/overnight`
 const WT = (t) => `${WTROOT}/${t.owner}-${t.id}`
 const PORT = (n) => 5100 + 10 * n
 const TRAILER = 'Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>'
-const SKILLS = '/Users/adammedford/.agents/skills'
+const SKILLS = (A.skills || SKILLS_DEFAULT).replace(/\/+$/, '')   // no trailing slash, so ${SKILLS}/<name> is one path
 const skill = (name) => `call the Skill tool with "${name}" (if the Skill tool is unavailable or refuses, read ${SKILLS}/${name}/SKILL.md and follow it)`
 
 // ---------------------------------------------------------------- shared rules
@@ -126,6 +134,10 @@ const TICK = (t, verb) => `To ${verb} acceptance boxes, edit the issue body and 
 // it as the ticket's result, and the report prompt names it, so the three say it alike. tools/overnight_collect.py's
 // CLOSE_IN_MORNING is the same sentence.
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
+// Why a ticket whose Touches line says none gets no lane, no Route and no grill (#480): a tracker edit, such as "Apply
+// Qn of Overnight <date> to #m", whose answer is already confirmed, so it is worked in the foreground the next day.
+// tools/overnight_collect.py's FOREGROUND is the same sentence.
+const FOREGROUND_WHY = '**Touches:** none, a tracker edit no lane can make; work it in the foreground'
 
 // The change-request route (#409, #421, #436): an integrator need, or a steering change, is filed as an issue
 // labelled change-request, never written as a file. The lane searches first, so two lanes needing one change add
@@ -159,7 +171,7 @@ const TICKET = {
     n: { type: 'integer' }, id: { type: 'string' }, slug: { type: 'string' },
     issue: { type: 'integer' }, url: { type: 'string' },
     title: { type: 'string' },
-    status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning'] },
+    status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning', 'foreground'] },
     owner: { type: 'string' }, blockedBy: { type: 'array', items: { type: 'string' } }, why: { type: 'string' },
     openBoxes: { type: 'integer' },
     // true when the issue is labelled change-request (#436 Q2): the lane, the grill and the report branch on it.
@@ -309,6 +321,7 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
 - owner: the \`**Owner:**\` line mapped to the OWNERSHIP.md role: ws1-infra (workstream 1, AWS and IaC, infra/), ws2-hosting (workstream 2, Registry/Hosting/spactl), ws3-identity (workstream 3, Identity), ws4-proxy (workstream 4, Proxy/Security), ws5-fixtures (workstream 5, fixtures/), ws6-verification (workstream 6, Telemetry, tests/Gateway.*, e2e, runbooks), integrator (everything else, and every I-* row). A body that says "workstream 2 (...)" maps the same way. When it names more than one owner, the ticket's owner is the first named and "why" says the others land in their own PRs.
 - blockedBy: the ids (by the rule above; \`issue-<number>\` for a blocker that is not in tonight's set) of the issues in \`blockedBy.nodes\` whose state is OPEN. Closed blockers do not count.
 - status (exactly one, in this order of precedence):
+  * a \`**Touches:** none\` line, whatever its label -> "foreground", "why" "${FOREGROUND_WHY}" (#480): a tracker edit with no repository path, such as "Apply Qn of Overnight <date> to #m", which no lane can make and a grill adds nothing to, so it gets no lane, no Route and no grill, and the report lists it under Foreground; a ticket waiting on it is "blocked";
   * label ready-for-human -> "ready-for-human" (whether or not it has an assignee);
   * label needs-triage -> "needs-triage";
   * label ready-for-agent last applied by an account other than the one docs/agents/tracker-policy.md names (the repository's owner while it names none) -> "needs-triage", "why" naming who applied it (#316): an authorisation is read from its author (CODING_STANDARDS.md), so whoever can label an issue cannot send a lane at it. Only tools/overnight_collect.py reads who applied it, from the issue's timeline; FORECAST below gives you its answer;
@@ -532,6 +545,9 @@ STEP 3 — record it on the issue: one comment headed "## Conflict at integrate"
 
 Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse HEAD\`), tip (the <tip> sha of STEP 0, the run branch's tip the back-merge took in; "" when unresolved), notes (the files and how each was resolved, or why not).`
 
+// The summary a grill returns when an earlier night already asked its questions (#487): the run's reasons read it to
+// say carried rather than grilled on paper, and the report reads it to leave those questions out of tonight's count.
+const CARRIED_GRILL = 'carried from an earlier night, not re-grilled'
 // A grill on a change request (#436 Q9; #421 Q5) drafts a decision and asks no numbered question: only Adam's
 // decision comment authorises a request, so the standing answer does not apply and nothing is pre-accepted. Its
 // draft opens with its heading, never with "Decision:", which would read as Adam's decision to the integrator lane
@@ -556,7 +572,7 @@ Return questions [], changeRequests (each change request the route above filed, 
 
 const grillPrompt = (t, context) => t.changeRequest ? requestGrillPrompt(t, context) : `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
 ${context ? `Context from tonight: ${context}\n` : ''}
-STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), changeRequests [], adrCandidates read from the "## Proposed glossary / ADR" comment, draftDecision "", decided "", summary "carried from an earlier night, not re-grilled", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
+STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), changeRequests [], adrCandidates read from the "## Proposed glossary / ADR" comment, draftDecision "", decided "", summary "${CARRIED_GRILL}", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
 
 ${STANDING ? "ADAM'S STANDING ANSWER, granted for this run (" + DATE + "): he accepts the recommendation on every question. Under each question write the line \"Answer: yes, pre-accepted under the standing answer granted " + DATE + "\", and in later rounds treat the recommendation as decided rather than provisional. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue (docs/agents/tracker-policy.md), so still write the question and the recommendation in full." : "NO STANDING ANSWER was granted for this run. Under each question write the line \"Answer: open\". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers."}
 
@@ -589,6 +605,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
    - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept", "re-run failed, reset", or, when the entry's "reset" is not "", "not kept: <its why>" and its reset (#397); "none" under the section's own heading when the list is empty;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
+   - Foreground (#480): every entry of the run results' "foreground", the tickets collect gave the status foreground, whose "why" is "${FOREGROUND_WHY}": no lane, Route or grill ran, because a tracker edit is worked in a foreground session the next day. List them under a "## Foreground" heading, each as #<issue>, its title and the issue it edits (the #<m> its title or body names as the edit's target, as in "Apply Q4 of Overnight <date> to #248"; "target not named" when neither names one), so Adam opens one session for them; "none" under the heading when the list is empty;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
    - Change requests (#421 Q7, #436 Q11): five lists, from the run results' "changeRequests", each reading "none" when empty. "Filed tonight" (its "filed"): one line per request, \`#<n> <title> — blocks #<ticket>\`, or \`#<n> <title> — blocks nothing (raised by #<ticket>)\` when its blocking is 0, the ticket being the one whose lane, review or grill filed it. "Edges added to an existing request" (its "edges"): the same line form. "Queued for the morning" (its "queued"): \`queued for the morning: <title> (pending line <k>, body ${LOG}/<task id>-cr.md)\`. "Awaiting a decision" (its "awaiting"): an open change request grilled tonight with no decision comment, each as #<issue>, its title and its draft's link. "Decided, not yet labelled ready-for-agent or closed" (its "decided"): each as #<issue>, its title and its decision's first line. A change request adds no numbered question: Adam decides it on the request itself;
@@ -641,7 +658,7 @@ BASE = col.base || BASE
 
 const inScope = (t) => !SKIP.has(t.id) && (!ONLY || ONLY.includes(t.id))
 const tickets = col.tickets
-log(`collected ${tickets.length}: ` + ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning']
+log(`collected ${tickets.length}: ` + ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning', 'foreground']
   .map((s) => `${tickets.filter((t) => t.status === s).length} ${s}`).join(', '))
 
 phase('Route')
@@ -921,6 +938,7 @@ await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, q
 await Promise.all(grillQueue)
 
 phase('Report')
+const foregroundT = tickets.filter((t) => t.status === 'foreground')
 // The night's change requests (#436 Q11), read from the results, one list per kind, for the report's "Change
 // requests" section. A lane's, a review's and a grill's entries are each gathered wherever its result is kept. A
 // request ticket grilled tonight awaits a decision until Adam's decision comment exists, and is decided after.
@@ -950,6 +968,8 @@ const summary = {
   blocked: tickets.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, issue: t.issue, waitsOn: t.blockedBy, why: t.why })),
   claimed: tickets.filter((t) => t.status === 'claimed').map((t) => t.id),
   closeInMorning: closeT.map((t) => ({ id: t.id, issue: t.issue })),
+  // A tracker edit (#480): no lane, Route or grill filtered it in, since each reads another status; the report lists it.
+  foreground: foregroundT.map((t) => ({ id: t.id, issue: t.issue, title: t.title })),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
   conflicts, flakes, changeRequests,
@@ -966,18 +986,25 @@ const oneLine = (s) => { const l = String(s || '').replace(/\s+/g, ' ').trim(); 
 const reasonOf = (r) => oneLine((r.outcome === 'needs-human' && r.question) || r.why || r.notes || r.summary) || 'no reason recorded'
 const entry = (id, outcome, stage, reason) => ({ id, issue: byId[id].issue, outcome, stage, reason })
 const fromResults = (outcome) => ids((r) => r.outcome === outcome).map((id) => entry(id, outcome, results[id].stage, reasonOf(results[id])))
-// A ready-for-human ticket has no outcome in results, only its grill: say how the grill went.
+// A ready-for-human ticket has no outcome in results, only its grill: say how the grill went. A grill carried from an
+// earlier night asked nothing tonight, so its line says carried and already answered (#487): on 2026-10-28 39 carried
+// grills each read "grilled on paper, N question(s)", hundreds of questions beside a run that asked 22 (#476).
 const grillNote = (id) => {
   const g = results[id] && results[id].grill
-  if (!g) return ''
-  return typeof g === 'object' ? `, ${g.questions.length} question(s) on #${byId[id].issue}` : ': the grill agent died'
+  if (!g) return 'grilled on paper'
+  if (typeof g !== 'object') return 'grilled on paper: the grill agent died'
+  const n = (g.questions || []).length, issue = byId[id].issue
+  // The clause before the comma, as the report's rule reads it, so a grill that drops "not re-grilled" still counts.
+  return String(g.summary || '').toLowerCase().includes(CARRIED_GRILL.split(',')[0])
+    ? `carried, ${n} question(s) already answered on #${issue}`
+    : `grilled on paper, ${n} question(s) on #${issue}`
 }
 const humanWithoutOutcome = humanT.map((t) => t.id).filter((id) => !(results[id] && results[id].outcome))
 const reasons = [
   ...fromResults('failed'),
   ...fromResults('skipped'),
   ...humanWithoutOutcome.map((id) => entry(id, 'needs-human', humanStage[id] || 'collect',
-    oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; grilled on paper${grillNote(id)}`))),
+    oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; ${grillNote(id)}`))),
   ...fromResults('needs-human'),
 ]
 return {
@@ -989,6 +1016,7 @@ return {
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
   closeInMorning: closeT.map((t) => t.id),
+  foreground: foregroundT.map((t) => t.id),
   willEndPartial: willEndPartial.map((w) => w.id), forecastFailed,
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,

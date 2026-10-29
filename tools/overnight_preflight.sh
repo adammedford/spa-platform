@@ -2,11 +2,24 @@
 # One verdict per launch precondition of the overnight workflow, then its launch arguments.
 # Owner: integrator.
 #
-#     tools/overnight_preflight.sh <date>
+#     tools/overnight_preflight.sh [--fixture <path>] [--skip <id,...>] <date>
 #
 # <date> is the YYYY-MM-DD the run ends on, the overnight workflow's `date` argument (an evening
 # launch on the 18th uses 2026-10-19). Run it from the Claude Code session that will launch the
 # run: line 5 judges the shell that ran it.
+#
+# --skip names, comma-separated, the tickets the launch plan skips besides the lines' candidates;
+# they join the printed arguments' skip. --fixture writes, at <path>, whose directory must exist, the
+# input of the overnight harness (.claude/workflows/overnight_harness.mjs, git-ignored), which each
+# prep used to build by hand from collect's JSON (#485): `{args, tickets, expect}`, with args the
+# printed arguments, their skip joined by the tickets the claims line lists as held, tickets the
+# forecast's, verbatim, and expect.integrated the forecast's ready-for-agent ids outside that skip,
+# less expect.skippedForBlocker: the ready ones a skipped ticket blocks, directly or through another
+# of them, which overnight.js skips on the blocker. A held ticket is in the fixture's skip and not
+# the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
+# before launch frees it for the run (#484). expect.startsBefore is written empty, as is
+# standingAnswer left out of args: the harness reads both, and they are the human's to fill. A
+# failed forecast writes no fixture: one with no tickets would pass the harness and prove nothing.
 #
 # Why (#378). Before #349's launch the preconditions were checked by hand, from memory notes, over
 # about eight separate commands. Each is a refusal or a wasted night when missed: collect refuses a
@@ -38,13 +51,37 @@
 #   demoted   The needs-triage tickets whose ready-for-agent label was removed in the last 24 hours,
 #             each a skip candidate: the ticket-shape check demotes a ticket a lane's edit flips
 #             (#358, #361), and a demotion the launch plan did not see sends Route at it.
+#   claims    Each ticket of the forecast with an open box (openBoxes above 0) held by a local
+#             `task/<id>-` branch whose <id> a `Merge part of task <id>` subject in origin/main's
+#             history names, with the rename that frees it: git branch -m <branch> hold/<id>-<tip>,
+#             the tip's sha cut to 7 (#484). Collect reads any such branch as the ticket's claim,
+#             and a part-landed ticket's merged branch stays, because the integration rewrites lane
+#             commits and so `git merge-base --is-ancestor` never shows it merged: its open boxes
+#             would never get a lane. A held ticket is the human's to free, so the line names each
+#             and passes, as demoted does; it fails only when it cannot judge: the forecast failed,
+#             since the open boxes come from collect's answer, git could not list the task branches
+#             or origin/main's subjects, or collect's answer could not be read for open boxes. A
+#             branch on origin alone is not listed: the rename moves a local one. Collect reads
+#             origin's task branches too, so a held entry whose id origin also has a `task/<id>-`
+#             branch for says so: the rename alone does not free that ticket.
+#   shape     Every ready-for-agent and needs-triage ticket of the forecast, judged by origin/main's
+#             tools/ticket_shape.py under the label it will carry after Route, ready-for-agent
+#             (#483). The ticket-shape Action judges a ticket once it carries that label, so a
+#             needs-triage ticket Route relabels is demoted mid-run, and the rules sitting-or-landing,
+#             shared-commit, foreground and spec fire only under it. Each ticket is read with
+#             `gh issue view <n> --json` and its fields FIELDS, its labels rewritten (needs-triage
+#             dropped, ready-for-agent added), and piped to `ticket_shape.py -` from the main
+#             checkout, where gh resolves the repository. A ticket that fails is a skip candidate,
+#             named with its rules. The line fails when the forecast failed, origin/main has no
+#             ticket_shape.py, or a ticket could not be read or judged (the check's exit 2): a
+#             ticket left unjudged would read as one that passed.
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
 # line, `overnight_preflight: pass: ...` or `overnight_preflight: fail: ...`, and last the Workflow
 # `args` JSON for the date: repo, date, wt, maxParallel (the number of owners with ready-for-agent
 # tickets, at least 1; left out when the forecast failed, so the workflow's default applies) and
-# skip (the skip candidates). It leaves out standingAnswer, which the workflow requires: the grant
+# skip (the skip candidates of the demoted and shape lines, then --skip's ids, each once). It leaves out standingAnswer, which the workflow requires: the grant
 # is the human's, per launch (ADR-0021 decision 3), so the arguments do not run until they set it.
 # The JSON is printed on a fail as well, so the evidence and the arguments are read together.
 #
@@ -57,6 +94,8 @@
 # remote-tracking refs and adds origin's tags: that is the read AGENTS.md -> "Where the work stands"
 # asks for before any work is chosen, and every other line is judged against what it brought. The
 # forecast's copy of origin/main goes to a temporary directory outside the checkout, removed on exit.
+# The one file it writes is --fixture's, when given, after the arguments, with a line on stderr
+# naming it, so stdout still ends on the arguments.
 #
 # Written for the bash 3.2 macOS ships: no mapfile, no associative arrays, no empty "${array[@]}"
 # under set -u. JSON is read and written by python3, which collect needs anyway.
@@ -64,16 +103,52 @@ set -u
 unset CDPATH
 
 usage() {
-  echo "usage: tools/overnight_preflight.sh <date>   (YYYY-MM-DD, the morning the run ends)" >&2
+  echo "usage: tools/overnight_preflight.sh [--fixture <path>] [--skip <id,...>] <date>   (YYYY-MM-DD, the morning the run ends)" >&2
   exit 2
 }
 
-[ "$#" -eq 1 ] || usage
-date="$1"
+date=""
+fixture=""
+given_skip=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --fixture)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || usage
+      fixture="$2"
+      shift 2
+      ;;
+    --skip)
+      [ "$#" -ge 2 ] || usage
+      given_skip="$2"
+      shift 2
+      ;;
+    -*) usage ;;
+    *)
+      [ -z "$date" ] || usage
+      date="$1"
+      shift
+      ;;
+  esac
+done
 case "$date" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
   *) usage ;;
 esac
+# --skip is ids separated by commas, each a plan-row id or issue-<n>: no space, no empty id.
+if [ -n "$given_skip" ]; then
+  case ",$given_skip," in
+    *,,*) usage ;;
+  esac
+  case "$given_skip" in
+    *[!A-Za-z0-9._,-]*) usage ;;
+  esac
+fi
+# The fixture's directory must exist now, so a bad path is refused before anything runs.
+if [ -n "$fixture" ]; then
+  fixture_dir="${fixture%/*}"
+  [ "$fixture_dir" = "$fixture" ] && fixture_dir=.
+  [ -d "$fixture_dir" ] || usage
+fi
 
 here="${0%/*}"
 [ "$here" = "$0" ] && here=.
@@ -321,7 +396,138 @@ print(len(numbers))
     row fail demoted "the needs-triage timelines could not be read as label events"
   fi
 fi
+
+# --- claims -----------------------------------------------------------------------------------------
+# The local task branches with their tips, and origin/main's subjects, judged against collect's answer
+# in python so the matching is under test. An id is compared whole, so issue-1 is not issue-10.
+if ! $forecast_ok; then
+  row fail claims "the forecast failed, so no ticket's open boxes are known and no claim was judged"
+elif ! g for-each-ref --format='%(refname:short) %(objectname)' refs/heads/task/ > "$scratch/task-branches" 2>/dev/null ||
+     ! g for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin/task/ > "$scratch/origin-task-branches" 2>/dev/null ||
+     ! g log --format=%s refs/remotes/origin/main > "$scratch/subjects" 2>/dev/null; then
+  row fail claims "git could not list the task branches or origin/main's subjects, so no claim was judged"
+elif held="$(python3 -I -c '
+import json, re, sys
+collect, branches, remote, subjects, repo, out = sys.argv[1:]
+merged = set()
+for subject in open(subjects):
+    match = re.match(r"Merge part of task ([^\s:]+)", subject)
+    if match:
+        merged.add(match.group(1))
+tips = [line.split() for line in open(branches) if line.strip()]
+# Collect reads origin/task/ as well (overnight_collect.branches), so a same-id branch there still claims.
+on_origin = [line.strip() for line in open(remote) if line.strip()]
+held = []
+ids = []
+for ticket in sorted(json.load(open(collect))["tickets"], key=lambda t: t["issue"]):
+    tid, number, boxes = ticket["id"], ticket["issue"], ticket["openBoxes"]
+    if boxes <= 0 or tid not in merged:
+        continue
+    for name, sha in tips:
+        if name.startswith(f"task/{tid}-"):
+            entry = (f"{tid} (#{number}, {boxes} open boxes): "
+                     f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
+            also = [other for other in on_origin if other.startswith(f"task/{tid}-")]
+            if also:
+                entry += f" (origin/{also[0]} claims it too, which the rename does not free)"
+            held.append(entry)
+            if tid not in ids:
+                ids.append(tid)
+with open(out, "w") as listing:
+    listing.write("".join(f"{tid}\n" for tid in ids))
+print("; ".join(held))
+' "$scratch/collect.json" "$scratch/task-branches" "$scratch/origin-task-branches" "$scratch/subjects" "$repo" \
+    "$scratch/held" 2>/dev/null)"; then
+  if [ -z "$held" ]; then
+    row pass claims "no ticket with an open box is held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names"
+  else
+    row pass claims "these tickets have open boxes and are held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names, so collect reads them as claimed; free each by renaming its branch: $held"
+  fi
+else
+  row fail claims "collect's answer could not be read for open boxes, so no claim was judged"
+fi
 [ -f "$scratch/candidates" ] || : > "$scratch/candidates"
+[ -f "$scratch/held" ] || : > "$scratch/held"
+
+# --- shape ------------------------------------------------------------------------------------------
+# The fields are tools/ticket_shape.py's FIELDS, the JSON its `-` reads.
+: > "$scratch/shaped"
+mkdir "$scratch/issues"
+if ! $forecast_ok; then
+  row fail shape "the forecast failed, so no ticket was judged"
+elif [ ! -f "$copy/tools/ticket_shape.py" ]; then
+  row fail shape "origin/main has no tools/ticket_shape.py, so no ticket was judged"
+elif ! judged="$(python3 -I -c '
+import json, sys
+tickets = json.load(open(sys.argv[1]))["tickets"]
+print(" ".join(str(int(t["issue"])) for t in tickets
+               if t["status"] in ("ready-for-agent", "needs-triage")))
+' "$scratch/collect.json" 2>/dev/null)"; then
+  row fail shape "the forecast's tickets could not be read, so no ticket was judged"
+else
+  unread=""
+  unjudged=""
+  count=0
+  for number in $judged; do
+    count=$((count + 1))
+    issue="$scratch/issues/$number"
+    if ! (cd "$repo" && gh issue view "$number" --json number,body,labels,subIssuesSummary,blockedBy) \
+           > "$issue.json" 2>/dev/null ||
+       ! python3 -I -c '
+import json, sys
+issue = json.load(open(sys.argv[1]))
+issue["labels"] = [label for label in issue["labels"]
+                   if label["name"] not in ("needs-triage", "ready-for-agent")]
+issue["labels"].append({"name": "ready-for-agent"})
+print(json.dumps(issue))
+' "$issue.json" > "$issue.ready.json" 2>/dev/null; then
+      unread="$unread #$number"
+      continue
+    fi
+    (cd "$repo" && python3 -I "$copy/tools/ticket_shape.py" - < "$issue.ready.json") > "$issue.out" 2>&1
+    case $? in
+      0) ;;
+      1) echo "$number" >> "$scratch/shaped" ;;
+      *) unjudged="$unjudged #$number" ;;
+    esac
+  done
+  # Each failed ticket as "<id>\t#<n>: <rules>", named by collect's id as the demoted line names it.
+  if python3 -I -c '
+import json, pathlib, re, sys
+collect, issues, shaped, out = sys.argv[1:]
+ids = {t["issue"]: t["id"] for t in json.load(open(collect))["tickets"]}
+lines = []
+for number in [int(n) for n in open(shaped).read().split()]:
+    rules = []
+    for line in pathlib.Path(issues, f"{number}.out").read_text().splitlines():
+        found = re.match(r"^ticket-shape: ([a-z-]+): ", line)
+        if found and found.group(1) not in ("note", "pass", "fail") and found.group(1) not in rules:
+            rules.append(found.group(1))
+    name = ids.get(number) or "issue-%d" % number
+    lines.append("%s\t#%d: %s\n" % (name, number, ", ".join(rules) or "no rule named"))
+pathlib.Path(out).write_text("".join(lines))
+' "$scratch/collect.json" "$scratch/issues" "$scratch/shaped" "$scratch/shape-candidates" 2>/dev/null; then
+    list=""
+    while IFS=$'\t' read -r id what; do list="$list; $id ($what)"; done < "$scratch/shape-candidates"
+    if [ -z "$list" ]; then
+      found="none fails"
+    else
+      found="these fail and are skip candidates: ${list#; }"
+    fi
+    problems=""
+    [ -n "$unread" ] && problems="$problems; gh could not read$unread"
+    [ -n "$unjudged" ] && problems="$problems; ticket_shape.py judged nothing for$unjudged"
+    if [ -z "$problems" ]; then
+      row pass shape "$count ready-for-agent and needs-triage tickets judged as ready-for-agent; $found"
+    else
+      row fail shape "$count ready-for-agent and needs-triage tickets${problems}, so those are unjudged; of the rest, $found"
+    fi
+  else
+    : > "$scratch/shape-candidates"
+    row fail shape "ticket_shape.py's verdicts could not be read"
+  fi
+fi
+[ -f "$scratch/shape-candidates" ] || : > "$scratch/shape-candidates"
 
 # --- verdict and arguments --------------------------------------------------------------------------
 if [ -z "$failed" ]; then
@@ -330,15 +536,48 @@ else
   echo "overnight_preflight: fail:$failed. The arguments follow, for when those lines pass; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
 fi
 python3 -I -c '
-import json, sys
-repo, date, wt, collect, candidates, ok = sys.argv[1:]
+import json, os, sys
+repo, date, wt, collect, candidates, shaped, held, given, ok, fixture = sys.argv[1:]
 args = {"repo": repo, "date": date, "wt": wt}
 if ok == "true":
     owners = {t["owner"] for t in json.load(open(collect))["tickets"] if t["status"] == "ready-for-agent"}
     args["maxParallel"] = max(1, len(owners))
-args["skip"] = [line.split("\t")[0] for line in open(candidates) if line.strip()]
+named = [line.split("\t")[0] for path in (candidates, shaped) for line in open(path) if line.strip()]
+given = [tid for tid in given.split(",") if tid]
+args["skip"] = list(dict.fromkeys(named + given))
 print(json.dumps(args))
-' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$forecast_ok" ||
+if fixture:
+    if ok != "true":
+        print("overnight_preflight: no harness fixture written: the forecast failed", file=sys.stderr)
+        sys.exit(0)
+    tickets = json.load(open(collect))["tickets"]
+    held = [line.strip() for line in open(held) if line.strip()]
+    skip = list(dict.fromkeys(named + held + given))
+    ready = [t for t in tickets if t["status"] == "ready-for-agent" and t["id"] not in skip]
+    # overnight.js gives a skipped ticket no lane, so a ready ticket it blocks, directly or through
+    # another such ticket, settles as skipped on the blocker and never integrates (#485 review).
+    stopped = set(skip)
+    grew = True
+    while grew:
+        grew = False
+        for t in ready:
+            if t["id"] not in stopped and stopped & set(t["blockedBy"]):
+                stopped.add(t["id"])
+                grew = True
+    integrated = [t["id"] for t in ready if t["id"] not in stopped]
+    blocked = [t["id"] for t in ready if t["id"] in stopped]
+    written = {"args": {**args, "skip": skip}, "tickets": tickets,
+               "expect": {"integrated": integrated, "skippedForBlocker": blocked, "startsBefore": []}}
+    with open(fixture, "w") as out:
+        json.dump(written, out, indent=1)
+        out.write("\n")
+    print(f"overnight_preflight: wrote the harness fixture {os.path.abspath(fixture)}: {len(tickets)} "
+          f"tickets, {len(integrated)} expected to integrate, {len(blocked)} skipped for a blocker, "
+          f"{len(skip)} skipped; add standingAnswer to its args, and startsBefore to its expect, before "
+          "the harness runs it",
+          file=sys.stderr)
+' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
+  "$scratch/held" "$given_skip" "$forecast_ok" "$fixture" ||
   { echo "overnight_preflight: fail: the arguments could not be written"; exit 1; }
 
 [ -z "$failed" ]

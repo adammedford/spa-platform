@@ -25,6 +25,15 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const scriptPath = process.argv[2] || path.join(here, 'morning.js')
 const top = path.resolve(here, '..', '..')
 const READER = path.join(top, 'tools', 'review_record.py')
+// The ticket-shape check the follow-ups filer runs on each body before it files it (#479), and the
+// ownership block its owners come from, both read from this checkout as the morning's agents read them.
+const SHAPE = path.join(top, 'tools', 'ticket_shape.py')
+const OWNERSHIP_MD = fs.readFileSync(path.join(top, 'OWNERSHIP.md'), 'utf8')
+const shapeOf = (body, label) => {
+  const r = spawnSync('python3', ['-I', SHAPE, '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: label }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+  const lines = String(r.stdout || '').trim().split('\n')
+  return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)) }
+}
 const DATE = '2026-10-21'
 const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
 const WT = '/tmp/morning-tests-wt/overnight-2026-10-21'
@@ -90,6 +99,16 @@ const FOLLOW_UPS_287 = `## Follow-ups\n\nCarried findings that name no open tick
 const rec287 = (i, verdict, extra = '') => ({ body: `## Review\n\nHead ${H287[i]}.\n\n## Spec\n\n- a finding\n\n${extra}\n## Mutations\n\n- none\n\nReviewed ${H287[i]} against ${F287}: ${verdict}`, author_association: 'OWNER', html_url: R287[i], created_at: `2026-10-22T0${i + 1}:00:00Z` })
 const ISSUE_288 = { number: 288, title: 'deploy.sh pulls the base image when it builds the gateway', body: `**Raised by:** #273, from the reviews of #287 (${R287[1]})\n**Owner:** ws1-infra\n`, url: 'https://github.com/adammedford/spa-platform/issues/288' }
 const FU287 = { prs: [{ number: 287, comments: [rec287(0, 'hold'), rec287(1, 'hold'), rec287(2, 'merge', FOLLOW_UPS_287)], reviews: [] }], filed: [ISSUE_288] }
+// #479: #443's record, whose follow-ups the morning of 2026-10-28 filed as #458 to #461 with a
+// Raised-by line alone, in the places those rows named, and a row that names no path at all.
+const PR443 = 'https://github.com/adammedford/spa-platform/pull/443'
+const R443 = `${PR443}#issuecomment-6432334669`
+const FINDING_DDB = 'ci.yml:657-658 still says no DynamoDB table exists anywhere in this platform, though the cell now declares the session table'
+const FINDING_DEADLINE = 'The three provider-deadline tests (300 ms, 500 ms) still bound the whole login backchannel'
+const FINDING_NOPATH = 'The pull request description names a test id the diff never proves'
+const FOLLOW_UPS_443 = `## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${FINDING_DDB} | Standards | .github/workflows/ci.yml:657-658 | this record |\n| ${FINDING_DEADLINE} | Standards | tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\` | this record |\n| ${FINDING_NOPATH} | Spec | the pull request description | this record |\n`
+const REC443 = { body: `## Review\n\n${FOLLOW_UPS_443}\nReviewed ${sha('e')} against ${sha('f')}: merge`, author_association: 'OWNER', html_url: R443, created_at: '2026-10-28T01:00:00Z' }
+const FU443 = { prs: [{ number: 443, comments: [REC443], reviews: [] }], filed: [] }
 
 // #300: #287's description as the morning wrote it at the first head, served verbatim from its edit
 // history, and the first-parent merges of the branch it was rebuilt to (76704c5), oldest first.
@@ -228,6 +247,7 @@ const jsonAfter = (prompt, marker) => {
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
 //           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
+//           followUps.ownership: OWNERSHIP.md's text as the reader returns it (this checkout's by default),
 //           filerDrops: [title],
 //           replay: {pending, renamed, stoppedAt, reason}, the Replay agent's own fields as it returned them,
 //           rewrite: [issue], after: {...}, refresh: the description writer's return (#300), nothingFrom: [label], the agents that return nothing,
@@ -334,22 +354,30 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'followups') {
         // The open pull requests into main with their comments and reviews as gh serves them, and the
         // issues already filed: those the fixture serves, then those an earlier run's filer filed.
+        // served.applyTickets: the open Apply tickets as the reader's listing returns them (#481).
         const f = served.followUps || { prs: [], filed: [] }
-        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], error: f.error || '' }
+        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], applyTickets: served.applyTickets || [], ownership: f.ownership === undefined ? OWNERSHIP_MD : f.ownership, error: f.error || '' }
       } else if (label === 'followups-file') {
-        // The filer files each follow-up it is given, as gh issue create would, and remembers it in
-        // env, so a rerun on the same checkout reads it back as filed.
+        // The filer checks each follow-up's body with the real tools/ticket_shape.py under the label it
+        // is given (#479), files each that passes, as gh issue create would, and remembers it in env, so
+        // a rerun on the same checkout reads it back as filed; one that fails is refused, never filed.
         // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
         // lost one would.
         const items = (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
         env.filed = env.filed || []
-        const filed = items.map((it) => {
+        env.shaped = []
+        const filed = []
+        const refused = []
+        for (const it of items) {
+          const shape = shapeOf(it.body, it.label)
+          env.shaped.push({ title: it.title, label: it.label, ...shape })
+          if (shape.status !== 0 || !shape.last.startsWith('ticket-shape: pass:')) { refused.push({ pr: it.pr, title: it.title, why: [...shape.failures, shape.last].join('; ') }); continue }
           const number = 900 + env.filed.length
-          const issue = { number, title: it.title, body: it.body, url: URL(number) }
+          const issue = { number, title: it.title, body: it.body, url: URL(number), labels: [it.label] }
           env.filed.push(issue)
-          return { pr: it.pr, title: it.title, number, url: issue.url }
-        })
-        out = { filed, skipped: [], unreachable: false, reason: '' }
+          filed.push({ pr: it.pr, title: it.title, number, url: issue.url })
+        }
+        out = { filed, skipped: [], refused, unreachable: false, reason: '' }
       } else if (label === 'draft-read') {
         // The draft check's one agent (#302) reads the issue and the draft file and returns them verbatim.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
@@ -733,6 +761,67 @@ try {
     if (APPLIERS(refusedRun.labels).length) fail(`#320: a ticket whose only follow-up was refused was sent an applier: ${refusedRun.labels.join(', ')}`)
   }
 
+  // 11c. Every open Apply ticket is handed over (#481). An answer the morning cannot state as an edit
+  //      is filed as "Apply Q<n> of Overnight <date> to #<m>", and on 2026-10-28 #476's launch prep
+  //      found nine such tickets open, three of them three days old. The hand-over lists each open
+  //      one, from any night, as a step of its own, oldest first, with its target and the Confirm
+  //      comment that confirmed it; a closed one is not listed.
+  checks++
+  {
+    const q = (n, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+    const night = issueWith([
+      comment(50, `## Questions: ${cite(244)}, issue-244, Walk the runbooks\n\n${q(1, 'Bring #62\'s acceptance in line with the move?')}`, '2026-10-21T06:40:00Z'),
+      comment(94, 'Confirm Q1 as pre-accepted.', '2026-10-21T08:00:00Z'),
+    ])
+    const CONFIRM_TODAY = `${URL(ISSUE)}#issuecomment-94`
+    const CONFIRM_OLD = 'https://github.com/adammedford/spa-platform/issues/286#issuecomment-6300000001'
+    const ticket = (number, title, state, confirm, login = 'adammedford') => ({ number, title, url: URL(number), state, author: { login }, createdAt: '2026-10-19T09:00:00Z', body: `**Raised by:** ${cite(240)}, Q7 of Overnight 2026-10-18 (${cite(286)}), confirmed at ${confirm}\n**Owner:** integrator\n` })
+    const OLD = ticket(455, 'Apply Q7 of Overnight 2026-10-18 to #248', 'OPEN', CONFIRM_OLD)
+    const SHUT = ticket(456, 'Apply Q8 of Overnight 2026-10-18 to #249', 'CLOSED', CONFIRM_OLD)
+    // An issue in the same shape that another account opened is no step (CODING_STANDARDS.md ->
+    // "An authorisation is read from its author").
+    const FORGED = ticket(457, 'Apply Q9 of Overnight 2026-10-18 to #250', 'OPEN', CONFIRM_OLD, 'someone-else')
+    const classes = { 1: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 } }
+    const { result } = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [SHUT, OLD, FORGED] })
+    const ho = result.handover.text
+    const sec = (/^### Open Apply tickets[^\n]*\n\n([\s\S]*?)(?=\n\n###|(?![\s\S]))/m.exec(ho) || [])[1]
+    if (!sec) fail(`#481: the hand-over has no Open Apply tickets section:\n${ho}`)
+    else {
+      const lines = sec.split('\n').filter((l) => l.startsWith('- '))
+      const today = lines.findIndex((l) => l.includes(`Apply Q1 of Overnight ${DATE} to #62`))
+      const old = lines.findIndex((l) => l.startsWith('- #455'))
+      if (old < 0) fail(`#481: the open Apply ticket of an earlier night is not listed:\n${sec}`)
+      if (today < 0) fail(`#481: the Apply ticket filed this morning is not listed:\n${sec}`)
+      if (old >= 0 && today >= 0 && old > today) fail(`#481: the Apply tickets are not oldest first:\n${sec}`)
+      if (old >= 0 && (!/\bto #248\b/.test(lines[old]) || !lines[old].includes(CONFIRM_OLD))) fail(`#481: the earlier night's line lacks its target or Confirm URL: ${lines[old]}`)
+      if (today >= 0 && (!/\bto #62\b/.test(lines[today]) || !lines[today].includes(CONFIRM_TODAY))) fail(`#481: this morning's line lacks its target or Confirm URL: ${lines[today]}`)
+      if (/#456\b/.test(sec)) fail(`#481: a closed Apply ticket is listed:\n${sec}`)
+      if (/#457\b/.test(sec)) fail(`#481: an Apply ticket another account opened is listed:\n${sec}`)
+      if (lines.length !== 2) fail(`#481: ${lines.length} Apply tickets listed, expected 2:\n${sec}`)
+    }
+    // The reader's listing may hold the ticket filed this morning too; it is listed once.
+    const filedToday = (result.apply.done.join('\n').match(/^filed #(\d+) Apply Q1 /m) || [])[1]
+    const twice = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'OPEN', CONFIRM_TODAY)] })
+    const n = (twice.result.handover.text.match(new RegExp(`^- #${filedToday}\\b`, 'gm')) || []).length
+    if (n !== 1) fail(`#481: the Apply ticket the reader also listed appears ${n} times`)
+    // One closed in the listing by the time it was read is not listed, though this morning filed it.
+    const shut = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'CLOSED', CONFIRM_TODAY)] })
+    if (new RegExp(`^- #${filedToday}\\b`, 'm').test(shut.result.handover.text)) fail('#481: an Apply ticket filed this morning and served as closed is listed')
+    // A dead reader leaves earlier nights unread, which the hand-over says rather than "none".
+    const dead = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], nothingFrom: ['followups'] })
+    if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(dead.result.handover.text)) fail(`#481: a dead reader's Apply tickets read as none:\n${dead.result.handover.text}`)
+    // A reader that reports an error says so, and whatever partial listing it returned beside the
+    // error is not handed over as steps (CODING_STANDARDS.md -> "A check fails closed").
+    const erred = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], followUps: { prs: [], filed: [], error: 'GitHub could not be reached' } })
+    if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(erred.result.handover.text)) fail(`#481: an erring reader's Apply tickets read as none:\n${erred.result.handover.text}`)
+    if (/^- #455\b/m.test(erred.result.handover.text)) fail('#481: an erring reader\'s partial listing is handed over as steps')
+    // This morning's line takes its Confirm URL from the body followUpTicket wrote, so the one parser
+    // reads both sources; a morning that filed none still lists the earlier night's, from the reader.
+    const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
+    if (!/^- #455\b/m.test(listed.result.handover.text)) fail('#481: an earlier night\'s Apply ticket is not listed on a morning that filed none')
+    if (!/gh issue list --state open --limit 500 --json number,title,body,url,state,author /.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
+  }
+
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
   //     every mocked run above none is the landing script, --admin, --no-verify, a force-push, a tag
   //     or a branch deletion. The span count shows the search read the commands it judges.
@@ -836,7 +925,7 @@ try {
     if (sent[1] && !sent[1].body.includes(`first carried by ${R287[2]}`)) fail('follow-ups: "this record" was not read as the record the table is in')
     const fp = first.prompt('followups-file')
     const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
-    if (!spans.some((x) => /gh issue create\b/.test(x) && /--label needs-triage\b/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with the needs-triage label')
+    if (!spans.some((x) => /gh issue create\b/.test(x) && /--label <its label>/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with each follow-up\'s own label')
     if (spans.some((x) => /--parent\b|blocked-by/.test(x))) fail(`follow-ups: the filer prompt files a sub-issue or a blocker: ${spans.filter((x) => /--parent\b|blocked-by/.test(x)).join(' | ')}`)
     const ho = first.result.handover.text
     if (!/### Follow-ups filed/.test(ho) || !ho.includes(FINDING_CI) || !ho.includes(FINDING_Q9)) fail(`follow-ups: the hand-over does not list what was filed:\n${ho}`)
@@ -865,6 +954,90 @@ try {
     // names it, never reads the silence as done (CODING_STANDARDS.md -> "A check fails closed").
     const lost = await execute(newRepo(), { date: DATE }, { followUps: FU287, filerDrops: [FINDING_Q9] })
     if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
+  }
+
+  // 17b. Owner and Touches (#479). Each follow-up carries an Owner line and a Touches line derived
+  //      from the finding's place, so it passes tools/ticket_shape.py when it is relabelled
+  //      ready-for-agent: the Touches line is the paths the Where cell names, each without its
+  //      ":line" suffix or commit prefix, and the Owner line the role OWNERSHIP.md derives from them,
+  //      by the reading ticket_shape uses. A place naming no path, or paths of two owners, is filed
+  //      ready-for-human saying why. Each body goes through the real ticket_shape under its label
+  //      before it is filed, and one that fails is not filed.
+  checks++
+  {
+    const line = (body, key) => (new RegExp(`^\\*\\*${key}:\\*\\* (.*)$`, 'm').exec(body) || [])[1]
+    const env = newRepo()
+    const run443 = await execute(env, { date: DATE }, { followUps: FU443 })
+    const sent = jsonAfter(run443.prompt('followups-file'), 'FOLLOW-UPS') || []
+    const of = (t) => sent.find((f) => f.title === t) || { body: '', label: '' }
+    const ddb = of(FINDING_DDB)
+    if (line(ddb.body, 'Owner') !== 'integrator' || line(ddb.body, 'Touches') !== '`.github/workflows/ci.yml`' || ddb.label !== 'needs-triage') fail(`#479: the finding at .github/workflows/ci.yml:657-658 files with Owner ${JSON.stringify(line(ddb.body, 'Owner'))}, Touches ${JSON.stringify(line(ddb.body, 'Touches'))}, label ${JSON.stringify(ddb.label)}`)
+    const deadline = of(FINDING_DEADLINE)
+    if (line(deadline.body, 'Owner') !== 'ws3-identity' || line(deadline.body, 'Touches') !== '`tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`' || deadline.label !== 'needs-triage') fail(`#479: the finding in tests/Platform.Identity.Tests/ files with Owner ${JSON.stringify(line(deadline.body, 'Owner'))}, Touches ${JSON.stringify(line(deadline.body, 'Touches'))}, label ${JSON.stringify(deadline.label)}`)
+    const nopath = of(FINDING_NOPATH)
+    if (nopath.label !== 'ready-for-human' || line(nopath.body, 'Owner') !== 'integrator' || line(nopath.body, 'Touches') !== undefined || !/names no repository path/.test(line(nopath.body, 'Filed ready-for-human') || '')) fail(`#479: the finding with no path files as ${JSON.stringify(nopath.label)}, saying ${JSON.stringify(line(nopath.body, 'Filed ready-for-human'))}:\n${nopath.body}`)
+    for (const f of sent) {
+      const s = (env.shaped || []).find((x) => x.title === f.title)
+      if (!s || s.status !== 0) fail(`#479: ${JSON.stringify(f.title)} fails tools/ticket_shape.py under ${f.label}: ${s ? [...s.failures, s.last].join('; ') : 'never checked'}`)
+    }
+    if ((env.filed || []).length !== 3) fail(`#479: ${(env.filed || []).length} of #443's three follow-ups were filed`)
+    const ho = run443.result.handover.text
+    if (!ho.includes(FINDING_NOPATH) || !/names no repository path/.test(ho)) fail(`#479: the hand-over does not say why the pathless follow-up is ready-for-human:\n${ho}`)
+
+    // Paths of two owners: #287's first row names the integrator's ci.yml and ws1-infra's tools/scripts
+    // (a directory written without its slash, read as that directory, as ticket_shape reads it).
+    const run287 = await execute(newRepo(), { date: DATE }, { followUps: FU287 })
+    const sent287 = jsonAfter(run287.prompt('followups-file'), 'FOLLOW-UPS') || []
+    const two = sent287.find((f) => f.title === FINDING_CI) || { body: '', label: '' }
+    const why = line(two.body, 'Filed ready-for-human') || ''
+    if (two.label !== 'ready-for-human' || line(two.body, 'Touches') !== undefined || !/two owners/.test(why) || !/integrator: \.github\/workflows\/ci\.yml/.test(why) || !/ws1-infra: tools\/scripts/.test(why)) fail(`#479: the finding with paths of two owners files as ${JSON.stringify(two.label)}, saying ${JSON.stringify(why)}`)
+    const q9 = sent287.find((f) => f.title === FINDING_Q9) || { body: '' }
+    if (line(q9.body, 'Owner') !== 'ws6-verification' || line(q9.body, 'Touches') !== '`docs/runbooks/end-app-sessions.md`') fail(`#479: "#244 Q9; docs/runbooks/end-app-sessions.md" files with Owner ${JSON.stringify(line(q9.body, 'Owner'))}, Touches ${JSON.stringify(line(q9.body, 'Touches'))}`)
+
+    // A body ticket_shape fails is not filed: the reader served an OWNERSHIP.md that gives
+    // tests/Platform.Identity.Tests/ to the integrator, so the script writes Owner integrator, which
+    // the checkout's ticket_shape reads as ws3-identity's paths (owner-line). It is refused and named.
+    const drifted = OWNERSHIP_MD.replace(/^\/tests\/Platform\.Identity\.Tests\/\s+ws3-identity$/m, '/tests/Platform.Identity.Tests/       integrator')
+    if (drifted === OWNERSHIP_MD) fail('#479: the drift fixture found no ws3-identity line for tests/Platform.Identity.Tests/ to change')
+    const envD = newRepo()
+    const runD = await execute(envD, { date: DATE }, { followUps: { ...FU443, ownership: drifted } })
+    if ((envD.filed || []).some((i) => i.title === FINDING_DEADLINE)) fail('#479: a body tools/ticket_shape.py fails was filed')
+    if ((envD.filed || []).length !== 2) fail(`#479: with one body failing the shape check, ${(envD.filed || []).length} were filed, expected the other two`)
+    const refusedD = (runD.result.followUps || {}).refused || []
+    if (!refusedD.some((r) => r.title === FINDING_DEADLINE && /owner-line/.test(r.why))) fail(`#479: the return does not list the shape-failed follow-up as refused: ${JSON.stringify(refusedD)}`)
+    if (!runD.result.refusals.some((r) => r.includes(FINDING_DEADLINE) && /ticket_shape/.test(r))) fail(`#479: the refusals do not name the shape-failed follow-up: ${JSON.stringify(runD.result.refusals)}`)
+    // Under its own heading: the refusals the hand-over also carries would name it without the list.
+    const notFiled = runD.result.handover.text.split(/^### /m).find((s) => s.startsWith('Follow-ups not filed: tools/ticket_shape.py failed them')) || ''
+    if (!notFiled.includes(FINDING_DEADLINE)) fail(`#479: the hand-over does not list the follow-up the shape check refused under "Follow-ups not filed":\n${runD.result.handover.text}`)
+    // A refused follow-up is accounted for: it is not reported again as one the filer lost.
+    if (runD.result.refusals.some((r) => /neither filed nor skipped/.test(r))) fail(`#479: a follow-up the shape check refused is reported as lost by the filer: ${JSON.stringify(runD.result.refusals)}`)
+    const fp = runD.prompt('followups-file')
+    const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    if (!spans.some((x) => /tools\/ticket_shape\.py -/.test(x))) fail('#479: the filer prompt does not check each body with tools/ticket_shape.py')
+    if (!/file nothing/.test(fp) || !/Never reword a body/.test(fp)) fail('#479: the filer prompt does not say a body the shape check fails is filed by nobody and never reworded')
+
+    // The reader returns the main checkout's OWNERSHIP.md, the file the filer's ticket_shape reads.
+    if (![...run443.prompt('followups').matchAll(/`([^`\n]+)`/g)].some((m) => m[1] === `cat ${env.repo}/OWNERSHIP.md`)) fail('#479: the follow-ups reader is not asked for the main checkout\'s OWNERSHIP.md')
+    // An OWNERSHIP.md the reader could not return derives no owner: nothing is filed, and the run says why.
+    const blind = await execute(newRepo(), { date: DATE }, { followUps: { ...FU443, ownership: '' } })
+    if (blind.labels.includes('followups-file')) fail('#479: follow-ups were filed with no OWNERSHIP.md to derive their owners from')
+    if (!blind.result.refusals.some((r) => /OWNERSHIP\.md/.test(r))) fail(`#479: an unread OWNERSHIP.md is not named: ${JSON.stringify(blind.result.refusals)}`)
+
+    // The owners are ticket_shape's: on every path OWNERSHIP.md names, with and without its slash and
+    // with a file under it, the script's derivation gives what tools/ticket_shape.py's owner_of gives.
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    const section = (/^\/\/ -+ follow-ups, owners and places\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+    if (!section) fail('#479: morning.js has no "follow-ups, owners and places" section to compare with ticket_shape')
+    else {
+      const port = new Function(`${section}\nreturn { ownershipRules, ownerOfPath }`)()
+      const rules = port.ownershipRules(OWNERSHIP_MD)
+      const probes = ['.github/workflows/ci.yml', 'README.md', 'tools/check.sh', 'tools/scripts', 'infra', '/infra/', 'docs/gaps.md', 'docs/gapsx.md']
+      for (const [pat] of rules) if (pat !== '*') { const a = pat.replace(/^\/+/, ''); probes.push(a, a.replace(/\/$/, ''), a.endsWith('/') ? a + 'x/y.cs' : a) }
+      const r = spawnSync('python3', ['-I', '-c', 'import json,sys; sys.path.insert(0, sys.argv[1]); import ticket_shape as t; r = t.ownership().rules(); print(json.dumps([t.owner_of(p, r) for p in json.load(sys.stdin)]))', path.join(top, 'tools')], { cwd: top, encoding: 'utf8', input: JSON.stringify(probes) })
+      let theirs = null
+      try { theirs = JSON.parse(r.stdout) } catch { fail(`#479: ticket_shape's owner_of did not run: ${r.stderr}`) }
+      if (theirs) probes.forEach((p, i) => { const mine = port.ownerOfPath(rules, p); if (mine !== theirs[i]) fail(`#479: ${p} is ${mine}'s by morning.js and ${theirs[i]}'s by tools/ticket_shape.py`) })
+    }
   }
 
   // 18. The follow-ups table has one grammar: morning.js's copy of its header, its "this record" cell,
@@ -1191,6 +1364,123 @@ try {
     if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
   }
 
+  // 22a. The draft check runs from the command line (#491): confirm_draft.mjs, run with node over a
+  //      draft file and the issue's comments as `gh issue view --json comments` prints them, prints
+  //      the covered, open, no and overridden lists, and exits 1 when a question is left open or an
+  //      override opens "no". It runs morning.js's own draftCheck, the function the confirmFile mode
+  //      calls: its --json output is that function's direct result, and a mutation of the script's
+  //      first-word rule changes what the command prints. landing-work.md shows the command and
+  //      states the two parse rules the fixtures below hold.
+  checks++
+  {
+    const CLI = path.join(here, 'confirm_draft.mjs')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-draft-'))
+    made.push(dir)
+    // The comments as gh prints them: author is an object carrying the login.
+    const ghShape = (cs) => ({ comments: cs.map((c) => ({ author: { login: c.author }, authorAssociation: 'OWNER', body: c.body, createdAt: c.createdAt, url: c.url })) })
+    const outsider = { ...comment(8, 'Confirm Q1 to Q4.\n', '2026-10-21T07:30:00Z'), author: 'someone-else' }
+    const COMMENTS = path.join(dir, 'comments.json')
+    fs.writeFileSync(COMMENTS, JSON.stringify(ghShape([...QUESTIONS, outsider])))
+    const cli = (draft, { json = false, comments = COMMENTS, cliPath = CLI } = {}) => {
+      const f = path.join(dir, `draft-${Math.random().toString(36).slice(2)}.md`)
+      fs.writeFileSync(f, draft)
+      const r = spawnSync(process.execPath, [cliPath, f, comments, ...(json ? ['--json'] : [])], { encoding: 'utf8' })
+      let parsed = null
+      if (json) try { parsed = JSON.parse(r.stdout) } catch { /* reported below */ }
+      return { status: r.status, out: r.stdout, err: r.stderr, json: parsed, file: f }
+    }
+    if (!fs.existsSync(CLI)) fail('#491: .claude/workflows/confirm_draft.mjs does not exist')
+    else {
+      const PASS = 'Confirm Q1 to Q4, with the override below.\n\nQ4: yes, port 5690\n'
+      const OPEN = 'Confirm Q1 to Q3. Q4 stays open.\n'
+      const NO = 'Confirm Q1 to Q4.\n\nQ4: yes\nQ2: No, keep the old sentence\n'
+
+      const pass = cli(PASS, { json: true })
+      const p = pass.json || {}
+      if (pass.status !== 0) fail(`#491: a draft confirming every question exited ${pass.status}: ${pass.err}${pass.out}`)
+      if (JSON.stringify(p.coveredList) !== '[1,2,3,4]' || JSON.stringify(p.open) !== '[]' || JSON.stringify(p.no) !== '[]') fail(`#491: the passing draft: covered ${JSON.stringify(p.coveredList)}, open ${JSON.stringify(p.open)}, no ${JSON.stringify(p.no)}`)
+      if (JSON.stringify(p.overridden) !== JSON.stringify([{ q: 4, answer: 'yes, port 5690' }])) fail(`#491: the passing draft's overridden list is ${JSON.stringify(p.overridden)}`)
+
+      // The first sentence sets the range: Q4, named after the first full stop, stays open.
+      const open = cli(OPEN)
+      if (open.status !== 1) fail(`#491: a draft leaving Q4 open exited ${open.status}, expected 1`)
+      const openJ = cli(OPEN, { json: true }).json || {}
+      if (JSON.stringify(openJ.coveredList) !== '[1,2,3]' || JSON.stringify((openJ.open || []).map((o) => o.q)) !== '[4]') fail(`#491: the first sentence did not set the range: covered ${JSON.stringify(openJ.coveredList)}, open ${JSON.stringify(openJ.open)}`)
+      for (const h of ['### Covered', '### Overridden', '### Answered no', '### Left open']) if (!open.out.includes(h)) fail(`#491: the command's printed result has no "${h}" list:\n${open.out}`)
+      if (!/^confirm-draft: fail: /m.test(open.out.trim().split('\n').pop())) fail(`#491: the command's last line is not its fail verdict:\n${open.out}`)
+
+      // An override opening "no" applies nothing, and fails the command.
+      const no = cli(NO)
+      const noJ = cli(NO, { json: true }).json || {}
+      if (no.status !== 1) fail(`#491: a draft with an override opening "No" exited ${no.status}, expected 1`)
+      if (JSON.stringify(noJ.noOverrides) !== '[2]' || !(noJ.no || []).some((n) => n.q === 2) || noJ.applied !== 3) fail(`#491: the override opening "No" was not held back: noOverrides ${JSON.stringify(noJ.noOverrides)}, no ${JSON.stringify(noJ.no)}, applied ${noJ.applied}`)
+      if (!no.out.includes('- Q2: No, keep the old sentence')) fail(`#491: the printed result does not list Q2's override:\n${no.out}`)
+      if (!/^confirm-draft: pass: /.test(cli(PASS).out.trim().split('\n').pop())) fail('#491: the passing draft\'s last line is not "confirm-draft: pass:"')
+
+      // A draft that does not begin "Confirm", and a number no questions comment yields, fail.
+      if (cli('Q1: yes\n').status !== 1) fail('#491: a draft not beginning "Confirm" did not fail')
+      const lost = cli('Confirm Q1 to Q4.\nQ4: yes\nQ9: yes\n', { json: true })
+      if (lost.status !== 1 || JSON.stringify((lost.json || {}).unknown) !== '[9]') fail(`#491: Q9, yielded by no questions comment, did not fail by name: exit ${lost.status}, unknown ${JSON.stringify((lost.json || {}).unknown)}`)
+
+      // Could not judge (exit 2): an issue Adam has already confirmed (his login read from gh's
+      // author object), a missing argument, and a comments file that is not JSON.
+      const CONFIRMED = path.join(dir, 'confirmed.json')
+      fs.writeFileSync(CONFIRMED, JSON.stringify(ghShape([...QUESTIONS, CONFIRM])))
+      const already = cli(PASS, { comments: CONFIRMED })
+      if (already.status !== 2 || !/already has a Confirm comment/.test(already.err + already.out)) fail(`#491: an issue already confirmed exited ${already.status}: ${already.err}`)
+      const BADJSON = path.join(dir, 'bad.json')
+      fs.writeFileSync(BADJSON, 'not json')
+      if (cli(PASS, { comments: BADJSON }).status !== 2) fail('#491: a comments file that is not JSON did not exit 2')
+      if (spawnSync(process.execPath, [CLI], { encoding: 'utf8' }).status !== 2) fail('#491: the command with no arguments did not exit 2')
+      // Comments with no questions comment among them are no input: exit 2, not "0 of 0" passed.
+      const NOQS = path.join(dir, 'no-questions.json')
+      fs.writeFileSync(NOQS, JSON.stringify(ghShape([outsider])))
+      const noqs = cli('Confirm.\n', { comments: NOQS })
+      if (noqs.status !== 2 || !/no "## Questions:" comment/.test(noqs.err)) fail(`#491: comments with no questions comment exited ${noqs.status}, expected 2: ${noqs.err}${noqs.out}`)
+      // The command is in the repository: .gitignore closes .claude/workflows/ to all but the files it
+      // names, and on the branch that added it the command sat untracked beside a green local check.
+      const ignored = spawnSync('git', ['-C', top, 'check-ignore', '-q', path.join('.claude', 'workflows', 'confirm_draft.mjs')], { encoding: 'utf8' })
+      if (ignored.status !== 1) fail(`#491: .gitignore ${ignored.status === 0 ? 'ignores' : 'could not be asked about'} .claude/workflows/confirm_draft.mjs, so a clone has no command${ignored.error ? `: ${ignored.error.message}` : ''}`)
+
+      // The command's output is morning.js's draftCheck, called directly on the same input.
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const section = (/^\/\/ -+ the questions, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+      const adam = (/^const ADAM = .*$/m.exec(src) || [])[0]
+      if (!section || !adam) fail('#491: morning.js has no "the questions, read here" section or no ADAM line to call')
+      else {
+        const port = new Function(`${adam}\n${section}\nreturn { draftCheck }`)()
+        const flat = ghShape([...QUESTIONS, outsider]).comments.map((c) => ({ ...c, author: c.author.login }))
+        for (const draft of [PASS, OPEN, NO]) {
+          const r = cli(draft, { json: true })
+          const direct = JSON.parse(JSON.stringify(port.draftCheck(flat, draft, r.file)))
+          if (JSON.stringify(r.json) !== JSON.stringify(direct)) fail(`#491: the command's output is not draftCheck's direct result for ${JSON.stringify(draft)}:\n${JSON.stringify(r.json)}\n${JSON.stringify(direct)}`)
+        }
+      }
+      // The confirmFile mode calls the same function.
+      const checkBlock = (/^if \(CHECK\) \{\n([\s\S]*?)\n\}\n/m.exec(src) || [])[1] || ''
+      if (!/\bdraftCheck\(/.test(checkBlock)) fail('#491: the confirmFile mode does not call draftCheck')
+      if (/const (readQuestions|readConfirmations|sortAnswers|verdictOf|draftCheck) =/.test(fs.readFileSync(CLI, 'utf8'))) fail('#491: confirm_draft.mjs carries its own copy of the parser')
+
+      // The command runs the script beside it: the first-word mutation changes what it prints.
+      const mdir = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-draft-mutant-'))
+      made.push(mdir)
+      const rule = (/^const verdictOf = .*$/m.exec(src) || [''])[0]
+      fs.writeFileSync(path.join(mdir, 'morning.js'), src.replace(rule, rule.replace('/^no\\b/i', '/^nope\\b/i')))
+      fs.copyFileSync(CLI, path.join(mdir, 'confirm_draft.mjs'))
+      const mut = cli(NO, { json: true, cliPath: path.join(mdir, 'confirm_draft.mjs') })
+      if (!rule || !mut.json || (mut.json.no || []).some((n) => n.q === 2)) fail('#491: the first-word mutation of morning.js did not change the command\'s result, so it does not run the script\'s parser')
+
+      // The guide shows the command and states the rules these fixtures hold.
+      const guide = fs.readFileSync(path.join(top, 'docs', 'agents', 'landing-work.md'), 'utf8')
+      const RULES = [
+        'node .claude/workflows/confirm_draft.mjs',
+        'The first sentence sets the range:',
+        'An override opening "no" applies nothing:',
+      ]
+      for (const r of RULES) if (!guide.includes(r)) fail(`#491: docs/agents/landing-work.md does not say ${JSON.stringify(r)}`)
+    }
+  }
+
   // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
   //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
   //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
@@ -1376,6 +1666,76 @@ try {
     const read = (/^For each question above, read .*$/m.exec(cls) || [''])[0]
     if (!/"## Proposed glossary \/ ADR" comment only for its ADR candidates/.test(read)) fail(`#433: Classify does not read proposals only for ADR candidates: ${read}`)
     if (!/a glossary or steering proposal there is never an answer/.test(read)) fail(`#433: Classify may still classify a proposal as an answer: ${read}`)
+  }
+
+  // 26. The morning's launch lines have one home (#489). On 2026-10-28 the arguments of the after pass
+  //     were found only by reading badArguments, and a search for "morning" found an unrelated synced
+  //     skill first. docs/agents/landing-work.md carries the three launches, whenToUse points there,
+  //     and the doc's lines are held to the checker itself: an argument it requires that a line
+  //     lacks, or one a line carries that it does not take, fails here. Then each drift is made on
+  //     purpose, to the doc and to the checker, and must be caught.
+  checks++
+  {
+    const LANDING = path.join(top, 'docs', 'agents', 'landing-work.md')
+    const HEADING = "## The morning's launches"
+    const checkerOf = (src) => {
+      const m = /^const KNOWN_ARGS = [\s\S]*?\n {2}return bad\n}\n/m.exec(src)
+      return m ? new Function(`${m[0]}\nreturn badArguments`)() : null
+    }
+    const launchProblems = (doc, src, meta) => {
+      const bad = []
+      const badArgs = checkerOf(src)
+      if (!badArgs) return ['morning.js has no KNOWN_ARGS ... badArguments span to hold the doc against']
+      const at = doc.indexOf(`\n${HEADING}\n`)
+      if (at < 0) return [`docs/agents/landing-work.md has no "${HEADING}" section`]
+      const rest = doc.slice(at + 1)
+      const next = rest.indexOf('\n## ', HEADING.length)
+      const section = next < 0 ? rest : rest.slice(0, next)
+      const lines = [...section.matchAll(/^Workflow\(\{ scriptPath: ("[^"\n]*"), args: (\{[^\n]*\}) \}\)$/gm)]
+      if (lines.length !== 3) bad.push(`the section carries ${lines.length} Workflow({ scriptPath, args }) line(s), expected 3`)
+      const launches = []
+      for (const [whole, sp, a] of lines) {
+        try { launches.push({ whole, scriptPath: JSON.parse(sp), args: JSON.parse(a) }) } catch (e) { bad.push(`a launch line is not JSON in its scriptPath and args: ${whole} (${e.message})`) }
+      }
+      const modes = ['the morning pass', 'the draft check', 'the after pass']
+      launches.forEach((l, i) => {
+        const a = l.args
+        const name = modes[i] || `launch ${i + 1}`
+        for (const r of badArgs(a)) bad.push(`${name}: the checker refuses its arguments: ${r}`)
+        if (a.repo === undefined || a.wt === undefined || (a.date === undefined && a.issue === undefined)) bad.push(`${name}: it lacks one of repo, wt, and date or issue`)
+        if (typeof a.repo === 'string' && l.scriptPath !== `${a.repo.replace(/\/+$/, '')}/.claude/workflows/morning.js`) bad.push(`${name}: scriptPath ${l.scriptPath} is not the repo's .claude/workflows/morning.js`)
+        if (i === 0 && !(a.after === false && a.confirmFile === undefined)) bad.push(`${name}: expected "after": false and no confirmFile, got ${JSON.stringify(a)}`)
+        if (i === 1 && !(typeof a.confirmFile === 'string' && a.after === undefined)) bad.push(`${name}: expected a confirmFile and no after, got ${JSON.stringify(a)}`)
+        if (i === 2 && !(a.after === true && a.confirmFile === undefined)) bad.push(`${name}: expected "after": true and no confirmFile, got ${JSON.stringify(a)}`)
+        for (const k of ['repo', 'date', 'issue', 'wt']) if (launches[0] && a[k] !== launches[0].args[k]) bad.push(`${name}: its ${k} differs from the morning pass's`)
+      })
+      if (!section.includes('`<wt>/overnight`')) bad.push('the section does not say which worktree root wt means (`<wt>/overnight` is the integration worktree)')
+      if (!section.includes('~/.claude/skills/synced') || !/unrelated/.test(section)) bad.push('the section does not say the morning skill under ~/.claude/skills/synced is an unrelated one')
+      const w = (meta && meta.whenToUse) || ''
+      if (!w.includes('docs/agents/landing-work.md') || !w.includes(HEADING.replace(/^## /, ''))) bad.push(`whenToUse does not point at docs/agents/landing-work.md -> "${HEADING.replace(/^## /, '')}": ${w}`)
+      const known = (/^const KNOWN_ARGS = (\[.*\])$/m.exec(src) || [])[1]
+      for (const k of known ? JSON.parse(known.replace(/'/g, '"')) : []) if (new RegExp(`\\b${k}:`).test(w)) bad.push(`whenToUse lists the argument ${k}, which the doc's launch lines carry`)
+      return bad
+    }
+    const doc = fs.readFileSync(LANDING, 'utf8')
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    for (const p of launchProblems(doc, src, loadMeta())) fail(`#489: ${p}`)
+    // Each drift the ticket names is caught: a required argument dropped from a line, an argument the
+    // checker does not take added to one, a new argument the checker starts requiring, and a
+    // whenToUse that lists arguments again.
+    const fromWt = doc.replace(/, "wt": "[^"\n]*"(?=, "after": false)/, '')
+    const extra = doc.replace(/"after": true \}/, '"after": true, "dryRun": true }')
+    const stricter = src.replace("const KNOWN_ARGS = ['date',", "const KNOWN_ARGS = ['night', 'date',").replace('  const bad = []\n', "  const bad = []\n  if (a.night === undefined) bad.push('night: required')\n")
+    const listing = { ...loadMeta(), whenToUse: 'The morning after an overnight run; once the pull request lands, again with after: true' }
+    for (const [label, d, s, m] of [
+      ['wt dropped from the morning pass', fromWt, src, loadMeta()],
+      ['an unknown argument on the after pass', extra, src, loadMeta()],
+      ['a checker that requires a new argument', doc, stricter, loadMeta()],
+      ['a whenToUse that lists after: true', doc, src, listing],
+    ]) {
+      if (d === doc && s === src && m.whenToUse === loadMeta().whenToUse) { fail(`#489: the mutation "${label}" changed nothing`); continue }
+      if (!launchProblems(d, s, m).length) fail(`#489: the launch-line check missed ${label}`)
+    }
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

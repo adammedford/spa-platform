@@ -804,6 +804,87 @@ class SittingOrLanding(unittest.TestCase):
         self.assertEqual(self.failures(209, labels=("ready-for-human",)), [])
 
 
+def box_says(box: str) -> list[str]:
+    """The sitting-or-landing details of a ready-for-agent body holding one open box and nothing
+    else: no Touches line to look up, and no blocker phrase to ask GitHub about."""
+    issue = shape.Issue(number=482, body=f"- [ ] {box}\n", labels=("ready-for-agent",),
+                        sub_issues=0, blockers=())
+    return [failure.detail for failure in shape.judge(issue, parsed=[])
+            if failure.rule == "sitting-or-landing"]
+
+
+class ProseWords(unittest.TestCase):
+    """#482: a listed word counts only as a word of prose, outside a code span and not joined to its
+    neighbour by a hyphen, a dot or a slash. Each misfire's box is quoted as it read before its
+    reword, from the issue's edit history."""
+
+    def test_457s_full_landing_compound_passes(self):
+        # #457 as filed on 2026-10-28; the old rule fired on "landing" inside "full-landing".
+        self.assertEqual(box_says(
+            "A full-landing subject is held while an open part ticket declares itself part of the "
+            "row: done, or declined with the reason in this issue's Answer."), [])
+
+    def test_451s_file_name_passes(self):
+        # #451 as filed, and as it still reads: "landing" inside landing-work.md.
+        self.assertEqual(box_says(
+            "Review landing-work.md's dated Review debt table and its 'Run the script before the "
+            "push' sentence: done, or declined with the reason in this issue's Answer."), [])
+
+    def test_a_path_or_a_code_span_says_nothing(self):
+        # #358's path half: the routing of 2026-10-26 found a box naming tests/e2e/Deployed fails
+        # on the path alone. #361's brief failed on `g3-deployed-slice` as well as on "sitting".
+        for box in ("The class lives in tests/e2e/Deployed and runs against RecordedRunner",
+                    "The class lives in `tests/e2e/Deployed`",
+                    "The chooser refuses D while `g3-deployed-slice` is absent",
+                    "The chooser refuses D while g3-deployed-slice is absent",
+                    "`docs/agents/landing-work.md` names `the cell` and `by hand`",
+                    "The wiz skill's `sitting` field names D"):
+            with self.subTest(box):
+                self.assertEqual(box_says(box), [])
+
+    def test_each_join_says_nothing(self):
+        # One box per join the rule names, so each half of JOINED_BEFORE and JOINED_AFTER has an
+        # input that fails without it: a dot before, a dot after and a slash after had none.
+        for box in ("Review full-landing subjects",       # a hyphen before
+                    "Review the landing-day notes",       # a hyphen after
+                    "Review docs/landing notes",          # a slash before
+                    "Review the landing/merge split",     # a slash after
+                    "Read the state.deployed flag",       # a dot before
+                    "Review landing.md's table"):         # a dot after
+            with self.subTest(box):
+                self.assertEqual(box_says(box), [])
+
+    def test_458s_358s_and_361s_boxes_still_fail_on_their_prose_word(self):
+        # The other three misfires use their word as prose, which no reading of hyphens, dots,
+        # slashes and code spans reaches: each still fails, naming that word, and its escape stays
+        # the reword the module docstring names. Each is quoted as filed.
+        cases = {
+            "the cell": "ci.yml:657-658 still says no DynamoDB table exists anywhere in this "
+                        "platform, though the cell now declares the session table: fixed, or "
+                        "declined with the reason in this issue's Answer.",
+            "deployed": "A deployed continuity class in tests/e2e/Deployed drives G6's rows 3 to "
+                        "9, proven against RecordedRunner: done, or declined with the reason in "
+                        "this issue's Answer.",
+            "sitting": "wiz walks a sitting D for the G6 continuity run: done, or declined with "
+                       "the reason in this issue's Answer.",
+        }
+        for word, box in cases.items():
+            with self.subTest(word):
+                details = box_says(box)
+                self.assertEqual(len(details), 1, details)
+                self.assertTrue(details[0].startswith(f"an open box says {word}: "), details)
+
+    def test_a_prose_box_using_a_listed_word_still_fails(self):
+        for box, word in (("F-01 passes against the deployed cell in a sitting.", "deployed"),
+                          ("The run is posted on #63, after the landing.", "landing"),
+                          ("The commit is pushed to `main`.", "pushed"),
+                          ("It is on `main` before the tag", "on main"),
+                          ("Checked by hand.", "by hand"),
+                          ("A sitting-day run in the browser", "browser")):
+            with self.subTest(box):
+                self.assertIn(word, " ".join(box_says(box)))
+
+
 class BlockerEdge(unittest.TestCase):
     """A wait the text states is a native blocked-by edge to an open issue (ADR-0020)."""
 

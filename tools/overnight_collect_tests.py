@@ -449,6 +449,51 @@ class Rules(unittest.TestCase):
         self.assertEqual(("ready-for-agent", ["1.7"]),
                          (answer[60]["status"], answer[60]["blockedBy"]))
 
+    def test_a_touches_none_ticket_is_foreground_under_any_label(self):
+        """#480: a tracker edit, "Apply Qn of Overnight <date> to #m", writes no repository path,
+        so no lane can do it and a grill adds nothing: its status is foreground, whatever its label,
+        and one whose Touches line names a path reads as before."""
+        none = ("**Owner:** integrator\n**Touches:** none (a tracker edit to #248)\n"
+                "**Plan row:** none\n\n## Acceptance\n- [ ] #248 carries Q4\n")
+        path = none.replace("none (a tracker edit to #248)", "`tools/roadmap.py`")
+        answer = by_issue(resolved(
+            agent=[issue(70, none), issue(71, path)],
+            human=[issue(72, none), issue(73, path)],
+            triage=[issue(74, none), issue(75, path)],
+        ))
+        self.assertEqual(("foreground", "**Touches:** none, a tracker edit no lane can make; "
+                          "work it in the foreground"), (answer[70]["status"], answer[70]["why"]))
+        self.assertEqual(["foreground"] * 3, [answer[n]["status"] for n in (70, 72, 74)])
+        self.assertEqual(["ready-for-agent", "ready-for-human", "needs-triage"],
+                         [answer[n]["status"] for n in (71, 73, 75)])
+
+    def test_the_foreground_why_is_the_workflows(self):
+        """overnight.js gives the same sentence in its collect rule and its report's Foreground
+        section, so the tool and the workflow say it alike."""
+        workflow = (ROOT / ".claude" / "workflows" / "overnight.js").read_text()
+        self.assertIn(f"const FOREGROUND_WHY = '{collect.FOREGROUND}'", workflow)
+
+    def test_foreground_comes_before_a_claim_an_outsiders_label_and_ticked_boxes(self):
+        """Touches none is read first: an assignee, a claiming branch, a label another account
+        applied or every box ticked would each give a lane-less status that hides the edit."""
+        none = "**Owner:** integrator\n**Touches:** none\n**Plan row:** {row}\n\n- [{box}] a\n"
+        answer = by_issue(resolved(
+            agent=[issue(80, none.format(row="none", box=" "), assignees=("adam",)),
+                   issue(81, none.format(row="1.7", box=" ")),
+                   issue(82, none.format(row="none", box=" ")),
+                   issue(83, none.format(row="none", box="x"))],
+            branches=["task/1.7-scripts"],
+            timelines={82: by("mallory")},
+        ))
+        self.assertEqual(["foreground"] * 4, [answer[n]["status"] for n in (80, 81, 82, 83)])
+
+    def test_a_foreground_blocker_is_not_met_tonight(self):
+        """The edit is made the next day, so a ticket waiting on it is blocked tonight."""
+        answer = by_issue(resolved(agent=[issue(90, body(), blockers=((91, "OPEN"),)),
+                                          issue(91, "**Owner:** integrator\n**Touches:** none\n")]))
+        self.assertEqual(("blocked", ["issue-91"]),
+                         (answer[90]["status"], answer[90]["blockedBy"]))
+
     def test_an_issue_with_sub_issues_is_a_parent_and_never_a_ticket(self):
         """#139 to #142 on 2026-10-20: specs labelled ready-for-agent, with no checkbox."""
         answer = resolved(agent=[issue(139, "## Problem Statement\n", subs=2), issue(153, body())])

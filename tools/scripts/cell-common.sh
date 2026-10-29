@@ -3,8 +3,13 @@
 #
 # Task 1.7 (#58). The plumbing is tunnel.sh's and verify-release-immutability.sh's: every AWS call
 # names the Region and --output text, a failure is reported by its error code and never by its
-# message (which can carry an ARN), and nothing printed names the account id. The cell's documents
-# are built and read by cell_documents.py beside this file, because bash 3.2 has no JSON reader.
+# message (which can carry an ARN), and nothing printed names the account id. Two calls name the
+# Region and not --output text, because neither answers with a document for --output to shape:
+# deploy.sh's `ecr get-login-password`, whose output is the registry password alone, piped to
+# docker login (https://docs.aws.amazon.com/cli/latest/reference/ecr/get-login-password.html), and
+# tunnel.sh's `ssm start-session`, which hands the terminal to the Session Manager plugin. certs.sh
+# sources none of this and keeps its own calls. The cell's documents are built and read by
+# cell_documents.py beside this file, because bash 3.2 has no JSON reader.
 #
 # The caller sets PROGRAM before sourcing this, and calls cell_start once its arguments are read.
 # tunnel.sh is the exception: it asks AWS only for its service's tasks, never who the caller is, so

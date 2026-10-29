@@ -24,19 +24,30 @@ GIT_CONFIG_GLOBAL names an empty file, and LC_ALL=C. A real gh on a runner's PAT
 **Real git; a double for gh and for collect.** Every git call the script makes works offline, so
 each case builds a bare origin, a clone of it standing in for whoever pushes to main, and the main
 checkout, a second clone. gh is the call that leaves the machine, so the case's bin holds a strict gh
-double that answers the two listings the script asks for, from the case's canned output, records
+double that answers the three reads the script asks for (the needs-triage listing, a timeline,
+and an issue's `gh issue view --json` for the shape line), from the case's canned output, records
 every call with the directory it ran in, and exits 97 on anything else, so a new gh call, or any
 write to the tracker, turns a case red. tools/overnight_collect.py is the case's own stub committed
 on origin/main: the script runs origin/main's copy, extracted outside the checkout, so the stub
 prints a canned summary line and answer and records how it was called and from where. A case whose
 origin/main moves commits a stub that says so, which is how a case tells origin's copy from the
-checkout's.
+checkout's. Imported, as tools/ticket_shape.py imports it, the stub is the real collect's OWNER and
+ROLES and does nothing else.
+
+**The shape line runs the real check.** Each case commits this checkout's tools/ticket_shape.py,
+.github/path-ownership.py and OWNERSHIP.md on origin/main, so the shape line judges a canned issue
+with the rules the run will use, and a case proves what the check fails, not what a stub prints.
 
 **The launch arguments meet the workflow's own validation.** The arguments case runs
 .claude/workflows/overnight.js, this checkout's, under node, with the arguments the script printed
 and every agent call answered by a sentinel, as .claude/workflows/overnight_tests.mjs runs it: the
 script either halts on a bad launch before its first agent or reaches Collect. node is required:
 without it the case fails, naming it.
+
+**The harness fixture is read back whole (#485).** A case run with --fixture reads the file it
+wrote and compares it with the arguments printed, the forecast's tickets and the ready-for-agent ids
+the skip leaves. The harness itself, .claude/workflows/overnight_harness.mjs, is git-ignored and not
+in the checkout, so no case runs it; the fixture's keys are the ones it reads.
 
 The cases run at the same time on the threads of tools/companion_runner.py; each keeps to its own
 throwaway directory and passes its own environment to what it runs.
@@ -64,6 +75,18 @@ spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools"
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "overnight_preflight.sh"
+spec = importlib.util.spec_from_file_location("overnight_collect", ROOT / "tools" / "overnight_collect.py")
+real_collect = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(real_collect)
+# The real files the shape line's tools/ticket_shape.py runs on, committed on each case's origin/main
+# at the same paths: the check itself, A-05's ownership reader and the ownership it reads.
+SHAPE_FILES = ("tools/ticket_shape.py", ".github/path-ownership.py", "OWNERSHIP.md")
+# The fields the gh double answers for `gh issue view`, read from the check itself: the script
+# copies them, so a FIELDS change the script misses turns a case red here.
+spec = importlib.util.spec_from_file_location("ticket_shape", ROOT / "tools" / "ticket_shape.py")
+ticket_shape = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ticket_shape)
+SHAPE_FIELDS = ticket_shape.FIELDS
 WORKFLOW = ROOT / ".claude" / "workflows" / "overnight.js"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
@@ -75,7 +98,7 @@ DATE = "2026-10-26"
 TOOLS = ("git", "ps", "tar", "mktemp", "mkdir", "rm")
 
 # The lines, by name, in the order the ticket gives them.
-LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted"]
+LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims", "shape"]
 
 LIST_TRIAGE = ["issue", "list", "--state", "open", "--label", "needs-triage", "--limit", "500",
                "--json", "number"]
@@ -85,8 +108,28 @@ def timeline_call(number: int) -> list[str]:
     return ["api", "--paginate", "--slurp", f"repos/{{owner}}/{{repo}}/issues/{number}/timeline?per_page=100"]
 
 
-def ticket(id: str, issue: int, owner: str, status: str) -> dict:
-    return {"id": id, "issue": issue, "owner": owner, "status": status}
+def view_call(number: int) -> list[str]:
+    return ["issue", "view", str(number), "--json", SHAPE_FIELDS]
+
+
+def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2,
+           blocked_by: tuple = ()) -> dict:
+    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes,
+            "blockedBy": list(blocked_by)}
+
+
+def issue_json(number: int, label: str, body: str) -> dict:
+    """`gh issue view <n> --json` with ticket_shape.py's fields, as gh prints it."""
+    return {"number": number, "body": body,
+            "labels": [{"id": "LA_x", "name": label, "description": "", "color": "ededed"}],
+            "subIssuesSummary": {"total": 0, "completed": 0, "percentCompleted": 0},
+            "blockedBy": {"nodes": []}}
+
+
+def clean_body(owner: str, box: str = "A test proves the behaviour") -> str:
+    """A body ticket_shape.py passes under any label: one Owner role, a Touches line that writes
+    nothing, so no path's owner is derived, and an open box no word list matches."""
+    return f"**Owner:** {owner}\n**Touches:** none\n\n## Acceptance criteria\n\n- [ ] {box}\n"
 
 
 # Collect's answer in the default case: three ready-for-agent tickets under two owners, one blocked
@@ -101,13 +144,18 @@ TICKETS = [
 SUMMARY = "overnight_collect: 5 tickets (1 blocked, 1 needs-triage, 3 ready-for-agent), 0 parents; 0 will end partial."
 
 # The stub committed as origin/main's tools/overnight_collect.py. It records each call, then prints
-# what collect prints: the summary on stderr and the answer on stdout.
-COLLECT_STUB = """import json, pathlib, sys
-with open({calls!r}, "a") as calls:
-    calls.write(json.dumps({{"argv": sys.argv[1:], "file": str(pathlib.Path(__file__).resolve())}}) + "\\n")
-print({summary!r}, file=sys.stderr)
-print(json.dumps({answer!r}))
-sys.exit({status!r})
+# what collect prints: the summary on stderr and the answer on stdout. Imported, as
+# tools/ticket_shape.py imports collect to read an Owner line, it is the real OWNER and ROLES and
+# does nothing else.
+COLLECT_STUB = """import json, pathlib, re, sys
+OWNER = re.compile({owner!r})
+ROLES = {roles!r}
+if __name__ == "__main__":
+    with open({calls!r}, "a") as calls:
+        calls.write(json.dumps({{"argv": sys.argv[1:], "file": str(pathlib.Path(__file__).resolve())}}) + "\\n")
+    print({summary!r}, file=sys.stderr)
+    print(json.dumps({answer!r}))
+    sys.exit({status!r})
 """
 
 # The gh double: the two reads, each from the case's canned output, and 97 for anything else.
@@ -132,6 +180,13 @@ if len(argv) == 4 and argv[:3] == ["api", "--paginate", "--slurp"]:
                 sys.exit(1)
             print(page.read_text())
             sys.exit(0)
+if len(argv) == 5 and argv[:2] == ["issue", "view"] and argv[3:] == ["--json", {fields!r}]:
+    issue = canned / ("issue-%s.json" % argv[2])
+    if not issue.exists():
+        print("GraphQL: Could not resolve to an issue or pull request", file=sys.stderr)
+        sys.exit(1)
+    print(issue.read_text())
+    sys.exit(0)
 print("gh double: unexpected call", argv, file=sys.stderr)
 sys.exit(97)
 """
@@ -219,9 +274,13 @@ class Case:
         runner.link_tool(self.bin / "python3", PYTHON)
         gh = self.bin / "gh"
         gh.write_text(GH_DOUBLE.format(python=PYTHON, calls=str(self.gh_calls), canned=str(self.canned),
-                                       list_triage=LIST_TRIAGE))
+                                       list_triage=LIST_TRIAGE, fields=SHAPE_FIELDS))
         gh.chmod(0o755)
         self.triage([])
+        # Each forecast ticket's issue, clean by default, so the shape line passes listing none.
+        for each in TICKETS if tickets is None else tickets:
+            label = each["status"] if each["status"] in ("needs-triage", "ready-for-human") else "ready-for-agent"
+            self.issue(each["issue"], label, clean_body(each["owner"]))
 
         self.landed = 0
         self.origin = self.dir / "origin.git"
@@ -234,6 +293,9 @@ class Case:
         (self.pusher / ".claude" / "workflows").mkdir(parents=True)
         (self.pusher / ".claude" / "workflows" / "overnight.js").write_text("// the workflow\n")
         (self.pusher / "tools").mkdir()
+        (self.pusher / ".github").mkdir()
+        for path in SHAPE_FILES:
+            (self.pusher / path).write_bytes((ROOT / path).read_bytes())
         self.push_collect("Lay out the repository", tickets=tickets, summary=summary,
                           status=collect_status)
         self.clone(self.checkout)
@@ -262,6 +324,7 @@ class Case:
         """Commits a collect stub on origin/main, and any other files `also` names."""
         answer = {"tickets": TICKETS if tickets is None else tickets, "parents": []}
         (self.pusher / "tools" / "overnight_collect.py").write_text(COLLECT_STUB.format(
+            owner=real_collect.OWNER.pattern, roles=real_collect.ROLES,
             calls=str(self.collect_calls), summary=summary, answer=answer, status=status))
         for path, text in (also or {}).items():
             (self.pusher / path).write_text(text)
@@ -281,6 +344,10 @@ class Case:
         for number, events in (timelines or {}).items():
             # One page, as `gh api --paginate --slurp` wraps them.
             (self.canned / f"timeline-{number}.json").write_text(json.dumps([events]))
+
+    def issue(self, number: int, label: str, body: str):
+        """What `gh issue view <number> --json` answers, with the label the issue carries now."""
+        (self.canned / f"issue-{number}.json").write_text(json.dumps(issue_json(number, label, body)))
 
     # --- running ---
 
@@ -351,7 +418,7 @@ class CleanStartTests(PreflightTestCase):
         result = case.run()
         self.assertOrder(result)
         self.assertOnlyFails(result)
-        self.assertEqual(9, len(result.lines), result.stdout)
+        self.assertEqual(11, len(result.lines), result.stdout)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
         self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": []},
@@ -381,6 +448,9 @@ class CleanStartTests(PreflightTestCase):
                          result.row("forecast"))
         self.assertEqual(("pass", "0 needs-triage tickets; none lost ready-for-agent in the last 24 hours"),
                          result.row("demoted"))
+        self.assertEqual(("pass", "no ticket with an open box is held by a local task branch whose id a "
+                                  "`Merge part of task <id>` subject on origin/main names"),
+                         result.row("claims"))
 
     def test_the_forecast_runs_origins_collect_from_outside_the_checkout_against_it(self):
         case = Case(self)
@@ -403,7 +473,8 @@ class CleanStartTests(PreflightTestCase):
                                            capture_output=True, text=True)
                 self.assertEqual(2, completed.returncode)
                 self.assertEqual("", completed.stdout)
-                self.assertIn("usage: tools/overnight_preflight.sh <date>", completed.stderr)
+                self.assertIn("usage: tools/overnight_preflight.sh [--fixture <path>] [--skip <id,...>] <date>",
+                              completed.stderr)
         self.assertEqual([], case.gh())
         self.assertEqual([], case.collect())
 
@@ -563,7 +634,7 @@ class ForecastTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: #56 and #180 share 1.4",
                     collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual("origin/main's overnight_collect.py --repo exited 1: overnight_collect: no "
                          "tickets printed: #56 and #180 share 1.4", result.row("forecast")[1])
         self.assertNotIn("maxParallel", result.arguments())
@@ -575,7 +646,7 @@ class ForecastTests(PreflightTestCase):
         case.git("push", "-q", "origin", "main", cwd=case.pusher)
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual("origin/main has no tools/overnight_collect.py", result.row("forecast")[1])
 
     def test_max_parallel_is_the_owners_with_ready_tickets_and_at_least_one(self):
@@ -616,7 +687,8 @@ class DemotedTests(PreflightTestCase):
         self.assertRegex(evidence, r"^4 needs-triage tickets; these lost ready-for-agent in the last 24 "
                                    r"hours and are skip candidates: 6\.9 \(#358, removed \S+Z\); "
                                    r"issue-363 \(#363, removed \S+Z\)$")
-        self.assertEqual([LIST_TRIAGE] + [timeline_call(n) for n in (358, 361, 362, 363)],
+        self.assertEqual([LIST_TRIAGE] + [timeline_call(n) for n in (358, 361, 362, 363)]
+                         + [view_call(n) for n in (10, 11, 12, 358)],
                          [call["argv"] for call in case.gh()])
         self.assertEqual({str(case.checkout)}, {call["cwd"] for call in case.gh()})
 
@@ -642,13 +714,310 @@ class DemotedTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual(["issue-358"], result.arguments()["skip"])
+
+
+class ClaimsTests(PreflightTestCase):
+    """#484: collect reads a local `task/<id>-` branch as the ticket's claim, and a part-landed
+    ticket's branch stays after its merge, which the integration rewrote, so its open boxes never get
+    a lane. The claims line names each such ticket with the rename that frees it."""
+
+    def part_merged(self, case: Case, *subjects: str):
+        """Commits on origin/main with the given subjects, and fast-forwards the checkout to it, so
+        the fetch line still passes."""
+        for subject in subjects:
+            case.git("commit", "-q", "--allow-empty", "-m", subject, cwd=case.pusher)
+            case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+
+    def test_a_ticket_with_open_boxes_held_by_a_part_merged_branch_is_listed_with_its_rename(self):
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        branch = "task/issue-10-preflight-claims"
+        case.git("branch", branch, cwd=case.checkout)
+        tip = case.git("rev-parse", branch, cwd=case.checkout)
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        self.assertEqual(
+            ("pass", "these tickets have open boxes and are held by a local task branch whose id a "
+                     "`Merge part of task <id>` subject on origin/main names, so collect reads them as "
+                     f"claimed; free each by renaming its branch: issue-10 (#10, 2 open boxes): "
+                     f"git -C {case.checkout} branch -m {branch} hold/issue-10-{tip[:7]}"),
+            result.row("claims"))
+        # The line names; it renames nothing, and adds no skip.
+        self.assertIn(branch, case.git("branch", "--list", "task/*", cwd=case.checkout))
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_each_held_ticket_is_listed_and_a_plan_row_id_matches_too(self):
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-12: one half", "Merge part of task 2.1: the other")
+        case.git("branch", "task/issue-12-a", cwd=case.checkout)
+        case.git("branch", "task/2.1-b", cwd=case.checkout)
+        evidence = case.run().row("claims")[1]
+        self.assertIn("2.1 (#11, 2 open boxes): git -C", evidence)
+        self.assertIn("issue-12 (#12, 2 open boxes): git -C", evidence)
+        self.assertIn("branch -m task/2.1-b hold/2.1-", evidence)
+
+    def test_a_ticket_without_the_subject_or_without_an_open_box_is_not_listed(self):
+        cases = {
+            # The branch is a claim, but no part of its task merged: a lane in flight, or abandoned.
+            "no subject": ([ticket("issue-10", 10, "integrator", "claimed")],
+                           "Merge the review records", "task/issue-10-x"),
+            # The subject names another id that shares the branch's prefix.
+            "another id": ([ticket("issue-10", 10, "integrator", "claimed")],
+                           "Merge part of task issue-1: something else", "task/issue-10-x"),
+            "a longer id": ([ticket("issue-1", 1, "integrator", "claimed")],
+                            "Merge part of task issue-10: something else", "task/issue-1-x"),
+            # The subject names the ticket, but the only branch is another ticket's whose id it prefixes.
+            "a branch with a longer id": ([ticket("issue-1", 1, "integrator", "claimed")],
+                                          "Merge part of task issue-1: half", "task/issue-10-x"),
+            # Every box ticked: close-in-morning, not a held ticket.
+            "no open box": ([ticket("issue-10", 10, "integrator", "close-in-morning", open_boxes=0)],
+                            "Merge part of task issue-10: the whole of it", "task/issue-10-x"),
+            # No checkbox at all, which collect gives as -1.
+            "no box at all": ([ticket("issue-10", 10, "integrator", "claimed", open_boxes=-1)],
+                              "Merge part of task issue-10: the whole of it", "task/issue-10-x"),
+        }
+        for name, (tickets, subject, branch) in cases.items():
+            with self.subTest(name):
+                case = Case(self, tickets=tickets)
+                self.part_merged(case, subject)
+                case.git("branch", branch, cwd=case.checkout)
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertTrue(result.row("claims")[1].startswith("no ticket with an open box"),
+                                result.row("claims"))
+
+    def test_a_branch_on_origin_alone_is_not_listed(self):
+        # git branch -m renames a local branch; a branch only on origin is not this checkout's to move.
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        case.git("push", "-q", "origin", "main:refs/heads/task/issue-10-x", cwd=case.pusher)
+        case.git("fetch", "-q", "origin", cwd=case.checkout)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertTrue(result.row("claims")[1].startswith("no ticket with an open box"))
+
+    def test_a_held_branch_origin_also_has_says_the_rename_does_not_free_it(self):
+        # Collect reads origin's task branches too, so the local rename alone leaves the claim.
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        case.git("push", "-q", "origin", "main:refs/heads/task/issue-10-x", cwd=case.pusher)
+        case.git("fetch", "-q", "origin", cwd=case.checkout)
+        case.git("branch", "task/issue-10-x", "origin/task/issue-10-x", cwd=case.checkout)
+        tip = case.git("rev-parse", "task/issue-10-x", cwd=case.checkout)
+        evidence = case.run().row("claims")[1]
+        self.assertIn(f"branch -m task/issue-10-x hold/issue-10-{tip[:7]} (origin/task/issue-10-x claims "
+                      "it too, which the rename does not free)", evidence)
+
+    def test_a_failed_forecast_fails_the_line_for_want_of_the_open_boxes(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertEqual("the forecast failed, so no ticket's open boxes are known and no claim was judged",
+                         result.row("claims")[1])
+
+
+class ShapeTests(PreflightTestCase):
+    """The shape line judges each ready-for-agent and needs-triage ticket of the forecast as
+    ready-for-agent, with origin/main's real tools/ticket_shape.py (#483)."""
+
+    def test_clean_tickets_are_not_listed_and_the_line_passes_with_none_listed(self):
+        case = Case(self)
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets judged as ready-for-agent; "
+                                  "none fails"), result.row("shape"))
+        self.assertEqual([], result.arguments()["skip"])
+        # The blocked ticket of the forecast is not read; the four others are, from the checkout.
+        views = [call for call in case.gh() if call["argv"][:2] == ["issue", "view"]]
+        self.assertEqual([view_call(n) for n in (10, 11, 12, 358)], [call["argv"] for call in views])
+        self.assertEqual({str(case.checkout)}, {call["cwd"] for call in views})
+
+    def test_a_needs_triage_ticket_with_no_owner_line_is_listed_with_owner_line_and_skipped(self):
+        case = Case(self)
+        case.issue(358, "needs-triage", "**Touches:** `tools/overnight_collect.py`\n\n"
+                                        "## Acceptance criteria\n\n- [ ] A test proves it\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets judged as ready-for-agent; "
+                                  "these fail and are skip candidates: 6.9 (#358: owner-line)"),
+                         result.row("shape"))
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_needs_triage_ticket_is_judged_under_ready_for_agent_so_its_box_words_count(self):
+        # Under its own label the word list does not fire; under ready-for-agent it does.
+        body = clean_body("integrator", "The stack is deployed and answers")
+        case = Case(self)
+        case.issue(358, "needs-triage", body)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("these fail and are skip candidates: 6.9 (#358: sitting-or-landing)",
+                      result.row("shape")[1])
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ready_ticket_that_fails_is_listed_by_its_id_with_each_rule_once(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", "**Owner:** ws2-hosting and integrator\n**Touches:** none\n\n"
+                                          "- [ ] It is deployed\n- [ ] It is checked by hand\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("skip candidates: issue-12 (#12: owner-line, sitting-or-landing)",
+                      result.row("shape")[1])
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_ticket_both_demoted_and_failing_is_skipped_once(self):
+        case = Case(self)
+        case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
+        case.issue(358, "needs-triage", "**Touches:** none\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ticket_gh_cannot_read_fails_the_line(self):
+        case = Case(self)
+        (case.canned / "issue-11.json").unlink()
+        case.issue(358, "needs-triage", "**Touches:** none\n")
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertEqual("4 ready-for-agent and needs-triage tickets; gh could not read #11, so those "
+                         "are unjudged; of the rest, these fail and are skip candidates: 6.9 (#358: "
+                         "owner-line)", result.row("shape")[1])
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ticket_the_check_cannot_judge_fails_the_line(self):
+        case = Case(self)
+        # No blockedBy field: ticket_shape.py reads nothing and exits 2.
+        (case.canned / "issue-10.json").write_text(json.dumps({"number": 10, "body": "", "labels": []}))
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertIn("ticket_shape.py judged nothing for #10, so those are unjudged; of the rest, none fails",
+                      result.row("shape")[1])
+
+    def test_a_failed_forecast_or_no_check_on_origin_fails_the_line(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertEqual("the forecast failed, so no ticket was judged", result.row("shape")[1])
+
+        case = Case(self)
+        case.git("rm", "-q", "tools/ticket_shape.py", cwd=case.pusher)
+        case.git("commit", "-q", "-m", "Drop the shape check", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertEqual("origin/main has no tools/ticket_shape.py, so no ticket was judged",
+                         result.row("shape")[1])
+
+
+class FixtureTests(PreflightTestCase):
+    """#485: --fixture writes the overnight harness's input, `{args, tickets, expect}`, from the
+    forecast, and --skip names what the launch plan skips besides the lines' candidates."""
+
+    def test_the_fixture_holds_the_arguments_the_forecasts_tickets_and_what_integrates(self):
+        case = Case(self)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), "--skip", "issue-12", DATE)
+        self.assertOnlyFails(result)
+        repo = str(case.checkout)
+        wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
+        printed = {"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": ["issue-12"]}
+        self.assertEqual(printed, result.arguments())
+        self.assertEqual({
+            "args": printed,
+            "tickets": TICKETS,
+            # The ready-for-agent tickets outside the skip, in the forecast's order: not the blocked
+            # issue-13, not the needs-triage 6.9, not the skipped issue-12.
+            "expect": {"integrated": ["issue-10", "2.1"], "skippedForBlocker": [], "startsBefore": []},
+        }, json.loads(fixture.read_text()))
+        self.assertNotIn("standingAnswer", fixture.read_text())
+        # The stdout contract holds: the verdict, then the arguments, last.
+        self.assertEqual(11, len(result.lines), result.stdout)
+        self.assertIn(f"overnight_preflight: wrote the harness fixture {fixture}", result.stderr)
+
+    def test_the_shape_and_claims_lines_candidates_are_in_the_written_skip(self):
+        case = Case(self)
+        # issue-12 fails the shape check; issue-10 is held by a part-merged branch.
+        case.issue(12, "ready-for-agent", "**Touches:** none\n\n- [ ] A test proves it\n")
+        case.git("commit", "-q", "--allow-empty", "-m", "Merge part of task issue-10: half", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        case.git("branch", "task/issue-10-x", cwd=case.checkout)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), "--skip", "2.1", DATE)
+        self.assertOnlyFails(result)
+        written = json.loads(fixture.read_text())
+        self.assertEqual(["issue-12", "issue-10", "2.1"], written["args"]["skip"])
+        self.assertEqual([], written["expect"]["integrated"])
+        # The printed arguments leave the held ticket out: a rename frees it before launch (#484).
+        self.assertEqual(["issue-12", "2.1"], result.arguments()["skip"])
+
+    def test_a_demoted_candidate_is_in_the_written_skip_too(self):
+        case = Case(self, tickets=TICKETS + [ticket("issue-14", 14, "integrator", "ready-for-agent")])
+        case.triage([14], {14: [labelled("unlabeled", "ready-for-agent", 2)]})
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), DATE)
+        written = json.loads(fixture.read_text())
+        self.assertEqual(["issue-14"], written["args"]["skip"])
+        self.assertEqual(["issue-10", "2.1", "issue-12"], written["expect"]["integrated"])
+
+    def test_a_ready_ticket_a_skipped_one_blocks_is_skipped_for_the_blocker(self):
+        # overnight.js gives a skipped ticket no lane, so issue-15, which waits on issue-12, and
+        # issue-16, which waits on issue-15, skip on the blocker; 2.1 waits on issue-10, which runs.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("2.1", 11, "ws2-hosting", "ready-for-agent", blocked_by=("issue-10",)),
+                   ticket("issue-12", 12, "integrator", "ready-for-agent"),
+                   ticket("issue-16", 16, "integrator", "ready-for-agent", blocked_by=("issue-15",)),
+                   ticket("issue-15", 15, "integrator", "ready-for-agent", blocked_by=("issue-12",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), "--skip", "issue-12", DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "2.1"], expect["integrated"])
+        self.assertEqual(["issue-16", "issue-15"], expect["skippedForBlocker"])
+
+    def test_without_the_flag_no_fixture_is_written(self):
+        case = Case(self)
+        # The directory it runs in, besides the call records its doubles keep there, and the checkout.
+        records = {"gh-calls", "collect-calls"}
+        before = (sorted(p.name for p in case.dir.iterdir() if p.name not in records), case.snapshot())
+        result = case.run("--skip", "issue-12", DATE)
+        self.assertOnlyFails(result)
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+        self.assertNotIn("fixture", result.stderr)
+        after = (sorted(p.name for p in case.dir.iterdir() if p.name not in records), case.snapshot())
+        self.assertEqual(before, after)
+
+    def test_a_failed_forecast_writes_no_fixture(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
+        self.assertEqual(1, result.status)
+        self.assertFalse(fixture.exists())
+        self.assertIn("overnight_preflight: no harness fixture written: the forecast failed", result.stderr)
+
+    def test_a_bad_invocation_is_refused_before_anything_runs(self):
+        case = Case(self)
+        script = str(case.checkout / "tools" / "overnight_preflight.sh")
+        for argv in (["--fixture"], ["--fixture", str(case.dir / "nowhere" / "f.json"), DATE],
+                     ["--skip", DATE], ["--skip", ",", DATE], ["--skip", "a b", DATE], ["--bogus", DATE]):
+            with self.subTest(argv=argv):
+                completed = subprocess.run([BASH, script, *argv], cwd=case.dir, env=case.env(),
+                                           capture_output=True, text=True)
+                self.assertEqual(2, completed.returncode, completed.stdout + completed.stderr)
+                self.assertEqual("", completed.stdout)
+                self.assertIn("usage: tools/overnight_preflight.sh", completed.stderr)
+        self.assertEqual([], case.gh())
+        self.assertEqual([], case.collect())
 
 
 class WritesNothingTests(PreflightTestCase):
     def test_the_tool_writes_nothing_to_the_checkout_its_refs_or_the_tracker(self):
-        for setup in ("clean", "stale and dirty", "demoted"):
+        for setup in ("clean", "stale and dirty", "demoted", "held"):
             with self.subTest(setup=setup):
                 case = Case(self)
                 if setup == "stale and dirty":
@@ -665,6 +1034,11 @@ class WritesNothingTests(PreflightTestCase):
                     os.utime(collect, (moved, moved))
                 if setup == "demoted":
                     case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
+                if setup == "held":
+                    case.git("commit", "-q", "--allow-empty", "-m", "Merge part of task issue-10: half",
+                             cwd=case.pusher)
+                    case.git("push", "-q", "origin", "main", cwd=case.pusher)
+                    case.git("branch", "task/issue-10-x", cwd=case.checkout)
                 before = case.snapshot()
                 result = case.run()
                 self.assertEqual(before, case.snapshot(), result.stdout)
@@ -672,11 +1046,11 @@ class WritesNothingTests(PreflightTestCase):
                     # The file whose mtime alone moved is no tracked change: its content is HEAD's.
                     self.assertIn("2 tracked changes", result.row("tracked")[1])
                     self.assertNotIn("overnight_collect.py", result.row("tracked")[1])
-                # Every gh call is one of the two reads: a write, or any other call, would be
+                # Every gh call is one of the three reads: a write, or any other call, would be
                 # recorded here and exit 97.
                 for call in case.gh():
-                    self.assertTrue(call["argv"] == LIST_TRIAGE or call["argv"][:3] == ["api", "--paginate", "--slurp"],
-                                    call)
+                    self.assertTrue(call["argv"] == LIST_TRIAGE or call["argv"][:3] == ["api", "--paginate", "--slurp"]
+                                    or call["argv"][:2] == ["issue", "view"], call)
                 self.assertEqual([], list(case.tmp.iterdir()))
 
 

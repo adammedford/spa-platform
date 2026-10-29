@@ -118,6 +118,10 @@ const changeRequestsOf = (kind, id, k) => (kind === 'implement' && id === AFTER_
 const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [QUEUED] : [], adrCandidates: [],
   draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: id === REQUEST_DECIDED.id ? DECIDED_LINE : '', summary: 'companion' })
 const reviewCalls = {}     // id -> review calls so far, so a ticket's first and second review can report apart
+// One more, added after the tickets above so none of their choices moves (#480): a tracker edit whose Touches line says
+// none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
+const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
+tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
 const TESTS_FAILED = 'check: fail: the tests failed.'
@@ -133,6 +137,14 @@ const reachLine = {
   [FLAKE_ELSEWHERE]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
   [FLAKE_DIED]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
 }
+// One ready-for-human ticket's grill was asked on an earlier night (#487): its grill returns the questions it carried
+// and the summary the grill prompt names for that case, so its reason says carried and already answered; every other
+// grill asks its questions tonight, and its reason says grilled on paper. A second carried grill words its summary
+// loosely, capitalised and without "not re-grilled", which the reason line still reads as carried, as the report does.
+const [CARRIED, CARRIED_LOOSE] = tickets.filter((t) => t.status === 'ready-for-human').map((t) => t.id)
+const CARRIED_SUMMARY = 'carried from an earlier night, not re-grilled'
+const CARRIED_LOOSE_SUMMARY = 'Carried from an earlier night.'
+const grillQuestions = (n) => Array.from({ length: n }, (_, i) => ({ q: `Q${i + 1}?`, recommendation: 'yes' }))
 const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
 const SHARED_FILE = '.gitignore'
@@ -148,7 +160,10 @@ const logs = []            // {at, text}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const clock = setInterval(() => { tick++ }, 1)
 
-globalThis.args = fixture.args
+// The run launches with a skills directory other than the script's default (#501), so every skill path a prompt names
+// must come from the launch, not from one machine's home.
+const OTHER_SKILLS = '/opt/companion/agent-skills'
+globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
 globalThis.phase = () => {}
 globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
@@ -159,7 +174,12 @@ globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-  if (kind === 'grill') return grillResult(id)
+  if (kind === 'grill') {
+    const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
+      : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
+      : { questions: grillQuestions(2) }
+    return byId[id].changeRequest ? grillResult(id) : { ...grillResult(id), ...asked }
+  }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
   const n = ++calls
@@ -545,6 +565,30 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
     const r = of(t.id)[0]
     if (r && (r.stage !== 'collect' || !r.reason.includes(t.why))) fail(`${t.id}, ready-for-human from collect, has reason ${JSON.stringify(r)}, not stage collect with its collect why`)
   }
+  // A grill carried from an earlier night asked nothing tonight (#487): its reason says carried and already answered,
+  // and never "grilled on paper", which read 39 carried grills as hundreds of new questions on 2026-10-28 (#476). A
+  // grill that asked tonight keeps "grilled on paper". The summary the mock returns must be the one the grill prompt
+  // tells a carried grill to return, so the script and its prompt cannot drift apart.
+  const grillPrompt = allPrompts.find((x) => x.label === `grill:${CARRIED}`)
+  if (!grillPrompt) fail(`no grill ran for ${CARRIED}, so the carried-grill reason check read nothing`)
+  else if (!grillPrompt.prompt.includes(`summary "${CARRIED_SUMMARY}"`)) fail(`the grill prompt no longer tells a carried grill to return the summary "${CARRIED_SUMMARY}"`)
+  const carried = of(CARRIED)[0]
+  if (!carried) fail(`the run's reasons hold no entry for ${CARRIED}, whose grill was carried`)
+  else if (!carried.reason.includes(`carried, 13 question(s) already answered on #${byId[CARRIED].issue}`) || carried.reason.includes('grilled on paper')) {
+    fail(`${CARRIED}'s grill was carried, yet its reason does not say carried and already answered: ${carried.reason}`)
+  }
+  const loose = of(CARRIED_LOOSE)[0]
+  if (!loose) fail(`the run's reasons hold no entry for ${CARRIED_LOOSE}, whose grill was carried with a loosely worded summary`)
+  else if (!loose.reason.includes(`carried, 5 question(s) already answered on #${byId[CARRIED_LOOSE].issue}`) || loose.reason.includes('grilled on paper')) {
+    fail(`${CARRIED_LOOSE}'s grill was carried with the summary "${CARRIED_LOOSE_SUMMARY}", yet its reason does not say carried and already answered: ${loose.reason}`)
+  }
+  // A change request's grill drafts a decision and asks no numbered question (#436 Q9), so it is not one of these.
+  const fresh = grilled.filter((t) => t.id !== CARRIED && t.id !== CARRIED_LOOSE && !t.changeRequest)
+  if (!fresh.length) fail('every grilled ticket was carried, so the fresh-grill reason check read nothing')
+  for (const t of fresh) {
+    const r = of(t.id)[0]
+    if (r && (!r.reason.includes(`grilled on paper, 2 question(s) on #${t.issue}`) || r.reason.includes('carried'))) fail(`${t.id}'s grill asked tonight, yet its reason does not say grilled on paper: ${r.reason}`)
+  }
 }
 
 // 15. A Confirm names the questions it covers, and each question carries both its numbers (#301). The morning reads
@@ -721,6 +765,25 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   const triaged = routeOf(TRIAGED)
   if (!triaged.includes('Decide the flow') || triaged.includes('Its flow is already decided')) fail(`${TRIAGED.id}, whose blocker is ready-for-agent, did not route as before`)
   if ((result.needsHuman || []).includes(TRIAGED.id)) fail(`${TRIAGED.id} went to a human although its blocker is ready-for-agent`)
+}
+
+// 18b. A Touches: none ticket is foreground work (#480): #402, #404 and #405, each "Apply Qn of Overnight <date> to
+//      #m", stayed open from 2026-10-25 and #404 and #405 were grilled again on 2026-10-28, though no lane can make a
+//      tracker edit and the answer was already confirmed. Collect gives it the status foreground; the run gives it no
+//      lane, no Route agent and no grill agent, and the report lists it under its own Foreground section.
+{
+  const id = FOREGROUND_T.id
+  const report = allPrompts.find((x) => x.label === 'report')
+  const summary = report ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report.prompt) || [, 'null'])[1]) : null
+  if (started(id)) fail(`${id} is foreground, yet a lane started its implement`)
+  for (const kind of ['route', 'grill', 'review', 'integrate']) if (allPrompts.some((x) => x.label === `${kind}:${id}`)) fail(`${id} is foreground, yet a ${kind} agent ran for it`)
+  if (!(result.foreground || []).includes(id)) fail(`${id} is not in the run's foreground`)
+  if ((result.needsHuman || []).includes(id) || (result.skipped || []).includes(id)) fail(`${id} is foreground, yet the run reports it needs-human or skipped`)
+  if (!summary || !(summary.foreground || []).some((f) => f.id === id && f.issue === FOREGROUND_T.issue && f.title === FOREGROUND_T.title)) fail(`the report's results do not list ${id} (#${FOREGROUND_T.issue}) with its title as foreground`)
+  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('under a "## Foreground" heading')) fail('the report prompt does not name the Foreground section')
+  if (!report || !report.prompt.includes('the issue it edits')) fail('the report prompt does not give each foreground ticket its target issue')
+  const FG_RULE = '`**Touches:** none` line, whatever its label -> "foreground"'
+  for (const c of allPrompts.filter((x) => x.label === 'collect')) if (!c.prompt.includes(FG_RULE)) fail('the collect prompt does not give a Touches: none ticket the status foreground')
 }
 
 // 19. One grammar where a ticket is filed (#248): the ticket-shape check at creation, the collect tool's forecast,
@@ -978,6 +1041,25 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   if (!housed.length) fail('#436: no prompt carries the house rules, so the Decision: rule search read nothing')
   for (const c of housed) if (!c.prompt.includes(RULE)) fail(`#436: the ${c.label} prompt's house rules do not forbid a comment beginning "Decision:"`)
   for (const c of allPrompts.filter((x) => x.label.startsWith('grill:'))) if (!c.prompt.includes('Never write a comment that begins "Confirm" or "Decision:"')) fail(`#436: the ${c.label} prompt, which carries no house rules, does not forbid a comment beginning "Decision:"`)
+}
+
+// 28. The skills directory is a launch argument (#501). The run above launched with OTHER_SKILLS: every SKILL.md path
+//     a prompt names lies under it, and no prompt names one under a home directory. A launch whose skills is not an
+//     absolute path halts naming the argument, and no hint of that halt names a home directory. Outside comments, the
+//     one /Users/<name> path the script holds is SKILLS_DEFAULT, the documented default of the skills argument.
+{
+  const named = allPrompts.flatMap((c) => [...c.prompt.matchAll(/(\/\S*?)\/[\w-]+\/SKILL\.md/g)].map((m) => ({ label: c.label, dir: m[1] })))
+  if (!named.some((x) => x.dir === OTHER_SKILLS)) fail(`#501: no prompt names a SKILL.md under the launch's skills directory ${OTHER_SKILLS}`)
+  for (const k of new Set(named.filter((x) => x.dir !== OTHER_SKILLS).map((x) => `${x.label} prompt reads a skill from ${x.dir}`))) fail(`#501: the ${k}, not the launch's ${OTHER_SKILLS}`)
+  for (const c of allPrompts) if (/\/Users\/[^/\s]+\/\.agents\b/.test(c.prompt)) fail(`#501: the ${c.label} prompt names a home directory's .agents path`)
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  globalThis.args = { ...fixture.args, repo: 'spa-platform', wt: 'worktrees', skills: 'agent-skills' }
+  const halted = await new Function('return (async () => {' + src + '\n})()')()
+  const why = (halted && halted.halted) || ''
+  if (!/^- skills: /m.test(why)) fail(`#501: a launch with a relative skills path did not halt naming skills: ${why || JSON.stringify(halted)}`)
+  if (/\/Users\//.test(why)) fail(`#501: a bad launch's hints name a home directory: ${why}`)
+  const homes = src.split('\n').map((line, i) => ({ line, n: i + 1 })).filter((x) => x.line.includes('/Users/') && !/^\s*\/\//.test(x.line) && !/^const SKILLS_DEFAULT = '\/Users\/[^']+'/.test(x.line))
+  for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
 if (failures.length) {

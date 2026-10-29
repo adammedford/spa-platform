@@ -894,9 +894,9 @@ class SteeringTests(unittest.TestCase):
                               out)
 
     def test_a_target_whose_header_cannot_be_read_fails(self):
-        """#493: each of these was passed over in silence, and the check still said the index
-        agreed. A row naming a contract that does not exist is the reproduction from #44's review:
-        `ghost.md`, at a gate no contract names."""
+        """#493 and #512: each of these was passed over in silence, and the check still said the
+        index agreed. A row naming a contract that does not exist is the reproduction from #44's
+        review: `ghost.md`, at a gate no contract names."""
         for shape, target, write, message in (
             ("a target that does not exist", "[`ghost.md`](ghost.md)", lambda: None,
              "ghost.md exists neither beside contracts/README.md nor at the repository root"),
@@ -913,9 +913,26 @@ class SteeringTests(unittest.TestCase):
             ("JSON that does not parse", "[`registry.schema.json`](registry.schema.json)",
              lambda: self.write("contracts/registry.schema.json", "{\n"),
              "contracts/registry.schema.json is not JSON that parses"),
+            # #512: the part before the '#' is empty, and an empty path resolved to contracts/
+            # itself, which passed as a directory of code carrying no header by design.
+            ("a link that is only a fragment", "[`pipeline`](#pipeline)", lambda: None,
+             "#pipeline is only a fragment, and names no file"),
+            # #511: these two passed as code and as a schema's example by their suffix alone,
+            # though they are neither.
+            ("JSON that is neither a schema nor an example", "[`registry.json`](registry.json)",
+             lambda: self.write("contracts/registry.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.json is JSON that states no freeze and is not a schema's "
+             "*.example.json"),
+            ("a contract that is neither markdown, JSON nor code",
+             "[`openapi.yaml`](openapi.yaml)",
+             lambda: self.write("contracts/openapi.yaml", "openapi: 3.1.0\n"),
+             "contracts/openapi.yaml is neither a markdown contract, JSON nor code, so no header "
+             "is read from it"),
         ):
             with self.subTest(shape=shape):
-                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json"):
+                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json",
+                              "contracts/registry.json", "contracts/openapi.yaml"):
                     (self.root / stale).unlink(missing_ok=True)
                 number = self.write_index(f"| A contract | {target} | G7z | Nobody |")
                 write()

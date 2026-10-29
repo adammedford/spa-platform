@@ -289,8 +289,9 @@ PYTHON_DOUBLE = """#!/bin/bash
 # fails, both are unexpected: a case that reaches them has gone past a merge that should have
 # stopped it. Where the merge goes through, the roadmap goes to the real interpreter, over the
 # copies of its inputs the case's clone holds, and the cleanup deletes nothing and prints nothing,
-# since tools/prune_branches_tests.py runs the real one.
-if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
+# since tools/prune_branches_tests.py runs the real one. The reader's arguments after its path are
+# its own to check (#488: `--pr <number> --head <head>`), and its gh calls reach the gh double.
+if [ "$#" -ge 2 ] && [ "$1" = -I ] && [ "$2" = {reader} ]; then exec {python} "$@"; fi
 n=0
 while [ -e {log}/python3-call-$n ]; do n=$((n + 1)); done
 printf '%s\\0' "$(pwd -P)" "$@" > {log}/python3-call-$n
@@ -792,6 +793,15 @@ class ReviewRecordRefusalTests(LandTestCase):
         self.assertIn("the merge fails on purpose", result.stderr)
         self.assertEqual(f"Reviewed: {HEAD} {review['html_url']}", case.calls()[-1][-1])
 
+    def test_a_listing_gh_cannot_fetch(self):
+        # The reader makes the listing calls since #488, so gh's failure reaches land.sh as the
+        # reader's status 2, and gh's own words pass through above the refusal.
+        case = Case(self, api_fails="gh: Server Error (HTTP 502)")
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertRefused(case, result, f"could not read the review records of #{PR}",
+                           [VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS])
+        self.assertIn("HTTP 502", result.stderr)
+
 
 class SilentExitTests(LandTestCase):
     """Exits before the merge that print no `land:` line. Each must still merge nothing."""
@@ -815,14 +825,6 @@ class SilentExitTests(LandTestCase):
         self.assertEqual(1, result.status, result.stderr)
         self.assertIn("Could not resolve to a PullRequest", result.stderr)
         self.assertEqual([VIEW_STATE], case.calls())
-        self.assertNoStrayCall(case)
-
-    def test_gh_api_listing_fails(self):
-        case = Case(self, api_fails="gh: Server Error (HTTP 502)")
-        result = case.run(PR, "--subject", "Merge task 9.9: x")
-        self.assertEqual(1, result.status, result.stderr)
-        self.assertIn("HTTP 502", result.stderr)
-        self.assertEqual([VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS], case.calls())
         self.assertNoStrayCall(case)
 
 

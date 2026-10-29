@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Gateway.TestHarness;
 
 namespace Gateway.E2ETests.Stack;
 
@@ -394,7 +395,7 @@ public static class ContinuityObserver
                 {
                     observed.Add($"session {s + 1}: {call.Name}: a connection error, missing coverage");
                 }
-                else if (call.Status is 401 or >= 500)
+                else if (call.Status is { } status && (status >= 500 || status == Contract.Error("unauthenticated").Status))
                 {
                     return RowResult.Failed($"session {s + 1}: {call.Name} answered {call.Status}", observed);
                 }
@@ -434,7 +435,7 @@ public static class ContinuityObserver
             capture.Refreshed(sessionRef) is [{ Ts: { } ts }] && ts >= from && ts <= to);
         return inside is null
             ? RowResult.NotProved("no Refreshed line inside the interval", observed)
-            : RowResult.Passed($"session {inside} refreshed once, inside the interval, and no call got a 401 or a 5xx", observed);
+            : RowResult.Passed($"session {inside} refreshed once, inside the interval, and no call was refused as unauthenticated or session_ended or got a 5xx", observed);
     }
 
     private static RowResult? Straddling(RollingDeploy deploy, GatewayCapture capture, List<string> observed)

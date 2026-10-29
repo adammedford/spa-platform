@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-queue',
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
-  whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them',
+  whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
     { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
@@ -111,6 +111,14 @@ export const meta = {
 // one line per pull request with its number, head, verdict, record URL, verified finding and mutation
 // counts and the did-not-fail rows named, because the completion notice cuts a return short and on
 // #287's runs the verdict and the mutation rows were past the cut. A halted run's summary is [].
+//
+// A date later than the run's (#525). A description and its commits are a dated record of what was
+// verified, and a date later than the review's own cannot be true when the review reads it (#507's
+// description said "#44's was re-checked on 2026-10-29" to a run dated 2026-10-28, and neither axis
+// noticed). The inventory hands over the description and every commit message since the fork point
+// as written, and the script finds each YYYY-MM-DD date in them later than date: each is a verified
+// low Spec finding quoting its sentence, which the comment carries beside the head comparison's and
+// the verdict weighs but does not re-take. It carries; it does not hold.
 //
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
@@ -349,13 +357,17 @@ const INVENTORY = {
     bodyClaims: { type: 'array', items: { type: 'string' } },
     // Every sha the description states as this pull request's head, as written, with its sentence (#294).
     statedHeads: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, quote: { type: 'string' } }, required: ['sha', 'quote'] } },
+    // The description and every commit message since the fork point, as written, for the script's
+    // search for a date later than the run's (#525).
+    description: { type: 'string' },
+    commitMessages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' } }, required: ['sha', 'message'] } },
     statedMutations: { type: 'array', items: STATED },
     candidates: { type: 'array', items: CANDIDATE },
     comments: { type: 'array', items: ENTRY },
     reviews: { type: 'array', items: ENTRY },
     error: { type: 'string' },
   },
-  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'reviewCommits', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedHeads', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
+  required: ['number', 'title', 'author', 'branch', 'baseRef', 'head', 'baseTip', 'forkPoint', 'commits', 'changedFiles', 'reviewCommits', 'ownership', 'ci', 'cites', 'bodyClaims', 'statedHeads', 'description', 'commitMessages', 'statedMutations', 'candidates', 'comments', 'reviews', 'error'],
 }
 const FINDING = {
   type: 'object',
@@ -457,6 +469,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
+6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte. Do not look for dates in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
@@ -543,7 +556,7 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
-${stale.length ? `The script compared every head the description states with the head the inventory read, and these differ; each is a verified Spec finding the comment already carries, so weigh it in verdict and outstanding and do not list it again in findings:\n${stale.map((f) => `- ${f.title}. ${f.checked}`).join('\n')}\n` : ''}The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
+${stale.length ? `The script compared every head the description states with the head the inventory read, and searched the description and the commit messages for a date later than the run's (${DATE}); each of these is a verified Spec finding the comment already carries, so weigh it in verdict and outstanding and do not list it again in findings:\n${stale.map((f) => `- ${f.title}. ${f.checked}`).join('\n')}\n` : ''}The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed. ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
@@ -771,7 +784,7 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   ...scopeLines(d, full),
   `CI on the head: ${inv.ci.map((c) => `${c.name} ${c.state}`).join(', ') || 'none reported'}.`,
   `Owner set: ${inv.ownership.owners.join(', ') || 'none'} (path-ownership ${inv.ownership.ok ? 'passed' : 'refused'}).`,
-  'Axes: Standards and Spec reported; the verdict re-took every severity but those of the script\'s head comparison (#294). Run by the review-queue workflow (#83).',
+  'Axes: Standards and Spec reported; the verdict re-took every severity but those of the script\'s head comparison (#294) and later-date search (#525). Run by the review-queue workflow (#83).',
   '',
   '## Standards',
   '',
@@ -813,6 +826,42 @@ const staleHeadFindings = (inv) => (inv.statedHeads || []).filter((s) => s && ty
     title: `The description names the head ${s.sha.trim()}, but the head is ${inv.head}`,
     checked: `Compared by the script with the head gh serves; the description says: ${JSON.stringify(s.quote || '')}`,
   }))
+
+// ---------------------------------------------------------------- a date later than the run's
+// A dated record that postdates the review (#525). This finds every YYYY-MM-DD date, month 01 to 12
+// and day 01 to 31, not part of a longer run of digits, in the description and in each commit message
+// the inventory handed over, and makes each one later than the run's date a verified low Spec finding
+// quoting its sentence: the line it is on, cut at a full stop, question or exclamation mark followed by
+// space. The same date in the same sentence of the same text counts once. A date on or before the
+// run's date, or none, yields none. Low, as the head comparison's: the fix is an edit to the text.
+const DATE_IN_TEXT = /(?<!\d)(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!\d)/g
+const laterDateFindings = (inv) => {
+  const texts = [
+    { where: 'the pull request description', text: inv.description },
+    ...(inv.commitMessages || []).filter((c) => c && typeof c.sha === 'string').map((c) => ({ where: `the commit message of ${c.sha}`, text: c.message })),
+  ]
+  const found = []
+  const seen = new Set()
+  for (const { where, text } of texts) {
+    if (typeof text !== 'string') continue
+    for (const line of text.split(/\r?\n/)) {
+      for (const sentence of line.split(/(?<=[.!?])\s+/)) {
+        for (const m of sentence.matchAll(DATE_IN_TEXT)) {
+          const quote = sentence.trim()
+          const key = `${where}\0${m[0]}\0${quote}`
+          if (m[0] <= DATE || seen.has(key)) continue
+          seen.add(key)
+          found.push({
+            axis: 'Spec', status: 'verified', severity: 'low', where,
+            title: `A date later than the run's (${DATE}): ${m[0]}, in ${where}`,
+            checked: `Found by the script, which compares every date with the run's; it says: ${JSON.stringify(quote)}`,
+          })
+        }
+      }
+    }
+  }
+  return found
+}
 
 // ---------------------------------------------------------------- a rebuilt head
 // The range agent's mapping judged against the inventory's commits (#293): null when it cannot be
@@ -922,12 +971,12 @@ const reviewOne = async (n, res, at) => {
   res.clearedByEarlier = cleared
 
   at.stage = 'verdict'
-  const stale = staleHeadFindings(inv)
+  const stale = [...staleHeadFindings(inv), ...laterDateFindings(inv)]
   const v = await run(verdictPrompt(n, inv, mut, d, stale), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) return failed(res, 'verdict: the verdict agent returned nothing')
   v.earlierFindings = v.earlierFindings || []
   v.changeRequests = (v.changeRequests || []).filter((c) => c && c.title)
-  // The comparison's findings lead the verdict's own: the verdict was told of them and not to repeat them.
+  // The script's findings, the head comparison's and the later dates', lead the verdict's own: the verdict was told of them and not to repeat them.
   v.findings = [...stale, ...(v.findings || [])]
   // The script holds on what it can judge itself: a mutation row under the hold rules, or a held
   // record's finding the range leaves unanswered (an axis that returned nothing failed the pull
