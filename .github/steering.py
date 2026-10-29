@@ -125,9 +125,7 @@ FILES = ["AGENTS.md", "CLAUDE.md"]
 
 # Paths named before they exist. Each is a planned artifact, and this check fails when one appears,
 # so landing it forces the entry out rather than leaving a stale exemption behind.
-PLANNED = {
-    "docs/gaps.md": "workstream 6 owns it and has not started; the row declares ownership",
-}
+PLANNED: dict[str, str] = {}
 
 # Deliberately small, and aimed at the shapes the drift actually took rather than at every way a
 # sentence could carry state. A false negative here is a missed line; a false positive is a check
