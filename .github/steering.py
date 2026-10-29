@@ -33,8 +33,9 @@ row it names, against which its own target's header is compared. A cell naming n
 holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
 by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
 and so does a target it cannot read a header from: one that does not exist, a markdown contract
-with no freeze bullet, a schema stating no freeze, or JSON that does not parse. Only code, a
-directory and a schema's example are passed over, since none of them carries a header (#493).
+with no freeze bullet, a header naming no gate, a schema stating no freeze, or JSON that does not
+parse. Only code, a directory and a schema's example are passed over, since none of them carries
+a header (#493).
 The line it passes prints how many headers it compared: a rule that quietly compares nothing is
 the defect it was written to catch, one level up.
 
@@ -548,9 +549,11 @@ def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
     none of those carries a header: absence there is not a disagreement, since this rule compares
     two claims about a gate and where there is no header there is only the index's. Every other
     absence is a problem, because it is the same silence one step earlier (#493): a target that
-    exists at neither reading, a markdown contract with no freeze bullet, a schema whose
-    description states no freeze, and JSON that does not parse each left a row compared with
-    nothing while the line this check prints still counted it as agreeing.
+    exists at neither reading, a markdown contract with no freeze bullet, a header naming no gate,
+    a schema whose description states no freeze, and JSON that does not parse each left a row
+    compared with nothing while the line this check prints still counted it as agreeing. The
+    header naming no gate is the one of the five this function cannot see: it returns that header
+    as read, and freeze_disagreements() fails the row when it finds no gate in it.
     """
     # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
     # the file, not another file.
