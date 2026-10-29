@@ -949,16 +949,18 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
 //     ordinary grill keeps its questions.
 {
   const grills = allPrompts.filter((x) => x.label.startsWith('grill:'))
-  const req = grills.filter((x) => x.label === `grill:${REQUEST_HUMAN.id}`)
-  if (req.length !== 1) fail(`#436: ${REQUEST_HUMAN.id}, a ready-for-human change request, got ${req.length} grill prompts, not 1`)
-  for (const c of req) {
-    for (const w of ['"## Draft decision": its first line is that heading, never "Decision:". The two lines after it are the draft\'s, as docs/agents/tracker-policy.md gives them (#442 Q43): "Proposed decision: accept|accept with changes|decline", then "Proposed ADR: yes|no"',
-      'Then "Not a decision: Adam accepts it with `Decision: accept as drafted <this comment\'s URL>`.", then the change as it would land',
-      'If a draft or a decision comment already exists, carry it and write nothing', 'you never edit a posted draft',
-      'The standing answer does not apply to a change request: write no "Answer:" line and no numbered question.'])
-      if (!c.prompt.includes(w)) fail(`#436: ${REQUEST_HUMAN.id}'s grill prompt lacks: ${w.slice(0, 100)}`)
-    for (const w of ['## Questions for Adam', '## Proposed glossary / ADR', 'pre-accepted under the standing answer']) if (c.prompt.includes(w)) fail(`#436: ${REQUEST_HUMAN.id}'s grill prompt names ${w}`)
-    for (const re of [/"Decision: accept\|/, /"ADR: yes\|no"/]) if (re.test(c.prompt)) fail(`#436: ${REQUEST_HUMAN.id}'s grill prompt still drafts a bare ${re.source} line, not tracker-policy.md's Proposed form`)
+  for (const id of REQUESTS_GRILLED) {
+    const req = grills.filter((x) => x.label === `grill:${id}`)
+    if (req.length !== 1) fail(`#436: ${id}, a ready-for-human change request, got ${req.length} grill prompts, not 1`)
+    for (const c of req) {
+      for (const w of ['"## Draft decision": its first line is that heading, never "Decision:". The two lines after it are the draft\'s, as docs/agents/tracker-policy.md gives them (#442 Q43): "Proposed decision: accept|accept with changes|decline", then "Proposed ADR: yes|no"',
+        'Then "Not a decision: Adam accepts it with `Decision: accept as drafted <this comment\'s URL>`.", then the change as it would land',
+        'If a draft or a decision comment already exists, carry it and write nothing', 'you never edit a posted draft',
+        'The standing answer does not apply to a change request: write no "Answer:" line and no numbered question.'])
+        if (!c.prompt.includes(w)) fail(`#436: ${id}'s grill prompt lacks: ${w.slice(0, 100)}`)
+      for (const w of ['## Questions for Adam', '## Proposed glossary / ADR', 'pre-accepted under the standing answer']) if (c.prompt.includes(w)) fail(`#436: ${id}'s grill prompt names ${w}`)
+      for (const re of [/"Decision: accept\|/, /"ADR: yes\|no"/]) if (re.test(c.prompt)) fail(`#436: ${id}'s grill prompt still drafts a bare ${re.source} line, not tracker-policy.md's Proposed form`)
+    }
   }
   const ordinary = grills.filter((x) => !REQUESTS_GRILLED.includes(x.label.split(':')[1]))
   if (!ordinary.length) fail('#436: no ordinary grill prompt was rendered, so the contrast check read nothing')
