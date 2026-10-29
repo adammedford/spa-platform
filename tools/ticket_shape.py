@@ -99,7 +99,15 @@ READY = "ready-for-agent"
 # (#284): each task merge is its ticket's merge body, written by the lane's own integrate step
 # (#226), so a box asking for a count in it is a lane's; "landing" and "pushed" still catch a box
 # that needs the landing.
-SITTING_OR_LANDING = tuple((word, re.compile(pattern, flags)) for word, pattern, flags in (
+#
+# A word counts only as a word of prose (#482): not joined to its neighbour by a hyphen, a slash
+# or a dot inside a name, so "full-landing", `landing-work.md` and tests/e2e/Deployed say nothing,
+# and not starting inside a code span, which spans_of() reads. A sentence's closing dot is no
+# join: "needs the cell." still counts. "on `main`" counts, since it starts outside its span.
+JOINED_BEFORE = r"(?<![-/])(?<!\w\.)"
+JOINED_AFTER = r"(?![-/])(?!\.\w)"
+SITTING_OR_LANDING = tuple((word, re.compile(JOINED_BEFORE + pattern + JOINED_AFTER, flags))
+                           for word, pattern, flags in (
     ("deployed", r"\bdeployed\b", re.IGNORECASE),
     ("the cell", r"\bthe cell\b", re.IGNORECASE),
     ("against the applied", r"\bagainst the applied\b", re.IGNORECASE),
@@ -129,6 +137,21 @@ SHARED_COMMIT = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     r"(?:branch|pull[ \t]+requests?|PR)\b",
 ))
 OPEN_BOX = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
+CODE_SPAN = re.compile(r"`[^`\n]+`")
+
+
+def spans_of(text: str) -> list[range]:
+    """The offsets of each code span in a line, its backticks included."""
+    return [range(*span.span()) for span in CODE_SPAN.finditer(text)]
+
+
+def prose_words(text: str) -> list[str]:
+    """The SITTING_OR_LANDING words a box says as words of prose, in the list's order: a match that
+    starts inside a code span is no word of prose, and the patterns refuse a joined one."""
+    spans = spans_of(text)
+    return [word for word, pattern in SITTING_OR_LANDING
+            if any(not any(found.start() in span for span in spans)
+                   for found in pattern.finditer(text))]
 
 # The three ways a body states a wait, each giving the issue numbers it waits for. "Blocked by"
 # takes a list, as the tracker guide's fallback line `Blocked by: #<n>, #<n>` writes one. An item of
@@ -380,7 +403,7 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
     if READY in issue.labels:
         for box in OPEN_BOX.finditer(issue.body):
             text = box.group("text")
-            words = [word for word, pattern in SITTING_OR_LANDING if pattern.search(text)]
+            words = prose_words(text)
             if words:
                 failures.append(Failure("sitting-or-landing", f"an open box says {said(words)}: "
                                         f"{text[:120]}"))
