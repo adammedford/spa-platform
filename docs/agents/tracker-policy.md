@@ -16,7 +16,10 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
 - **The shape of a ticket a lane can finish.** Five rules, confirmed on #227:
   1. A ticket has one owner.
   2. A box that needs a sitting is its own ready-for-human ticket, blocked by every ticket that
-     builds what it runs.
+     builds what it runs. A box ticked from a count a later run's retro reports is likewise its
+     own ready-for-human ticket. A ticket whose open boxes are all of that kind is itself that
+     ticket, relabelled in place. An observation ticket is blocked by any separate ticket whose
+     work must land before the observation can be made.
   3. No box depends on a push or a landing.
   4. Cross-owner work is a spec with one sub-issue per owner in build order, the integrator's
      `Platform.Abstractions` change first. Two halves that must land together stay single-owner on
