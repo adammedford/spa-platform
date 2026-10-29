@@ -125,7 +125,8 @@ note "the service runs ${CURRENT}, gateway ${RUNNING_IMAGE##*@}"
 
 # --- which revision ---------------------------------------------------------------------------------
 
-# A revision's gateway image, or nothing when ECS no longer describes it (deleted).
+# A revision's gateway image, or nothing when ECS does not describe it: deleted, never registered, or
+# deregistered with nothing left running it (the header's two ECS references).
 gateway_of_revision() {
   aws_call ecs describe-task-definition --task-definition "${FAMILY}:$1" \
     --query "taskDefinition.containerDefinitions[?name=='${GATEWAY_CONTAINER}'] | [0].image"
