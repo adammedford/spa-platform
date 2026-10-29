@@ -1177,6 +1177,38 @@ class ClosesTests(LandTestCase):
         case.push_branch()
         self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
 
+    def test_a_lane_task_commit_names_its_ticket_as_issue_n(self):
+        # The overnight route (#529): a lane's task commit names its ticket only as issue-<n>, and
+        # the lane's merge, which carries `Ticket: #n`, is not read (decision on #566).
+        case = MergingCase(self, commits=("Task issue-479: the work, with no number sign",),
+                           description="Closes #479")
+        result = case.run(PR, "--subject", self.SUBJECT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], result.land_lines())
+        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
+    def test_an_issue_token_is_matched_whole(self):
+        # Each way round, as for #n: issue-35 is not read inside issue-352, nor issue-352 as
+        # issue-35; and a word ending in issue, such as reissue-352, is not the token.
+        for closes, message in (("35", "Task issue-352: the work"),
+                                ("352", "Task issue-35: the work"),
+                                ("352", "The reissue-352 of the work")):
+            with self.subTest(closes=closes, message=message):
+                case = MergingCase(self, commits=(message,), description=f"Closes #{closes}")
+                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), f"#{closes}")
+
+    def test_a_lane_merge_naming_the_ticket_does_not_count(self):
+        # The overnight lane merge's shape: issue-352 in its subject, Ticket: #352 in its body, and
+        # neither commit it joins names the ticket.
+        case = MergingCase(self, description="Closes #352")
+        case.git("checkout", "-q", "-b", "side", "origin/main", cwd=case.author)
+        case.git("commit", "-q", "--allow-empty", "-m", "Side work", cwd=case.author)
+        case.git("checkout", "-q", MergingCase.BRANCH, cwd=case.author)
+        case.git("merge", "-q", "--no-ff", "-m", "Merge task issue-352: the work\n\nTicket: #352",
+                 "side", cwd=case.author)
+        case.push_branch()
+        self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+
     def test_a_description_whose_every_ticket_a_commit_names_merges(self):
         # Named in a subject, a body and a trailer. The description was edited on the web, so its
         # lines end in a carriage return, and its keywords are in three cases, as GitHub reads any.
