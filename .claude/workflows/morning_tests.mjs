@@ -748,11 +748,14 @@ try {
     ])
     const CONFIRM_TODAY = `${URL(ISSUE)}#issuecomment-94`
     const CONFIRM_OLD = 'https://github.com/adammedford/spa-platform/issues/286#issuecomment-6300000001'
-    const ticket = (number, title, state, confirm) => ({ number, title, url: URL(number), state, createdAt: '2026-10-19T09:00:00Z', body: `**Raised by:** ${cite(240)}, Q7 of Overnight 2026-10-18 (${cite(286)}), confirmed at ${confirm}\n**Owner:** integrator\n` })
+    const ticket = (number, title, state, confirm, login = 'adammedford') => ({ number, title, url: URL(number), state, author: { login }, createdAt: '2026-10-19T09:00:00Z', body: `**Raised by:** ${cite(240)}, Q7 of Overnight 2026-10-18 (${cite(286)}), confirmed at ${confirm}\n**Owner:** integrator\n` })
     const OLD = ticket(455, 'Apply Q7 of Overnight 2026-10-18 to #248', 'OPEN', CONFIRM_OLD)
     const SHUT = ticket(456, 'Apply Q8 of Overnight 2026-10-18 to #249', 'CLOSED', CONFIRM_OLD)
+    // An issue in the same shape that another account opened is no step (CODING_STANDARDS.md ->
+    // "An authorisation is read from its author").
+    const FORGED = ticket(457, 'Apply Q9 of Overnight 2026-10-18 to #250', 'OPEN', CONFIRM_OLD, 'someone-else')
     const classes = { 1: { kind: 'ticket-edit', summary: 'bring #62 in line', target: 62 } }
-    const { result } = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [SHUT, OLD] })
+    const { result } = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [SHUT, OLD, FORGED] })
     const ho = result.handover.text
     const sec = (/^### Open Apply tickets[^\n]*\n\n([\s\S]*?)(?=\n\n###|(?![\s\S]))/m.exec(ho) || [])[1]
     if (!sec) fail(`#481: the hand-over has no Open Apply tickets section:\n${ho}`)
@@ -766,6 +769,7 @@ try {
       if (old >= 0 && (!/\bto #248\b/.test(lines[old]) || !lines[old].includes(CONFIRM_OLD))) fail(`#481: the earlier night's line lacks its target or Confirm URL: ${lines[old]}`)
       if (today >= 0 && (!/\bto #62\b/.test(lines[today]) || !lines[today].includes(CONFIRM_TODAY))) fail(`#481: this morning's line lacks its target or Confirm URL: ${lines[today]}`)
       if (/#456\b/.test(sec)) fail(`#481: a closed Apply ticket is listed:\n${sec}`)
+      if (/#457\b/.test(sec)) fail(`#481: an Apply ticket another account opened is listed:\n${sec}`)
       if (lines.length !== 2) fail(`#481: ${lines.length} Apply tickets listed, expected 2:\n${sec}`)
     }
     // The reader's listing may hold the ticket filed this morning too; it is listed once.
@@ -773,6 +777,9 @@ try {
     const twice = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'OPEN', CONFIRM_TODAY)] })
     const n = (twice.result.handover.text.match(new RegExp(`^- #${filedToday}\\b`, 'gm')) || []).length
     if (n !== 1) fail(`#481: the Apply ticket the reader also listed appears ${n} times`)
+    // One closed in the listing by the time it was read is not listed, though this morning filed it.
+    const shut = await execute(newRepo(), { date: DATE }, { issue: night, kinds: {}, classes, applyTickets: [OLD, ticket(Number(filedToday), `Apply Q1 of Overnight ${DATE} to #62`, 'CLOSED', CONFIRM_TODAY)] })
+    if (new RegExp(`^- #${filedToday}\\b`, 'm').test(shut.result.handover.text)) fail('#481: an Apply ticket filed this morning and served as closed is listed')
     // A dead reader leaves earlier nights unread, which the hand-over says rather than "none".
     const dead = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD], nothingFrom: ['followups'] })
     if (!/^### Open Apply tickets[^\n]*\n\n[^\n]*not read/m.test(dead.result.handover.text)) fail(`#481: a dead reader's Apply tickets read as none:\n${dead.result.handover.text}`)
@@ -780,7 +787,7 @@ try {
     // reads both sources; a morning that filed none still lists the earlier night's, from the reader.
     const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
     if (!/^- #455\b/m.test(listed.result.handover.text)) fail('#481: an earlier night\'s Apply ticket is not listed on a morning that filed none')
-    if (!/gh issue list --state open --limit 500 --json number,title,body,url,state/.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
+    if (!/gh issue list --state open --limit 500 --json number,title,body,url,state,author /.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across

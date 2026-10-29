@@ -285,7 +285,7 @@ const FOLLOWUPS = {
   properties: {
     prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: ENTRY }, reviews: { type: 'array', items: ENTRY } }, required: ['number', 'comments', 'reviews'] } },
     filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
-    applyTickets: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' } }, required: ['number', 'title', 'body', 'url', 'state'] } },
+    applyTickets: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' }, author: { type: 'object', properties: { login: { type: 'string' } }, required: ['login'] } }, required: ['number', 'title', 'body', 'url', 'state', 'author'] } },
     error: { type: 'string' },
   },
   required: ['prs', 'filed', 'applyTickets', 'error'],
@@ -439,7 +439,10 @@ const followUpsToFile = (read, mdir) => {
 // (by number, which GitHub gives in filing order), each with its target and the Confirm comment its
 // Raised-by line names (followUpTicket). Two sources, one parser: the follow-ups reader's listing of
 // the open issues, and the tickets this morning's appliers filed, which a listing taken minutes later
-// may not show yet. A ticket either names as closed is not listed.
+// may not show yet. A ticket the listing names as closed is not listed. A listed ticket counts only when
+// Adam's account opened it, as the morning's appliers do: a title and a Raised-by line are all it takes
+// to read as a step, so an issue anyone else opened in that shape is never handed over as one
+// (CODING_STANDARDS.md -> "An authorisation is read from its author").
 const APPLY_TITLE = /^(?:Apply Q(\d+) of Overnight (\d{4}-\d{2}-\d{2}) to|The rest of Q(\d+) of Overnight (\d{4}-\d{2}-\d{2}) on) #(\d+)$/
 const applyTicketOf = (i) => {
   const m = i && Number.isInteger(i.number) ? APPLY_TITLE.exec(String(i.title || '').trim()) : null
@@ -450,7 +453,7 @@ const applyTicketOf = (i) => {
 const openApplyTickets = (listed, filedToday) => {
   const closed = new Set((listed || []).filter((i) => i && String(i.state).toUpperCase() !== 'OPEN').map((i) => i.number))
   const byNumber = new Map()
-  for (const i of [...(listed || []).filter((x) => x && !closed.has(x.number)), ...filedToday]) {
+  for (const i of [...(listed || []).filter((x) => x && x.author && x.author.login === ADAM), ...filedToday]) {
     const t = applyTicketOf(i)
     if (t && !closed.has(t.number) && !(byNumber.get(t.number) || {}).confirm) byNumber.set(t.number, t)
   }
@@ -944,7 +947,7 @@ OUTPUT FILE: ${p.mdir}/followups-read.txt
 1. \`cd ${REPO} && gh pr list --state open --base main --limit 500 --json number\`.
 2. For each pull request it lists: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served; reviews = the same for \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads the records and their follow-ups tables from them.
 3. filed: for each pull request, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
-4. applyTickets, the open Apply tickets of every night (#481): \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,url,state --jq '[.[] | select(.title | test("^(Apply|The rest of) Q[0-9]+ of Overnight "))]'\`, each issue as served, its body verbatim. It lists without --search, whose index can miss an issue filed minutes ago.
+4. applyTickets, the open Apply tickets of every night (#481): \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,url,state,author --jq '[.[] | select(.title | test("^(Apply|The rest of) Q[0-9]+ of Overnight "))]'\`, each issue as served, its body verbatim and its author as {login}. It lists without --search, whose index can miss an issue filed minutes ago.
 5. If GitHub cannot be reached, error says so and prs, filed and applyTickets are []. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it. It is named .txt so that a later morning's Replay, which reads every .json file there as a phase file, passes over it.`
 }
