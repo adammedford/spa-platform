@@ -11,7 +11,7 @@ a throwaway directory. The clone's first commit holds copies of the five files t
 (itself, the two documents it writes and the two plan files), so `roadmap.py --json` derives the row
 states from that case's own merge subjects, which the case writes. gh is the one call that leaves the
 machine, so each case's bin holds a strict gh double: it answers the pull request listing the cleanup
-makes for an overnight branch, and the three `pr view` reads and the merge tools/land.sh makes, and
+makes for an overnight branch, and the four `pr view` reads and the merge tools/land.sh makes, and
 any other call is recorded and exits 97.
 
 **A constructed environment, inheriting nothing**, for land_tests.py's reasons: PATH is the case's
@@ -112,6 +112,8 @@ case "$1 $2" in
       "state .state") echo OPEN ;;
       "baseRefName .baseRefName") echo main ;;
       "headRefOid .headRefOid") /bin/cat -- "$fixtures/head" ;;
+      # A description with no Closes line, so land.sh checks no ticket against the branch (#566).
+      "body .body") echo ;;
       *) unexpected ;;
     esac
     exit 0 ;;

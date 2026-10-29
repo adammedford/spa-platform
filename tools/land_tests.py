@@ -29,7 +29,7 @@ carry a real gh. `GIT_DIR` or `CDPATH` inherited would change what git or `cd` d
 **Real git; a double for gh and for python3.** Every git call land.sh makes works offline, so each
 case builds a bare `origin` and a clone of it in its throwaway directory and lets the refusals meet
 git itself. gh is the one call that leaves the machine, so each case's bin holds a strict gh double:
-it answers the three `pr view` shapes land.sh uses, the two `api` listings of the pull request's
+it answers the four `pr view` shapes land.sh uses, the two `api` listings of the pull request's
 comments and reviews (from the case's own fixtures), and `pr merge`, and it records every call's
 arguments. Any other call is recorded and exits 97, which turns a new gh call in land.sh into a red
 case instead of an empty answer. land.sh runs python3 up to three times. Before its merge it runs
@@ -133,10 +133,12 @@ PR = "5"
 VIEW_STATE = ["pr", "view", PR, "--json", "state", "--jq", ".state"]
 VIEW_BASE = ["pr", "view", PR, "--json", "baseRefName", "--jq", ".baseRefName"]
 VIEW_HEAD = ["pr", "view", PR, "--json", "headRefOid", "--jq", ".headRefOid"]
+VIEW_BODY = ["pr", "view", PR, "--json", "body", "--jq", ".body"]
 LIST_COMMENTS = ["api", "repos/{owner}/{repo}/issues/" + PR + "/comments", "--paginate", "--slurp"]
 LIST_REVIEWS = ["api", "repos/{owner}/{repo}/pulls/" + PR + "/reviews", "--paginate", "--slurp"]
-# What land.sh asks gh before any refusal that reads the review records, in order.
-READS_RECORDS = [VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS, LIST_REVIEWS]
+# What land.sh asks gh before it reads the review records, and with them, in order.
+READS_HEAD = [VIEW_STATE, VIEW_BASE, VIEW_HEAD, VIEW_BODY]
+READS_RECORDS = READS_HEAD + [LIST_COMMENTS, LIST_REVIEWS]
 
 # The pull request's head as the double reports it, an earlier head a review once read, the base a
 # record names, and a head the pull request moves to while land.sh runs.
@@ -185,6 +187,7 @@ view_fails={view_fails}
 api_fails={api_fails}
 server={server}
 during_merge={during_merge}
+description={description}
 
 n=0
 while [ -e "$log/call-$n" ]; do n=$((n + 1)); done
@@ -237,6 +240,8 @@ case "$1" in
         case "$5 $7" in
           "state .state") printf '%s\\n' "$state" ;;
           "baseRefName .baseRefName") printf '%s\\n' "$base" ;;
+          # The description, as `--jq .body` prints a string: its bytes and a newline.
+          "body .body") /bin/cat -- "$description" ;;
           # The k-th read of the head answers the k-th of $heads, and the last one after that, so
           # a case can move the head between two reads the way a push during the run would.
           "headRefOid .headRefOid")
@@ -348,7 +353,7 @@ class Case:
     def __init__(self, test: unittest.TestCase, *, state: str = "OPEN", base: str = "main",
                  heads: tuple[str, ...] = (HEAD,), comments: list | None = None,
                  reviews: list | None = None, view_fails: str = "", api_fails: str = "",
-                 gh: bool = True, python3: bool = True):
+                 description: str = "", gh: bool = True, python3: bool = True):
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
         # Resolved, because bash's pwd reports the physical path when the caller's PWD is not
@@ -372,7 +377,7 @@ class Case:
             runner.link_tool(self.bin / tool, os.path.realpath(found))
         if gh:
             self.serve(state=state, base=base, heads=heads, comments=comments, reviews=reviews,
-                       view_fails=view_fails, api_fails=api_fails)
+                       view_fails=view_fails, api_fails=api_fails, description=description)
         if python3:
             self.write_python3(past_merge=False)
 
@@ -396,21 +401,24 @@ class Case:
 
     def serve(self, *, state: str = "OPEN", base: str = "main", heads: tuple[str, ...] = (HEAD,),
               comments: list | None = None, reviews: list | None = None, view_fails: str = "",
-              api_fails: str = "", server: str = ""):
-        """Writes the gh double and the two listings it answers from. Given a `server`, a clone of
-        origin, its merge goes through; without one the merge fails, as every case outside
-        PostMergeTests needs."""
+              api_fails: str = "", server: str = "", description: str = ""):
+        """Writes the gh double, the two listings and the description it answers from. Given a
+        `server`, a clone of origin, its merge goes through; without one the merge fails, as every
+        case outside PostMergeTests and ClosesTests needs. The default description has no Closes
+        line, so land.sh reads no commit of the head, which in most cases git does not hold."""
         # One page each, as `gh api --paginate --slurp` wraps them (`gh api --help`).
         listings = {"comments": CLEARS if comments is None else comments, "reviews": reviews or []}
         for name, entries in listings.items():
             (self.dir / f"{name}.json").write_text(json.dumps([entries]))
+        (self.dir / "description").write_bytes(f"{description}\n".encode())
         self.write_executable("gh", GH_DOUBLE.format(
             log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
             base=shlex.quote(base), heads=shlex.quote(" ".join(heads)),
             comments=shlex.quote(str(self.dir / "comments.json")),
             reviews=shlex.quote(str(self.dir / "reviews.json")),
             view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails),
-            server=shlex.quote(server), during_merge=shlex.quote(str(self.dir / "during-merge"))))
+            server=shlex.quote(server), during_merge=shlex.quote(str(self.dir / "during-merge")),
+            description=shlex.quote(str(self.dir / "description"))))
 
     def write_python3(self, *, past_merge: bool):
         """Writes the python3 double, which answers the roadmap and the cleanup only `past_merge`."""
@@ -474,14 +482,18 @@ class MergingCase(Case):
     The clone's history ends in copies of the five files tools/roadmap.py reads, taken from this
     checkout now, and a commit that makes their generated blocks current for this history, so the
     blocks move only when the merge lands a plan row. A pull request branch with one commit of its
-    own sits on origin; the gh double reports its tip as the head, and a review record clears it.
+    own, or the `commits` a case names, sits on origin; the gh double reports its tip as the head, a
+    review record clears it, and `description` is the pull request's. The branch is written in
+    `author`, a clone of its own, and the clone land.sh runs in never fetches it, as a worktree made
+    at origin's base holds none of a pull request's commits until land.sh fetches them (#566).
     The double's merge goes through, from `server`, a clone of origin standing in for GitHub's side.
     The clone sits detached at origin's base, as the worktree land.sh's header asks for does.
     """
 
     BRANCH = "change"
 
-    def __init__(self, test: unittest.TestCase, *, base: str = "main"):
+    def __init__(self, test: unittest.TestCase, *, base: str = "main",
+                 commits: tuple[str, ...] = ("The change under review",), description: str = ""):
         super().__init__(test, base=base)
         for name in ROADMAP_FILES:
             target = self.work / name
@@ -500,21 +512,31 @@ class MergingCase(Case):
         if base != "main":
             self.git("push", "-q", "origin", f"HEAD:refs/heads/{base}", cwd=self.work)
         self.base_tip = self.worktree_head()
-
-        self.git("checkout", "-q", "-b", self.BRANCH, cwd=self.work)
-        (self.work / "change.txt").write_text("the change under review\n")
-        self.git("add", "change.txt", cwd=self.work)
-        self.git("commit", "-q", "-m", "The change under review", cwd=self.work)
-        self.head = self.worktree_head()
-        self.git("push", "-q", "origin", self.BRANCH, cwd=self.work)
         self.git("fetch", "-q", "origin", cwd=self.work)
         self.git("checkout", "-q", "--detach", f"origin/{base}", cwd=self.work)
 
+        self.author = self.dir / "author"
+        self.clone(str(self.origin), self.author)
+        self.git("checkout", "-q", "-b", self.BRANCH, f"origin/{base}", cwd=self.author)
+        (self.author / "change.txt").write_text("the change under review\n")
+        self.git("add", "change.txt", cwd=self.author)
+        for message in commits:
+            self.git("commit", "-q", "--allow-empty", "-m", message, cwd=self.author)
+
         self.server = self.dir / "server"
         self.clone(str(self.origin), self.server)
-        self.serve(base=base, heads=(self.head,), comments=[record_comment(self.head, "merge")],
-                   server=str(self.server))
+        self.base = base
+        self.description = description
+        self.push_branch()
         self.write_python3(past_merge=True)
+
+    def push_branch(self):
+        """Pushes the author's branch to origin and serves its tip as the head, which a review
+        record clears."""
+        self.head = self.git_out("rev-parse", "HEAD", cwd=self.author).strip()
+        self.git("push", "-q", "-f", "origin", self.BRANCH, cwd=self.author)
+        self.serve(base=self.base, heads=(self.head,), comments=[record_comment(self.head, "merge")],
+                   server=str(self.server), description=self.description)
 
     def during_merge(self, script: str):
         """Has the gh double run `script` under /bin/sh while it merges, before the merge commit is
@@ -799,7 +821,7 @@ class ReviewRecordRefusalTests(LandTestCase):
         case = Case(self, api_fails="gh: Server Error (HTTP 502)")
         result = case.run(PR, "--subject", "Merge task 9.9: x")
         self.assertRefused(case, result, f"could not read the review records of #{PR}",
-                           [VIEW_STATE, VIEW_BASE, VIEW_HEAD, LIST_COMMENTS])
+                           READS_HEAD + [LIST_COMMENTS])
         self.assertIn("HTTP 502", result.stderr)
 
 
@@ -883,7 +905,7 @@ class MergeCallTests(LandTestCase):
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--unreviewed", reason)
         self.assertMergeCalled(case, result,
                                MERGE + ["--subject", "Merge task 9.9: x", "--body", f"Unreviewed: {reason}"],
-                               before=[VIEW_STATE, VIEW_BASE, VIEW_HEAD])
+                               before=READS_HEAD)
 
     def test_the_trailer_follows_the_body_after_one_blank_line(self):
         for written, trailer_after in ((self.BODY, self.BODY), (self.BODY + "\n\n\n", self.BODY),
@@ -905,7 +927,7 @@ class MergeCallTests(LandTestCase):
             case, result,
             MERGE + ["--subject", "Merge task 9.9: x", "--body",
                      f"{self.BODY}\n\nUnreviewed: no session free tonight"],
-            before=[VIEW_STATE, VIEW_BASE, VIEW_HEAD])
+            before=READS_HEAD)
 
     def test_relative_body_path_from_a_subdirectory(self):
         # 2c9962f: the path was checked from the caller's directory and read from the repository's
@@ -1102,6 +1124,86 @@ class PostMergeTests(LandTestCase):
         self.assertEqual({"main": case.base_tip, "release": refresh.sha,
                           MergingCase.BRANCH: case.head}, case.origin_refs())
         self.assertPython3Calls(case, [self.roadmap_call(case)])
+
+
+class ClosesTests(LandTestCase):
+    """The description's Closes lines against the branch's commits (#566): every #n a `Closes #n`
+    line names must be in the message of a non-merge commit between the base and the head, or
+    nothing merges. The cases run MergingCase, whose merge would go through and whose landing clone
+    holds none of the branch's commits, so a refusal is land.sh's own and a pass shows land.sh
+    fetching the head before it read its commits."""
+
+    SUBJECT = "Merge task issue-566: a change that closes tickets"
+
+    def assertClosesRefused(self, case: MergingCase, result: Result, *unnamed: str):
+        """Refused before the records are read, naming exactly `unnamed`, in the description's
+        order, with origin as it was."""
+        self.assertRefused(case, result,
+                           f"the description of #{PR} closes {' '.join(unnamed)}, which no non-merge",
+                           READS_HEAD)
+        self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head}, case.origin_refs())
+
+    def test_a_ticket_no_commit_names_is_refused_reviewed_or_not(self):
+        # #536 on 2026-10-29: the commit naming #352 was dropped and the Closes line stayed.
+        for extra in ((), ("--unreviewed", "main is red and cannot wait")):
+            with self.subTest(extra=extra):
+                case = MergingCase(self, description="Lands the change.\n\nCloses #352")
+                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT, *extra),
+                                         "#352")
+
+    def test_only_the_tickets_no_commit_names_are_named(self):
+        # The unnamed one in lower case, which GitHub reads as a closing keyword too.
+        case = MergingCase(self, commits=("Task issue-177: the first part, for #177",
+                                          "The rest\n\nTicket: #388"),
+                           description="Closes #177\ncloses #352\nCloses #388")
+        self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+
+    def test_a_number_is_matched_whole(self):
+        # Each way round: #35 is not read inside #352, and #352 is not read as #35 and a 2.
+        for closes, named in (("35", "352"), ("352", "35")):
+            with self.subTest(closes=closes, named=named):
+                case = MergingCase(self, commits=(f"The work for #{named}",),
+                                   description=f"Closes #{closes}")
+                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), f"#{closes}")
+
+    def test_a_merge_naming_the_ticket_does_not_count(self):
+        # A merge on the branch names #352; neither commit it joins does.
+        case = MergingCase(self, description="Closes #352")
+        case.git("checkout", "-q", "-b", "side", "origin/main", cwd=case.author)
+        case.git("commit", "-q", "--allow-empty", "-m", "Side work", cwd=case.author)
+        case.git("checkout", "-q", MergingCase.BRANCH, cwd=case.author)
+        case.git("merge", "-q", "--no-ff", "-m", "Merge side: the work for #352", "side",
+                 cwd=case.author)
+        case.push_branch()
+        self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+
+    def test_a_description_whose_every_ticket_a_commit_names_merges(self):
+        # Named in a subject, a body and a trailer. The description was edited on the web, so its
+        # lines end in a carriage return, and its keywords are in three cases, as GitHub reads any.
+        # A Ticket: line closes nothing, so the ticket it names needs no commit.
+        case = MergingCase(self, commits=("Task issue-177: the first part, for #177",
+                                          "The second part\n\nIt finishes what #252 asked for.",
+                                          "The third part\n\nTicket: #388"),
+                           description="Lands three tickets.\r\n\r\nCloses #177\r\n  closes #252\r\n"
+                                       "CLOSES #388\r\nTicket: #100")
+        # The premise: the landing clone does not hold the head, so land.sh fetched it.
+        missing = subprocess.run(["git", "cat-file", "-e", f"{case.head}^{{commit}}"],
+                                 cwd=case.work, env=case.env(), capture_output=True)
+        self.assertNotEqual(0, missing.returncode, "the landing clone already holds the head")
+        result = case.run(PR, "--subject", self.SUBJECT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], result.land_lines())
+        self.assertEqual(READS_RECORDS + [["pr", "merge", PR, "--merge", "--match-head-commit",
+                                           case.head, "--subject", self.SUBJECT, "--body",
+                                           f"Reviewed: {case.head} {RECORD_URL}"]], case.calls())
+        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
+    def test_a_head_whose_commits_cannot_be_read_is_refused(self):
+        # The double's head is a sha origin does not hold, so the fetch for it fails.
+        case = Case(self, description="Closes #352")
+        result = case.run(PR, "--subject", "Merge task 9.9: x")
+        self.assertRefused(case, result, f"could not read the commits of #{PR} up to {HEAD}",
+                           READS_HEAD)
 
 
 class HelpTests(LandTestCase):

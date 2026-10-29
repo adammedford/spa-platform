@@ -36,6 +36,10 @@
 # than take an unreviewed head.
 # The merge body ends with `Reviewed: <head> <record URL>`, which this script writes, not its caller.
 #
+# It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
+# between the base and that head names in its message, because the merge closes each one (#566).
+# A refusal names each #n no commit names, and --unreviewed does not lift it.
+#
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
 # with `Unreviewed: <reason>`. That review stays open until a record naming the merged head says
@@ -161,6 +165,42 @@ git diff --quiet && git diff --cached --quiet \
 head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
 full_sha='^[0123456789abcdef]{40}$'
 [[ $head =~ $full_sha ]] || die "gh reported '$head' as the head of #$pr, which is not a full commit sha."
+
+# A `Closes #n` line in the description closes ticket n when this merges into the default branch:
+# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue.
+# So each n has to be a ticket the branch did work for (#566). On 2026-10-29 #536's branch was
+# rebuilt without e2fc266, the one commit naming #352, and its description still closed #352, whose
+# work change request #551 still carried; only a sub-agent's reading caught it. Every n a Closes
+# line names must appear as `#n` in the message (subject, body or trailer) of a non-merge commit
+# between the base and the pinned head. A merge is left out because its message names what it
+# joins, which a rebuild can keep after the commit that did the work is gone. It runs with
+# --unreviewed too: a review record clears a head, not a description, which can change after it.
+#
+# A Closes line is read in the form docs/agents/landing-work.md -> "Land it" gives it and
+# .claude/workflows/morning.js reads, one `Closes #n` to a line, with the keyword in any case, as
+# GitHub reads it, and whatever follows the number, such as the carriage return that ends each line
+# of a description edited on the web. n is every digit after the `#`, and `#n` is matched in a
+# message only where no digit follows, so #35 is not found inside #352. The head's commits are read
+# only when there is a Closes line, and fetched by sha when this clone lacks them, the way
+# actions/checkout fetches a pull request's commit from GitHub: https://github.com/actions/checkout.
+description="$(gh pr view "$pr" --json body --jq .body)"
+closes_line='^[[:space:]]*[Cc][Ll][Oo][Ss][Ee][Ss][[:space:]]+#([0-9]+)'
+closes=""
+while IFS= read -r line; do
+  if [[ $line =~ $closes_line ]]; then closes="$closes #${BASH_REMATCH[1]}"; fi
+done <<< "$description"
+if [ -n "$closes" ]; then
+  { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
+    && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
+    || die "could not read the commits of #$pr up to $head, so the tickets its Closes lines name cannot be checked."
+  unnamed=""
+  for ticket in $closes; do
+    named="$ticket([^0-9]|\$)"
+    [[ $messages =~ $named ]] || unnamed="$unnamed $ticket"
+  done
+  [ -z "$unnamed" ] \
+    || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names, so it does not merge. Name each in the commit that did its work, or make its line Ticket: #n (docs/agents/landing-work.md -> Land it)."
+fi
 
 if [ -n "$unreviewed" ]; then
   trailer="Unreviewed: $unreviewed"
