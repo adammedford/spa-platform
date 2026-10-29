@@ -107,8 +107,8 @@ An agent identity apart from the human's account is out of scope here, not rejec
   - decision 4 when the steering check refuses an added file (#437);
   - decision 5 when the steering check's set changes (#437); `tracker-policy.md` itself landed with
     #432.
-- `docs/agents/domain.md`'s "Two decision surfaces" duplicates "Where a decision lives" until #440
-  makes it a pointer.
+- `docs/agents/domain.md`'s "Two decision surfaces" duplicates "Where a decision lives" until #438
+  makes it a pointer, in the landing that carries this ADR.
 - ADR-0020's status line records the amendment.
 - ADR-0021's status line records the amendment.
 - ADR-0023's status line records the amendment.
