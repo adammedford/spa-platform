@@ -485,9 +485,12 @@ STEP 3 — record it on the issue: one comment headed "## Conflict at integrate"
 
 Return outcome "resolved" or "unresolved", headSha (\`git -C ${WT(t)} rev-parse HEAD\`), tip (the <tip> sha of STEP 0, the run branch's tip the back-merge took in; "" when unresolved), notes (the files and how each was resolved, or why not).`
 
+// The summary a grill returns when an earlier night already asked its questions (#487): the run's reasons read it to
+// say carried rather than grilled on paper, and the report reads it to leave those questions out of tonight's count.
+const CARRIED_GRILL = 'carried from an earlier night, not re-grilled'
 const grillPrompt = (t, context) => `Grill ticket ${t.n} (task ${t.id}) on paper for Adam: issue #${t.issue}, ${t.url}. Adam is asleep and will answer in bulk tomorrow.
 ${context ? `Context from tonight: ${context}\n` : ''}
-STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), glossaryProposals and adrCandidates read from the "## Proposed glossary / ADR" comment, summary "carried from an earlier night, not re-grilled", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
+STEP 0, do not grill twice. Read the issue once: \`cd ${REPO} && gh issue view ${t.issue} --json title,body,comments\` (the body is the spec; the comments are the record). If a comment headed "## Questions for Adam" already exists and no context from tonight is given above, it was grilled on an earlier night: return its existing questions (q, recommendation), glossaryProposals and adrCandidates read from the "## Proposed glossary / ADR" comment, summary "${CARRIED_GRILL}", and write nothing. Only an issue with no such comment, or one with context from tonight, is grilled below.
 
 ${STANDING ? "ADAM'S STANDING ANSWER, granted for this run (" + DATE + "): he accepts the recommendation on every question. Under each question write the line \"Answer: yes, pre-accepted under the standing answer granted " + DATE + "\", and in later rounds treat the recommendation as decided rather than provisional. A pre-accepted answer is provisional until Adam confirms it on the Overnight issue (docs/agents/tracker-policy.md), so still write the question and the recommendation in full." : "NO STANDING ANSWER was granted for this run. Under each question write the line \"Answer: open\". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers."}
 
@@ -874,18 +877,25 @@ const oneLine = (s) => { const l = String(s || '').replace(/\s+/g, ' ').trim(); 
 const reasonOf = (r) => oneLine((r.outcome === 'needs-human' && r.question) || r.why || r.notes || r.summary) || 'no reason recorded'
 const entry = (id, outcome, stage, reason) => ({ id, issue: byId[id].issue, outcome, stage, reason })
 const fromResults = (outcome) => ids((r) => r.outcome === outcome).map((id) => entry(id, outcome, results[id].stage, reasonOf(results[id])))
-// A ready-for-human ticket has no outcome in results, only its grill: say how the grill went.
+// A ready-for-human ticket has no outcome in results, only its grill: say how the grill went. A grill carried from an
+// earlier night asked nothing tonight, so its line says carried and already answered (#487): on 2026-10-28 39 carried
+// grills each read "grilled on paper, N question(s)", hundreds of questions beside a run that asked 22 (#476).
 const grillNote = (id) => {
   const g = results[id] && results[id].grill
-  if (!g) return ''
-  return typeof g === 'object' ? `, ${g.questions.length} question(s) on #${byId[id].issue}` : ': the grill agent died'
+  if (!g) return 'grilled on paper'
+  if (typeof g !== 'object') return 'grilled on paper: the grill agent died'
+  const n = (g.questions || []).length, issue = byId[id].issue
+  // The clause before the comma, as the report's rule reads it, so a grill that drops "not re-grilled" still counts.
+  return String(g.summary || '').toLowerCase().includes(CARRIED_GRILL.split(',')[0])
+    ? `carried, ${n} question(s) already answered on #${issue}`
+    : `grilled on paper, ${n} question(s) on #${issue}`
 }
 const humanWithoutOutcome = humanT.map((t) => t.id).filter((id) => !(results[id] && results[id].outcome))
 const reasons = [
   ...fromResults('failed'),
   ...fromResults('skipped'),
   ...humanWithoutOutcome.map((id) => entry(id, 'needs-human', humanStage[id] || 'collect',
-    oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; grilled on paper${grillNote(id)}`))),
+    oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; ${grillNote(id)}`))),
   ...fromResults('needs-human'),
 ]
 return {

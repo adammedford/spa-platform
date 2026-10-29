@@ -98,6 +98,12 @@ const reachLine = {
   [FLAKE_ELSEWHERE]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
   [FLAKE_DIED]: JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] }),
 }
+// One ready-for-human ticket's grill was asked on an earlier night (#487): its grill returns the questions it carried
+// and the summary the grill prompt names for that case, so its reason says carried and already answered; every other
+// grill asks its questions tonight, and its reason says grilled on paper.
+const CARRIED = tickets.find((t) => t.status === 'ready-for-human').id
+const CARRIED_SUMMARY = 'carried from an earlier night, not re-grilled'
+const grillQuestions = (n) => Array.from({ length: n }, (_, i) => ({ q: `Q${i + 1}?`, recommendation: 'yes' }))
 const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
 const SHARED_FILE = '.gitignore'
@@ -124,7 +130,9 @@ globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-  if (kind === 'grill') return { questions: [], glossaryProposals: [], adrCandidates: [], summary: 'companion' }
+  if (kind === 'grill') return id === CARRIED
+    ? { questions: grillQuestions(13), glossaryProposals: [], adrCandidates: [], summary: CARRIED_SUMMARY }
+    : { questions: grillQuestions(2), glossaryProposals: [], adrCandidates: [], summary: 'companion' }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
   const n = ++calls
@@ -505,6 +513,24 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   for (const t of grilled) {
     const r = of(t.id)[0]
     if (r && (r.stage !== 'collect' || !r.reason.includes(t.why))) fail(`${t.id}, ready-for-human from collect, has reason ${JSON.stringify(r)}, not stage collect with its collect why`)
+  }
+  // A grill carried from an earlier night asked nothing tonight (#487): its reason says carried and already answered,
+  // and never "grilled on paper", which read 39 carried grills as hundreds of new questions on 2026-10-28 (#476). A
+  // grill that asked tonight keeps "grilled on paper". The summary the mock returns must be the one the grill prompt
+  // tells a carried grill to return, so the script and its prompt cannot drift apart.
+  const grillPrompt = allPrompts.find((x) => x.label === `grill:${CARRIED}`)
+  if (!grillPrompt) fail(`no grill ran for ${CARRIED}, so the carried-grill reason check read nothing`)
+  else if (!grillPrompt.prompt.includes(`summary "${CARRIED_SUMMARY}"`)) fail(`the grill prompt no longer tells a carried grill to return the summary "${CARRIED_SUMMARY}"`)
+  const carried = of(CARRIED)[0]
+  if (!carried) fail(`the run's reasons hold no entry for ${CARRIED}, whose grill was carried`)
+  else if (!carried.reason.includes(`carried, 13 question(s) already answered on #${byId[CARRIED].issue}`) || carried.reason.includes('grilled on paper')) {
+    fail(`${CARRIED}'s grill was carried, yet its reason does not say carried and already answered: ${carried.reason}`)
+  }
+  const fresh = grilled.filter((t) => t.id !== CARRIED)
+  if (!fresh.length) fail('every grilled ticket was carried, so the fresh-grill reason check read nothing')
+  for (const t of fresh) {
+    const r = of(t.id)[0]
+    if (r && (!r.reason.includes(`grilled on paper, 2 question(s) on #${t.issue}`) || r.reason.includes('carried'))) fail(`${t.id}'s grill asked tonight, yet its reason does not say grilled on paper: ${r.reason}`)
   }
 }
 
