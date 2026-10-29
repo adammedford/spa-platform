@@ -126,6 +126,10 @@ const TICK = (t, verb) => `To ${verb} acceptance boxes, edit the issue body and 
 // it as the ticket's result, and the report prompt names it, so the three say it alike. tools/overnight_collect.py's
 // CLOSE_IN_MORNING is the same sentence.
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
+// Why a ticket whose Touches line says none gets no lane, no Route and no grill (#480): a tracker edit, such as "Apply
+// Qn of Overnight <date> to #m", whose answer is already confirmed, so it is worked in the foreground the next day.
+// tools/overnight_collect.py's FOREGROUND is the same sentence.
+const FOREGROUND_WHY = '**Touches:** none, a tracker edit no lane can make; work it in the foreground'
 
 // ---------------------------------------------------------------- schemas
 const TICKET = {
@@ -134,7 +138,7 @@ const TICKET = {
     n: { type: 'integer' }, id: { type: 'string' }, slug: { type: 'string' },
     issue: { type: 'integer' }, url: { type: 'string' },
     title: { type: 'string' },
-    status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning'] },
+    status: { type: 'string', enum: ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning', 'foreground'] },
     owner: { type: 'string' }, blockedBy: { type: 'array', items: { type: 'string' } }, why: { type: 'string' },
     openBoxes: { type: 'integer' },
     // tools/overnight_collect.py's forecast (#228): why a lane cannot finish this ticket, [] when nothing says so.
@@ -278,6 +282,7 @@ An open issue carrying none of the three (a parent such as #${PARENT_ISSUE}, an 
 - owner: the \`**Owner:**\` line mapped to the OWNERSHIP.md role: ws1-infra (workstream 1, AWS and IaC, infra/), ws2-hosting (workstream 2, Registry/Hosting/spactl), ws3-identity (workstream 3, Identity), ws4-proxy (workstream 4, Proxy/Security), ws5-fixtures (workstream 5, fixtures/), ws6-verification (workstream 6, Telemetry, tests/Gateway.*, e2e, runbooks), integrator (everything else, and every I-* row). A body that says "workstream 2 (...)" maps the same way. When it names more than one owner, the ticket's owner is the first named and "why" says the others land in their own PRs.
 - blockedBy: the ids (by the rule above; \`issue-<number>\` for a blocker that is not in tonight's set) of the issues in \`blockedBy.nodes\` whose state is OPEN. Closed blockers do not count.
 - status (exactly one, in this order of precedence):
+  * a \`**Touches:** none\` line, whatever its label -> "foreground", "why" "${FOREGROUND_WHY}" (#480): a tracker edit with no repository path, such as "Apply Qn of Overnight <date> to #m", which no lane can make and a grill adds nothing to, so it gets no lane, no Route and no grill, and the report lists it under Foreground; a ticket waiting on it is "blocked";
   * label ready-for-human -> "ready-for-human" (whether or not it has an assignee);
   * label needs-triage -> "needs-triage";
   * label ready-for-agent last applied by an account other than the one docs/agents/tracker-policy.md names (the repository's owner while it names none) -> "needs-triage", "why" naming who applied it (#316): an authorisation is read from its author (CODING_STANDARDS.md), so whoever can label an issue cannot send a lane at it. Only tools/overnight_collect.py reads who applied it, from the issue's timeline; FORECAST below gives you its answer;
@@ -511,6 +516,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
    - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept", "re-run failed, reset", or, when the entry's "reset" is not "", "not kept: <its why>" and its reset (#397); "none" under the section's own heading when the list is empty;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
+   - Foreground (#480): every entry of the run results' "foreground", the tickets collect gave the status foreground, whose "why" is "${FOREGROUND_WHY}": no lane, Route or grill ran, because a tracker edit is worked in a foreground session the next day. List them under a "## Foreground" heading, each as #<issue>, its title and the issue it edits (the #<m> its title or body names as the edit's target, as in "Apply Q4 of Overnight <date> to #248"; "target not named" when neither names one), so Adam opens one session for them; "none" under the heading when the list is empty;
    - Partial (Outstanding), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge; every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
    - Pending tracker writes: if ${PENDING} exists, how many lines it holds and that the morning session replays them (a comment, label change or close that GitHub refused tonight); otherwise "none";
@@ -562,7 +568,7 @@ BASE = col.base || BASE
 
 const inScope = (t) => !SKIP.has(t.id) && (!ONLY || ONLY.includes(t.id))
 const tickets = col.tickets
-log(`collected ${tickets.length}: ` + ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning']
+log(`collected ${tickets.length}: ` + ['ready-for-agent', 'ready-for-human', 'needs-triage', 'blocked', 'claimed', 'close-in-morning', 'foreground']
   .map((s) => `${tickets.filter((t) => t.status === s).length} ${s}`).join(', '))
 
 phase('Route')
@@ -842,6 +848,7 @@ await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, q
 await Promise.all(grillQueue)
 
 phase('Report')
+const foregroundT = tickets.filter((t) => t.status === 'foreground')
 const summary = {
   base: BASE, integrationBranch: INT_BRANCH, halted,
   landedBeforeTonight: col.landed,
@@ -849,6 +856,8 @@ const summary = {
   blocked: tickets.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, issue: t.issue, waitsOn: t.blockedBy, why: t.why })),
   claimed: tickets.filter((t) => t.status === 'claimed').map((t) => t.id),
   closeInMorning: closeT.map((t) => ({ id: t.id, issue: t.issue })),
+  // A tracker edit (#480): no lane, Route or grill filtered it in, since each reads another status; the report lists it.
+  foreground: foregroundT.map((t) => ({ id: t.id, issue: t.issue, title: t.title })),
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
   conflicts, flakes,
@@ -888,6 +897,7 @@ return {
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
   closeInMorning: closeT.map((t) => t.id),
+  foreground: foregroundT.map((t) => t.id),
   willEndPartial: willEndPartial.map((w) => w.id), forecastFailed,
   questions: rep ? rep.questions : null,
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
