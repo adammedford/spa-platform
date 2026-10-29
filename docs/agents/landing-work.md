@@ -235,6 +235,36 @@ python3 -I tools/review_record.py <40-hex head> < listings.json   # {"comments":
 Both forms give the same answer for the same pull request. A number where the head belongs, or a
 head after `--pr`, is refused with both forms named.
 
+## Drafting a Confirm comment
+
+A `Confirm` comment on an `Overnight <date>` issue is Adam's act, and no agent session posts one
+(`docs/agents/tracker-policy.md`). A session that drafts one for him writes the draft to a file and
+runs the morning's own parser over it and the issue's comments before handing it over:
+
+```bash
+gh issue view <n> --json comments > .scratch/overnight/log/confirm-<date>-comments.json
+node .claude/workflows/confirm_draft.mjs .scratch/overnight/log/confirm-<date>.md .scratch/overnight/log/confirm-<date>-comments.json
+```
+
+It prints the questions the draft covers, those it overrides, those answered no and those left
+open, then one verdict line. It exits 0 when every question is confirmed and none is answered no by
+an override, 1 when a question is left open, an override opens "no", the draft names a number no
+questions comment yields or does not begin `Confirm`, and 2 when it cannot judge, such as on an
+issue that already has a `Confirm` comment. `--json` prints the sort as JSON. It reads the parser
+out of `.claude/workflows/morning.js`, so it runs the code the morning runs, and needs no agent.
+The morning workflow's `confirmFile` argument is the full check, with an agent reading the issue;
+its verdict fails only on a number no questions comment yields.
+
+The rules it holds, which the morning applies:
+
+- The first sentence sets the range: the questions named on the draft's first line, up to its
+  first full stop (`Confirm Q1 to Q57.`, `Q1-Q3`, `Q58`), are the ones it confirms; a question named
+  after that stop is not, and a bare `Confirm` confirms only its own override lines.
+- An override is a line `Q<n>: <answer>`; the last one for a question wins, and it confirms that
+  question even when the first sentence does not name it.
+- An override opening "no" applies nothing: the question is recorded as answered no, and nothing is
+  done for it. One opening "open" leaves it open.
+
 ## Gates
 
 A gate closes when its exit test in `docs/plan/01-plan.md` passes and no review of a change it
