@@ -242,6 +242,9 @@ def look_up(number: str, head: str | None) -> tuple[str, object]:
         if not FULL_SHA.fullmatch(head):
             raise Unreadable(f"gh reported {head!r} as the head of #{number}, which is not a full "
                              "commit sha")
+    # Both listings whole: --paginate follows every page and --slurp wraps the pages in one array,
+    # so a record on page two is read, and gh fills {owner} and {repo} from the remote of the
+    # repository the working directory is in (https://cli.github.com/manual/gh_api).
     listings = {}
     for name, endpoint in (("comments", f"repos/{{owner}}/{{repo}}/issues/{number}/comments"),
                            ("reviews", f"repos/{{owner}}/{{repo}}/pulls/{number}/reviews")):
