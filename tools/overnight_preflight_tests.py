@@ -701,6 +701,9 @@ class ClaimsTests(PreflightTestCase):
                            "Merge part of task issue-1: something else", "task/issue-10-x"),
             "a longer id": ([ticket("issue-1", 1, "integrator", "claimed")],
                             "Merge part of task issue-10: something else", "task/issue-1-x"),
+            # The subject names the ticket, but the only branch is another ticket's whose id it prefixes.
+            "a branch with a longer id": ([ticket("issue-1", 1, "integrator", "claimed")],
+                                          "Merge part of task issue-1: half", "task/issue-10-x"),
             # Every box ticked: close-in-morning, not a held ticket.
             "no open box": ([ticket("issue-10", 10, "integrator", "close-in-morning", open_boxes=0)],
                             "Merge part of task issue-10: the whole of it", "task/issue-10-x"),
@@ -727,6 +730,18 @@ class ClaimsTests(PreflightTestCase):
         result = case.run()
         self.assertOnlyFails(result)
         self.assertTrue(result.row("claims")[1].startswith("no ticket with an open box"))
+
+    def test_a_held_branch_origin_also_has_says_the_rename_does_not_free_it(self):
+        # Collect reads origin's task branches too, so the local rename alone leaves the claim.
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        case.git("push", "-q", "origin", "main:refs/heads/task/issue-10-x", cwd=case.pusher)
+        case.git("fetch", "-q", "origin", cwd=case.checkout)
+        case.git("branch", "task/issue-10-x", "origin/task/issue-10-x", cwd=case.checkout)
+        tip = case.git("rev-parse", "task/issue-10-x", cwd=case.checkout)
+        evidence = case.run().row("claims")[1]
+        self.assertIn(f"branch -m task/issue-10-x hold/issue-10-{tip[:7]} (origin/task/issue-10-x claims "
+                      "it too, which the rename does not free)", evidence)
 
     def test_a_failed_forecast_fails_the_line_for_want_of_the_open_boxes(self):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)

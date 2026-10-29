@@ -47,7 +47,9 @@
 #             would never get a lane. A held ticket is the human's to free, so the line names each
 #             and passes, as demoted does; it fails only when it cannot judge, which is when the
 #             forecast failed, since the open boxes come from collect's answer. A branch on origin
-#             alone is not listed: the rename moves a local one.
+#             alone is not listed: the rename moves a local one. Collect reads origin's task branches
+#             too, so a held entry whose id origin also has a `task/<id>-` branch for says so: the
+#             rename alone does not free that ticket.
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
@@ -338,17 +340,20 @@ fi
 if ! $forecast_ok; then
   row fail claims "the forecast failed, so no ticket's open boxes are known and no claim was judged"
 elif ! g for-each-ref --format='%(refname:short) %(objectname)' refs/heads/task/ > "$scratch/task-branches" 2>/dev/null ||
+     ! g for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin/task/ > "$scratch/origin-task-branches" 2>/dev/null ||
      ! g log --format=%s refs/remotes/origin/main > "$scratch/subjects" 2>/dev/null; then
-  row fail claims "git could not list the local task branches or origin/main's subjects, so no claim was judged"
+  row fail claims "git could not list the task branches or origin/main's subjects, so no claim was judged"
 elif held="$(python3 -I -c '
 import json, re, sys
-collect, branches, subjects, repo = sys.argv[1:]
+collect, branches, remote, subjects, repo = sys.argv[1:]
 merged = set()
 for subject in open(subjects):
     match = re.match(r"Merge part of task ([^\s:]+)", subject)
     if match:
         merged.add(match.group(1))
 tips = [line.split() for line in open(branches) if line.strip()]
+# Collect reads origin/task/ as well (overnight_collect.branches), so a same-id branch there still claims.
+on_origin = [line.strip() for line in open(remote) if line.strip()]
 held = []
 for ticket in sorted(json.load(open(collect))["tickets"], key=lambda t: t["issue"]):
     tid, number, boxes = ticket["id"], ticket["issue"], ticket["openBoxes"]
@@ -356,10 +361,14 @@ for ticket in sorted(json.load(open(collect))["tickets"], key=lambda t: t["issue
         continue
     for name, sha in tips:
         if name.startswith(f"task/{tid}-"):
-            held.append(f"{tid} (#{number}, {boxes} open boxes): "
-                        f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
+            entry = (f"{tid} (#{number}, {boxes} open boxes): "
+                     f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
+            also = [other for other in on_origin if other.startswith(f"task/{tid}-")]
+            if also:
+                entry += f" (origin/{also[0]} claims it too, which the rename does not free)"
+            held.append(entry)
 print("; ".join(held))
-' "$scratch/collect.json" "$scratch/task-branches" "$scratch/subjects" "$repo" 2>/dev/null)"; then
+' "$scratch/collect.json" "$scratch/task-branches" "$scratch/origin-task-branches" "$scratch/subjects" "$repo" 2>/dev/null)"; then
   if [ -z "$held" ]; then
     row pass claims "no ticket with an open box is held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names"
   else
