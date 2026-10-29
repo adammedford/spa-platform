@@ -2,14 +2,24 @@
 """Reads a pull request's review records and says whether one clears the head about to merge.
 
 Owner: integrator. Decided in #67 (archived overnight ticket 70, Q1, Q3, Q6, Q7 and Q14, which Adam
-confirmed on #67). tools/land.sh runs it before every merge it makes without `--unreviewed`:
+confirmed on #67). Two forms, which give the same answer for the same pull request (#488):
 
-    printf '{"comments": %s, "reviews": %s}\n' "$comments" "$reviews" \
-      | python3 -I tools/review_record.py <40-hex head>
+    python3 -I tools/review_record.py --pr <number> [--head <40-hex head>]
+    python3 -I tools/review_record.py <40-hex head>  < listings
 
-where the two values are `gh api --paginate --slurp` listings of the pull request's issue comments
-and its reviews. It prints the clearing record's URL and exits 0, or says on standard error why
-nothing clears the head and exits 1. Input it cannot read exits 2. land.sh stops on either.
+**The `--pr` form looks everything up itself**, with gh, from the repository the working directory
+is in: the pull request's current head (`gh pr view <number> --json headRefOid --jq .headRefOid`),
+unless `--head` names the head to judge, and its issue comments and reviews (`gh api
+repos/{owner}/{repo}/issues/<number>/comments --paginate --slurp` and the same of
+`pulls/<number>/reviews`). tools/land.sh runs it before every merge it makes without `--unreviewed`,
+and passes `--head`, because it pins the merge to the head it read once and a second read could
+answer a head pushed since. **The stdin form** is for a caller already holding the two listings: it
+reads `{"comments": <pages>, "reviews": <pages>}` on standard input, each value as `gh api
+--paginate --slurp` gives it.
+
+Either prints the clearing record's URL and exits 0, or says on standard error why nothing clears the
+head and exits 1. A wrong argument, a gh call that fails (its own message passes through) and input
+it cannot read exit 2. land.sh stops on either.
 
 **The record is one fixed line**, specified in docs/agents/review.md -> "Landing or holding":
 
@@ -58,10 +68,15 @@ from __future__ import annotations
 import datetime
 import json
 import re
+import subprocess
 import sys
 
 FORM = "Reviewed <40-hex head> against <40-hex base>: merge (or : hold)"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
+NUMBER = re.compile(r"[1-9][0-9]*")
+USAGE = ("the two forms are `review_record.py --pr <number> [--head <40-hex head>]`, which looks the "
+         "pull request up with gh, and `review_record.py <40-hex head>` with the two `gh api "
+         "--paginate --slurp` listings on standard input")
 RECORD = re.compile(r"Reviewed (?P<head>[0-9a-f]{40}) against (?P<base>[0-9a-f]{40}): "
                     r"(?P<verdict>merge|hold)")
 # A line a reviewer probably meant as a record: the word, then something sha-shaped. Read only to
@@ -179,17 +194,85 @@ def say(text: str):
     sys.stderr.buffer.write(f"review_record: {text}\n".encode("utf-8", "backslashreplace"))
 
 
+class WrongArguments(Exception):
+    """Arguments in neither form. The refusal names both."""
+
+
+def parse(arguments: list[str]) -> tuple[str | None, str | None]:
+    """(pull request number or None, head or None) from the arguments of one of the two forms."""
+    if len(arguments) == 1 and not arguments[0].startswith("-"):
+        if not FULL_SHA.fullmatch(arguments[0]):
+            raise WrongArguments(f"the head must be a full commit sha, and {arguments[0]!r} is not "
+                                 "a full commit sha")
+        return None, arguments[0]
+    if len(arguments) not in (2, 4) or arguments[0] != "--pr":
+        raise WrongArguments(f"{arguments!r} is in neither form")
+    if not NUMBER.fullmatch(arguments[1]):
+        raise WrongArguments(f"--pr takes a pull request number, and {arguments[1]!r} is not one")
+    if len(arguments) == 2:
+        return arguments[1], None
+    if arguments[2] != "--head":
+        raise WrongArguments(f"{arguments!r} is in neither form")
+    if not FULL_SHA.fullmatch(arguments[3]):
+        raise WrongArguments(f"--head takes a full commit sha, and {arguments[3]!r} is not a full "
+                             "commit sha")
+    return arguments[1], arguments[3]
+
+
+def gh(*arguments: str) -> str:
+    """gh's standard output for one call. Its standard error passes through to the caller's."""
+    command = "gh " + " ".join(arguments)
+    try:
+        completed = subprocess.run(["gh", *arguments], stdout=subprocess.PIPE)
+    except OSError as problem:
+        raise Unreadable(f"`{command}` could not start ({problem.strerror}); the --pr form needs "
+                         "gh on PATH") from None
+    if completed.returncode != 0:
+        raise Unreadable(f"`{command}` failed with status {completed.returncode}")
+    try:
+        return completed.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Unreadable(f"`{command}` printed something that is not UTF-8") from None
+
+
+def look_up(number: str, head: str | None) -> tuple[str, object]:
+    """The head to judge and the listings, as land.sh read them before #488."""
+    if head is None:
+        head = gh("pr", "view", number, "--json", "headRefOid", "--jq", ".headRefOid").strip()
+        if not FULL_SHA.fullmatch(head):
+            raise Unreadable(f"gh reported {head!r} as the head of #{number}, which is not a full "
+                             "commit sha")
+    # Both listings whole: --paginate follows every page and --slurp wraps the pages in one array,
+    # so a record on page two is read, and gh fills {owner} and {repo} from the remote of the
+    # repository the working directory is in (https://cli.github.com/manual/gh_api).
+    listings = {}
+    for name, endpoint in (("comments", f"repos/{{owner}}/{{repo}}/issues/{number}/comments"),
+                           ("reviews", f"repos/{{owner}}/{{repo}}/pulls/{number}/reviews")):
+        text = gh("api", endpoint, "--paginate", "--slurp")
+        try:
+            listings[name] = json.loads(text)
+        except ValueError:
+            raise Unreadable(f"the {name} gh listed are not JSON") from None
+    return head, listings
+
+
 def main(arguments: list[str]) -> int:
-    if len(arguments) != 1 or not FULL_SHA.fullmatch(arguments[0]):
-        say(f"the head must be a full commit sha, and {arguments!r} is not a full commit sha.")
+    try:
+        number, head = parse(arguments)
+    except WrongArguments as problem:
+        say(f"{problem}; {USAGE}.")
         return 2
     try:
-        listings = json.loads(sys.stdin.buffer.read().decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        say("standard input is not JSON; land.sh hands it two `gh api` listings.")
-        return 2
-    try:
-        url, reasons = judge(arguments[0], listings)
+        if number is None:
+            try:
+                listings = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                say("standard input is not JSON; the stdin form takes two `gh api` listings, and "
+                    "`review_record.py --pr <number>` fetches them itself.")
+                return 2
+        else:
+            head, listings = look_up(number, head)
+        url, reasons = judge(head, listings)
     except Unreadable as problem:
         say(f"cannot read the records: {problem}.")
         return 2

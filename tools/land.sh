@@ -23,7 +23,8 @@
 # the pull request, `Reviewed <40-hex head> against <40-hex base>: merge` (or `: hold`), whose form
 # is in docs/agents/review.md -> "Landing or holding". The latest record naming the pull request's
 # current head must say merge, or nothing merges; tools/review_record.py, beside this script, reads
-# the records and says which. The merge is then pinned to that head with --match-head-commit, so a
+# the records and says which, run as `review_record.py --pr <number> --head <head>` so the gh calls
+# that list them live in the reader alone (#488). The merge is then pinned to that head with --match-head-commit, so a
 # push that lands while this runs makes GitHub refuse the merge rather than take an unreviewed head.
 # The merge body ends with `Reviewed: <head> <record URL>`, which this script writes, not its caller.
 #
@@ -155,16 +156,19 @@ full_sha='^[0123456789abcdef]{40}$'
 if [ -n "$unreviewed" ]; then
   trailer="Unreviewed: $unreviewed"
 else
-  # Both listings whole: --paginate follows every page and --slurp wraps the pages in one array, so
-  # a record on page two is read (`gh api --help`). {owner} and {repo} are filled from this
-  # repository's remote, as for `gh pr view`. The reader prints the clearing record's URL, or says
-  # why nothing clears the head, on standard error above the line below.
+  # The reader's --pr form lists the pull request's comments and reviews itself, every page of each
+  # (#488), and judges the head passed with --head: the one this script pinned above, not whatever
+  # a second read would report. It prints the clearing record's URL, or says on standard error, above
+  # the line below, why nothing clears the head (status 1) or why it could not read the records
+  # (status 2: a gh call failed, or what came back was not GitHub's shape).
   echo "--- reading the review records of #$pr at $head"
-  comments="$(gh api "repos/{owner}/{repo}/issues/$pr/comments" --paginate --slurp)"
-  reviews="$(gh api "repos/{owner}/{repo}/pulls/$pr/reviews" --paginate --slurp)"
-  record="$(printf '{"comments": %s, "reviews": %s}\n' "$comments" "$reviews" \
-    | python3 -I "$here/review_record.py" "$head")" \
-    || die "no review record clears #$pr at $head, so it does not merge. An agent session that wrote none of its commits reviews it and posts the record; docs/agents/review.md -> Landing or holding."
+  status=0
+  record="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head")" || status=$?
+  case "$status" in
+    0) ;;
+    1) die "no review record clears #$pr at $head, so it does not merge. An agent session that wrote none of its commits reviews it and posts the record; docs/agents/review.md -> Landing or holding." ;;
+    *) die "could not read the review records of #$pr, so it does not merge; the reader says why above." ;;
+  esac
   trailer="Reviewed: $head $record"
 fi
 
