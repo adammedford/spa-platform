@@ -79,6 +79,10 @@ const [CLOSE, AFTER_CLOSE, HELD, TRIAGED] = [
 ]
 for (const t of [CLOSE, AFTER_CLOSE, HELD, TRIAGED]) { tickets.push(t); byId[t.id] = t }
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
+// One more, added after those four so none of their choices moves (#480): a tracker edit whose Touches line says
+// none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
+const FOREGROUND_T = { ...synthetic(905, 'issue-905', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
+tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
 const TESTS_FAILED = 'check: fail: the tests failed.'
@@ -678,6 +682,25 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   const triaged = routeOf(TRIAGED)
   if (!triaged.includes('Decide the flow') || triaged.includes('Its flow is already decided')) fail(`${TRIAGED.id}, whose blocker is ready-for-agent, did not route as before`)
   if ((result.needsHuman || []).includes(TRIAGED.id)) fail(`${TRIAGED.id} went to a human although its blocker is ready-for-agent`)
+}
+
+// 18b. A Touches: none ticket is foreground work (#480): #402, #404 and #405, each "Apply Qn of Overnight <date> to
+//      #m", stayed open from 2026-10-25 and #404 and #405 were grilled again on 2026-10-28, though no lane can make a
+//      tracker edit and the answer was already confirmed. Collect gives it the status foreground; the run gives it no
+//      lane, no Route agent and no grill agent, and the report lists it under its own Foreground section.
+{
+  const id = FOREGROUND_T.id
+  const report = allPrompts.find((x) => x.label === 'report')
+  const summary = report ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report.prompt) || [, 'null'])[1]) : null
+  if (started(id)) fail(`${id} is foreground, yet a lane started its implement`)
+  for (const kind of ['route', 'grill', 'review', 'integrate']) if (allPrompts.some((x) => x.label === `${kind}:${id}`)) fail(`${id} is foreground, yet a ${kind} agent ran for it`)
+  if (!(result.foreground || []).includes(id)) fail(`${id} is not in the run's foreground`)
+  if ((result.needsHuman || []).includes(id) || (result.skipped || []).includes(id)) fail(`${id} is foreground, yet the run reports it needs-human or skipped`)
+  if (!summary || !(summary.foreground || []).some((f) => f.id === id && f.issue === FOREGROUND_T.issue && f.title === FOREGROUND_T.title)) fail(`the report's results do not list ${id} (#${FOREGROUND_T.issue}) with its title as foreground`)
+  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('under a "## Foreground" heading')) fail('the report prompt does not name the Foreground section')
+  if (!report || !report.prompt.includes('the issue it edits')) fail('the report prompt does not give each foreground ticket its target issue')
+  const FG_RULE = '`**Touches:** none` line, whatever its label -> "foreground"'
+  for (const c of allPrompts.filter((x) => x.label === 'collect')) if (!c.prompt.includes(FG_RULE)) fail('the collect prompt does not give a Touches: none ticket the status foreground')
 }
 
 // 19. One grammar where a ticket is filed (#248): the ticket-shape check at creation, the collect tool's forecast,
