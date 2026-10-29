@@ -25,11 +25,11 @@ or a test run, make a throwaway worktree outside the repo, run the one project t
 
 **Standards** is `CODING_STANDARDS.md`, plus `AGENTS.md` and `CLAUDE.md` for the rules an
 implementation agent carries, plus `OWNERSHIP.md`: a diff that writes outside its owner's paths is a
-finding on its own, and `.github/path-ownership.py <base> <head>` decides it. A linear branch is
-checked by its whole diff. A history containing a merge is audited per commit, including reverted
-commits, with merge resolutions checked separately from imported commits. This signal also applies
-when a task branch merges main: it establishes history shape, not task scope or authorization.
-Review the plan row and ownership scope even when the mechanical check passes.
+finding on its own, and `python3 -I .github/path-ownership.py <base> <head>` decides it. A linear
+branch is checked by its whole diff. A history containing a merge is audited per commit, including
+reverted commits, with merge resolutions checked separately from imported commits. This signal also
+applies when a task branch merges main: it establishes history shape, not task scope or
+authorization. Review the plan row and ownership scope even when the mechanical check passes.
 
 **Spec** has no per-task spec file. `docs/agents/landing-work.md` fixes it: the plan row plus the
 contracts rows naming it, cited by path. In practice:
