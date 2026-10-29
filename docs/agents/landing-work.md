@@ -209,6 +209,32 @@ Only one kind of change reaches `main` without a pull request: a generated roadm
 through a pull request whose head a review record names. This is a rule in prose, not a check, until
 the first time it is broken.
 
+### Reading the records
+
+To ask whether a pull request `<n>` is cleared, ask the record reader by its number. It gives the
+verdict `tools/land.sh` would act on, from the repository the working directory is in:
+
+```bash
+python3 -I tools/review_record.py --pr <n>                       # its current head
+python3 -I tools/review_record.py --pr <n> --head <40-hex head>  # a head you name, such as a merged head
+```
+
+It looks up the head itself unless `--head` names one, and lists the pull request's comments and
+reviews with gh, every page. It prints the URL of the record that clears the head and exits 0;
+otherwise it says on standard error why not, the latest record naming the head saying `hold` or no
+record naming it, and exits 1. A wrong argument, a gh call that fails or a listing it cannot read
+exits 2. `tools/land.sh` runs the `--head` form with the head it pins the merge to.
+
+A caller already holding the two listings, each as `gh api --paginate --slurp` gives it, hands
+them over on standard input instead, with the head as the one argument:
+
+```bash
+python3 -I tools/review_record.py <40-hex head> < listings.json   # {"comments": <pages>, "reviews": <pages>}
+```
+
+Both forms give the same answer for the same pull request. A number where the head belongs, or a
+head after `--pr`, is refused with both forms named.
+
 ## Gates
 
 A gate closes when its exit test in `docs/plan/01-plan.md` passes and no review of a change it
@@ -243,13 +269,10 @@ A `Reviewed:` line names the record the merge was checked against. An `Unreviewe
 line at all, is a merge to check by hand: its pull request must carry a record naming the merged
 head with `merge`. Before the check landed, a review naming the merged head in full counts in
 whatever shape it was written, as #41 to #43 do; after, only the record line does. To ask the record
-reader about a merged pull request `<n>` and its merged head:
+reader about a merged pull request `<n>`, name its merged head ("Reading the records" above):
 
 ```bash
-printf '{"comments": %s, "reviews": %s}\n' \
-  "$(gh api "repos/{owner}/{repo}/issues/<n>/comments" --paginate --slurp)" \
-  "$(gh api "repos/{owner}/{repo}/pulls/<n>/reviews" --paginate --slurp)" \
-  | python3 -I tools/review_record.py <merged head>
+python3 -I tools/review_record.py --pr <n> --head <merged head>
 ```
 
 Whether a review is still running is in no record: the tagger checks that none they or anyone else
