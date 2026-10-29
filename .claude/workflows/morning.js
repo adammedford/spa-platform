@@ -661,6 +661,54 @@ const unreadOf = (questions, conf) => {
   const readQs = new Set(questions.map((q) => q.q))
   return [...new Set([...conf.covered.keys(), ...conf.overrides.keys()])].filter((q) => !readQs.has(q)).sort((a, b) => a - b)
 }
+// The draft check (#302), run by the confirmFile mode and by confirm_draft.mjs from the command line
+// (#491), which reads this section out of this file so both run the same code: the issue's comments,
+// as {author: the login, createdAt, url, body}, and a draft Confirm, as the one Confirm comment Adam
+// would post, sorted by Apply's own code. An issue that already has a Confirm comment is refused
+// (halted), since a draft is then no longer the whole confirmation. Answers are cut to sixty
+// characters. noOverrides are the Q<n>: lines opening "no", which apply nothing.
+const first60 = (s) => String(s).slice(0, 60)
+const draftCheck = (comments, draft, url) => {
+  if (readConfirmations(comments).confirms.length) return { halted: 'already has a Confirm comment, so a draft is no longer the whole confirmation; nothing was sorted' }
+  const read = readQuestions(comments)
+  const conf = readConfirmations([{ author: ADAM, createdAt: 'draft', url, body: draft }])
+  const s = sortAnswers(read.questions, conf, false)
+  const qs = read.questions.map((q) => q.q)
+  const overridden = [...conf.overrides.entries()].sort((a, b) => a[0] - b[0])
+  return {
+    total: qs.length,
+    covered: qs.filter((q) => conf.covered.has(q)).length,
+    coveredList: qs.filter((q) => conf.covered.has(q)),
+    overrides: conf.overrides.size,
+    overridden: overridden.map(([q, o]) => ({ q, answer: first60(o.answer) })),
+    noOverrides: overridden.filter(([, o]) => verdictOf(o.answer) === 'no').map(([q]) => q),
+    byOwnLines: qs.filter((q) => conf.overrides.has(q) && !conf.covered.has(q)).length,
+    confirmed: qs.filter((q) => s.answers[q].confirmed).length,
+    applied: s.toClassify.length,
+    no: s.no.map((q) => ({ q, answer: first60(s.answers[q].answer) })),
+    open: s.open.map((q) => ({ q, answer: first60(s.answers[q].answer), confirmed: s.answers[q].confirmed })),
+    unknown: unreadOf(read.questions, conf),
+    notConfirm: conf.confirms.length === 0,
+    refusals: read.refusals,
+  }
+}
+// The lists both print: covered as runs ("Q1 to Q263"), then each question by its line.
+const qRuns = (qs) => {
+  const runs = []
+  for (const q of qs) { const last = runs[runs.length - 1]; if (last && q === last[1] + 1) last[1] = q; else runs.push([q, q]) }
+  return runs.map(([a, b]) => (a === b ? `Q${a}` : `Q${a} to Q${b}`))
+}
+const draftLists = (r) => {
+  const L = []
+  const list = (title, items) => { L.push('', `### ${title}`, ''); if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push('none') }
+  list('Covered', qRuns(r.coveredList))
+  list('Overridden', r.overridden.map((n) => `Q${n.q}: ${n.answer}`))
+  list('Answered no', r.no.map((n) => `Q${n.q}: ${n.answer}`))
+  list('Left open', r.open.map((n) => `Q${n.q}: ${n.answer}${n.confirmed ? '' : ' (not confirmed)'}`))
+  list('Not found', r.unknown.map((q) => `Q${q}: no "## Questions:" comment yields it`))
+  if (r.refusals.length) list('Questions not read', r.refusals)
+  return L
+}
 
 // ---------------------------------------------------------------- the record, judged here
 // tools/review_record.py, run by the Verify agent, decides which record clears a head; the script
@@ -1196,18 +1244,13 @@ ${LOOKUP('')}
 3. The draft: open ${A.confirmFile} with the Read tool. draft is its whole text, byte for byte, without the Read tool's line numbers. If it cannot be read, draft is "" and error says why.
 Return listing, issue, draft and error ("" when nothing stopped you).`
 
-const first60 = (s) => String(s).slice(0, 60)
 const checkText = (r) => {
   const L = [`## Draft Confirm, Overnight ${r.date} (#${r.issue})`, '']
   L.push(`The first sentence covers ${r.covered} of ${r.total} questions.`)
   L.push(`${r.overrides} Q<n>: line(s) override; ${r.byOwnLines} confirmed by their own Q<n>: lines alone, named by no first sentence.`)
   L.push(`${r.confirmed} confirmed of ${r.total}: ${r.applied} applied, ${r.no.length} answered no, ${r.open.length} left open.`)
   if (r.notConfirm) L.push('The draft does not begin with "Confirm", so the apply step would read it as no Confirm comment at all.')
-  const list = (title, items) => { L.push('', `### ${title}`, ''); if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push('none') }
-  list('Answered no', r.no.map((n) => `Q${n.q}: ${n.answer}`))
-  list('Left open', r.open.map((n) => `Q${n.q}: ${n.answer}${n.confirmed ? '' : ' (not confirmed)'}`))
-  list('Not found', r.unknown.map((q) => `Q${q}: no "## Questions:" comment yields it`))
-  if (r.refusals.length) list('Questions not read', r.refusals)
+  L.push(...draftLists(r))
   L.push('', r.ok ? `check: pass: ${r.confirmed} of ${r.total} confirmed, every question number in the draft found` : `check: fail: ${r.unknown.map((q) => 'Q' + q).join(', ')} named by the draft, yielded by no questions comment`)
   return L.join('\n')
 }
@@ -1219,26 +1262,10 @@ if (CHECK) {
   if (dl.refused) return { mode: 'check', halted: dl.refused, agents: agentsRun }
   if (d.issue.number !== dl.issue) return { mode: 'check', halted: `the read agent read #${d.issue.number}, not the run's #${dl.issue}; nothing was sorted`, agents: agentsRun }
   if (d.error || !d.draft.trim()) return { mode: 'check', halted: `the draft ${A.confirmFile} was not read${d.error ? `: ${d.error}` : ': it came back empty'}; nothing was sorted`, agents: agentsRun }
-  const comments = d.issue.comments || []
-  if (readConfirmations(comments).confirms.length) return { mode: 'check', halted: `#${dl.issue} already has a Confirm comment, so a draft is no longer the whole confirmation; nothing was sorted`, agents: agentsRun }
-  const read = readQuestions(comments)
   // The draft, as the one Confirm comment Adam would post, read and sorted by Apply's own code.
-  const conf = readConfirmations([{ author: ADAM, createdAt: 'draft', url: A.confirmFile, body: d.draft }])
-  const s = sortAnswers(read.questions, conf, false)
-  const qs = read.questions.map((q) => q.q)
-  const r = {
-    mode: 'check', date: dl.date, issue: dl.issue, total: qs.length,
-    covered: qs.filter((q) => conf.covered.has(q)).length,
-    overrides: conf.overrides.size,
-    byOwnLines: qs.filter((q) => conf.overrides.has(q) && !conf.covered.has(q)).length,
-    confirmed: qs.filter((q) => s.answers[q].confirmed).length,
-    applied: s.toClassify.length,
-    no: s.no.map((q) => ({ q, answer: first60(s.answers[q].answer) })),
-    open: s.open.map((q) => ({ q, answer: first60(s.answers[q].answer), confirmed: s.answers[q].confirmed })),
-    unknown: unreadOf(read.questions, conf),
-    notConfirm: conf.confirms.length === 0,
-    refusals: read.refusals,
-  }
+  const sorted = draftCheck(d.issue.comments || [], d.draft, A.confirmFile)
+  if (sorted.halted) return { mode: 'check', halted: `#${dl.issue} ${sorted.halted}`, agents: agentsRun }
+  const r = { mode: 'check', date: dl.date, issue: dl.issue, ...sorted }
   r.ok = r.unknown.length === 0
   r.text = checkText(r)
   log(r.text)
