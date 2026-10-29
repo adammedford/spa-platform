@@ -4,7 +4,9 @@
   of plan row P2-5)
 - **Tasks:** P2-5; #345; #332 (the `continuity` spec, T7); the register decided on #322
 - **Date:** 2026-10-25
-- **Status:** open
+- **Status:** decided, 2026-10-28, on
+  https://github.com/adammedford/spa-platform/issues/387#issuecomment-6481711116. See the Decision
+  section below. The rows are F-12 to F-18 and N-28 to N-31 in `contracts/test-ids.md`
 
 ## What changed
 
@@ -48,3 +50,41 @@ Everything else. The rows run in CI under the names above, which carry plan row 
 `contracts/` is the integrator's (`AGENTS.md`, `OWNERSHIP.md`), and the register's own rule is that
 "the integrator adds it by deciding a request under `contracts/changes/`, never the workstream that
 needs it" (`contracts/test-ids.md`, "How an id is added").
+
+## Decision
+
+Integrator, 2026-10-28, on https://github.com/adammedford/spa-platform/issues/387#issuecomment-6481711116
+(Adam's decision comment, "Decision: accept", "ADR: no"), with the choices this request left to the
+integrator settled as Overnight 2026-10-27 confirmed (#442 Q115 to Q124). **Accepted as written**:
+one id per row as the table above lists them and no rows merged (Q117), the table's prefixes, seven
+F and four N (Q123), Tier `H` on every row (Q119), Criterion `None` on the seven F rows (Q118), the
+two-host harness row keeping an F id (Q122), and the numbers taken from the next free ids at the
+deciding commit in the table's order (Q124). This request is decided before the open issue-358
+request, so that request numbers its deployed rows after these, not from F-12.
+
+| ID | Row (table above) | Test cell names |
+| --- | --- | --- |
+| F-12 | Two-host harness | `TwoHostHarnessTests` |
+| F-13 | P2-2 across hosts, session cookie | matrix row F2 (#332); `AcrossHostsTests` |
+| F-14 | P2-2 across hosts, login state | matrix row F2 (#332); `AcrossHostsTests` |
+| F-15 | P2-2 across hosts, antiforgery token | matrix row F2 (#332); `AcrossHostsTests` |
+| F-16 | Convergence and the wait | matrix row F8 (#332); `ConvergenceTests` |
+| F-17 | Cross-host login after convergence, with D3's control | matrix row F8 (#332); `ConvergenceTests` |
+| F-18 | F17 composed | matrix row F17 (#332); `StoreOutageTests` |
+| N-28 | P2-2 across hosts, the control | matrix row F2 (#332); `AcrossHostsTests` |
+| N-29 | Rotation, the purge reaching the shared store | matrix row F7 (#332); `RotationTests` |
+| N-30 | Rotation, the purge failing | matrix row F7 (#332); `RotationTests` |
+| N-31 | Rotation with a login in flight | matrix row F9 (#332); `RotationTests` |
+
+Each row's Expect and test method are copied from the table above. The register's Test (F) or
+Attempt (N) cell names the matrix row as "matrix row Fn (#332)", never a bare `Fn`, since #332's
+matrix numbers its rows F1 to F17 without a hyphen and F-17 here is the login row while matrix row
+F17 is the store outage. Recorded by reads "change request `P2-5-continuity-rows-in-the-register`
+(continuity rows); #345" on all eleven, because "change request P2-5" alone also names
+`p2-5-readiness-reports-registry-revision.md`. The register's Numbering paragraph then reads F-19
+and N-32 as next.
+
+No ADR: the register's rules (#322) and this section record the granularity choice, and nothing
+here amends an ADR or waits for a gate. #455 is the workstream 6 follow-up: each test's
+documentation gains its id, with no method renames (Q120). #387, the finding that raised the
+decision, closes as declined with its reason in its Answer (Q115).
