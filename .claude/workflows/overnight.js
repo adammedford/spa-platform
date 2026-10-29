@@ -14,7 +14,8 @@ export const meta = {
 }
 
 // ---------------------------------------------------------------- args and paths
-// Launch (Workflow tool). Pass scriptPath, so the file as edited runs and not a session's snapshot:
+// Launch (Workflow tool). Pass scriptPath, so the file as edited runs and not a session's snapshot. A sample, with
+// one machine's paths; put your own checkout, worktree root and skills directory in their places:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/overnight.js
 //   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-19",
 //           "wt": "/Users/adammedford/.worktrees/overnight-2026-10-19", "standingAnswer": true, "maxParallel": 3 }
@@ -32,6 +33,9 @@ export const meta = {
 //                             per launch, default off). The string "true" is refused, not read as false.
 //   base            optional  the full 40-hex sha of origin/main; absent, collect takes the main checkout's
 //                             HEAD and checks it against origin.
+//   skills          optional  the skills directory, an absolute path holding <name>/SKILL.md for each skill a
+//                             prompt names (implement, ask-matt, grill-with-docs, and the fallbacks of the Skill
+//                             tool); default SKILLS_DEFAULT below, one machine's ~/.agents/skills (#501).
 //   maxParallel     optional  positive integer, default 3.      maxFailures  optional  positive integer, default 4.
 //   only            optional  array of task ids to run.         skip         optional  array of task ids to
 //                             leave out of this run.
@@ -39,17 +43,21 @@ export const meta = {
 // Claude Code process started after that setting merged honours it; collect reports the shell, and the run halts
 // before Route, with no lane started, when it is not bash. Restart Claude Code before a launch if in doubt.
 const A = args || {}
+// The skills argument's documented default (#501): the one home path the script reads, and only when a launch
+// passes no skills directory of its own.
+const SKILLS_DEFAULT = '/Users/adammedford/.agents/skills'
 const badArguments = (a) => {
   const bad = []
   const abs = (p) => typeof p === 'string' && p.startsWith('/') && p.length > 1
   const ids = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.length > 0)
   const count = (v) => Number.isInteger(v) && v > 0
-  if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /Users/adammedford/Projects/spa-platform')
+  if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /path/to/spa-platform')
   if (typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) bad.push('date: YYYY-MM-DD, the morning the run ends (an evening launch on the 18th uses 2026-10-19)')
-  if (!abs(a.wt)) bad.push('wt: the worktree root as an absolute path outside repo, e.g. /Users/adammedford/.worktrees/overnight-<date>')
+  if (!abs(a.wt)) bad.push('wt: the worktree root as an absolute path outside repo, e.g. <home>/.worktrees/overnight-<date>')
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; the house rules forbid a worktree under the repository')
   if (typeof a.standingAnswer !== 'boolean') bad.push('standingAnswer: true or false, a boolean (the string "true" is refused); it grants the standing answer for this run (ADR-0021 decision 3)')
   if (a.base !== undefined && !/^[0-9a-f]{40}$/.test(String(a.base))) bad.push('base: when given, the full 40-hex sha of origin/main')
+  if (a.skills !== undefined && !abs(a.skills)) bad.push('skills: when given, the skills directory as an absolute path, the one holding <name>/SKILL.md')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
   if (a.maxFailures !== undefined && !count(a.maxFailures)) bad.push('maxFailures: a positive integer (default 4)')
   if (a.only !== undefined && a.only !== null && !ids(a.only)) bad.push('only: an array of task ids, e.g. ["2.1b", "issue-96"]')
@@ -90,7 +98,7 @@ const INT_WT = `${WTROOT}/overnight`
 const WT = (t) => `${WTROOT}/${t.owner}-${t.id}`
 const PORT = (n) => 5100 + 10 * n
 const TRAILER = 'Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>'
-const SKILLS = '/Users/adammedford/.agents/skills'
+const SKILLS = (A.skills || SKILLS_DEFAULT).replace(/\/+$/, '')   // no trailing slash, so ${SKILLS}/<name> is one path
 const skill = (name) => `call the Skill tool with "${name}" (if the Skill tool is unavailable or refuses, read ${SKILLS}/${name}/SKILL.md and follow it)`
 
 // ---------------------------------------------------------------- shared rules
