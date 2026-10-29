@@ -1364,6 +1364,114 @@ try {
     if (!applyRed.length || !checkRed.length) fail(`draft check: the first-word mutation turned ${!applyRed.length ? 'the apply case' : 'the check case'} not red, so the two do not share the sort`)
   }
 
+  // 22a. The draft check runs from the command line (#491): confirm_draft.mjs, run with node over a
+  //      draft file and the issue's comments as `gh issue view --json comments` prints them, prints
+  //      the covered, open, no and overridden lists, and exits 1 when a question is left open or an
+  //      override opens "no". It runs morning.js's own draftCheck, the function the confirmFile mode
+  //      calls: its --json output is that function's direct result, and a mutation of the script's
+  //      first-word rule changes what the command prints. landing-work.md shows the command and
+  //      states the two parse rules the fixtures below hold.
+  checks++
+  {
+    const CLI = path.join(here, 'confirm_draft.mjs')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-draft-'))
+    made.push(dir)
+    // The comments as gh prints them: author is an object carrying the login.
+    const ghShape = (cs) => ({ comments: cs.map((c) => ({ author: { login: c.author }, authorAssociation: 'OWNER', body: c.body, createdAt: c.createdAt, url: c.url })) })
+    const outsider = { ...comment(8, 'Confirm Q1 to Q4.\n', '2026-10-21T07:30:00Z'), author: 'someone-else' }
+    const COMMENTS = path.join(dir, 'comments.json')
+    fs.writeFileSync(COMMENTS, JSON.stringify(ghShape([...QUESTIONS, outsider])))
+    const cli = (draft, { json = false, comments = COMMENTS, cliPath = CLI } = {}) => {
+      const f = path.join(dir, `draft-${Math.random().toString(36).slice(2)}.md`)
+      fs.writeFileSync(f, draft)
+      const r = spawnSync(process.execPath, [cliPath, f, comments, ...(json ? ['--json'] : [])], { encoding: 'utf8' })
+      let parsed = null
+      if (json) try { parsed = JSON.parse(r.stdout) } catch { /* reported below */ }
+      return { status: r.status, out: r.stdout, err: r.stderr, json: parsed, file: f }
+    }
+    if (!fs.existsSync(CLI)) fail('#491: .claude/workflows/confirm_draft.mjs does not exist')
+    else {
+      const PASS = 'Confirm Q1 to Q4, with the override below.\n\nQ4: yes, port 5690\n'
+      const OPEN = 'Confirm Q1 to Q3. Q4 stays open.\n'
+      const NO = 'Confirm Q1 to Q4.\n\nQ4: yes\nQ2: No, keep the old sentence\n'
+
+      const pass = cli(PASS, { json: true })
+      const p = pass.json || {}
+      if (pass.status !== 0) fail(`#491: a draft confirming every question exited ${pass.status}: ${pass.err}${pass.out}`)
+      if (JSON.stringify(p.coveredList) !== '[1,2,3,4]' || JSON.stringify(p.open) !== '[]' || JSON.stringify(p.no) !== '[]') fail(`#491: the passing draft: covered ${JSON.stringify(p.coveredList)}, open ${JSON.stringify(p.open)}, no ${JSON.stringify(p.no)}`)
+      if (JSON.stringify(p.overridden) !== JSON.stringify([{ q: 4, answer: 'yes, port 5690' }])) fail(`#491: the passing draft's overridden list is ${JSON.stringify(p.overridden)}`)
+
+      // The first sentence sets the range: Q4, named after the first full stop, stays open.
+      const open = cli(OPEN)
+      if (open.status !== 1) fail(`#491: a draft leaving Q4 open exited ${open.status}, expected 1`)
+      const openJ = cli(OPEN, { json: true }).json || {}
+      if (JSON.stringify(openJ.coveredList) !== '[1,2,3]' || JSON.stringify((openJ.open || []).map((o) => o.q)) !== '[4]') fail(`#491: the first sentence did not set the range: covered ${JSON.stringify(openJ.coveredList)}, open ${JSON.stringify(openJ.open)}`)
+      for (const h of ['### Covered', '### Overridden', '### Answered no', '### Left open']) if (!open.out.includes(h)) fail(`#491: the command's printed result has no "${h}" list:\n${open.out}`)
+      if (!/^confirm-draft: fail: /m.test(open.out.trim().split('\n').pop())) fail(`#491: the command's last line is not its fail verdict:\n${open.out}`)
+
+      // An override opening "no" applies nothing, and fails the command.
+      const no = cli(NO)
+      const noJ = cli(NO, { json: true }).json || {}
+      if (no.status !== 1) fail(`#491: a draft with an override opening "No" exited ${no.status}, expected 1`)
+      if (JSON.stringify(noJ.noOverrides) !== '[2]' || !(noJ.no || []).some((n) => n.q === 2) || noJ.applied !== 3) fail(`#491: the override opening "No" was not held back: noOverrides ${JSON.stringify(noJ.noOverrides)}, no ${JSON.stringify(noJ.no)}, applied ${noJ.applied}`)
+      if (!no.out.includes('- Q2: No, keep the old sentence')) fail(`#491: the printed result does not list Q2's override:\n${no.out}`)
+      if (!/^confirm-draft: pass: /.test(cli(PASS).out.trim().split('\n').pop())) fail('#491: the passing draft\'s last line is not "confirm-draft: pass:"')
+
+      // A draft that does not begin "Confirm", and a number no questions comment yields, fail.
+      if (cli('Q1: yes\n').status !== 1) fail('#491: a draft not beginning "Confirm" did not fail')
+      const lost = cli('Confirm Q1 to Q4.\nQ4: yes\nQ9: yes\n', { json: true })
+      if (lost.status !== 1 || JSON.stringify((lost.json || {}).unknown) !== '[9]') fail(`#491: Q9, yielded by no questions comment, did not fail by name: exit ${lost.status}, unknown ${JSON.stringify((lost.json || {}).unknown)}`)
+
+      // Could not judge (exit 2): an issue Adam has already confirmed (his login read from gh's
+      // author object), a missing argument, and a comments file that is not JSON.
+      const CONFIRMED = path.join(dir, 'confirmed.json')
+      fs.writeFileSync(CONFIRMED, JSON.stringify(ghShape([...QUESTIONS, CONFIRM])))
+      const already = cli(PASS, { comments: CONFIRMED })
+      if (already.status !== 2 || !/already has a Confirm comment/.test(already.err + already.out)) fail(`#491: an issue already confirmed exited ${already.status}: ${already.err}`)
+      const BADJSON = path.join(dir, 'bad.json')
+      fs.writeFileSync(BADJSON, 'not json')
+      if (cli(PASS, { comments: BADJSON }).status !== 2) fail('#491: a comments file that is not JSON did not exit 2')
+      if (spawnSync(process.execPath, [CLI], { encoding: 'utf8' }).status !== 2) fail('#491: the command with no arguments did not exit 2')
+
+      // The command's output is morning.js's draftCheck, called directly on the same input.
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const section = (/^\/\/ -+ the questions, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+      const adam = (/^const ADAM = .*$/m.exec(src) || [])[0]
+      if (!section || !adam) fail('#491: morning.js has no "the questions, read here" section or no ADAM line to call')
+      else {
+        const port = new Function(`${adam}\n${section}\nreturn { draftCheck }`)()
+        const flat = ghShape([...QUESTIONS, outsider]).comments.map((c) => ({ ...c, author: c.author.login }))
+        for (const draft of [PASS, OPEN, NO]) {
+          const r = cli(draft, { json: true })
+          const direct = JSON.parse(JSON.stringify(port.draftCheck(flat, draft, r.file)))
+          if (JSON.stringify(r.json) !== JSON.stringify(direct)) fail(`#491: the command's output is not draftCheck's direct result for ${JSON.stringify(draft)}:\n${JSON.stringify(r.json)}\n${JSON.stringify(direct)}`)
+        }
+      }
+      // The confirmFile mode calls the same function.
+      const checkBlock = (/^if \(CHECK\) \{\n([\s\S]*?)\n\}\n/m.exec(src) || [])[1] || ''
+      if (!/\bdraftCheck\(/.test(checkBlock)) fail('#491: the confirmFile mode does not call draftCheck')
+      if (/const (readQuestions|readConfirmations|sortAnswers|verdictOf|draftCheck) =/.test(fs.readFileSync(CLI, 'utf8'))) fail('#491: confirm_draft.mjs carries its own copy of the parser')
+
+      // The command runs the script beside it: the first-word mutation changes what it prints.
+      const mdir = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-draft-mutant-'))
+      made.push(mdir)
+      const rule = (/^const verdictOf = .*$/m.exec(src) || [''])[0]
+      fs.writeFileSync(path.join(mdir, 'morning.js'), src.replace(rule, rule.replace('/^no\\b/i', '/^nope\\b/i')))
+      fs.copyFileSync(CLI, path.join(mdir, 'confirm_draft.mjs'))
+      const mut = cli(NO, { json: true, cliPath: path.join(mdir, 'confirm_draft.mjs') })
+      if (!rule || (mut.json && (mut.json.no || []).some((n) => n.q === 2))) fail('#491: the first-word mutation of morning.js did not change the command\'s result, so it does not run the script\'s parser')
+
+      // The guide shows the command and states the rules these fixtures hold.
+      const guide = fs.readFileSync(path.join(top, 'docs', 'agents', 'landing-work.md'), 'utf8')
+      const RULES = [
+        'node .claude/workflows/confirm_draft.mjs',
+        'The first sentence sets the range:',
+        'An override opening "no" applies nothing:',
+      ]
+      for (const r of RULES) if (!guide.includes(r)) fail(`#491: docs/agents/landing-work.md does not say ${JSON.stringify(r)}`)
+    }
+  }
+
   // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
   //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
   //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
