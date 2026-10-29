@@ -122,11 +122,12 @@ session's own ticket does not authorise. What one is: `GLOSSARY.md` → "Change 
 **Filing.** Anyone may file one. Search the open `change-request` issues first, and when one already
 asks for the change, add a blocked-by edge to it instead of filing another (#409). Label it
 `change-request` and `ready-for-human`, never `needs-triage`, and title it in plain prose with no id
-prefix. Its body is a `**Touches:**` line, a `**Rows:**` line when it serves plan rows, then
-`## The gap` and `## The change`, with every steering paragraph it changes quoted whole (above). The
-ticket that needs it is blocked by it, and one request may block many tickets as one ticket may wait
-on many requests; a request that nothing waits on carries `**Raised by:** #NNN` and blocks nothing.
-It may be filed from a pre-accepted answer, because filing decides nothing (ADR-0021 as amended).
+prefix. Its body is an `**Owner:** integrator` line, a `**Touches:**` line, a `**Rows:**` line when it
+serves plan rows, then `## The gap` and `## The change`, with every steering paragraph it changes
+quoted whole (above). The ticket that needs it is blocked by it, and one request may block many
+tickets as one ticket may wait on many requests; a request that nothing waits on carries
+`**Raised by:** #NNN` and blocks nothing. It may be filed from a pre-accepted answer, because filing
+decides nothing (ADR-0021 as amended).
 
 **Queued filing.** An overnight session that cannot reach GitHub queues the request as a pending
 `create` line, and the morning files it after a title search and comments its number on the blocked
