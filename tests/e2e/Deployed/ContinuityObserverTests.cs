@@ -443,10 +443,12 @@ public sealed class ContinuityObserverTests
     }
 
     [Theory]
-    [InlineData(401)]
-    [InlineData(502)]
-    public async Task Row6_a_401_or_a_5xx_on_any_call_fails_it(int status)
+    [InlineData("unauthenticated", null)]
+    [InlineData("session_ended", null)]
+    [InlineData(null, 502)] // Not an Errors row: any 5xx, which the observer judges by range.
+    public async Task Row6_a_lost_session_or_a_5xx_on_any_call_fails_it(string? refusal, int? other)
     {
+        int status = refusal is null ? other!.Value : Contract.Error(refusal).Status;
         (ContinuityObserver.RollingDeploy deploy, CloudWatch log) = Rolling(status: status);
 
         Assert.Equal(Verdict.Failed, ContinuityObserver.Rolling(deploy, await log.CaptureAsync(Deadline)).Verdict);
