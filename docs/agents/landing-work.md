@@ -267,14 +267,14 @@ what enforces review, the five merges after that tag that no record named were t
 before G2. `g2-local-slice` was tagged before that was done, and stands as it was cut. They are
 review debt like any other, and the next gate tag waits until a record clears each.
 
-| Pull request | Merged head | Merge commit |
-| --- | --- | --- |
-| #38 | `9202d6cc2e9af80cc4e27f24371d488f0399175f` | `733477a` |
-| #39 | `9564347d640b80c86711ea93a6d7ad55da1b9802` | `e376fe2` |
-| #40 | `6c07267ffd2ea422cdaa3a9aad4cda3d7ff0be1e` | `a3ec472` |
-| #44 | `ced5d8d6a49867c85b5547ff9d6f59a0ab488499` | `37fdca2` |
-| #45 | `91a8b2089df820237572719303c9d7195bad3dd9` | `eb65be8` |
+On 28 October 2026 records cleared #38, #39, #40 and #45, whose rows have left this table (#451).
+One remains:
 
-As read on 18 October 2026, for #67: none of the five carries a comment or a review, and no merge
-body, issue or pull request names its merged head. Each is cleared by a record naming that head,
-posted on its pull request, by an agent session that wrote none of its commits.
+| Pull request | Merged head | Merge commit | Latest record |
+| --- | --- | --- | --- |
+| #44 | `ced5d8d6a49867c85b5547ff9d6f59a0ab488499` | `37fdca2` | hold, https://github.com/adammedford/spa-platform/pull/44#issuecomment-6482050688 |
+
+Its review found that the contracts-index freeze rule #44 added to `.github/steering.py` still
+passes when an index row names a contract file that does not exist, and carried that as a
+follow-up. The row leaves when the fix lands and a record naming the merged head says `merge`,
+posted on #44 by an agent session that wrote none of its commits.
