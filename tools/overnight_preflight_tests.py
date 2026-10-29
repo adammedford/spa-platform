@@ -44,6 +44,11 @@ and every agent call answered by a sentinel, as .claude/workflows/overnight_test
 script either halts on a bad launch before its first agent or reaches Collect. node is required:
 without it the case fails, naming it.
 
+**The harness fixture is read back whole (#485).** A case run with --fixture reads the file it
+wrote and compares it with the arguments printed, the forecast's tickets and the ready-for-agent ids
+the skip leaves. The harness itself, .claude/workflows/overnight_harness.mjs, is git-ignored and not
+in the checkout, so no case runs it; the fixture's keys are the ones it reads.
+
 The cases run at the same time on the threads of tools/companion_runner.py; each keeps to its own
 throwaway directory and passes its own environment to what it runs.
 
@@ -107,8 +112,10 @@ def view_call(number: int) -> list[str]:
     return ["issue", "view", str(number), "--json", SHAPE_FIELDS]
 
 
-def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2) -> dict:
-    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes}
+def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2,
+           blocked_by: tuple = ()) -> dict:
+    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes,
+            "blockedBy": list(blocked_by)}
 
 
 def issue_json(number: int, label: str, body: str) -> dict:
@@ -466,7 +473,8 @@ class CleanStartTests(PreflightTestCase):
                                            capture_output=True, text=True)
                 self.assertEqual(2, completed.returncode)
                 self.assertEqual("", completed.stdout)
-                self.assertIn("usage: tools/overnight_preflight.sh <date>", completed.stderr)
+                self.assertIn("usage: tools/overnight_preflight.sh [--fixture <path>] [--skip <id,...>] <date>",
+                              completed.stderr)
         self.assertEqual([], case.gh())
         self.assertEqual([], case.collect())
 
@@ -904,6 +912,107 @@ class ShapeTests(PreflightTestCase):
         self.assertOnlyFails(result, "shape")
         self.assertEqual("origin/main has no tools/ticket_shape.py, so no ticket was judged",
                          result.row("shape")[1])
+
+
+class FixtureTests(PreflightTestCase):
+    """#485: --fixture writes the overnight harness's input, `{args, tickets, expect}`, from the
+    forecast, and --skip names what the launch plan skips besides the lines' candidates."""
+
+    def test_the_fixture_holds_the_arguments_the_forecasts_tickets_and_what_integrates(self):
+        case = Case(self)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), "--skip", "issue-12", DATE)
+        self.assertOnlyFails(result)
+        repo = str(case.checkout)
+        wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
+        printed = {"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": ["issue-12"]}
+        self.assertEqual(printed, result.arguments())
+        self.assertEqual({
+            "args": printed,
+            "tickets": TICKETS,
+            # The ready-for-agent tickets outside the skip, in the forecast's order: not the blocked
+            # issue-13, not the needs-triage 6.9, not the skipped issue-12.
+            "expect": {"integrated": ["issue-10", "2.1"], "skippedForBlocker": [], "startsBefore": []},
+        }, json.loads(fixture.read_text()))
+        self.assertNotIn("standingAnswer", fixture.read_text())
+        # The stdout contract holds: the verdict, then the arguments, last.
+        self.assertEqual(11, len(result.lines), result.stdout)
+        self.assertIn(f"overnight_preflight: wrote the harness fixture {fixture}", result.stderr)
+
+    def test_the_shape_and_claims_lines_candidates_are_in_the_written_skip(self):
+        case = Case(self)
+        # issue-12 fails the shape check; issue-10 is held by a part-merged branch.
+        case.issue(12, "ready-for-agent", "**Touches:** none\n\n- [ ] A test proves it\n")
+        case.git("commit", "-q", "--allow-empty", "-m", "Merge part of task issue-10: half", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        case.git("branch", "task/issue-10-x", cwd=case.checkout)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), "--skip", "2.1", DATE)
+        self.assertOnlyFails(result)
+        written = json.loads(fixture.read_text())
+        self.assertEqual(["issue-12", "issue-10", "2.1"], written["args"]["skip"])
+        self.assertEqual([], written["expect"]["integrated"])
+        # The printed arguments leave the held ticket out: a rename frees it before launch (#484).
+        self.assertEqual(["issue-12", "2.1"], result.arguments()["skip"])
+
+    def test_a_demoted_candidate_is_in_the_written_skip_too(self):
+        case = Case(self, tickets=TICKETS + [ticket("issue-14", 14, "integrator", "ready-for-agent")])
+        case.triage([14], {14: [labelled("unlabeled", "ready-for-agent", 2)]})
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), DATE)
+        written = json.loads(fixture.read_text())
+        self.assertEqual(["issue-14"], written["args"]["skip"])
+        self.assertEqual(["issue-10", "2.1", "issue-12"], written["expect"]["integrated"])
+
+    def test_a_ready_ticket_a_skipped_one_blocks_is_skipped_for_the_blocker(self):
+        # overnight.js gives a skipped ticket no lane, so issue-15, which waits on issue-12, and
+        # issue-16, which waits on issue-15, skip on the blocker; 2.1 waits on issue-10, which runs.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("2.1", 11, "ws2-hosting", "ready-for-agent", blocked_by=("issue-10",)),
+                   ticket("issue-12", 12, "integrator", "ready-for-agent"),
+                   ticket("issue-16", 16, "integrator", "ready-for-agent", blocked_by=("issue-15",)),
+                   ticket("issue-15", 15, "integrator", "ready-for-agent", blocked_by=("issue-12",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), "--skip", "issue-12", DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "2.1"], expect["integrated"])
+        self.assertEqual(["issue-16", "issue-15"], expect["skippedForBlocker"])
+
+    def test_without_the_flag_no_fixture_is_written(self):
+        case = Case(self)
+        # The directory it runs in, besides the call records its doubles keep there, and the checkout.
+        records = {"gh-calls", "collect-calls"}
+        before = (sorted(p.name for p in case.dir.iterdir() if p.name not in records), case.snapshot())
+        result = case.run("--skip", "issue-12", DATE)
+        self.assertOnlyFails(result)
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+        self.assertNotIn("fixture", result.stderr)
+        after = (sorted(p.name for p in case.dir.iterdir() if p.name not in records), case.snapshot())
+        self.assertEqual(before, after)
+
+    def test_a_failed_forecast_writes_no_fixture(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
+        self.assertEqual(1, result.status)
+        self.assertFalse(fixture.exists())
+        self.assertIn("overnight_preflight: no harness fixture written: the forecast failed", result.stderr)
+
+    def test_a_bad_invocation_is_refused_before_anything_runs(self):
+        case = Case(self)
+        script = str(case.checkout / "tools" / "overnight_preflight.sh")
+        for argv in (["--fixture"], ["--fixture", str(case.dir / "nowhere" / "f.json"), DATE],
+                     ["--skip", DATE], ["--skip", ",", DATE], ["--skip", "a b", DATE], ["--bogus", DATE]):
+            with self.subTest(argv=argv):
+                completed = subprocess.run([BASH, script, *argv], cwd=case.dir, env=case.env(),
+                                           capture_output=True, text=True)
+                self.assertEqual(2, completed.returncode, completed.stdout + completed.stderr)
+                self.assertEqual("", completed.stdout)
+                self.assertIn("usage: tools/overnight_preflight.sh", completed.stderr)
+        self.assertEqual([], case.gh())
+        self.assertEqual([], case.collect())
 
 
 class WritesNothingTests(PreflightTestCase):
