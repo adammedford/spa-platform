@@ -17,14 +17,12 @@ it.
 
 - **Missing.** The task sits in the load balancer's two subnets, so its own address is inside
   `ForwardedHeaders:TrustedNetworks`.
-- **Risk.** Whoever holds a Session Manager session on the task can forward a port to the task's own
-  address. That connection never leaves the task, no security group sees it, and the gateway trusts
-  the `X-Forwarded-For` and `X-Forwarded-Proto` it carries: a tunnel holder can forge forwarded
-  headers (threat T6). Only operators hold that session, and they can already run commands in the
-  task (GAP-14).
-- **Found.** `.scratch/overnight/issues/03-1.2-cell-network.md`, questions 5 and 11, and
-  `.scratch/overnight/questions.md` Q23, all answered yes. `infra/modules/cell/README.md` → "One gap
-  the shared subnets leave" states the mechanism.
+- **Risk.** A tunnel holder can forge forwarded headers (threat T6), by the path
+  `infra/modules/cell/README.md` → "One gap the shared subnets leave" sets out. Only operators hold
+  that tunnel, and they can already run commands in the task (GAP-15).
+- **Found.** `.scratch/overnight/issues/03-1.2-cell-network.md`: question 5 kept the shared subnets
+  as a Phase 1 gap, and question 11 sent the entry here, which `.scratch/overnight/questions.md` Q23
+  confirmed.
 - **Closes with.** P2-4 (private subnets) and P2-9 (no ECS Exec). Accepted for Phase 1.
 
 ### GAP-2. Ending an app's sessions leaves the provider's session
@@ -75,7 +73,7 @@ refusal a test proves.
 
 ### GAP-14. The shared gateway process is compromised (T14)
 
-- **Missing.** Every app is served by one process, so one compromise reaches every app's sessions
+- **Missing.** Every app is served by the same gateway, so one compromise reaches every app's sessions
   and secrets.
 - **Risk.** Very high impact, low likelihood (`docs/plan/06-phase-2-and-risks.md`, risk 1).
   Least-privilege IAM is the only Phase 1 bound.
@@ -96,6 +94,8 @@ refusal a test proves.
 - **Missing.** The registry keeps serving its last good snapshot, which F-09 proves. The rest of
   T16 is accepted: assets have no cache in front of S3, and no limit bounds a login storm.
 - **Risk.** An S3 outage stops every app's assets, and a login storm reaches the provider unbounded.
-- **Found.** `docs/plan/01-plan.md` → "Threats", T16.
-- **Closes with.** Phase 2's caching and limits, which T16 names and no row yet holds; GAP-6 and
-  GAP-7 are the written-plan half.
+- **Found.** `docs/plan/01-plan.md` → "Threats", T16, and `docs/plan/06-phase-2-and-risks.md`,
+  risk 10.
+- **Closes with.** Phase 2's caching and limits, which T16 and risk 10 name and no Phase 2 row yet
+  holds: the deferred-features table there leaves asset caching to hosting and rate limiting to the
+  request gate, with no trigger. GAP-6 and GAP-7 are the written-plan half.
