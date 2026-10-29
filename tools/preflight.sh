@@ -254,6 +254,12 @@ if [ "$aws_ok" -eq 1 ]; then
     missing "AWS project" "${project_env} is absent, so nothing says which project is intended"
   elif [ -z "$want_profile" ]; then
     missing "AWS project" "tools/aws-project.env names no AWS_PROFILE, so nothing says which project is intended"
+  elif [ -z "$want_region" ]; then
+    # Fails closed, as the profile does (#508): a file that names no Region gives the two Region
+    # comparisons below nothing to compare, and the ok row would then claim a Region the file never
+    # named. An empty `AWS_REGION=` line, a commented one and a form the parse does not read, such
+    # as `readonly AWS_REGION=...`, all arrive here.
+    missing "AWS project" "tools/aws-project.env names no AWS_REGION, so nothing says which Region is intended"
   elif [ "$using" != "$want_profile" ]; then
     # The profile, not the account id: change request 1.5 kept account identifiers out of the
     # tracked tree, and on a correctly configured workstation the profile resolves to the account.
@@ -265,9 +271,9 @@ if [ "$aws_ok" -eq 1 ]; then
     # presence is the whole condition.
     #   https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html
     missing "AWS project" "profile '${using}' is named, but AWS_ACCESS_KEY_ID in the environment outranks it. unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN"
-  elif [ -n "$want_region" ] && [ "$eff_region" != "$want_region" ]; then
+  elif [ "$eff_region" != "$want_region" ]; then
     missing "AWS Region" "this shell resolves to '${eff_region:-unset}', expected '${want_region}'. set -a; . tools/aws-project.env; set +a"
-  elif [ -n "$want_region" ] && [ "$cfg_region" != "$want_region" ]; then
+  elif [ "$cfg_region" != "$want_region" ]; then
     missing "AWS Region" "profile '${using}' is configured for '${cfg_region:-unset}', expected '${want_region}', so a shell that has not sourced tools/aws-project.env would use it. aws configure set region ${want_region} --profile ${using}"
   else
     ok "AWS project" "profile '${using}', region ${eff_region}, as tools/aws-project.env names"
