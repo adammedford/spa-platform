@@ -50,13 +50,24 @@
 #             alone is not listed: the rename moves a local one. Collect reads origin's task branches
 #             too, so a held entry whose id origin also has a `task/<id>-` branch for says so: the
 #             rename alone does not free that ticket.
+#   shape     Every ready-for-agent and needs-triage ticket of the forecast, judged by origin/main's
+#             tools/ticket_shape.py under the label it will carry after Route, ready-for-agent
+#             (#483). The ticket-shape Action judges a ticket once it carries that label, so a
+#             needs-triage ticket Route relabels is demoted mid-run, and the rules sitting-or-landing,
+#             shared-commit, foreground and spec fire only under it. Each ticket is read with
+#             `gh issue view <n> --json` and its fields FIELDS, its labels rewritten (needs-triage
+#             dropped, ready-for-agent added), and piped to `ticket_shape.py -` from the main
+#             checkout, where gh resolves the repository. A ticket that fails is a skip candidate,
+#             named with its rules. The line fails when the forecast failed, origin/main has no
+#             ticket_shape.py, or a ticket could not be read or judged (the check's exit 2): a
+#             ticket left unjudged would read as one that passed.
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
 # line, `overnight_preflight: pass: ...` or `overnight_preflight: fail: ...`, and last the Workflow
 # `args` JSON for the date: repo, date, wt, maxParallel (the number of owners with ready-for-agent
 # tickets, at least 1; left out when the forecast failed, so the workflow's default applies) and
-# skip (the skip candidates). It leaves out standingAnswer, which the workflow requires: the grant
+# skip (the skip candidates of the demoted and shape lines, each once). It leaves out standingAnswer, which the workflow requires: the grant
 # is the human's, per launch (ADR-0021 decision 3), so the arguments do not run until they set it.
 # The JSON is printed on a fail as well, so the evidence and the arguments are read together.
 #
@@ -379,6 +390,86 @@ else
 fi
 [ -f "$scratch/candidates" ] || : > "$scratch/candidates"
 
+# --- shape ------------------------------------------------------------------------------------------
+# The fields are tools/ticket_shape.py's FIELDS, the JSON its `-` reads.
+: > "$scratch/shaped"
+mkdir "$scratch/issues"
+if ! $forecast_ok; then
+  row fail shape "the forecast failed, so no ticket was judged"
+elif [ ! -f "$copy/tools/ticket_shape.py" ]; then
+  row fail shape "origin/main has no tools/ticket_shape.py, so no ticket was judged"
+elif ! judged="$(python3 -I -c '
+import json, sys
+tickets = json.load(open(sys.argv[1]))["tickets"]
+print(" ".join(str(int(t["issue"])) for t in tickets
+               if t["status"] in ("ready-for-agent", "needs-triage")))
+' "$scratch/collect.json" 2>/dev/null)"; then
+  row fail shape "the forecast's tickets could not be read, so no ticket was judged"
+else
+  unread=""
+  unjudged=""
+  count=0
+  for number in $judged; do
+    count=$((count + 1))
+    issue="$scratch/issues/$number"
+    if ! (cd "$repo" && gh issue view "$number" --json number,body,labels,subIssuesSummary,blockedBy) \
+           > "$issue.json" 2>/dev/null ||
+       ! python3 -I -c '
+import json, sys
+issue = json.load(open(sys.argv[1]))
+issue["labels"] = [label for label in issue["labels"]
+                   if label["name"] not in ("needs-triage", "ready-for-agent")]
+issue["labels"].append({"name": "ready-for-agent"})
+print(json.dumps(issue))
+' "$issue.json" > "$issue.ready.json" 2>/dev/null; then
+      unread="$unread #$number"
+      continue
+    fi
+    (cd "$repo" && python3 -I "$copy/tools/ticket_shape.py" - < "$issue.ready.json") > "$issue.out" 2>&1
+    case $? in
+      0) ;;
+      1) echo "$number" >> "$scratch/shaped" ;;
+      *) unjudged="$unjudged #$number" ;;
+    esac
+  done
+  # Each failed ticket as "<id>\t#<n>: <rules>", named by collect's id as the demoted line names it.
+  if python3 -I -c '
+import json, pathlib, re, sys
+collect, issues, shaped, out = sys.argv[1:]
+ids = {t["issue"]: t["id"] for t in json.load(open(collect))["tickets"]}
+lines = []
+for number in [int(n) for n in open(shaped).read().split()]:
+    rules = []
+    for line in pathlib.Path(issues, f"{number}.out").read_text().splitlines():
+        found = re.match(r"^ticket-shape: ([a-z-]+): ", line)
+        if found and found.group(1) not in ("note", "pass", "fail") and found.group(1) not in rules:
+            rules.append(found.group(1))
+    name = ids.get(number) or "issue-%d" % number
+    lines.append("%s\t#%d: %s\n" % (name, number, ", ".join(rules) or "no rule named"))
+pathlib.Path(out).write_text("".join(lines))
+' "$scratch/collect.json" "$scratch/issues" "$scratch/shaped" "$scratch/shape-candidates" 2>/dev/null; then
+    list=""
+    while IFS=$'\t' read -r id what; do list="$list; $id ($what)"; done < "$scratch/shape-candidates"
+    if [ -z "$list" ]; then
+      found="none fails"
+    else
+      found="these fail and are skip candidates: ${list#; }"
+    fi
+    problems=""
+    [ -n "$unread" ] && problems="$problems; gh could not read$unread"
+    [ -n "$unjudged" ] && problems="$problems; ticket_shape.py judged nothing for$unjudged"
+    if [ -z "$problems" ]; then
+      row pass shape "$count ready-for-agent and needs-triage tickets judged as ready-for-agent; $found"
+    else
+      row fail shape "$count ready-for-agent and needs-triage tickets${problems}, so those are unjudged; of the rest, $found"
+    fi
+  else
+    : > "$scratch/shape-candidates"
+    row fail shape "ticket_shape.py's verdicts could not be read"
+  fi
+fi
+[ -f "$scratch/shape-candidates" ] || : > "$scratch/shape-candidates"
+
 # --- verdict and arguments --------------------------------------------------------------------------
 if [ -z "$failed" ]; then
   echo "overnight_preflight: pass: every precondition holds. The arguments follow; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
@@ -387,14 +478,16 @@ else
 fi
 python3 -I -c '
 import json, sys
-repo, date, wt, collect, candidates, ok = sys.argv[1:]
+repo, date, wt, collect, candidates, shaped, ok = sys.argv[1:]
 args = {"repo": repo, "date": date, "wt": wt}
 if ok == "true":
     owners = {t["owner"] for t in json.load(open(collect))["tickets"] if t["status"] == "ready-for-agent"}
     args["maxParallel"] = max(1, len(owners))
-args["skip"] = [line.split("\t")[0] for line in open(candidates) if line.strip()]
+named = [line.split("\t")[0] for path in (candidates, shaped) for line in open(path) if line.strip()]
+args["skip"] = list(dict.fromkeys(named))
 print(json.dumps(args))
-' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$forecast_ok" ||
+' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
+  "$forecast_ok" ||
   { echo "overnight_preflight: fail: the arguments could not be written"; exit 1; }
 
 [ -z "$failed" ]

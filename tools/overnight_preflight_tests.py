@@ -24,13 +24,19 @@ GIT_CONFIG_GLOBAL names an empty file, and LC_ALL=C. A real gh on a runner's PAT
 **Real git; a double for gh and for collect.** Every git call the script makes works offline, so
 each case builds a bare origin, a clone of it standing in for whoever pushes to main, and the main
 checkout, a second clone. gh is the call that leaves the machine, so the case's bin holds a strict gh
-double that answers the two listings the script asks for, from the case's canned output, records
+double that answers the three reads the script asks for (the needs-triage listing, a timeline,
+and an issue's `gh issue view --json` for the shape line), from the case's canned output, records
 every call with the directory it ran in, and exits 97 on anything else, so a new gh call, or any
 write to the tracker, turns a case red. tools/overnight_collect.py is the case's own stub committed
 on origin/main: the script runs origin/main's copy, extracted outside the checkout, so the stub
 prints a canned summary line and answer and records how it was called and from where. A case whose
 origin/main moves commits a stub that says so, which is how a case tells origin's copy from the
-checkout's.
+checkout's. Imported, as tools/ticket_shape.py imports it, the stub is the real collect's OWNER and
+ROLES and does nothing else.
+
+**The shape line runs the real check.** Each case commits this checkout's tools/ticket_shape.py,
+.github/path-ownership.py and OWNERSHIP.md on origin/main, so the shape line judges a canned issue
+with the rules the run will use, and a case proves what the check fails, not what a stub prints.
 
 **The launch arguments meet the workflow's own validation.** The arguments case runs
 .claude/workflows/overnight.js, this checkout's, under node, with the arguments the script printed
@@ -64,6 +70,18 @@ spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools"
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "overnight_preflight.sh"
+spec = importlib.util.spec_from_file_location("overnight_collect", ROOT / "tools" / "overnight_collect.py")
+real_collect = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(real_collect)
+# The real files the shape line's tools/ticket_shape.py runs on, committed on each case's origin/main
+# at the same paths: the check itself, A-05's ownership reader and the ownership it reads.
+SHAPE_FILES = ("tools/ticket_shape.py", ".github/path-ownership.py", "OWNERSHIP.md")
+# The fields the gh double answers for `gh issue view`, read from the check itself: the script
+# copies them, so a FIELDS change the script misses turns a case red here.
+spec = importlib.util.spec_from_file_location("ticket_shape", ROOT / "tools" / "ticket_shape.py")
+ticket_shape = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ticket_shape)
+SHAPE_FIELDS = ticket_shape.FIELDS
 WORKFLOW = ROOT / ".claude" / "workflows" / "overnight.js"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
@@ -75,7 +93,7 @@ DATE = "2026-10-26"
 TOOLS = ("git", "ps", "tar", "mktemp", "mkdir", "rm")
 
 # The lines, by name, in the order the ticket gives them.
-LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims"]
+LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims", "shape"]
 
 LIST_TRIAGE = ["issue", "list", "--state", "open", "--label", "needs-triage", "--limit", "500",
                "--json", "number"]
@@ -85,8 +103,26 @@ def timeline_call(number: int) -> list[str]:
     return ["api", "--paginate", "--slurp", f"repos/{{owner}}/{{repo}}/issues/{number}/timeline?per_page=100"]
 
 
+def view_call(number: int) -> list[str]:
+    return ["issue", "view", str(number), "--json", SHAPE_FIELDS]
+
+
 def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2) -> dict:
     return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes}
+
+
+def issue_json(number: int, label: str, body: str) -> dict:
+    """`gh issue view <n> --json` with ticket_shape.py's fields, as gh prints it."""
+    return {"number": number, "body": body,
+            "labels": [{"id": "LA_x", "name": label, "description": "", "color": "ededed"}],
+            "subIssuesSummary": {"total": 0, "completed": 0, "percentCompleted": 0},
+            "blockedBy": {"nodes": []}}
+
+
+def clean_body(owner: str, box: str = "A test proves the behaviour") -> str:
+    """A body ticket_shape.py passes under any label: one Owner role, a Touches line that writes
+    nothing, so no path's owner is derived, and an open box no word list matches."""
+    return f"**Owner:** {owner}\n**Touches:** none\n\n## Acceptance criteria\n\n- [ ] {box}\n"
 
 
 # Collect's answer in the default case: three ready-for-agent tickets under two owners, one blocked
@@ -101,13 +137,18 @@ TICKETS = [
 SUMMARY = "overnight_collect: 5 tickets (1 blocked, 1 needs-triage, 3 ready-for-agent), 0 parents; 0 will end partial."
 
 # The stub committed as origin/main's tools/overnight_collect.py. It records each call, then prints
-# what collect prints: the summary on stderr and the answer on stdout.
-COLLECT_STUB = """import json, pathlib, sys
-with open({calls!r}, "a") as calls:
-    calls.write(json.dumps({{"argv": sys.argv[1:], "file": str(pathlib.Path(__file__).resolve())}}) + "\\n")
-print({summary!r}, file=sys.stderr)
-print(json.dumps({answer!r}))
-sys.exit({status!r})
+# what collect prints: the summary on stderr and the answer on stdout. Imported, as
+# tools/ticket_shape.py imports collect to read an Owner line, it is the real OWNER and ROLES and
+# does nothing else.
+COLLECT_STUB = """import json, pathlib, re, sys
+OWNER = re.compile({owner!r})
+ROLES = {roles!r}
+if __name__ == "__main__":
+    with open({calls!r}, "a") as calls:
+        calls.write(json.dumps({{"argv": sys.argv[1:], "file": str(pathlib.Path(__file__).resolve())}}) + "\\n")
+    print({summary!r}, file=sys.stderr)
+    print(json.dumps({answer!r}))
+    sys.exit({status!r})
 """
 
 # The gh double: the two reads, each from the case's canned output, and 97 for anything else.
@@ -132,6 +173,13 @@ if len(argv) == 4 and argv[:3] == ["api", "--paginate", "--slurp"]:
                 sys.exit(1)
             print(page.read_text())
             sys.exit(0)
+if len(argv) == 5 and argv[:2] == ["issue", "view"] and argv[3:] == ["--json", {fields!r}]:
+    issue = canned / ("issue-%s.json" % argv[2])
+    if not issue.exists():
+        print("GraphQL: Could not resolve to an issue or pull request", file=sys.stderr)
+        sys.exit(1)
+    print(issue.read_text())
+    sys.exit(0)
 print("gh double: unexpected call", argv, file=sys.stderr)
 sys.exit(97)
 """
@@ -219,9 +267,13 @@ class Case:
         runner.link_tool(self.bin / "python3", PYTHON)
         gh = self.bin / "gh"
         gh.write_text(GH_DOUBLE.format(python=PYTHON, calls=str(self.gh_calls), canned=str(self.canned),
-                                       list_triage=LIST_TRIAGE))
+                                       list_triage=LIST_TRIAGE, fields=SHAPE_FIELDS))
         gh.chmod(0o755)
         self.triage([])
+        # Each forecast ticket's issue, clean by default, so the shape line passes listing none.
+        for each in TICKETS if tickets is None else tickets:
+            label = each["status"] if each["status"] in ("needs-triage", "ready-for-human") else "ready-for-agent"
+            self.issue(each["issue"], label, clean_body(each["owner"]))
 
         self.landed = 0
         self.origin = self.dir / "origin.git"
@@ -234,6 +286,9 @@ class Case:
         (self.pusher / ".claude" / "workflows").mkdir(parents=True)
         (self.pusher / ".claude" / "workflows" / "overnight.js").write_text("// the workflow\n")
         (self.pusher / "tools").mkdir()
+        (self.pusher / ".github").mkdir()
+        for path in SHAPE_FILES:
+            (self.pusher / path).write_bytes((ROOT / path).read_bytes())
         self.push_collect("Lay out the repository", tickets=tickets, summary=summary,
                           status=collect_status)
         self.clone(self.checkout)
@@ -262,6 +317,7 @@ class Case:
         """Commits a collect stub on origin/main, and any other files `also` names."""
         answer = {"tickets": TICKETS if tickets is None else tickets, "parents": []}
         (self.pusher / "tools" / "overnight_collect.py").write_text(COLLECT_STUB.format(
+            owner=real_collect.OWNER.pattern, roles=real_collect.ROLES,
             calls=str(self.collect_calls), summary=summary, answer=answer, status=status))
         for path, text in (also or {}).items():
             (self.pusher / path).write_text(text)
@@ -281,6 +337,10 @@ class Case:
         for number, events in (timelines or {}).items():
             # One page, as `gh api --paginate --slurp` wraps them.
             (self.canned / f"timeline-{number}.json").write_text(json.dumps([events]))
+
+    def issue(self, number: int, label: str, body: str):
+        """What `gh issue view <number> --json` answers, with the label the issue carries now."""
+        (self.canned / f"issue-{number}.json").write_text(json.dumps(issue_json(number, label, body)))
 
     # --- running ---
 
@@ -351,7 +411,7 @@ class CleanStartTests(PreflightTestCase):
         result = case.run()
         self.assertOrder(result)
         self.assertOnlyFails(result)
-        self.assertEqual(10, len(result.lines), result.stdout)
+        self.assertEqual(11, len(result.lines), result.stdout)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
         self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": []},
@@ -566,7 +626,7 @@ class ForecastTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: #56 and #180 share 1.4",
                     collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual("origin/main's overnight_collect.py --repo exited 1: overnight_collect: no "
                          "tickets printed: #56 and #180 share 1.4", result.row("forecast")[1])
         self.assertNotIn("maxParallel", result.arguments())
@@ -578,7 +638,7 @@ class ForecastTests(PreflightTestCase):
         case.git("push", "-q", "origin", "main", cwd=case.pusher)
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual("origin/main has no tools/overnight_collect.py", result.row("forecast")[1])
 
     def test_max_parallel_is_the_owners_with_ready_tickets_and_at_least_one(self):
@@ -619,7 +679,8 @@ class DemotedTests(PreflightTestCase):
         self.assertRegex(evidence, r"^4 needs-triage tickets; these lost ready-for-agent in the last 24 "
                                    r"hours and are skip candidates: 6\.9 \(#358, removed \S+Z\); "
                                    r"issue-363 \(#363, removed \S+Z\)$")
-        self.assertEqual([LIST_TRIAGE] + [timeline_call(n) for n in (358, 361, 362, 363)],
+        self.assertEqual([LIST_TRIAGE] + [timeline_call(n) for n in (358, 361, 362, 363)]
+                         + [view_call(n) for n in (10, 11, 12, 358)],
                          [call["argv"] for call in case.gh()])
         self.assertEqual({str(case.checkout)}, {call["cwd"] for call in case.gh()})
 
@@ -645,7 +706,7 @@ class DemotedTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual(["issue-358"], result.arguments()["skip"])
 
 
@@ -746,9 +807,103 @@ class ClaimsTests(PreflightTestCase):
     def test_a_failed_forecast_fails_the_line_for_want_of_the_open_boxes(self):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims")
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
         self.assertEqual("the forecast failed, so no ticket's open boxes are known and no claim was judged",
                          result.row("claims")[1])
+
+
+class ShapeTests(PreflightTestCase):
+    """The shape line judges each ready-for-agent and needs-triage ticket of the forecast as
+    ready-for-agent, with origin/main's real tools/ticket_shape.py (#483)."""
+
+    def test_clean_tickets_are_not_listed_and_the_line_passes_with_none_listed(self):
+        case = Case(self)
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets judged as ready-for-agent; "
+                                  "none fails"), result.row("shape"))
+        self.assertEqual([], result.arguments()["skip"])
+        # The blocked ticket of the forecast is not read; the four others are, from the checkout.
+        views = [call for call in case.gh() if call["argv"][:2] == ["issue", "view"]]
+        self.assertEqual([view_call(n) for n in (10, 11, 12, 358)], [call["argv"] for call in views])
+        self.assertEqual({str(case.checkout)}, {call["cwd"] for call in views})
+
+    def test_a_needs_triage_ticket_with_no_owner_line_is_listed_with_owner_line_and_skipped(self):
+        case = Case(self)
+        case.issue(358, "needs-triage", "**Touches:** `tools/overnight_collect.py`\n\n"
+                                        "## Acceptance criteria\n\n- [ ] A test proves it\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets judged as ready-for-agent; "
+                                  "these fail and are skip candidates: 6.9 (#358: owner-line)"),
+                         result.row("shape"))
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_needs_triage_ticket_is_judged_under_ready_for_agent_so_its_box_words_count(self):
+        # Under its own label the word list does not fire; under ready-for-agent it does.
+        body = clean_body("integrator", "The stack is deployed and answers")
+        case = Case(self)
+        case.issue(358, "needs-triage", body)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("these fail and are skip candidates: 6.9 (#358: sitting-or-landing)",
+                      result.row("shape")[1])
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ready_ticket_that_fails_is_listed_by_its_id_with_each_rule_once(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", "**Owner:** ws2-hosting and integrator\n**Touches:** none\n\n"
+                                          "- [ ] It is deployed\n- [ ] It is checked by hand\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("skip candidates: issue-12 (#12: owner-line, sitting-or-landing)",
+                      result.row("shape")[1])
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_ticket_both_demoted_and_failing_is_skipped_once(self):
+        case = Case(self)
+        case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
+        case.issue(358, "needs-triage", "**Touches:** none\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ticket_gh_cannot_read_fails_the_line(self):
+        case = Case(self)
+        (case.canned / "issue-11.json").unlink()
+        case.issue(358, "needs-triage", "**Touches:** none\n")
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertEqual("4 ready-for-agent and needs-triage tickets; gh could not read #11, so those "
+                         "are unjudged; of the rest, these fail and are skip candidates: 6.9 (#358: "
+                         "owner-line)", result.row("shape")[1])
+        self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ticket_the_check_cannot_judge_fails_the_line(self):
+        case = Case(self)
+        # No blockedBy field: ticket_shape.py reads nothing and exits 2.
+        (case.canned / "issue-10.json").write_text(json.dumps({"number": 10, "body": "", "labels": []}))
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertIn("ticket_shape.py judged nothing for #10, so those are unjudged; of the rest, none fails",
+                      result.row("shape")[1])
+
+    def test_a_failed_forecast_or_no_check_on_origin_fails_the_line(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertEqual("the forecast failed, so no ticket was judged", result.row("shape")[1])
+
+        case = Case(self)
+        case.git("rm", "-q", "tools/ticket_shape.py", cwd=case.pusher)
+        case.git("commit", "-q", "-m", "Drop the shape check", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        result = case.run()
+        self.assertOnlyFails(result, "shape")
+        self.assertEqual("origin/main has no tools/ticket_shape.py, so no ticket was judged",
+                         result.row("shape")[1])
 
 
 class WritesNothingTests(PreflightTestCase):
@@ -782,11 +937,11 @@ class WritesNothingTests(PreflightTestCase):
                     # The file whose mtime alone moved is no tracked change: its content is HEAD's.
                     self.assertIn("2 tracked changes", result.row("tracked")[1])
                     self.assertNotIn("overnight_collect.py", result.row("tracked")[1])
-                # Every gh call is one of the two reads: a write, or any other call, would be
+                # Every gh call is one of the three reads: a write, or any other call, would be
                 # recorded here and exit 97.
                 for call in case.gh():
-                    self.assertTrue(call["argv"] == LIST_TRIAGE or call["argv"][:3] == ["api", "--paginate", "--slurp"],
-                                    call)
+                    self.assertTrue(call["argv"] == LIST_TRIAGE or call["argv"][:3] == ["api", "--paginate", "--slurp"]
+                                    or call["argv"][:2] == ["issue", "view"], call)
                 self.assertEqual([], list(case.tmp.iterdir()))
 
 
