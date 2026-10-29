@@ -33,9 +33,10 @@ row it names, against which its own target's header is compared. A cell naming n
 holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
 by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
 and so does a target it cannot read a header from: one that does not exist, a markdown contract
-with no freeze bullet, a schema stating no freeze, JSON that does not parse, or a file that is
-none of those nor code. Only code, named by its suffix in CODE_SUFFIXES, a directory and a
-schema's `*.example.json` are passed over, since none of them carries a header (#493, #511).
+with no freeze bullet, a header naming no gate, a schema stating no freeze, JSON that does not
+parse, or a file that is none of those nor code. Only code, named by its suffix in CODE_SUFFIXES,
+a directory and a schema's `*.example.json` are passed over, since none of them carries a header
+(#493, #511).
 The line it passes prints how many headers it compared: a rule that quietly compares nothing is
 the defect it was written to catch, one level up.
 
@@ -556,9 +557,12 @@ def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
     by its shape, which is all a path says: code by a suffix in CODE_SUFFIXES, and an example by
     the name `*.example.json`. Every other absence is a problem, because it is the same silence one
     step earlier (#493): a target that exists at neither reading, a markdown contract with no
-    freeze bullet, a schema whose description states no freeze, JSON that does not parse, JSON
-    that states no freeze under any other name, and a file in any other format each left a row
-    compared with nothing while the line this check prints still counted it as agreeing (#511).
+    freeze bullet, a header naming no gate, a schema whose description states no freeze, JSON that
+    does not parse, JSON that states no freeze under any other name, and a file in any other format
+    each left a row compared with nothing while the line this check prints still counted it as
+    agreeing (#511). The header naming no gate is the one of these this function cannot see: it
+    returns that header as read, and freeze_disagreements() fails the row when it finds no gate in
+    it.
     """
     # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
     # the file, not another file.
