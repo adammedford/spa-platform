@@ -270,8 +270,9 @@ frozen export, and a spec is one feature's working statement.
 Phase 2 package table (I-4, 2.1, P2-1), and the unit the roadmap counts. Not a ticket: one row may be
 built by several. _Avoid_: bare "task" where a ticket could be meant.
 
-**Carrier** — the one ticket whose `Plan row` line names a row that several tickets build; its merge
-is the one that can name the row. _Avoid_: "the row's ticket", when the row has parts.
+**Carrier** — the one ticket whose `Plan row` line names a row that several tickets build. How its
+merge and the part tickets' merges name the row is #332 D7's rule. _Avoid_: "the row's ticket",
+when the row has parts.
 
 **Part ticket** — a ticket that builds part of a plan row it does not carry, and declares that in its
 `Plan row` line as `none (part of <row>...)`. _Avoid_: "sibling", "sub-ticket" (a sub-issue is
