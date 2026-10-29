@@ -46,11 +46,8 @@ push that reaches outside one owner's set. When it fires, either the change went
 not mean to, or it needs an integrator path.
 
 **Needing an integrator path** — a contract, a package version, a new project, anything in
-`src/Platform.Abstractions` — means writing `contracts/changes/<task-id>-<slug>.md` describing what
-you need and why. Anyone may add one; the check exempts that directory, except a request added or
-edited to say its Status is decided, which needs a confirmed answer as its authority (ADR-0021
-decision 4). Then merge what you have, say in the merge body that the request is open, and stop the
-task. The integrator decides and edits.
+`src/Platform.Abstractions` — means filing a change request and stopping the task:
+`docs/agents/tracker-policy.md` → "Change requests".
 
 Needing *another workstream's* path means something has gone wrong: A-03 says a workstream project
 references `Platform.Abstractions` and no other workstream's project, so a real need for another
@@ -59,8 +56,11 @@ out of order.
 
 **A commit that changes a steering document names its authority** (ADR-0023). The steering
 documents are `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`, `OWNERSHIP.md`, `CODING_STANDARDS.md`,
-`docs/agents/`, `docs/adr/` and `contracts/`. The commit's message ends with a trailer in one of two
-forms, on a line of its own in the last paragraph, beside any other trailers:
+`docs/agents/`, `docs/adr/` and `contracts/`, except `docs/agents/issue-tracker.md`,
+`docs/agents/triage-labels.md` and `docs/agents/aws-rules.md`, which a setup skill rewrites when it
+is run again (#411, #412). `docs/agents/domain.md` stays in the set while it holds a rule of this
+repository's. The commit's message ends with a trailer in one of two forms, on a line of its own in
+the last paragraph, beside any other trailers:
 
 ```
 Authority: #<n>     the ticket whose acceptance criterion asks for the change,
@@ -69,6 +69,9 @@ Authority: <URL>    the comment on this repository that holds a confirmed answer
                     links it: https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>
 ```
 
+A change request, or a frozen contract's sentence, lands only on a decision comment's URL or on an
+integrator ticket the human labelled `ready-for-agent`; which `#<n>` the check refuses, and why:
+`docs/agents/tracker-policy.md` → "Change requests".
 A pre-accepted answer, a follow-up a night raised, an archived ticket's proposal and a reviewer's
 finding are not authority. `git commit --amend --no-edit --trailer "Authority: #<n>"` adds the
 trailer to the last commit. git reads trailers from the message's last paragraph alone, and an
@@ -76,13 +79,13 @@ trailer to the last commit. git reads trailers from the message's last paragraph
 
 `.github/steering.py` holds this, in the pre-push hook and in CI, on every branch (#102). It reads
 each non-merge commit between the base the check judges against and HEAD, made since the starting
-point the script records, and fails one that changes a steering document with no `Authority:`
-trailer, a `#<n>` that names no issue (a pull request's number included), or a URL that is not a
-comment on this repository, naming the commit and the paths. A merge needs no trailer, and neither
-does a commit that only adds an open change request under `contracts/changes/`; editing or removing
-one does, and a commit that sets a request's Status to decided needs a trailer that is the URL of a
-confirmed answer, never a bare `#<n>`. Whether what the trailer cites decides the change is the
-reviewer's call, not the check's.
+points the script records, and fails one that changes a steering document with no `Authority:`
+trailer, a `#<n>` that names no issue (a pull request's number included) or names a change request,
+or a URL that is not a comment on this repository, naming the commit and the paths. A merge needs
+no trailer. A file added under `contracts/changes/`, the read-only archive of requests filed before
+they were issues, fails whatever its trailer cites; editing or removing one needs a trailer like any
+other steering change. Whether what the trailer cites decides the change is the reviewer's call, not
+the check's.
 
 ## Land it
 
@@ -184,8 +187,7 @@ taken. Run without `--delete` from a checkout at `origin/main`, the script says 
 deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same
 rule, and when it deletes anything its own last line names that file.
 
-A task is **done** when its tests pass in CI, it touched only its own paths, and it leaves no change
-request open. Merged is not done.
+A task is **done** as `GLOSSARY.md` → "Done" defines it.
 
 ## Review
 

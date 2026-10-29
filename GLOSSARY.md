@@ -250,8 +250,13 @@ reads the checkout's settings when it starts, so a change to them reaches only a
 afterwards. _Avoid_: "fresh session" or "new session" for this; a new agent session can run in an
 old process.
 
-**Change request** — a file under `contracts/changes/<task-id>-<slug>.md`. The only way a workstream
-asks for a change to an integrator path. Anyone may add one; the integrator decides and edits.
+**Change request** — a ticket asking the human to decide a change on an integrator path: a contract,
+a package, a project, an ADR or a steering document. It is how a session asks for a change its own
+ticket does not authorise. Anyone may file one. The human decides it in a decision comment, the
+integrator makes the edit, and a task that needs it waits on it until it closes. Requests filed
+before ADR-0032 are read-only files under `contracts/changes/`, cited by their id, and are change
+requests all the same. _Avoid_: "CR" in prose, "proposal", "change-request file"
+for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
 cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
@@ -315,11 +320,15 @@ steering document, ticket body or new ticket does. Not "accepted".
 the run's `Overnight <date>` issue. The only answer a session applies to a steering document, a
 ticket body or a new ticket.
 
-**Steering document** — a document a session steers by: `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`,
-`OWNERSHIP.md`, `CODING_STANDARDS.md`, the agent guides in `docs/agents/`, the ADRs and `contracts/`.
-A change to one cites its authority: an acceptance criterion of the ticket it serves, where the
-human wrote or approved that ticket, or a confirmed answer. Adding a change request is not a change
-to one.
+**Decision comment** — the human's comment on a change request that decides it: accept, accept with
+changes or decline, and whether the decision gets an ADR. It is the confirmed answer that the edit
+landing the change request cites. A draft an agent posts is not one until the human accepts it as
+drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's decision could be
+meant, and "decision" for a draft.
+
+**Steering document** — a document a session steers by, so a change to it lands only on a cited
+authority. Which documents are in the set, and what counts as authority:
+`docs/agents/landing-work.md` → "A commit that changes a steering document".
 
 **Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
 common directory. Concurrent sessions share it, so a session's branch work happens in a linked
@@ -346,11 +355,17 @@ It closes when a record names that head with a merge verdict and the findings it
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
 every refusal with its reason.
 
-**Landed** — the state of a plan row whose merge subject names it, in the form
-`docs/agents/landing-work.md` fixes. A row is **part-landed** when the subject says "part of", or
-when a split of the row merged. Landed is not done: a row is done when its tests pass in CI, it
-touched only its owner's paths and it leaves no change request open. _Avoid_: "merged" for landed,
-and "landed" for done.
+**Landed** — the state of a plan row or a ticket whose work a merge into `main` names as complete: a
+plan row by the merge subject's form in `docs/agents/landing-work.md`, a ticket by the pull request
+that closes it. It is **part-landed** when a merge into `main` advances it without completing it
+(`docs/agents/landing-work.md` says how a merge marks that), or when a split of the row merged.
+Landed is not done (see **Done**). _Avoid_: "merged" for landed, "landed" for done, and
+"half-landed" for part-landed.
+
+**Done** — the state of a plan row or a ticket that has landed, whose tests pass in CI, that
+touched only its owner's paths, and that no open change request waits on. Landed is not done, and
+merged is not done. _Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn
+is closed and not done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
