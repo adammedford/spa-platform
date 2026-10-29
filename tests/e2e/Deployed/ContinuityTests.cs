@@ -181,7 +181,7 @@ public sealed class ContinuityTests
                 {
                     Step before = await driver.SendAsync("pre-logout-replay", HttpMethod.Get, "/bff/session", cookies, null, ct);
                     Step logout = await driver.LogoutAsync(profile, driver.App1);
-                    Step replay = await driver.SendAsync("replay", HttpMethod.Get, "/bff/session", cookies, 401, ct);
+                    Step replay = await driver.SendAsync("replay", HttpMethod.Get, "/bff/session", cookies, Contract.Error("unauthenticated").Status, ct);
                     return new Attempt(n, [before, logout, replay]);
                 }
             },

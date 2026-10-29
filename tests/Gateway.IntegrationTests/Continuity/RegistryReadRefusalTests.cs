@@ -38,7 +38,7 @@ public sealed class RegistryReadRefusalTests
         // row's outcome Missing; the harness writing the registry whatever RegistryAtStart says makes
         // both rows 200 at revision 1.
         Assert.Equal(outcome, polled);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, status);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, status); // Not an Errors row: /readyz's bodiless not-ready answer (contracts/pipeline.md).
         Assert.Null(revision);
         Assert.Equal(0, harness.Registry.Current.Revision);
 

@@ -42,7 +42,7 @@ public sealed class AssetReadRefusalTests
         // The telemetry stage writes the line after the rest of the pipeline returns, so it can land after
         // the response does. The asset's line is the only 404 on the asset route since the sign-in.
         static bool IsTheAssets(JsonElement line) =>
-            line.GetProperty("route").GetString() == "asset" && line.GetProperty("status").GetInt32() == 404;
+            line.GetProperty("route").GetString() == "asset" && line.GetProperty("status").GetInt32() == Contract.Error("not_found").Status;
         await CapturedTelemetry.UntilAsync(
             () => CapturedTelemetry.RequestLines(harness).Skip(before).Any(IsTheAssets), "the missing asset's request line", Ct);
         return Assert.Single(CapturedTelemetry.RequestLines(harness).Skip(before), IsTheAssets);
