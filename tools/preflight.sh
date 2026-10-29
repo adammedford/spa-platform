@@ -55,7 +55,24 @@ first_version() { printf '%s\n' "$1" | sed -n 's/[^0-9]*\([0-9][0-9]*\(\.[0-9][0
 # ends each command's options, so a path starting with a hyphen is a path: POSIX utility syntax
 # guideline 10, https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02.
 # The same fix as tools/land.sh's body path (#66); tools/preflight_tests.py has both cases (#96).
-tools_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+#
+# Started through a symbolic link, `$0` is the link, and the directory beside it holds none of these
+# files: the floor's helper failed to source and the Terraform rows read MISSING (#509). So each
+# link is followed to what it names, a relative target read from the link's own directory as the
+# kernel reads it, and `cd -P` resolves any linked directory on the way, so `..` is the repository
+# the script sits in. A loop over plain `readlink` rather than `readlink -f` or `realpath`, which
+# older macOS releases do not ship. bash itself opens `$0` before any of this runs, so a link that
+# loops never gets here.
+script="$0"
+while [ -L "$script" ]; do
+  link_dir="$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd)"
+  script="$(readlink -- "$script")"
+  case "$script" in
+    /*) ;;
+    *) script="$link_dir/$script" ;;
+  esac
+done
+tools_dir="$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd)"
 
 # The Terraform floor's version and where it is installed come from the one file and the one
 # helper that tools/check.sh and CI read them through (#69), so this cannot name a different floor
