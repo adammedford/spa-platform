@@ -21,8 +21,10 @@
 // whose reach line does not parse, all reset; and three whose re-run agent answers ok with a project not passed,
 // answers ok on another head, or dies, which keep no merge and reset the run branch (#397). It also checks that
 // each ticket has its own worktree, that a lane implements while its last ticket is in review or integrating, that
-// no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). No
-// agent, gh or git call is made.
+// no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). Three
+// change requests (#436), two ready-for-human and one ready-for-agent, prove that a request is grilled into a draft
+// decision and built only on Adam's decision comment, and the mocked lanes' changeRequests fill the report's
+// Change requests lists. No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -69,8 +71,8 @@ const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED, ..
 // lane, listed with the issues to close, and met for AFTER_CLOSE, which waits on it. HELD is needs-triage with an open
 // blocker labelled ready-for-human, so it routes to a human whatever its route agent says, and its routing names the
 // blocker; TRIAGED is needs-triage with a ready-for-agent blocker, so it routes as before and integrates after it.
-const synthetic = (n, id, status, blockedBy, openBoxes) => ({ n, id, slug: id, issue: Number(id.slice(6)), url: `https://example.invalid/${id}`,
-  title: `Synthetic ${id}`, status, owner: 'integrator', blockedBy, why: `companion ${status}`, openBoxes, willEndPartial: [] })
+const synthetic = (n, id, status, blockedBy, openBoxes, changeRequest = false) => ({ n, id, slug: id, issue: Number(id.slice(6)), url: `https://example.invalid/${id}`,
+  title: `Synthetic ${id}`, status, owner: 'integrator', blockedBy, why: `companion ${status}`, openBoxes, willEndPartial: [], changeRequest })
 const HELD_BY = 'issue-135', TRIAGED_AFTER = 'issue-144'
 if (byId[HELD_BY].status !== 'ready-for-human' || byId[TRIAGED_AFTER].status !== 'ready-for-agent') throw new Error('the fixture no longer has issue-135 ready-for-human and issue-144 ready-for-agent')
 const [CLOSE, AFTER_CLOSE, HELD, TRIAGED] = [
@@ -78,10 +80,47 @@ const [CLOSE, AFTER_CLOSE, HELD, TRIAGED] = [
   synthetic(903, 'issue-903', 'needs-triage', [HELD_BY], 3), synthetic(904, 'issue-904', 'needs-triage', [TRIAGED_AFTER], 3),
 ]
 for (const t of [CLOSE, AFTER_CLOSE, HELD, TRIAGED]) { tickets.push(t); byId[t.id] = t }
+// Three change requests (#436 Q12, after #379's four): a change-request issue is a ticket labelled change-request,
+// which collect flags as changeRequest. REQUEST_HUMAN is ready-for-human, so it is grilled into a draft decision;
+// REQUEST_AGENT is ready-for-agent, so the integrator lane builds it on Adam's decision comment. REQUEST_DECIDED is
+// ready-for-human and already carries Adam's decision comment, so its grill carries the decision and the report
+// lists it as decided, not yet relabelled. Every other ticket, the fixture's included, carries no changeRequest
+// field, which reads as false.
+const [REQUEST_HUMAN, REQUEST_AGENT, REQUEST_DECIDED] = [
+  synthetic(905, 'issue-905', 'ready-for-human', [], 2, true), synthetic(906, 'issue-906', 'ready-for-agent', [], 2, true),
+  synthetic(907, 'issue-907', 'ready-for-human', [], 2, true),
+]
+const REQUESTS_GRILLED = [REQUEST_HUMAN.id, REQUEST_DECIDED.id]
+for (const t of [REQUEST_HUMAN, REQUEST_AGENT, REQUEST_DECIDED]) { tickets.push(t); byId[t.id] = t }
 const CLOSE_WHY = 'every acceptance box is ticked; close it in the morning'
-// One more, added after those four so none of their choices moves (#480): a tracker edit whose Touches line says
+// What the mocked lanes say they did with change requests (#436 Q10), so the report's "Change requests" lists have
+// entries from every place a result is kept: AFTER_CLOSE's implement filed request 950 blocking its ticket, TRIAGED's
+// review found request 951 open and added an edge, and HELD_BY's grill could not reach GitHub and queued pending line
+// 1. REQUEST_HUMAN's grill posted a draft decision and found no decision comment, so it awaits Adam's decision;
+// REQUEST_DECIDED's grill found his decision comment, so it is decided.
+const FILED = { number: 950, title: 'Name the rotated-key store in contracts/pipeline.md', blocking: AFTER_CLOSE.issue, queued: 0, filed: true }
+const EDGE = { number: 951, title: 'Add a package for the synthetic proof', blocking: TRIAGED.issue, queued: 0, filed: false }
+const QUEUED = { number: 0, title: 'Define the term Synthetic in GLOSSARY.md', blocking: 0, queued: 1, filed: false }
+const DRAFT_URL = `https://example.invalid/issue-905#issuecomment-1`
+const DECIDED_LINE = 'Decision: accept'
+// AFTER_CLOSE's reviewer reports its implementer's request again, and one it found open but did not wire, which the
+// route says to report not at all: neither may add a line to the report's lists.
+const UNWIRED = { number: 952, title: 'An open request this ticket does not need', blocking: 0, queued: 0, filed: false }
+// CONFLICT_ALWAYS fails at integrate, so its result keeps the implementer's and both reviewers' results whole as impl,
+// rev and rev1, not a changeRequests field (#436 Q11): its implement filed request 953, its first review added an edge to
+// request 954, and its second review, after the resolve, an edge to request 955. Each list must still reach the report.
+const KEPT_IMPL = { number: 953, title: 'Name the conflict owner in contracts/pipeline.md', blocking: byId[CONFLICT_ALWAYS].issue, queued: 0, filed: true }
+const KEPT_REV1 = { number: 954, title: 'Add a package for the conflict proof', blocking: byId[CONFLICT_ALWAYS].issue, queued: 0, filed: false }
+const KEPT_REV = { number: 955, title: 'Pin the merge driver in OWNERSHIP.md', blocking: byId[CONFLICT_ALWAYS].issue, queued: 0, filed: false }
+const changeRequestsOf = (kind, id, k) => (kind === 'implement' && id === AFTER_CLOSE.id) ? [FILED] : (kind === 'review' && id === AFTER_CLOSE.id) ? [FILED, UNWIRED]
+  : (kind === 'review' && id === TRIAGED.id) ? [EDGE]
+  : (kind === 'implement' && id === CONFLICT_ALWAYS) ? [KEPT_IMPL] : (kind === 'review' && id === CONFLICT_ALWAYS) ? [k === 1 ? KEPT_REV1 : KEPT_REV] : []
+const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [QUEUED] : [], adrCandidates: [],
+  draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: id === REQUEST_DECIDED.id ? DECIDED_LINE : '', summary: 'companion' })
+const reviewCalls = {}     // id -> review calls so far, so a ticket's first and second review can report apart
+// One more, added after the tickets above so none of their choices moves (#480): a tracker edit whose Touches line says
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
-const FOREGROUND_T = { ...synthetic(905, 'issue-905', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
+const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
@@ -135,20 +174,21 @@ globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-  if (kind === 'grill') return id === CARRIED
-    ? { questions: grillQuestions(13), glossaryProposals: [], adrCandidates: [], summary: CARRIED_SUMMARY }
-    : id === CARRIED_LOOSE
-      ? { questions: grillQuestions(5), glossaryProposals: [], adrCandidates: [], summary: CARRIED_LOOSE_SUMMARY }
-      : { questions: grillQuestions(2), glossaryProposals: [], adrCandidates: [], summary: 'companion' }
+  if (kind === 'grill') {
+    const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
+      : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
+      : { questions: grillQuestions(2) }
+    return byId[id].changeRequest ? grillResult(id) : { ...grillResult(id), ...asked }
+  }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
   const n = ++calls
   events.push({ at: tick, kind, id, edge: 'start', n })
   await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
   events.push({ at: tick, kind, id, edge: 'end', n })
-  if (kind === 'implement' && id === NEEDS_HUMAN) return { outcome: 'needs-human', branch: 'b', forkSha: 'f', headSha: 'h', complete: false, outstanding: '', summary: 'stopped on a storage question', question: QUESTION, delegatedDecisions: [], proposedSteering: [] }
-  if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], proposedSteering: [] }
-  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', proposedSteering: [], changedFiles: changedFiles(id) }
+  if (kind === 'implement' && id === NEEDS_HUMAN) return { outcome: 'needs-human', branch: 'b', forkSha: 'f', headSha: 'h', complete: false, outstanding: '', summary: 'stopped on a storage question', question: QUESTION, delegatedDecisions: [], changeRequests: changeRequestsOf(kind, id) }
+  if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: changeRequestsOf(kind, id) }
+  if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: changeRequestsOf(kind, id, reviewCalls[id] = (reviewCalls[id] || 0) + 1), changedFiles: changedFiles(id) }
   if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
@@ -212,7 +252,7 @@ const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id
 const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
 
 // 1. What integrates and what skips.
-const want = new Set([...fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)), AFTER_CLOSE.id, TRIAGED.id])
+const want = new Set([...fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)), AFTER_CLOSE.id, TRIAGED.id, REQUEST_AGENT.id])
 const got = new Set(result.integrated || [])
 for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
 for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
@@ -249,6 +289,10 @@ for (const l of logs) {
 // The run's log directory, as overnight.js derives it from the launch's repo: every file an agent writes outside
 // its worktree goes there (#202).
 const LOG = `${fixture.args.repo}/.scratch/overnight/log`
+// The change-request route (#436): its search, its create, and the house rule that names the create.
+const REQUEST_SEARCH = `cd ${fixture.args.repo} && gh issue list --state open --label change-request --limit 500 --json number,title,body`
+const REQUEST_CREATE = 'gh issue create --title "<title>" --label change-request,ready-for-human --blocking '
+const HOUSE_CREATE = 'gh issue create` only for a change request, after the search'
 
 // 5. The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
 //    line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced. #202
@@ -538,7 +582,8 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   else if (!loose.reason.includes(`carried, 5 question(s) already answered on #${byId[CARRIED_LOOSE].issue}`) || loose.reason.includes('grilled on paper')) {
     fail(`${CARRIED_LOOSE}'s grill was carried with the summary "${CARRIED_LOOSE_SUMMARY}", yet its reason does not say carried and already answered: ${loose.reason}`)
   }
-  const fresh = grilled.filter((t) => t.id !== CARRIED && t.id !== CARRIED_LOOSE)
+  // A change request's grill drafts a decision and asks no numbered question (#436 Q9), so it is not one of these.
+  const fresh = grilled.filter((t) => t.id !== CARRIED && t.id !== CARRIED_LOOSE && !t.changeRequest)
   if (!fresh.length) fail('every grilled ticket was carried, so the fresh-grill reason check read nothing')
   for (const t of fresh) {
     const r = of(t.id)[0]
@@ -554,7 +599,7 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 //     into the number a Confirm names without counting down a comment.
 {
   const FIRST_LINE = 'Adam confirms pre-accepted answers with one comment on this issue beginning "Confirm", whose first sentence names the questions it covers, as in "Confirm Q1 to Q<last>, with the overrides below." where Q<last> is the last question\'s night-wide number; a bare "Confirm" covers no question, because the morning reads only that first sentence for them (ADR-0021 decision 2)'
-  const BOTH_NUMBERS = 'Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket\'s own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note\'s question, a proposed steering change) opens with the night-wide number alone, as in "**Q95.**"'
+  const BOTH_NUMBERS = 'Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket\'s own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note\'s question) opens with the night-wide number alone, as in "**Q95.**"'
   const reports = allPrompts.filter((c) => c.label === 'report')
   if (!reports.length) fail('no report prompt was rendered, so the Confirm and numbering checks read nothing')
   for (const c of reports) {
@@ -745,8 +790,9 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
 //     and the run's own filing site. NEW TICKETS, the one place the run files a ticket, pipes each body through
 //     tools/ticket_shape.py under the label and blockers it is filed with, before its `gh issue create`, and files
 //     nothing when the check fails. Every other `gh issue create` a prompt carries is the report's own issue,
-//     "Overnight <date>", which is no ticket; the grill writes comments and files none. Retro's filing site is
-//     retro.js's, proved by its own companion.
+//     "Overnight <date>", which is no ticket, or a change request filed by the change-request route after its
+//     search (#436), whose body shape check 22 runs through the same check. Retro's filing site is retro.js's,
+//     proved by its own companion.
 //     The recipe is taken from the prompt and run for real, as retro_tests.mjs check 19 runs retro's, so a recipe
 //     that cannot judge, or never passes the label it is given, fails here and not on the night. Neither body
 //     cites an issue number, so ticket_shape.py makes no gh call.
@@ -786,11 +832,14 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     if (bad.status !== 1 || !/^ticket-shape: foreground:/m.test(bad.stdout)) fail(`#248: the NEW TICKETS check did not fail a ready-for-agent foreground body on its rule: exit ${bad.status}, ${(bad.stdout + bad.stderr).trim()}`)
   }
   fs.rmSync(bodyDir, { recursive: true, force: true })
-  // Every gh issue create in every prompt the run sends is the one checked NEW TICKETS create or the report's issue.
+  // Every gh issue create in every prompt the run sends is the one checked NEW TICKETS create, the report's issue, the
+  // house rule that names the change-request create, or the change-request route's create after its search (#436).
   for (const c of allPrompts) {
     for (const x of c.prompt.matchAll(/gh issue create\b/g)) {
       const rest = c.prompt.slice(x.index)
+      const searched = c.prompt.lastIndexOf(REQUEST_SEARCH, x.index) >= 0
       const ok = (c.label === 'collect' && x.index === creates.get(c)) || (c.label === 'report' && rest.startsWith(REPORT_CREATE))
+        || rest.startsWith(HOUSE_CREATE) || (rest.startsWith(REQUEST_CREATE) && searched)
       if (!ok) fail(`#248: the ${c.label} prompt carries a gh issue create the ticket-shape check does not guard: ${rest.slice(0, 80)}`)
     }
   }
@@ -821,7 +870,180 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   }
 }
 
-// 21. The skills directory is a launch argument (#501). The run above launched with OTHER_SKILLS: every SKILL.md path
+// 21. Change requests are issues (#436; #421 Q6, Q8): one changeRequests field replaces proposedSteering and
+//     glossaryProposals, and no prompt or schema sends a session to the file route under contracts/changes/, which is
+//     an archive (#424). The script's own source is read, so a schema naming a retired field fails here though no
+//     mock agent reads a schema.
+const reportPrompt = (allPrompts.find((x) => x.label === 'report') || {}).prompt || ''
+const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(reportPrompt) || [, 'null'])[1]) : null
+{
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  for (const retired of ['proposedSteering', 'glossaryProposals', '## Proposed steering changes', 'contracts/changes/'])
+    if (src.includes(retired)) fail(`#436: ${path.basename(scriptPath)} still names ${retired}`)
+  for (const c of allPrompts) if (c.prompt.includes('contracts/changes/')) fail(`#436: the ${c.label} prompt names contracts/changes/`)
+  if (!reportSummary) fail('#436: no report prompt carried the run results, so the changeRequests checks read nothing')
+  else {
+    const r = reportSummary.results
+    const implOf = (id) => r[id] && r[id].changeRequests && r[id].changeRequests.implement
+    const revOf = (id) => r[id] && r[id].changeRequests && r[id].changeRequests.review
+    if (JSON.stringify(implOf(AFTER_CLOSE.id)) !== JSON.stringify([FILED])) fail(`#436: ${AFTER_CLOSE.id}'s integrated result does not keep its implementer's changeRequests: ${JSON.stringify(r[AFTER_CLOSE.id])}`)
+    if (JSON.stringify(revOf(TRIAGED.id)) !== JSON.stringify([EDGE])) fail(`#436: ${TRIAGED.id}'s integrated result does not keep its reviewer's changeRequests: ${JSON.stringify(r[TRIAGED.id])}`)
+    const g = r[HELD_BY] && r[HELD_BY].grill
+    if (!g || JSON.stringify(g.changeRequests) !== JSON.stringify([QUEUED])) fail(`#436: ${HELD_BY}'s grill result does not keep its changeRequests: ${JSON.stringify(g)}`)
+    const d = r[REQUEST_HUMAN.id] && r[REQUEST_HUMAN.id].grill
+    if (!d || d.draftDecision !== DRAFT_URL || d.decided !== '') fail(`#436: ${REQUEST_HUMAN.id}'s grill result does not keep its draftDecision and decided: ${JSON.stringify(d)}`)
+    const e = r[REQUEST_DECIDED.id] && r[REQUEST_DECIDED.id].grill
+    if (!e || e.decided !== DECIDED_LINE) fail(`#436: ${REQUEST_DECIDED.id}'s grill result does not keep the decision it carried: ${JSON.stringify(e)}`)
+    // The failed result keeps each stage's result whole; the report's lists are checked from them in check 24.
+    const c = r[CONFLICT_ALWAYS] || {}
+    const keptOf = (x) => JSON.stringify((x && x.changeRequests) || [])
+    if (c.stage !== 'integrate' || keptOf(c.impl) !== JSON.stringify([KEPT_IMPL]) || keptOf(c.rev1) !== JSON.stringify([KEPT_REV1]) || keptOf(c.rev) !== JSON.stringify([KEPT_REV]))
+      fail(`#436: ${CONFLICT_ALWAYS}'s failed result does not keep its implementer's and two reviewers' changeRequests as impl, rev1 and rev: ${JSON.stringify(c)}`)
+  }
+}
+
+// 22. A lane, a review and a grill file a change request by one route (#409; #421 Q2, Q8; #436): the open
+//     change-request issues are searched before anything is filed; a request is filed ready-for-human, blocking its
+//     ticket; and when GitHub is unreachable a create line is queued in the shape morning.js replays (#433). The
+//     route's body shape is run through tools/ticket_shape.py under ready-for-human, as collect's forecast judges
+//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68).
+{
+  const PENDING = `${LOG}/pending-${fixture.args.date}.jsonl`
+  const routed = allPrompts.filter((c) => /^(implement|review|grill):/.test(c.label))
+  if (!routed.some((c) => c.label.startsWith('implement:')) || !routed.some((c) => c.label.startsWith('review:')) || !routed.some((c) => c.label.startsWith('grill:'))) fail('#436: no implement, review or grill prompt was rendered, so the route checks read nothing')
+  let shape = null
+  for (const c of routed) {
+    const id = c.label.split(':')[1], issue = byId[id].issue
+    const search = c.prompt.indexOf(REQUEST_SEARCH)
+    const create = c.prompt.indexOf(`${REQUEST_CREATE}${issue} --body-file ${LOG}/${id}-cr.md`)
+    if (search < 0) { fail(`#436: the ${c.label} prompt does not search the open change-request issues`); continue }
+    if (create < 0) { fail(`#436: the ${c.label} prompt does not file a change request ready-for-human, blocking #${issue}`); continue }
+    if (search > create) fail(`#436: the ${c.label} prompt files a change request before it searches`)
+    if (!c.prompt.includes(`gh issue edit ${issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it.`)) fail(`#436: the ${c.label} prompt adds no edge to a request it finds open, or reports one it did not wire`)
+    const queue = `jq -cn --arg t "<title>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, body: $b}' >> ${PENDING}`
+    if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line when GitHub is unreachable`)
+    else if (c.prompt.indexOf(queue) < create) fail(`#436: the ${c.label} prompt queues the create line before it tries to file`)
+    if (!shape) shape = (/in this shape:\n([\s\S]*?)\n   Its title/.exec(c.prompt) || [])[1]
+  }
+  for (const c of allPrompts.filter((x) => x.label.startsWith('implement:'))) {
+    if (!c.prompt.includes('cite the request\'s number (#<n>)')) fail(`#436: the ${c.label} prompt does not cite the request's number on a partial lane's Outstanding line`)
+  }
+  // morning.js replays exactly this label on a create line, and refuses any other (#433).
+  const morning = fs.readFileSync(path.join(here, 'morning.js'), 'utf8')
+  if (!morning.includes('"label": "change-request,ready-for-human"')) fail('#436: morning.js no longer replays a create line labelled change-request,ready-for-human, so the queued line would fail')
+  if (!shape) fail('#436: no prompt gave the change request\'s body shape, so the ticket-shape run read nothing')
+  else {
+    const body = shape.split('\n').map((l) => l.replace(/^   /, '')).filter((l) => !/^\*\*(Rows|Raised by):\*\*/.test(l))
+      .map((l) => l.replace('<each integrator path it changes>', '`contracts/pipeline.md`').replace(/^<.*>$/, 'The companion fills this paragraph.')).join('\n') + '\n'
+    const json = JSON.stringify({ number: 0, body, labels: [{ name: 'change-request' }, { name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } })
+    const r = spawnSync('python3', ['-I', 'tools/ticket_shape.py', '-'], { cwd: path.resolve(here, '..', '..'), input: json, encoding: 'utf8' })
+    if (r.status !== 0 || !/^ticket-shape: pass:/m.test(r.stdout)) fail(`#436: a change request in the route's shape fails tools/ticket_shape.py: exit ${r.status}, ${(r.stdout + r.stderr).trim()}\n${body}`)
+  }
+}
+
+// 23. The review's trailer read goes (#411 Q5, #436): the steering check reads the Authority trailers, and the
+//     reviewer judges whether the cited authority decides the change, filing a held change as a request.
+for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
+  if (/trailers:key=Authority/.test(c.prompt)) fail(`#436: the ${c.label} prompt still reads the Authority trailers`)
+  if (!c.prompt.includes('judge whether the authority the change cites decides it')) fail(`#436: the ${c.label} prompt does not judge whether the cited authority decides a steering change`)
+  if (!c.prompt.includes('file it as a change request by the route below')) fail(`#436: the ${c.label} prompt does not file a held steering change as a change request`)
+}
+
+// 24. The report's "Change requests" section (#421 Q7, #436 Q11): five lists from the run results, each "none" when
+//     empty, after Decisions taken overnight and before Pending tracker writes; a request adds no numbered question.
+{
+  if (!reportPrompt) fail('#436: no report prompt was rendered, so the Change requests checks read nothing')
+  else {
+    const at = reportPrompt.indexOf('   - Change requests (')
+    if (at < 0) fail('#436: the report prompt names no Change requests section')
+    else {
+      if (!(reportPrompt.indexOf('   - Decisions taken overnight:') < at && at < reportPrompt.indexOf('   - Pending tracker writes:'))) fail('#436: the Change requests section is not between Decisions taken overnight and Pending tracker writes')
+      for (const list of ['"Filed tonight"', '"Edges added to an existing request"', '"Queued for the morning"', '"Awaiting a decision"', '"Decided, not yet labelled ready-for-agent or closed"', 'each reading "none" when empty'])
+        if (!reportPrompt.includes(list)) fail(`#436: the report's Change requests section does not give ${list}`)
+    }
+  }
+  const cr = reportSummary && reportSummary.changeRequests
+  // CONFLICT_ALWAYS's three entries come only from the impl, rev1 and rev its failed result keeps, and
+  // REQUEST_DECIDED's only from a grill that carried a decision, so a list that drops either kind fails here.
+  const conflict = { id: CONFLICT_ALWAYS, issue: byId[CONFLICT_ALWAYS].issue }
+  const want = {
+    filed: [{ id: AFTER_CLOSE.id, issue: AFTER_CLOSE.issue, ...FILED }, { ...conflict, ...KEPT_IMPL }],
+    edges: [{ id: TRIAGED.id, issue: TRIAGED.issue, ...EDGE }, { ...conflict, ...KEPT_REV }, { ...conflict, ...KEPT_REV1 }],
+    queued: [{ id: HELD_BY, issue: byId[HELD_BY].issue, ...QUEUED }],
+    awaiting: [{ id: REQUEST_HUMAN.id, issue: REQUEST_HUMAN.issue, title: REQUEST_HUMAN.title, draftDecision: DRAFT_URL }],
+    decided: [{ id: REQUEST_DECIDED.id, issue: REQUEST_DECIDED.issue, title: REQUEST_DECIDED.title, decided: DECIDED_LINE }],
+  }
+  // The results settle in the order the lanes finish, which the clock decides, so a list is compared as a set.
+  const sorted = (xs) => Array.isArray(xs) ? JSON.stringify(xs.map((x) => JSON.stringify(x)).sort()) : JSON.stringify(xs)
+  for (const [list, entries] of Object.entries(want)) if (!cr || sorted(cr[list]) !== sorted(entries)) fail(`#436: the run results' changeRequests.${list} is ${JSON.stringify(cr && cr[list])}, not ${JSON.stringify(entries)}`)
+}
+
+// 25. The integrator lane on a change request (#436 Q7, Q8; #421 Q4): it reads only the confirming account's comments
+//     whose first line begins "Decision:", latest first, and takes #436 Q7's three outcomes (#442 Q20): accept builds and cites that
+//     comment's URL; accept as drafted builds the draft, cites the accepting comment, and stops on a draft edited
+//     after it; decline, none, or a line it cannot read stops with a status note and ready-for-human, never closing.
+//     ADR: yes stops before building. An ordinary ticket's prompt carries none of it.
+{
+  const req = (allPrompts.find((x) => x.label === `implement:${REQUEST_AGENT.id}`) || {}).prompt
+  if (!req) fail(`#436: ${REQUEST_AGENT.id}, a ready-for-agent change request, got no implement prompt`)
+  else {
+    const wants = [
+      'A decision comment is one written by the account docs/agents/tracker-policy.md names (the repository\'s owner while it names none) whose first line begins "Decision:". Read those latest first, and act on the latest alone',
+      '- "Decision: accept" or "Decision: accept with changes": build the change as that comment states it, steering paragraphs as quoted there, and commit it with the trailer "Authority: <that comment\'s html_url>".',
+      '- "Decision: accept as drafted <link>": build the draft the link names, as it stands, with the trailer "Authority: <the accepting comment\'s html_url>", never the draft\'s own URL. If the draft\'s updated_at is later than the accepting comment\'s created_at, it was edited after Adam accepted it, so stop',
+      '- "Decision: decline", no decision comment, or a first line you cannot read as one of those: stop, as below.',
+      '"ADR: yes" stops before you build anything',
+      `gh issue edit ${REQUEST_AGENT.issue} --remove-label ready-for-agent --add-label ready-for-human --remove-assignee @me`,
+      'return outcome "needs-human"',
+      'Never close a change request, declined or not',
+    ]
+    for (const w of wants) if (!req.includes(w)) fail(`#436: ${REQUEST_AGENT.id}'s implement prompt lacks: ${w.slice(0, 100)}`)
+    if (req.indexOf('THE DECISION (#436)') > req.indexOf('STEP 1 —')) fail(`#436: ${REQUEST_AGENT.id}'s implement prompt reads the decision after it starts building`)
+    if (req.includes(`"Authority: #${REQUEST_AGENT.issue}"`)) fail(`#436: ${REQUEST_AGENT.id}'s implement prompt commits with its own number as the Authority, which the steering check refuses`)
+  }
+  for (const c of allPrompts.filter((x) => /^(implement|review|integrate|resolve):/.test(x.label) && x.label.split(':')[1] !== REQUEST_AGENT.id))
+    for (const w of ['THE DECISION (#436)', 'accept as drafted']) if (c.prompt.includes(w)) fail(`#436: the ${c.label} prompt, not a change request's, carries the request branch (${w})`)
+}
+
+// 26. A grill on a change request drafts a decision and asks no numbered questions (#436 Q1, Q9; #421 Q5): it carries
+//     an existing draft or decision, ignores the standing answer, posts "## Grilling record" and "## Draft decision"
+//     alone, and the draft opens with its heading, never "Decision:", then tracker-policy.md's "Proposed decision:" and
+//     "Proposed ADR:" lines (#442 Q43), so no line of a scripted draft reads as Adam's decision or his ADR call. An
+//     ordinary grill keeps its questions.
+{
+  const grills = allPrompts.filter((x) => x.label.startsWith('grill:'))
+  for (const id of REQUESTS_GRILLED) {
+    const req = grills.filter((x) => x.label === `grill:${id}`)
+    if (req.length !== 1) fail(`#436: ${id}, a ready-for-human change request, got ${req.length} grill prompts, not 1`)
+    for (const c of req) {
+      for (const w of ['"## Draft decision": its first line is that heading, never "Decision:". The two lines after it are the draft\'s, as docs/agents/tracker-policy.md gives them (#442 Q43): "Proposed decision: accept|accept with changes|decline", then "Proposed ADR: yes|no"',
+        'Then "Not a decision: Adam accepts it with `Decision: accept as drafted <this comment\'s URL>`.", then the change as it would land',
+        'If a draft or a decision comment already exists, carry it and write nothing', 'you never edit a posted draft',
+        'The standing answer does not apply to a change request: write no "Answer:" line and no numbered question.'])
+        if (!c.prompt.includes(w)) fail(`#436: ${id}'s grill prompt lacks: ${w.slice(0, 100)}`)
+      for (const w of ['## Questions for Adam', '## Proposed glossary / ADR', 'pre-accepted under the standing answer']) if (c.prompt.includes(w)) fail(`#436: ${id}'s grill prompt names ${w}`)
+      for (const re of [/"Decision: accept\|/, /"ADR: yes\|no"/]) if (re.test(c.prompt)) fail(`#436: ${id}'s grill prompt still drafts a bare ${re.source} line, not tracker-policy.md's Proposed form`)
+    }
+  }
+  const ordinary = grills.filter((x) => !REQUESTS_GRILLED.includes(x.label.split(':')[1]))
+  if (!ordinary.length) fail('#436: no ordinary grill prompt was rendered, so the contrast check read nothing')
+  for (const c of ordinary) {
+    if (!c.prompt.includes('"## Questions for Adam": numbered')) fail(`#436: the ${c.label} prompt, an ordinary grill, lost its numbered questions`)
+    if (c.prompt.includes('## Draft decision')) fail(`#436: the ${c.label} prompt, an ordinary grill, carries the request branch`)
+  }
+}
+
+// 27. No session writes a comment that begins "Decision:" (#436 Q1): every house-rules prompt forbids it beside
+//     "Confirm", since every session posts under the account whose "Decision:" comment authorises a request.
+{
+  const RULE = '- Never write a comment that begins "Confirm" or "Decision:" on any issue: a confirmation, and a change request\'s decision, are the human\'s act (docs/agents/tracker-policy.md). A draft decision opens with its heading, never with "Decision:" (#436).'
+  const housed = allPrompts.filter((c) => /House rules \(/.test(c.prompt))
+  if (!housed.length) fail('#436: no prompt carries the house rules, so the Decision: rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(RULE)) fail(`#436: the ${c.label} prompt's house rules do not forbid a comment beginning "Decision:"`)
+  for (const c of allPrompts.filter((x) => x.label.startsWith('grill:'))) if (!c.prompt.includes('Never write a comment that begins "Confirm" or "Decision:"')) fail(`#436: the ${c.label} prompt, which carries no house rules, does not forbid a comment beginning "Decision:"`)
+}
+
+// 28. The skills directory is a launch argument (#501). The run above launched with OTHER_SKILLS: every SKILL.md path
 //     a prompt names lies under it, and no prompt names one under a home directory. A launch whose skills is not an
 //     absolute path halts naming the argument, and no hint of that halt names a home directory. Outside comments, the
 //     one /Users/<name> path the script holds is SKILLS_DEFAULT, the documented default of the skills argument.

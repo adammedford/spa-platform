@@ -1,6 +1,11 @@
 # ADR-0023: A lane's code may rest on a pre-accepted answer; a steering document changes only on a cited authority
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-28 by
+  [ADR-0032](0032-change-requests-are-issues-and-each-decision-has-one-layer.md):**
+  decision 2's set leaves out the three setup-written guides and no longer exempts an added change
+  request; decision 3 counts a decision comment as a confirmed answer and never a change-request
+  issue's number; decision 4 is replaced: a proposed steering change is filed as a change request;
+  the other decisions are unchanged.
 - **Date:** 2026-10-18
 - **Deciders:** integrator
 - **Plan ref:** No decision row. Amends ADR-0021 decision 1. Decided in the grill of the

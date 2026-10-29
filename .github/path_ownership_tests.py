@@ -274,13 +274,26 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(1, code, out)
         self.assertIn(bad[:9], out)
 
-    def test_a_change_request_is_allowed_beside_another_owner(self):
+    def test_a_change_request_file_beside_another_owner_crosses_owners(self):
+        """#410: a change request is an issue now, so contracts/changes/ is the integrator's like
+        the rest of contracts/, and a lane writing there crosses owners."""
         self.repo.branch("task/with-request")
         self.repo.commit("Task 1.4a and its request",
                          "infra/main.tf", "contracts/changes/1.4a-something.md")
         code, out = self.check("task/with-request")
+        self.assertEqual(1, code, out)
+        self.assertIn("touches more than one owner's paths", out)
+        self.assertIn("integrator:", out)
+        self.assertIn("ws1-infra:", out)
+
+    def test_a_change_request_file_alone_is_the_integrators(self):
+        """The file alone is one owner's and passes A-05; the steering check's closed archive is
+        what refuses it."""
+        self.repo.branch("task/request-only")
+        self.repo.commit("A request file", "contracts/changes/1.4a-something.md")
+        code, out = self.check("task/request-only")
         self.assertEqual(0, code, out)
-        self.assertIn("all owned by ws1-infra", out)
+        self.assertIn("all owned by integrator", out)
 
 
 def commands_started(trace: pathlib.Path) -> set[str]:

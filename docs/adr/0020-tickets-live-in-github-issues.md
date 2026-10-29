@@ -1,6 +1,9 @@
 # ADR-0020: Tickets and specs live in GitHub Issues; what outlives a feature stays in the repository
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-10-28 by
+  [ADR-0032](0032-change-requests-are-issues-and-each-decision-has-one-layer.md):**
+  decision 2's four homes become the layers in `docs/adr/README.md` → "Where a decision lives",
+  which add the steering documents and a reading order; the other decisions are unchanged.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. `docs/agents/issue-tracker.md`, which this supersedes in part; the

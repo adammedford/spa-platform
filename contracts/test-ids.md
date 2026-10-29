@@ -14,15 +14,15 @@ live home, and one register under `contracts/` is the one place a session looks.
 alternative was a convention that the ADR owning each check records its id, which is where P-07
 first lived (ADR-0016 decision 7). This file never freezes.
 
-**How an id is added.** The integrator adds it by deciding a request under `contracts/changes/`,
-never the workstream that needs it. A row lands between gates as prose, under
-[`README.md`](README.md)'s rule, except that a row whose check waits for a gate (one needing a new
-rule id, say) lands in that gate's integrator commit.
+**How an id is added.** The integrator adds it by landing a decided change request
+(`docs/agents/tracker-policy.md` → "Change requests"), never the workstream that needs it. A row
+lands between gates as prose, under [`README.md`](README.md)'s rule, except that a row whose check
+waits for a gate (one needing a new rule id, say) lands in that gate's integrator commit.
 
 **Numbering.** A new id continues its prefix's sequence: F-12, N-28, P-08 and A-06 are next. A number
-is given only when the integrator decides the row, is never reused and never takes a letter suffix.
-A dropped check keeps its row, marked retired, so old merge bodies, tags and review records stay
-true.
+is given only when the row's change request is decided, is never reused and never takes a letter
+suffix. A dropped check keeps its row, marked retired, so old merge bodies, tags and review records
+stay true.
 
 **Row shape.** The export's columns for the prefix, plus Tier (`H` hermetic, `D` deployed) on every
 table and a Recorded by column naming the ADR, change request or confirmed answer that named the id.
