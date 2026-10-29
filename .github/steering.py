@@ -555,6 +555,11 @@ def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
     # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
     # the file, not another file.
     path = target.split("#", 1)[0]
+    # A link that is only a fragment, `#frag`, leaves nothing before the '#', and the empty path
+    # joined to the index's directory is contracts/ itself, which would pass as a directory of code
+    # carrying no header by design (#512). It names a heading of the index, not a file to compare.
+    if not path:
+        return Freeze(target, problem="is only a fragment, and names no file")
     for candidate in (root / INDEX).parent / path, root / path:
         if candidate.is_dir():
             return None
