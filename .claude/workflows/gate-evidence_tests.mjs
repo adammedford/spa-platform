@@ -867,6 +867,15 @@ try {
     const strayWhy = `change request ${cite(900)}'s Rows line "Rows: 4.2" does not begin **Rows:**, so it names no row`
     if (stray.result.verdict !== 'tag withheld' || !stray.result.reasons.includes(strayWhy) || !stray.result.report.text.includes(strayWhy)) fail(`a rowsLine without the prefix: verdict ${stray.result.verdict}, reasons ${JSON.stringify(stray.result.reasons)}`)
     if (whyOf(stray).length) fail(`a rowsLine without the prefix made row 4.2 not done: ${JSON.stringify(whyOf(stray))}`)
+    // A served rowsLine is trimmed before it is judged (#537's review record, 6509543463): a
+    // whitespace-only line is an empty one and withholds nothing ("an empty Rows line still
+    // withholds nothing", #435's decision comment), and a line with leading space is parsed, not
+    // quoted as a stray.
+    const strayOf = (r) => r.result.reasons.filter((w) => /does not begin \*\*Rows:\*\*/.test(w))
+    const blank = await run({ changeRequests: [CR({ rowsLine: '  ' })] })
+    if (blank.result.verdict !== 'tag ready' || strayOf(blank).length || whyOf(blank).length) fail(`a whitespace-only rowsLine: verdict ${blank.result.verdict}, reasons ${JSON.stringify(blank.result.reasons)}`)
+    const padded = await run({ changeRequests: [CR({ rowsLine: ' **Rows:** 4.2' })] })
+    if (strayOf(padded).length || !whyOf(padded).includes(rowsWhy)) fail(`a rowsLine with leading space: reasons ${JSON.stringify(padded.result.reasons)}, row 4.2 reads ${JSON.stringify(whyOf(padded))}`)
     // An unread listing withholds the tag and marks every stage row (Q2).
     const unread = await run({ changeRequestsRead: { ok: false, why: 'the label change-request does not exist' }, changeRequests: [CR({ rowsLine: '**Rows:** 4.2' })] })
     if (unread.result.verdict !== 'tag withheld' || !unread.result.reasons.includes('the open change requests could not be read (the label change-request does not exist)')) fail(`an unread listing: verdict ${unread.result.verdict}, reasons ${JSON.stringify(unread.result.reasons)}`)
