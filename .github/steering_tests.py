@@ -903,9 +903,22 @@ class SteeringTests(unittest.TestCase):
             ("JSON that does not parse", "[`registry.schema.json`](registry.schema.json)",
              lambda: self.write("contracts/registry.schema.json", "{\n"),
              "contracts/registry.schema.json is not JSON that parses"),
+            # #511: these two passed as code and as a schema's example by their suffix alone,
+            # though they are neither.
+            ("JSON that is neither a schema nor an example", "[`registry.json`](registry.json)",
+             lambda: self.write("contracts/registry.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.json is JSON that states no freeze and is not a schema's "
+             "*.example.json"),
+            ("a contract that is neither markdown, JSON nor code",
+             "[`openapi.yaml`](openapi.yaml)",
+             lambda: self.write("contracts/openapi.yaml", "openapi: 3.1.0\n"),
+             "contracts/openapi.yaml is neither a markdown contract, JSON nor code, so no header "
+             "is read from it"),
         ):
             with self.subTest(shape=shape):
-                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json"):
+                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json",
+                              "contracts/registry.json", "contracts/openapi.yaml"):
                     (self.root / stale).unlink(missing_ok=True)
                 number = self.write_index(f"| A contract | {target} | G7z | Nobody |")
                 write()
