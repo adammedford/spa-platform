@@ -76,7 +76,12 @@ spec.loader.exec_module(real_collect)
 # The real files the shape line's tools/ticket_shape.py runs on, committed on each case's origin/main
 # at the same paths: the check itself, A-05's ownership reader and the ownership it reads.
 SHAPE_FILES = ("tools/ticket_shape.py", ".github/path-ownership.py", "OWNERSHIP.md")
-SHAPE_FIELDS = "number,body,labels,subIssuesSummary,blockedBy"
+# The fields the gh double answers for `gh issue view`, read from the check itself: the script
+# copies them, so a FIELDS change the script misses turns a case red here.
+spec = importlib.util.spec_from_file_location("ticket_shape", ROOT / "tools" / "ticket_shape.py")
+ticket_shape = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ticket_shape)
+SHAPE_FIELDS = ticket_shape.FIELDS
 WORKFLOW = ROOT / ".claude" / "workflows" / "overnight.js"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
