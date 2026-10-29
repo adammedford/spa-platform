@@ -31,8 +31,9 @@
 # is in docs/agents/review.md -> "Landing or holding". The latest record naming the pull request's
 # current head must say merge, or nothing merges; tools/review_record.py, beside this script, reads
 # the records and says which, run as `review_record.py --pr <number> --head <head>` so the gh calls
-# that list them live in the reader alone (#488). The merge is then pinned to that head with --match-head-commit, so a
-# push that lands while this runs makes GitHub refuse the merge rather than take an unreviewed head.
+# that list them live in the reader alone (#488). The merge is then pinned to that head with
+# --match-head-commit, so a push that lands while this runs makes GitHub refuse the merge rather
+# than take an unreviewed head.
 # The merge body ends with `Reviewed: <head> <record URL>`, which this script writes, not its caller.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to

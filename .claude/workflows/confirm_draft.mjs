@@ -16,10 +16,11 @@
 // morning_tests.mjs holds this command's output to draftCheck's direct result.
 //
 // Exit 0: every question the comments yield is confirmed, none is left open, no Q<n>: line opens
-// "no", and every number the draft names is found. Exit 1: any of those fails, or the draft does not
-// begin "Confirm". Exit 2: it could not judge: a missing or unreadable file, comments that are not
-// JSON, an issue that already has a Confirm comment, comments with no questions comment among them,
-// or a morning.js it cannot read the parser from.
+// "no", and every number the draft names is found. Exit 1: any of those fails, the draft does not
+// begin "Confirm", or a "## Questions:" comment could not be read. Exit 2: it could not judge: a
+// missing or unreadable file, comments that are not JSON, an issue that already has a Confirm
+// comment, comments with no questions comment among them, or a morning.js it cannot read the parser
+// from.
 // The confirmFile mode of the morning workflow is the full check with an agent reading the issue;
 // its verdict fails only on a number no questions comment yields, where this one, the step a session
 // runs before handing a draft to Adam, also fails on what the draft leaves undecided.

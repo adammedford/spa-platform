@@ -58,11 +58,12 @@
 #             and a part-landed ticket's merged branch stays, because the integration rewrites lane
 #             commits and so `git merge-base --is-ancestor` never shows it merged: its open boxes
 #             would never get a lane. A held ticket is the human's to free, so the line names each
-#             and passes, as demoted does; it fails only when it cannot judge, which is when the
-#             forecast failed, since the open boxes come from collect's answer. A branch on origin
-#             alone is not listed: the rename moves a local one. Collect reads origin's task branches
-#             too, so a held entry whose id origin also has a `task/<id>-` branch for says so: the
-#             rename alone does not free that ticket.
+#             and passes, as demoted does; it fails only when it cannot judge: the forecast failed,
+#             since the open boxes come from collect's answer, git could not list the task branches
+#             or origin/main's subjects, or collect's answer could not be read for open boxes. A
+#             branch on origin alone is not listed: the rename moves a local one. Collect reads
+#             origin's task branches too, so a held entry whose id origin also has a `task/<id>-`
+#             branch for says so: the rename alone does not free that ticket.
 #   shape     Every ready-for-agent and needs-triage ticket of the forecast, judged by origin/main's
 #             tools/ticket_shape.py under the label it will carry after Route, ready-for-agent
 #             (#483). The ticket-shape Action judges a ticket once it carries that label, so a
