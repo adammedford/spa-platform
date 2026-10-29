@@ -577,6 +577,19 @@ class ProjectGuardTests(PreflightTestCase):
                                        "which project is intended"))
         self.assertMissing(result, 1)
 
+    def test_a_file_that_names_no_region_is_missing(self):
+        # #508: both Region comparisons were guarded by a non-empty AWS_REGION from the file, so an
+        # empty `AWS_REGION=` line skipped them and the ok row said the Region was "as
+        # tools/aws-project.env names" while the file named none. This shell holds the intended
+        # Region, so only the file's silence can refuse it.
+        case = Case(self, project_env=f"AWS_PROFILE={INTENDED_PROFILE}\nAWS_REGION=\n")
+        result = self.preflight(case, env={**INTENDED, "AWS_REGION": INTENDED_REGION})
+        self.assertRefused(result, row("MISSING", "AWS project",
+                                       "tools/aws-project.env names no AWS_REGION, so nothing says "
+                                       "which Region is intended"))
+        self.assertNotIn(self.passing_rows()[1], result.lines)
+        self.assertMissing(result, 1)
+
     def test_the_documented_recipe_verbatim(self):
         # The file's header documents the recipe and preflight prints it as the remedy for a shell
         # in another Region; they are one line. Run as written in a shell on another profile and
@@ -697,11 +710,11 @@ class ParseTests(PreflightTestCase):
 
     def read_region(self, case: Case, profile: str) -> str:
         """The AWS_REGION preflight read from the case's file, from the row it prints for a shell on
-        the file's profile and in another Region, or nothing when it compares no Region and the
-        project row passes."""
+        the file's profile and in another Region, or nothing when the project row says the file
+        names none (#508: once an ok row that compared no Region)."""
         result = self.preflight(case, env={"AWS_PROFILE": profile, "AWS_REGION": SHELL_REGION})
-        compares_none = row("ok", "AWS project",
-                            f"profile '{profile}', region {SHELL_REGION}, as tools/aws-project.env names")
+        compares_none = row("MISSING", "AWS project",
+                            "tools/aws-project.env names no AWS_REGION, so nothing says which Region is intended")
         expects = re.compile(re.escape(row("MISSING", "AWS Region", ""))
                              + rf"this shell resolves to '{SHELL_REGION}', expected '(.*)'\. .*")
         for line in result.lines:
