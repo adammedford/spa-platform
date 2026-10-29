@@ -105,6 +105,20 @@ roadmap — and a merge made through the GitHub API or the web UI is created on 
 hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
 commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
+**It runs from a worktree of its own, which is disposable.** The roadmap is derived from the tree
+the merge makes, so the script runs where `HEAD` sits at the base with nothing uncommitted:
+
+```bash
+git worktree add --detach ../spa-land origin/main
+git worktree remove ../spa-land        # the script does this when the landing succeeds
+```
+
+Once the merge, the roadmap refresh and its push have all succeeded, a landing run from a linked
+worktree that is detached and clean, untracked files included, removes that worktree as its last
+act and names it (#490). A worktree on a branch, or one holding an untracked file such as a body
+file, stays, and the script prints the `git worktree remove` line for it; a landing that fails
+leaves its worktree for inspection. The repository's own working tree is never removed.
+
 **It merges only a reviewed head.** Before merging, `tools/land.sh` reads the pull request's review
 records and refuses unless the latest record naming its current head says `merge`
 (`docs/agents/review.md` → "The review record"). It then merges pinned to that head, so a push that
