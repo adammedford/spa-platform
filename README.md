@@ -27,9 +27,9 @@ top of every session misleads from the first token, which is why `.github/steeri
 in `AGENTS.md` and why this block is generated.
 
 <!-- BEGIN GENERATED summary -->
-**Closed gates:** G1a (`skeleton-v1`), G0 (`g0-mechanism`), G1b (`contracts-v1`), G2 (`g2-local-slice`).
-**Where the gateway is:** S5 The same gateway on real infrastructure, which closes at gate G3.
-**Plan rows landed:** 47 of 62, with 8 part-landed. S5 still owes `1.3`, `1.4`, `1.5`, `1.6b`, `1.7`, `6.5`, `6.9`.
+**Closed gates:** G1a (`skeleton-v1`), G0 (`g0-mechanism`), G1b (`contracts-v1`), G2 (`g2-local-slice`), G3 (`g3-deployed-slice`), G4 (`g4-negative-green`).
+**Where the gateway is:** S7 Operable, and accepted for Phase 1, which closes at gate G5.
+**Plan rows landed:** 47 of 62, with 8 part-landed. S7 still owes `6.7`.
 <!-- END GENERATED summary -->
 
 `docs/roadmap.md` has the same figures per stage, and what each stage still owes. For the detail

@@ -871,6 +871,60 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("contracts/README.md agrees with the 1 freeze header it "
                       "indexes", out)
 
+    def test_a_target_with_no_header_by_design_passes_and_is_not_counted(self):
+        """The three shapes that carry no header: a code file, a directory of code, and a schema's
+        example. Each beside a contract that does carry one, so the count shows the headerless
+        target was passed over rather than the row."""
+        for shape, cell, write in (
+            ("a code file", "[`pipeline.md`](pipeline.md), `src/Gateway/Program.cs`",
+             lambda: self.write("src/Gateway/Program.cs")),
+            ("a directory", "[`pipeline.md`](pipeline.md), `src/Platform.Abstractions`",
+             lambda: self.write("src/Platform.Abstractions/")),
+            ("a schema's example", "[`pipeline.md`](pipeline.md), "
+             "[`pipeline.example.json`](pipeline.example.json)",
+             lambda: self.write("contracts/pipeline.example.json", "{}\n")),
+        ):
+            with self.subTest(shape=shape):
+                self.write_index(f"| Pipeline | {cell} | G1a | Everyone |")
+                self.write_contract("contracts/pipeline.md", "G1a")
+                write()
+                code, out = self.check()
+                self.assertEqual(0, code, out)
+                self.assertIn("contracts/README.md agrees with the 1 freeze header it indexes",
+                              out)
+
+    def test_a_target_whose_header_cannot_be_read_fails(self):
+        """#493: each of these was passed over in silence, and the check still said the index
+        agreed. A row naming a contract that does not exist is the reproduction from #44's review:
+        `ghost.md`, at a gate no contract names."""
+        for shape, target, write, message in (
+            ("a target that does not exist", "[`ghost.md`](ghost.md)", lambda: None,
+             "ghost.md exists neither beside contracts/README.md nor at the repository root"),
+            ("a contract with no freeze bullet", "[`telemetry.md`](telemetry.md)",
+             lambda: self.write("contracts/telemetry.md", "# Telemetry\n\nNo header.\n"),
+             "contracts/telemetry.md carries no '- **Freezes at:**' bullet"),
+            ("a header naming no gate", "[`telemetry.md`](telemetry.md)",
+             lambda: self.write_contract("contracts/telemetry.md", "when it lands"),
+             "contracts/telemetry.md's header 'Freezes at: when it lands' names no gate"),
+            ("a schema stating no freeze", "[`registry.schema.json`](registry.schema.json)",
+             lambda: self.write("contracts/registry.schema.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.schema.json is a schema whose description states no freeze"),
+            ("JSON that does not parse", "[`registry.schema.json`](registry.schema.json)",
+             lambda: self.write("contracts/registry.schema.json", "{\n"),
+             "contracts/registry.schema.json is not JSON that parses"),
+        ):
+            with self.subTest(shape=shape):
+                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json"):
+                    (self.root / stale).unlink(missing_ok=True)
+                number = self.write_index(f"| A contract | {target} | G7z | Nobody |")
+                write()
+                code, out = self.check()
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: a contracts index target has no readable freeze "
+                              "header.", out)
+                self.assertIn(f"contracts/README.md:{number}: row 'A contract': {message}", out)
+
     def test_the_live_index_agrees_with_every_header_it_points_at(self):
         """The one case against the real tree: the shapes above are the shapes actually in it.
 

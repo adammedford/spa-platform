@@ -260,23 +260,3 @@ dispatched is. That is why this rule is prose and a command rather than a hook o
 The tag is the record. There is no separate checklist. The name each gate's tag takes is in the
 ladder table in `docs/roadmap.md`, which is where `tools/roadmap.py` reads it to tell a closed gate
 from an open one.
-
-### Review debt from before the check
-
-`contracts-v1` was tagged two minutes after #37 merged, while #37's review was still running; that
-review found claims the tag still freezes, which #39 and #40 corrected on `main`. When #67 decided
-what enforces review, the five merges after that tag that no record named were to be reviewed
-before G2. `g2-local-slice` was tagged before that was done, and stands as it was cut. They are
-review debt like any other, and the next gate tag waits until a record clears each.
-
-| Pull request | Merged head | Merge commit |
-| --- | --- | --- |
-| #38 | `9202d6cc2e9af80cc4e27f24371d488f0399175f` | `733477a` |
-| #39 | `9564347d640b80c86711ea93a6d7ad55da1b9802` | `e376fe2` |
-| #40 | `6c07267ffd2ea422cdaa3a9aad4cda3d7ff0be1e` | `a3ec472` |
-| #44 | `ced5d8d6a49867c85b5547ff9d6f59a0ab488499` | `37fdca2` |
-| #45 | `91a8b2089df820237572719303c9d7195bad3dd9` | `eb65be8` |
-
-As read on 18 October 2026, for #67: none of the five carries a comment or a review, and no merge
-body, issue or pull request names its merged head. Each is cleared by a record naming that head,
-posted on its pull request, by an agent session that wrote none of its commits.

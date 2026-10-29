@@ -32,8 +32,11 @@ token, and a cell naming no gate at all -- `With the registry document` -- borro
 row it names, against which its own target's header is compared. A cell naming no row the index
 holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
 by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
-and the line it passes prints how many headers it compared: a rule that quietly compares nothing
-is the defect it was written to catch, one level up.
+and so does a target it cannot read a header from: one that does not exist, a markdown contract
+with no freeze bullet, a schema stating no freeze, or JSON that does not parse. Only code, a
+directory and a schema's example are passed over, since none of them carries a header (#493).
+The line it passes prints how many headers it compared: a rule that quietly compares nothing is
+the defect it was written to catch, one level up.
 
 **No citation that resolves to nothing.** The dangling-pointer rule again, for the one pointer
 written as a number rather than a path. The tracker guide once said a document citing a
@@ -528,39 +531,60 @@ def index_rows(text: str):
         yield number, headers, cells
 
 
-def freeze_header(root: pathlib.Path, target: str) -> tuple[str, str] | None:
-    """Where the target is and what it says about its own freeze, or None when it says nothing.
+class Freeze(typing.NamedTuple):
+    """What one index target says about its own freeze: where it is, and either the header it
+    states or why no header could be read from it."""
+
+    where: str
+    header: str = ""
+    problem: str = ""
+
+
+def freeze_header(root: pathlib.Path, target: str) -> Freeze | None:
+    """Where the target is and what it says about its own freeze, or None when it carries no
+    header by design.
 
     A link in the index is relative to the index, and a backticked path is relative to the root,
-    so both are tried. A row may point at source code or at a schema's example, and neither
-    carries a header. Absence is not a disagreement: this rule compares two claims about a gate,
-    and where there is no header there is only the index's.
+    so both are tried. A row may point at source code, a directory of it or a schema's example, and
+    none of those carries a header: absence there is not a disagreement, since this rule compares
+    two claims about a gate and where there is no header there is only the index's. Every other
+    absence is a problem, because it is the same silence one step earlier (#493): a target that
+    exists at neither reading, a markdown contract with no freeze bullet, a schema whose
+    description states no freeze, and JSON that does not parse each left a row compared with
+    nothing while the line this check prints still counted it as agreeing.
     """
     # A link may carry a fragment -- `registry.schema.json#/$defs/oauth` -- which names a part of
     # the file, not another file.
     path = target.split("#", 1)[0]
     for candidate in (root / INDEX).parent / path, root / path:
+        if candidate.is_dir():
+            return None
         if not candidate.is_file():
             continue
         where = candidate.relative_to(root).as_posix()
         if candidate.suffix == ".md":
             found = MD_FREEZE.search(candidate.read_text())
             if not found:
-                return None
+                return Freeze(where, problem="carries no '- **Freezes at:**' bullet")
             # The bullet's first sentence is the freeze; what follows it is the reason, and in
             # http-contract.md and request-gate.md it runs on past the end of the line.
             bullet = " ".join(found.group("freeze").split())
             sentence = bullet.split(". ")[0].strip().rstrip(".")
-            return where, f"Freezes at: {sentence}"
+            return Freeze(where, f"Freezes at: {sentence}")
         if candidate.suffix == ".json":
             try:
                 document = json.loads(candidate.read_text())
             except ValueError:
-                return None
+                return Freeze(where, problem="is not JSON that parses")
             description = document.get("description", "") if isinstance(document, dict) else ""
             found = SCHEMA_FREEZE.search(description)
-            return (where, found.group(0)) if found else None
-    return None
+            if found:
+                return Freeze(where, found.group(0))
+            # A schema states its freeze; the example beside it is sample data and states none.
+            if candidate.name.endswith(".schema.json"):
+                return Freeze(where, problem="is a schema whose description states no freeze")
+        return None
+    return Freeze(path, problem=f"exists neither beside {INDEX} nor at the repository root")
 
 
 def spoken(name: str) -> str:
@@ -570,22 +594,22 @@ def spoken(name: str) -> str:
 
 def freeze_disagreements(
     root: pathlib.Path,
-) -> tuple[list[str], list[str], list[str], list[str], int]:
-    """The rows that contradict their target, the rows this rule cannot read, the relational cells
-    that defer to no row, the UNCOMPARED entries no row carries, and how many headers it read to
-    find out.
+) -> tuple[list[str], list[str], list[str], list[str], list[str], int]:
+    """The rows that contradict their target, the rows this rule cannot read, the targets whose
+    header it cannot read, the relational cells that defer to no row, the UNCOMPARED entries no row
+    carries, and how many headers it read to find out.
 
     The count is reported, so the line this check prints when it passes says how much it
     compared. A sentence that would be printed whether or not the comparison happened is a
-    sentence no test can hold to anything. The unreadable rows are reported for the same reason,
-    and so are the cells deferring to nothing: a row passed over in silence is a freeze claim
-    nothing compares.
+    sentence no test can hold to anything. The unreadable rows and targets are reported for the
+    same reason, and so are the cells deferring to nothing: a row passed over in silence is a
+    freeze claim nothing compares.
     """
     index = root / INDEX
     exempt = set()
-    found, unreadable, nowhere, compared = [], [], [], 0
+    found, unreadable, headerless, nowhere, compared = [], [], [], [], 0
     if not index.is_file():
-        return found, unreadable, nowhere, outlived(exempt), compared
+        return found, unreadable, headerless, nowhere, outlived(exempt), compared
 
     rows = []
     for number, headers, cells in index_rows(index.read_text()):
@@ -626,9 +650,15 @@ def freeze_disagreements(
             read = freeze_header(root, link or backticked)
             if read is None:
                 continue
-            where, header = read
+            where, header, problem = read
+            if problem:
+                headerless.append(f"{INDEX}:{number}: row '{name}': {where} {problem}")
+                continue
             stated = GATE.search(header)
             if not stated:
+                headerless.append(
+                    f"{INDEX}:{number}: row '{name}': {where}'s header '{header}' names no gate"
+                )
                 continue
             compared += 1
             if stated.group(0) != claimed.group(0):
@@ -639,7 +669,7 @@ def freeze_disagreements(
                     f"{claimed.group(0)}, and {where}'s header '{header}' names "
                     f"{stated.group(0)}"
                 )
-    return found, unreadable, nowhere, outlived(exempt), compared
+    return found, unreadable, headerless, nowhere, outlived(exempt), compared
 
 
 def outlived(exempt: set[tuple[str, str]]) -> list[str]:
@@ -1220,7 +1250,9 @@ def main(argv: list[str] | None = None) -> int:
 
     claims = progress_claims(root)
     missing, landed = dangling_pointers(root)
-    disagreements, unreadable, nowhere, uncompared, compared = freeze_disagreements(root)
+    disagreements, unreadable, headerless, nowhere, uncompared, compared = (
+        freeze_disagreements(root)
+    )
     unresolved, filed, resolved_tickets = dangling_tickets(root)
     shared, numbered = shared_numbers(root)
     cited, untracked = issue_citations(root)
@@ -1291,6 +1323,15 @@ def main(argv: list[str] | None = None) -> int:
             "Its cells do not line up with the columns above it, so nothing compared its freeze",
             "claim against the contract it points at. Fix the row, or the headings it sits",
             "under; a pipe inside a cell is written \\|.",
+        ),
+        report(
+            headerless,
+            "STEERING FAILED: a contracts index target has no readable freeze header.",
+            "A row's freeze cell is compared against each target's own header, so a target that",
+            "does not exist, a markdown contract with no '- **Freezes at:**' bullet naming a gate,",
+            "a schema stating no freeze, or JSON that does not parse is a claim nothing compared.",
+            "Fix the path or write the header. Code, a directory and a schema's example carry no",
+            "header by design and are not read.",
         ),
         report(
             nowhere,
