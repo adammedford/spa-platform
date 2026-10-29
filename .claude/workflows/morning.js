@@ -71,7 +71,9 @@ export const meta = {
 // name no open ticket; the morning reads the table of the latest record on each open pull request
 // into main, and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
 // to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
-// verdict nor a Confirm comment gates it: the review decided the finding, and the night did not.
+// verdict nor a Confirm comment gates it: the review decided the finding, and the night did not. Each
+// carries the "**Owner:**" and "**Touches:**" lines its place derives, or is filed ready-for-human
+// saying why it has none, and is filed only when tools/ticket_shape.py passes its body (#479).
 const A = args || {}
 const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
 const badArguments = (a) => {
@@ -281,12 +283,14 @@ const FOLLOWUPS = {
   properties: {
     prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: ENTRY }, reviews: { type: 'array', items: ENTRY } }, required: ['number', 'comments', 'reviews'] } },
     filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
+    ownership: { type: 'string' },
     error: { type: 'string' },
   },
-  required: ['prs', 'filed', 'error'],
+  required: ['prs', 'filed', 'ownership', 'error'],
 }
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
-const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'unreachable', 'reason'] }
+const SHAPE_REFUSED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
+const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, refused: SHAPE_REFUSED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'refused', 'unreachable', 'reason'] }
 const HANDED = { type: 'object', properties: { url: { type: 'string' }, posted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['url', 'posted', 'reason'] }
 const REFRESHED = { type: 'object', properties: { edited: { type: 'boolean' }, reason: { type: 'string' } }, required: ['edited', 'reason'] }
 const AFTERED = {
@@ -397,8 +401,91 @@ const latestRecordOf = (pr) => {
 // request on its Raised-by line, the shape this script files and a hand-filed one can take.
 const filedAs = (filed, pr, title) => (filed || []).find((i) => i && sameFinding(i.title, title)
   && new RegExp(`^\\*\\*Raised by:\\*\\*[^\\n]*#${pr}(?!\\d)`, 'm').test(String(i.body || ''))) || null
-const followUpBody = (pr, record, f) => [
+
+// ---------------------------------------------------------------- follow-ups, owners and places
+// #479. A follow-up filed with a Raised-by line alone failed tools/ticket_shape.py on owner-line the
+// moment it was labelled ready-for-agent (#458 to #461; #386 to #401), though its place was in hand.
+// So its Touches line is the paths the finding's Where cell names, and its Owner line the role
+// OWNERSHIP.md derives from them. OWNERSHIP.md's block is read as .github/path-ownership.py's rules()
+// and owner_of() read it: the first fenced block, "#" opening a comment, the last matching line
+// winning, "*" every path, a pattern ending "/" a directory, any other an fnmatch pattern. A path is
+// read as tools/ticket_shape.py's owner_of() reads a Touches path: a directory written without its
+// slash (`tools/scripts`) is that directory. morning_tests.mjs evaluates this section and holds its
+// owners equal to ticket_shape's on every path OWNERSHIP.md names, so it uses nothing defined outside it.
+const ownershipRules = (text) => {
+  const rules = []
+  let inside = false
+  for (const line of String(text || '').split(/\r\n|\n|\r/)) {
+    if (line.startsWith('```')) {
+      if (inside) break
+      inside = true
+      continue
+    }
+    if (!inside) continue
+    const fields = line.split('#')[0].trim().split(/\s+/).filter(Boolean)
+    if (fields.length >= 2) rules.push([fields[0], fields[1]])
+  }
+  return rules
+}
+// fnmatch's "*" and "?", which match a "/" too; no line of OWNERSHIP.md uses a "[...]" set.
+const fnmatchOf = (pattern) => new RegExp(`^${pattern.split('').map((c) => (c === '*' ? '[\\s\\S]*' : c === '?' ? '[\\s\\S]' : c.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('')}$`)
+const ruleMatches = (pattern, p) => {
+  if (pattern === '*') return true
+  const anchored = pattern.replace(/^\/+/, '')
+  if (anchored.endsWith('/')) return p.startsWith(anchored)
+  return p === anchored || fnmatchOf(anchored).test(p)
+}
+const ownerOfPath = (rules, p) => {
+  const bare = String(p).trim().replace(/^\/+/, '').replace(/\/+$/, '')
+  const read = rules.some(([pattern]) => pattern.replace(/^\/+/, '') === bare + '/') ? bare + '/' : bare
+  let found = null
+  for (const [pattern, owner] of rules) if (ruleMatches(pattern, read)) found = owner
+  return found
+}
+// The paths a Where cell names, in its order, once each. The cell is prose a reviewer wrote
+// (".github/workflows/ci.yml:657-658", "a.cs; b.cs", "76704c5:ci.yml lines 321-326 | tools/scripts",
+// "#244 Q9; docs/runbooks/x.md", "fixtures/TestIdp/SigningKeyRing.cs NewKey", "the pull request
+// description"), so a token is a path by tools/ticket_shape.py's BARE_PATH, once its code-span ticks,
+// a commit prefix ("76704c5:") and a ":line" or ":line-line" suffix are taken off; a token with no "/"
+// counts only as a dotfile or a name ending in a lower-case extension, so "SigningKeyRing.NewKey" is
+// not read as a file.
+const PLACE_PATH = /^(?=[^/]*\/|\.?[\w-]*[\w-]\.[\w-]|\.[\w-])[\w./*-]+$/
+const NOT_PLACES = ['e.g', 'i.e', 'and/or']
+const pathsOf = (where) => {
+  const out = []
+  for (const raw of String(where || '').split(/[\s,;|]+/)) {
+    const t = raw.replace(/^[`'"([]+|[`'")\]]+$/g, '').replace(/[.,:;]+$/, '')
+      .replace(/^[0-9a-f]{7,40}:(?=\S)/, '').replace(/(:\d+(-\d+)?)+$/, '').replace(/[.:]+$/, '')
+    if (!t || NOT_PLACES.includes(t) || !PLACE_PATH.test(t)) continue
+    if (!t.includes('/') && !/^\.[\w-]+$/.test(t) && !/\.[a-z0-9]{1,8}$/.test(t)) continue
+    if (!out.includes(t)) out.push(t)
+  }
+  return out
+}
+// A follow-up's owner, Touches paths and label. One owner: its role, filed needs-triage as before. No
+// path, a path no line owns, or paths of two owners: no Touches line, since ticket_shape fails two
+// owners' paths under any label (one-owner); the integrator, who triages it, as its Owner; filed
+// ready-for-human with why, which names the paths and their roles.
+const placeOf = (rules, where) => {
+  const touches = pathsOf(where)
+  if (!touches.length) return { owner: 'integrator', touches, label: 'ready-for-human', why: `the finding names no repository path (its place: ${where || 'none named'}), so no owner is derived from it; give it a path and an owner, then relabel it` }
+  const byOwner = {}
+  for (const p of touches) {
+    const owner = ownerOfPath(rules, p) || 'no owner'
+    ;(byOwner[owner] = byOwner[owner] || []).push(p)
+  }
+  const owners = Object.keys(byOwner).sort()
+  const listed = owners.map((o) => `${o}: ${byOwner[o].join(', ')}`).join('; ')
+  if (owners.length > 1) return { owner: 'integrator', touches, label: 'ready-for-human', why: `the finding names paths of two owners or more (${listed}), and a ticket has one owner (docs/agents/tracker-policy.md); split it, one ticket per owner, then relabel each` }
+  if (owners[0] === 'no owner') return { owner: 'integrator', touches, label: 'ready-for-human', why: `no line of OWNERSHIP.md owns ${byOwner['no owner'].join(', ')}, so no owner is derived from it` }
+  return { owner: owners[0], touches, label: 'needs-triage', why: '' }
+}
+
+// ---------------------------------------------------------------- follow-ups, their bodies
+const followUpBody = (pr, record, f, place) => [
   `**Raised by:** #${pr}, from its review record ${record}`,
+  `**Owner:** ${place.owner}`,
+  place.label === 'needs-triage' ? `**Touches:** ${place.touches.map((p) => '`' + p + '`').join(', ')}` : `**Filed ready-for-human:** ${place.why}`,
   '',
   '## What to build',
   '',
@@ -409,10 +496,12 @@ const followUpBody = (pr, record, f) => [
   `- [ ] ${f.title}: fixed, or declined with the reason in this issue's Answer.`,
 ].join('\n')
 // The rows to file and those already filed, from what the reader returned: per open pull request, the
-// latest record's table, each row checked against the issues already filed.
+// latest record's table, each row checked against the issues already filed, and its owner, Touches
+// and label derived from its place under the OWNERSHIP.md the reader returned (#479).
 const followUpsToFile = (read, mdir) => {
   const toFile = []
   const already = []
+  const rules = ownershipRules(read.ownership)
   for (const pr of read.prs || []) {
     const latest = pr && Number.isInteger(pr.number) ? latestRecordOf(pr) : null
     if (!latest) continue
@@ -420,7 +509,8 @@ const followUpsToFile = (read, mdir) => {
       const hit = filedAs(read.filed, pr.number, f.title)
       if (hit) { already.push({ pr: pr.number, title: f.title, number: hit.number, url: hit.url || '' }); return }
       const k = toFile.filter((x) => x.pr === pr.number).length + 1
-      toFile.push({ pr: pr.number, title: f.title, record: latest.url, file: `${mdir}/followups/pr-${pr.number}-${k}.md`, body: followUpBody(pr.number, latest.url, f) })
+      const place = placeOf(rules, f.where)
+      toFile.push({ pr: pr.number, title: f.title, record: latest.url, label: place.label, why: place.why, file: `${mdir}/followups/pr-${pr.number}-${k}.md`, body: followUpBody(pr.number, latest.url, f, place) })
     })
   }
   return { toFile, already }
@@ -913,7 +1003,8 @@ OUTPUT FILE: ${p.mdir}/followups-read.txt
 1. \`cd ${REPO} && gh pr list --state open --base main --limit 500 --json number\`.
 2. For each pull request it lists: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served; reviews = the same for \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads the records and their follow-ups tables from them.
 3. filed: for each pull request, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
-4. If GitHub cannot be reached, error says so and prs and filed are []. error is "" when nothing stopped you.
+4. ownership: OWNERSHIP.md as the main checkout holds it, \`cat ${REPO}/OWNERSHIP.md\`, verbatim (#479): the script derives each follow-up's owner from it, and tools/ticket_shape.py checks the result against the same file. "" when it cannot be read, which files nothing.
+5. If GitHub cannot be reached, error says so and prs and filed are []. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it. It is named .txt so that a later morning's Replay, which reads every .json file there as a phase file, passes over it.`
 }
 
@@ -929,8 +1020,9 @@ ${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
 For each follow-up, in order:
 1. Write its body, exactly, to its file.
 2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
-3. Otherwise file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`. A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
-If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you.`
+3. Check its shape as the overnight run checks a new ticket, under the label it will be filed with (#479): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": []}}))' <its file> <its label> | python3 -I tools/ticket_shape.py -\`. Only when that exits 0 with its last line starting "ticket-shape: pass:" go on to step 4. On exit 1 file nothing, and list it in refused with its pr, title and why, each "ticket-shape: <rule>:" line it printed joined by "; "; on any other exit file nothing, and list it in refused with why "the check did not judge it: " and its last line. Never reword a body to get past the check: a failure is reported, not repaired.
+4. File it: \`cd ${REPO} && gh issue create --title "<its title>" --label <its label> --body-file <its file>\`, with its label exactly as given (needs-triage, or ready-for-human for one whose place names no path or two owners' paths). A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you; refused is [] when the check refused none.`
 }
 
 const handoverPrompt = (date, issue, text) => {
@@ -1033,8 +1125,10 @@ const handoverText = (s) => {
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
   list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
-  const fu = s.followUps || { filed: [], already: [] }
+  const fu = s.followUps || { filed: [], already: [], refused: [], forHuman: [] }
   list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title} (${f.url})`), 'none')
+  if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}: ${f.why}`))
+  if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   return L.join('\n').replace(/`/g, "'")
 }
@@ -1276,22 +1370,34 @@ if (commentsRefusal) {
 
 phase('Follow-ups')
 // Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
-const followUps = { filed: [], already: [] }
+const followUps = { filed: [], already: [], refused: [], forHuman: [] }
 const fr = await run(followupsPrompt(DATE), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
 if (!fr) refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
 else if (fr.error) refusals.push(`the follow-ups agent could not read the open pull requests: ${fr.error}; none was filed`)
 else {
   const { toFile, already } = followUpsToFile(fr, P.mdir)
   followUps.already.push(...already)
-  if (toFile.length) {
+  // No rules, no owner: a follow-up is filed only with the owner its place derives (#479), so an
+  // OWNERSHIP.md the reader could not return, or one with no block, files none (CODING_STANDARDS.md
+  // -> "A check fails closed"), as .github/path-ownership.py refuses one.
+  if (toFile.length && !ownershipRules(fr.ownership).length) refusals.push(`the follow-ups agent returned no OWNERSHIP.md block, so no follow-up's owner could be derived and none was filed: ${toFile.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')}; relaunch to file them`)
+  else if (toFile.length) {
     const fd = await run(fileFollowUpsPrompt(DATE, toFile), { label: 'followups-file', phase: 'Follow-ups', schema: FILED })
     if (!fd) refusals.push(`the follow-ups filer returned nothing: ${toFile.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} may be unfiled; relaunch to file them`)
     else {
       followUps.filed.push(...fd.filed)
       followUps.already.push(...fd.skipped)
-      // A follow-up the filer accounts for in neither list is named, never read as filed: the hand-over
+      followUps.refused.push(...fd.refused)
+      // Filed ready-for-human, each with why, so the hand-over names what a person must place (#479).
+      for (const f of fd.filed) {
+        const sent = toFile.find((t) => t.pr === f.pr && sameFinding(t.title, f.title))
+        if (sent && sent.label === 'ready-for-human') followUps.forHuman.push({ ...f, why: sent.why })
+      }
+      // A body tools/ticket_shape.py failed was filed by nobody (#479): named, so it is fixed and filed by hand.
+      for (const r of fd.refused) refusals.push(`the follow-up #${r.pr} ${JSON.stringify(r.title)} failed tools/ticket_shape.py and was not filed: ${r.why}`)
+      // A follow-up the filer accounts for in no list is named, never read as filed: the hand-over
       // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
-      const told = [...fd.filed, ...fd.skipped]
+      const told = [...fd.filed, ...fd.skipped, ...fd.refused]
       const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
       if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${lost.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} neither filed nor skipped; relaunch to file them`)
       if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
