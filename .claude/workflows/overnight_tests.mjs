@@ -100,9 +100,11 @@ const reachLine = {
 }
 // One ready-for-human ticket's grill was asked on an earlier night (#487): its grill returns the questions it carried
 // and the summary the grill prompt names for that case, so its reason says carried and already answered; every other
-// grill asks its questions tonight, and its reason says grilled on paper.
-const CARRIED = tickets.find((t) => t.status === 'ready-for-human').id
+// grill asks its questions tonight, and its reason says grilled on paper. A second carried grill words its summary
+// loosely, capitalised and without "not re-grilled", which the reason line still reads as carried, as the report does.
+const [CARRIED, CARRIED_LOOSE] = tickets.filter((t) => t.status === 'ready-for-human').map((t) => t.id)
 const CARRIED_SUMMARY = 'carried from an earlier night, not re-grilled'
+const CARRIED_LOOSE_SUMMARY = 'Carried from an earlier night.'
 const grillQuestions = (n) => Array.from({ length: n }, (_, i) => ({ q: `Q${i + 1}?`, recommendation: 'yes' }))
 const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
@@ -132,7 +134,9 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
   if (kind === 'grill') return id === CARRIED
     ? { questions: grillQuestions(13), glossaryProposals: [], adrCandidates: [], summary: CARRIED_SUMMARY }
-    : { questions: grillQuestions(2), glossaryProposals: [], adrCandidates: [], summary: 'companion' }
+    : id === CARRIED_LOOSE
+      ? { questions: grillQuestions(5), glossaryProposals: [], adrCandidates: [], summary: CARRIED_LOOSE_SUMMARY }
+      : { questions: grillQuestions(2), glossaryProposals: [], adrCandidates: [], summary: 'companion' }
   if (kind === 'route') return { flow: 'agent', reason: 'companion' }
   if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
   const n = ++calls
@@ -526,7 +530,12 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
   else if (!carried.reason.includes(`carried, 13 question(s) already answered on #${byId[CARRIED].issue}`) || carried.reason.includes('grilled on paper')) {
     fail(`${CARRIED}'s grill was carried, yet its reason does not say carried and already answered: ${carried.reason}`)
   }
-  const fresh = grilled.filter((t) => t.id !== CARRIED)
+  const loose = of(CARRIED_LOOSE)[0]
+  if (!loose) fail(`the run's reasons hold no entry for ${CARRIED_LOOSE}, whose grill was carried with a loosely worded summary`)
+  else if (!loose.reason.includes(`carried, 5 question(s) already answered on #${byId[CARRIED_LOOSE].issue}`) || loose.reason.includes('grilled on paper')) {
+    fail(`${CARRIED_LOOSE}'s grill was carried with the summary "${CARRIED_LOOSE_SUMMARY}", yet its reason does not say carried and already answered: ${loose.reason}`)
+  }
+  const fresh = grilled.filter((t) => t.id !== CARRIED && t.id !== CARRIED_LOOSE)
   if (!fresh.length) fail('every grilled ticket was carried, so the fresh-grill reason check read nothing')
   for (const t of fresh) {
     const r = of(t.id)[0]
