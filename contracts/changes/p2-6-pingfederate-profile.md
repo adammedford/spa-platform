@@ -5,7 +5,7 @@
 - **Tasks:** P2-6; 3.7 (the profiles), 5.4 (the test identity provider), 4.3 (the request gate),
   6.2 and 6.3 (the composed suites), 6.9 (the deployed runs)
 - **Date:** 2026-10-19
-- **Status:** decided, 2026-10-20, items 1 to 6; item 7, 2026-10-21, on https://github.com/adammedford/spa-platform/issues/224; item 8 open until the harness branch that selects the profile exists. See the Decision section below.
+- **Status:** decided, 2026-10-20, items 1 to 6; item 7, 2026-10-21, on https://github.com/adammedford/spa-platform/issues/224; item 8 moved to #545, 2026-10-29, by the cutover #439. See the Decision section below.
 
 ## The gap
 

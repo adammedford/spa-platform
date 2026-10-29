@@ -5,7 +5,7 @@
 - **Tasks:** MR-8; 2.2 (`AddPlatformRegistry`, where the validation runs); 1.4 (the task
   environment, #56); I-5 (CI's smoke step)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** moved to #544, 2026-10-29, by the cutover #439
 
 ## What the gateway does with its configuration today
 
