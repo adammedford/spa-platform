@@ -14,10 +14,10 @@ copy of tools/terraform-floor.sh and the env files the case crafts. A whole-file
 script itself for a script that reads beside itself; an extracted fragment does not, and neither
 does a switch added so a test could point the script at another env file, which would give the
 guard a second way to read the wrong file (archived overnight ticket 69, Q5, accepted on #66). A
-copy and not a link: preflight reads beside the path it was started through, and 9ec9aa1 left that
-"alone deliberately", which is not a promise for a case to rest on. Each case starts the copy as
-AGENTS.md starts the script, `tools/preflight.sh` from the top level, unless it is about another
-way in.
+copy and not a link, so the directory the script sits in is the case's own; the cases about a link
+add one beside a decoy and hold that preflight follows it to the copy (#509). Each case starts the
+copy as AGENTS.md starts the script, `tools/preflight.sh` from the top level, unless it is about
+another way in.
 
 **The interpreter is named.** Each case runs `/bin/bash`, so a Mac with Homebrew's bash first on
 PATH still tests the 3.2 macOS ships, which the script's header targets. The companion prints that
@@ -96,7 +96,7 @@ OLDER = "1.10.5"
 
 # The real tools preflight reads its answers with. Every other tool it asks about is a double or
 # absent.
-TOOLS = ("uname", "sed", "head", "tail", "tr", "cut", "awk", "grep", "sort", "dirname")
+TOOLS = ("uname", "sed", "head", "tail", "tr", "cut", "awk", "grep", "sort", "dirname", "readlink")
 
 # What the documented recipe, `set -a; . tools/aws-project.env; set +a`, leaves in the two keys the
 # guard reads, printed NUL-separated so a carriage return or a space survives the trip.
@@ -782,7 +782,8 @@ class ScriptDirectoryTests(PreflightTestCase):
     the directory it found, so every path built from it names another file over two lines: the
     defect #66 fixed in tools/land.sh. CDPATH is looked up only for a relative name that does not
     start with ./ or ../, so the cases start the script as AGENTS.md does, `tools/preflight.sh` from
-    the top level."""
+    the top level. The same `cd` has to reach the directory the script sits in when it is started
+    through a symbolic link, which the last three cases hold (#509)."""
 
     def assertFoundItsOwnFiles(self, case: Case, result: Result):
         self.assertReady(result)
@@ -819,6 +820,40 @@ class ScriptDirectoryTests(PreflightTestCase):
         case = Case(self, repo="-repo")
         self.decoy(case.dir)
         result = self.preflight(case, BASH, "--", "-repo/tools/preflight.sh", cwd=case.dir, env=INTENDED)
+        self.assertFoundItsOwnFiles(case, result)
+
+    # #509: preflight started through a symbolic link reads its files from the directory the script
+    # itself sits in, not from the link's. Until #509 it read beside the link, where it found no
+    # tools/terraform-floor.sh, wrote the failed source to standard error and reported the
+    # Terraform rows MISSING (#38's review record). A decoy sits beside each link, so a wrong turn
+    # that finds env files at all finds another project's.
+
+    def test_an_absolute_link_in_another_directory(self):
+        case = Case(self)
+        links = case.dir / "links"
+        self.decoy(links)
+        (links / "preflight.sh").symlink_to(case.script)
+        result = self.preflight(case, BASH, str(links / "preflight.sh"), cwd=case.home, env=INTENDED)
+        self.assertFoundItsOwnFiles(case, result)
+
+    def test_a_chain_of_relative_links(self):
+        # A relative target is read from the link's own directory, not the caller's: the second
+        # link names the first by a path relative to where the second sits.
+        case = Case(self)
+        first, second = case.dir / "first", case.dir / "second" / "deeper"
+        self.decoy(first)
+        self.decoy(second)
+        (first / "preflight.sh").symlink_to(pathlib.Path("..") / case.repo.name / "tools" / "preflight.sh")
+        (second / "preflight.sh").symlink_to(pathlib.Path("..") / ".." / "first" / "preflight.sh")
+        result = self.preflight(case, BASH, "second/deeper/preflight.sh", cwd=case.dir, env=INTENDED)
+        self.assertFoundItsOwnFiles(case, result)
+
+    def test_a_link_to_the_tools_directory(self):
+        # A linked directory on the way to the script, rather than a linked script, still finds the
+        # repository the script sits in for .terraform-version one level up.
+        case = Case(self)
+        (case.dir / "linked-tools").symlink_to(case.tools)
+        result = self.preflight(case, BASH, "linked-tools/preflight.sh", cwd=case.dir, env=INTENDED)
         self.assertFoundItsOwnFiles(case, result)
 
 

@@ -907,9 +907,22 @@ class SteeringTests(unittest.TestCase):
             # itself, which passed as a directory of code carrying no header by design.
             ("a link that is only a fragment", "[`pipeline`](#pipeline)", lambda: None,
              "#pipeline is only a fragment, and names no file"),
+            # #511: these two passed as code and as a schema's example by their suffix alone,
+            # though they are neither.
+            ("JSON that is neither a schema nor an example", "[`registry.json`](registry.json)",
+             lambda: self.write("contracts/registry.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.json is JSON that states no freeze and is not a schema's "
+             "*.example.json"),
+            ("a contract that is neither markdown, JSON nor code",
+             "[`openapi.yaml`](openapi.yaml)",
+             lambda: self.write("contracts/openapi.yaml", "openapi: 3.1.0\n"),
+             "contracts/openapi.yaml is neither a markdown contract, JSON nor code, so no header "
+             "is read from it"),
         ):
             with self.subTest(shape=shape):
-                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json"):
+                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json",
+                              "contracts/registry.json", "contracts/openapi.yaml"):
                     (self.root / stale).unlink(missing_ok=True)
                 number = self.write_index(f"| A contract | {target} | G7z | Nobody |")
                 write()

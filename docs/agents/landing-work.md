@@ -105,6 +105,20 @@ roadmap — and a merge made through the GitHub API or the web UI is created on 
 hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
 commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
+**It runs from a worktree of its own, which is disposable.** The roadmap is derived from the tree
+the merge makes, so the script runs where `HEAD` sits at the base with nothing uncommitted:
+
+```bash
+git worktree add --detach ../spa-land origin/main
+git worktree remove ../spa-land        # the script does this when the landing succeeds
+```
+
+Once the merge, the roadmap refresh and its push have all succeeded, a landing run from a linked
+worktree that is detached and clean, untracked files included, removes that worktree as its last
+act and names it (#490). A worktree on a branch, or one holding an untracked file such as a body
+file, stays, and the script prints the `git worktree remove` line for it; a landing that fails
+leaves its worktree for inspection. The repository's own working tree is never removed.
+
 **It merges only a reviewed head.** Before merging, `tools/land.sh` reads the pull request's review
 records and refuses unless the latest record naming its current head says `merge`
 (`docs/agents/review.md` → "The review record"). It then merges pinned to that head, so a push that
@@ -274,6 +288,36 @@ python3 -I tools/review_record.py <40-hex head> < listings.json   # {"comments":
 
 Both forms give the same answer for the same pull request. A number where the head belongs, or a
 head after `--pr`, is refused with both forms named.
+
+## Drafting a Confirm comment
+
+A `Confirm` comment on an `Overnight <date>` issue is Adam's act, and no agent session posts one
+(`docs/agents/tracker-policy.md`). A session that drafts one for him writes the draft to a file and
+runs the morning's own parser over it and the issue's comments before handing it over:
+
+```bash
+gh issue view <n> --json comments > .scratch/overnight/log/confirm-<date>-comments.json
+node .claude/workflows/confirm_draft.mjs .scratch/overnight/log/confirm-<date>.md .scratch/overnight/log/confirm-<date>-comments.json
+```
+
+It prints the questions the draft covers, those it overrides, those answered no and those left
+open, then one verdict line. It exits 0 when every question is confirmed and none is answered no by
+an override, 1 when a question is left open, an override opens "no", the draft names a number no
+questions comment yields or does not begin `Confirm`, and 2 when it cannot judge, such as on an
+issue that already has a `Confirm` comment. `--json` prints the sort as JSON. It reads the parser
+out of `.claude/workflows/morning.js`, so it runs the code the morning runs, and needs no agent.
+The morning workflow's `confirmFile` argument is the full check, with an agent reading the issue;
+its verdict fails only on a number no questions comment yields.
+
+The rules it holds, which the morning applies:
+
+- The first sentence sets the range: the questions named on the draft's first line, up to its
+  first full stop (`Confirm Q1 to Q57.`, `Q1-Q3`, `Q58`), are the ones it confirms; a question named
+  after that stop is not, and a bare `Confirm` confirms only its own override lines.
+- An override is a line `Q<n>: <answer>`; the last one for a question wins, and it confirms that
+  question even when the first sentence does not name it.
+- An override opening "no" applies nothing: the question is recorded as answered no, and nothing is
+  done for it. One opening "open" leaves it open.
 
 ## Gates
 
