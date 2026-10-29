@@ -3,6 +3,7 @@
 - **Status:** Accepted. **Amended 2026-10-20 by
   [ADR-0024](0024-session-gate-in-process-and-refresh-lease-across-tasks.md): decision 1's
   refresh design gains a cross-task refresh lease beside the in-process session gate.**
+  See #332's decision D1 (2026-10-23) and #339 for Cognito's refresh-rotation grace window.
 - **Date:** 2026-10-16
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/03-workstreams-and-tasks.md` → task I-6 ("fold the G0 findings into the
