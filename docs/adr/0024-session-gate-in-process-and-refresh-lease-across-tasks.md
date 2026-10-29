@@ -3,6 +3,12 @@
 - **Status:** Accepted. **Amended 2026-10-24 by change request P2-3's amendment to item 3:**
   decision 4's margin is `2 × StoreDeadline + 1 s`, so "10 s + 5 s today" is 10 s + 11 s, and
   the margin covers taking the lease as well as the versioned write and clock skew.
+  **Amended 2026-10-29 by change request P2-3's second amendment, the budget end to end
+  (#445):** the figures stay; the lease covers the acquire and the re-read together within one
+  `StoreDeadline`, the provider call, the versioned write and skew, so a refresh admitted
+  before the host stops writes within 20 s of its acquire's send; a loser's wait is not bounded
+  by `ShutdownTimeout`; and no provider refresh is admitted once `ApplicationStopping` is
+  observed, pending the workstream 3 ticket that builds it.
 - **Date:** 2026-10-20
 - **Deciders:** integrator, on Adam's answers to
   https://github.com/adammedford/spa-platform/issues/218 (wayfinder map #215)
