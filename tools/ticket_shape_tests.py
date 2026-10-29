@@ -842,6 +842,18 @@ class ProseWords(unittest.TestCase):
             with self.subTest(box):
                 self.assertEqual(box_says(box), [])
 
+    def test_each_join_says_nothing(self):
+        # One box per join the rule names, so each half of JOINED_BEFORE and JOINED_AFTER has an
+        # input that fails without it: a dot before, a dot after and a slash after had none.
+        for box in ("Review full-landing subjects",       # a hyphen before
+                    "Review the landing-day notes",       # a hyphen after
+                    "Review docs/landing notes",          # a slash before
+                    "Review the landing/merge split",     # a slash after
+                    "Read the state.deployed flag",       # a dot before
+                    "Review landing.md's table"):         # a dot after
+            with self.subTest(box):
+                self.assertEqual(box_says(box), [])
+
     def test_458s_358s_and_361s_boxes_still_fail_on_their_prose_word(self):
         # The other three misfires use their word as prose, which no reading of hyphens, dots,
         # slashes and code spans reaches: each still fails, naming that word, and its escape stays
