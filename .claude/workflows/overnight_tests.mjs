@@ -121,7 +121,10 @@ const logs = []            // {at, text}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const clock = setInterval(() => { tick++ }, 1)
 
-globalThis.args = fixture.args
+// The run launches with a skills directory other than the script's default (#501), so every skill path a prompt names
+// must come from the launch, not from one machine's home.
+const OTHER_SKILLS = '/opt/companion/agent-skills'
+globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
 globalThis.phase = () => {}
 globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
@@ -816,6 +819,25 @@ const LOG = `${fixture.args.repo}/.scratch/overnight/log`
     if (c.prompt.includes(`- subject "Merge task ${id}: `)) fail(`#388: the ${c.label} prompt still writes "Merge task ${id}" from the lane's completeness`)
     if (!c.prompt.includes('naming each open part ticket')) fail(`#388: the ${c.label} prompt does not name the open part tickets on a part merge's Outstanding line`)
   }
+}
+
+// 21. The skills directory is a launch argument (#501). The run above launched with OTHER_SKILLS: every SKILL.md path
+//     a prompt names lies under it, and no prompt names one under a home directory. A launch whose skills is not an
+//     absolute path halts naming the argument, and no hint of that halt names a home directory. Outside comments, the
+//     one /Users/<name> path the script holds is SKILLS_DEFAULT, the documented default of the skills argument.
+{
+  const named = allPrompts.flatMap((c) => [...c.prompt.matchAll(/(\/\S*?)\/[\w-]+\/SKILL\.md/g)].map((m) => ({ label: c.label, dir: m[1] })))
+  if (!named.some((x) => x.dir === OTHER_SKILLS)) fail(`#501: no prompt names a SKILL.md under the launch's skills directory ${OTHER_SKILLS}`)
+  for (const k of new Set(named.filter((x) => x.dir !== OTHER_SKILLS).map((x) => `${x.label} prompt reads a skill from ${x.dir}`))) fail(`#501: the ${k}, not the launch's ${OTHER_SKILLS}`)
+  for (const c of allPrompts) if (/\/Users\/[^/\s]+\/\.agents\b/.test(c.prompt)) fail(`#501: the ${c.label} prompt names a home directory's .agents path`)
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  globalThis.args = { ...fixture.args, repo: 'spa-platform', wt: 'worktrees', skills: 'agent-skills' }
+  const halted = await new Function('return (async () => {' + src + '\n})()')()
+  const why = (halted && halted.halted) || ''
+  if (!/^- skills: /m.test(why)) fail(`#501: a launch with a relative skills path did not halt naming skills: ${why || JSON.stringify(halted)}`)
+  if (/\/Users\//.test(why)) fail(`#501: a bad launch's hints name a home directory: ${why}`)
+  const homes = src.split('\n').map((line, i) => ({ line, n: i + 1 })).filter((x) => x.line.includes('/Users/') && !/^\s*\/\//.test(x.line) && !/^const SKILLS_DEFAULT = '\/Users\/[^']+'/.test(x.line))
+  for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
 if (failures.length) {
