@@ -38,6 +38,16 @@
 #   demoted   The needs-triage tickets whose ready-for-agent label was removed in the last 24 hours,
 #             each a skip candidate: the ticket-shape check demotes a ticket a lane's edit flips
 #             (#358, #361), and a demotion the launch plan did not see sends Route at it.
+#   claims    Each ticket of the forecast with an open box (openBoxes above 0) held by a local
+#             `task/<id>-` branch whose <id> a `Merge part of task <id>` subject in origin/main's
+#             history names, with the rename that frees it: git branch -m <branch> hold/<id>-<tip>,
+#             the tip's sha cut to 7 (#484). Collect reads any such branch as the ticket's claim,
+#             and a part-landed ticket's merged branch stays, because the integration rewrites lane
+#             commits and so `git merge-base --is-ancestor` never shows it merged: its open boxes
+#             would never get a lane. A held ticket is the human's to free, so the line names each
+#             and passes, as demoted does; it fails only when it cannot judge, which is when the
+#             forecast failed, since the open boxes come from collect's answer. A branch on origin
+#             alone is not listed: the rename moves a local one.
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
@@ -320,6 +330,43 @@ print(len(numbers))
     : > "$scratch/candidates"
     row fail demoted "the needs-triage timelines could not be read as label events"
   fi
+fi
+
+# --- claims -----------------------------------------------------------------------------------------
+# The local task branches with their tips, and origin/main's subjects, judged against collect's answer
+# in python so the matching is under test. An id is compared whole, so issue-1 is not issue-10.
+if ! $forecast_ok; then
+  row fail claims "the forecast failed, so no ticket's open boxes are known and no claim was judged"
+elif ! g for-each-ref --format='%(refname:short) %(objectname)' refs/heads/task/ > "$scratch/task-branches" 2>/dev/null ||
+     ! g log --format=%s refs/remotes/origin/main > "$scratch/subjects" 2>/dev/null; then
+  row fail claims "git could not list the local task branches or origin/main's subjects, so no claim was judged"
+elif held="$(python3 -I -c '
+import json, re, sys
+collect, branches, subjects, repo = sys.argv[1:]
+merged = set()
+for subject in open(subjects):
+    match = re.match(r"Merge part of task ([^\s:]+)", subject)
+    if match:
+        merged.add(match.group(1))
+tips = [line.split() for line in open(branches) if line.strip()]
+held = []
+for ticket in sorted(json.load(open(collect))["tickets"], key=lambda t: t["issue"]):
+    tid, number, boxes = ticket["id"], ticket["issue"], ticket["openBoxes"]
+    if boxes <= 0 or tid not in merged:
+        continue
+    for name, sha in tips:
+        if name.startswith(f"task/{tid}-"):
+            held.append(f"{tid} (#{number}, {boxes} open boxes): "
+                        f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
+print("; ".join(held))
+' "$scratch/collect.json" "$scratch/task-branches" "$scratch/subjects" "$repo" 2>/dev/null)"; then
+  if [ -z "$held" ]; then
+    row pass claims "no ticket with an open box is held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names"
+  else
+    row pass claims "these tickets have open boxes and are held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names, so collect reads them as claimed; free each by renaming its branch: $held"
+  fi
+else
+  row fail claims "collect's answer could not be read for open boxes, so no claim was judged"
 fi
 [ -f "$scratch/candidates" ] || : > "$scratch/candidates"
 

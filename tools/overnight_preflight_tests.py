@@ -75,7 +75,7 @@ DATE = "2026-10-26"
 TOOLS = ("git", "ps", "tar", "mktemp", "mkdir", "rm")
 
 # The lines, by name, in the order the ticket gives them.
-LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted"]
+LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims"]
 
 LIST_TRIAGE = ["issue", "list", "--state", "open", "--label", "needs-triage", "--limit", "500",
                "--json", "number"]
@@ -85,8 +85,8 @@ def timeline_call(number: int) -> list[str]:
     return ["api", "--paginate", "--slurp", f"repos/{{owner}}/{{repo}}/issues/{number}/timeline?per_page=100"]
 
 
-def ticket(id: str, issue: int, owner: str, status: str) -> dict:
-    return {"id": id, "issue": issue, "owner": owner, "status": status}
+def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2) -> dict:
+    return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes}
 
 
 # Collect's answer in the default case: three ready-for-agent tickets under two owners, one blocked
@@ -351,7 +351,7 @@ class CleanStartTests(PreflightTestCase):
         result = case.run()
         self.assertOrder(result)
         self.assertOnlyFails(result)
-        self.assertEqual(9, len(result.lines), result.stdout)
+        self.assertEqual(10, len(result.lines), result.stdout)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
         self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": []},
@@ -381,6 +381,9 @@ class CleanStartTests(PreflightTestCase):
                          result.row("forecast"))
         self.assertEqual(("pass", "0 needs-triage tickets; none lost ready-for-agent in the last 24 hours"),
                          result.row("demoted"))
+        self.assertEqual(("pass", "no ticket with an open box is held by a local task branch whose id a "
+                                  "`Merge part of task <id>` subject on origin/main names"),
+                         result.row("claims"))
 
     def test_the_forecast_runs_origins_collect_from_outside_the_checkout_against_it(self):
         case = Case(self)
@@ -563,7 +566,7 @@ class ForecastTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: #56 and #180 share 1.4",
                     collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims")
         self.assertEqual("origin/main's overnight_collect.py --repo exited 1: overnight_collect: no "
                          "tickets printed: #56 and #180 share 1.4", result.row("forecast")[1])
         self.assertNotIn("maxParallel", result.arguments())
@@ -575,7 +578,7 @@ class ForecastTests(PreflightTestCase):
         case.git("push", "-q", "origin", "main", cwd=case.pusher)
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims")
         self.assertEqual("origin/main has no tools/overnight_collect.py", result.row("forecast")[1])
 
     def test_max_parallel_is_the_owners_with_ready_tickets_and_at_least_one(self):
@@ -642,13 +645,100 @@ class DemotedTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
         result = case.run()
-        self.assertOnlyFails(result, "forecast")
+        self.assertOnlyFails(result, "forecast", "claims")
         self.assertEqual(["issue-358"], result.arguments()["skip"])
+
+
+class ClaimsTests(PreflightTestCase):
+    """#484: collect reads a local `task/<id>-` branch as the ticket's claim, and a part-landed
+    ticket's branch stays after its merge, which the integration rewrote, so its open boxes never get
+    a lane. The claims line names each such ticket with the rename that frees it."""
+
+    def part_merged(self, case: Case, *subjects: str):
+        """Commits on origin/main with the given subjects, and fast-forwards the checkout to it, so
+        the fetch line still passes."""
+        for subject in subjects:
+            case.git("commit", "-q", "--allow-empty", "-m", subject, cwd=case.pusher)
+            case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+
+    def test_a_ticket_with_open_boxes_held_by_a_part_merged_branch_is_listed_with_its_rename(self):
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        branch = "task/issue-10-preflight-claims"
+        case.git("branch", branch, cwd=case.checkout)
+        tip = case.git("rev-parse", branch, cwd=case.checkout)
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        self.assertEqual(
+            ("pass", "these tickets have open boxes and are held by a local task branch whose id a "
+                     "`Merge part of task <id>` subject on origin/main names, so collect reads them as "
+                     f"claimed; free each by renaming its branch: issue-10 (#10, 2 open boxes): "
+                     f"git -C {case.checkout} branch -m {branch} hold/issue-10-{tip[:7]}"),
+            result.row("claims"))
+        # The line names; it renames nothing, and adds no skip.
+        self.assertIn(branch, case.git("branch", "--list", "task/*", cwd=case.checkout))
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_each_held_ticket_is_listed_and_a_plan_row_id_matches_too(self):
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-12: one half", "Merge part of task 2.1: the other")
+        case.git("branch", "task/issue-12-a", cwd=case.checkout)
+        case.git("branch", "task/2.1-b", cwd=case.checkout)
+        evidence = case.run().row("claims")[1]
+        self.assertIn("2.1 (#11, 2 open boxes): git -C", evidence)
+        self.assertIn("issue-12 (#12, 2 open boxes): git -C", evidence)
+        self.assertIn("branch -m task/2.1-b hold/2.1-", evidence)
+
+    def test_a_ticket_without_the_subject_or_without_an_open_box_is_not_listed(self):
+        cases = {
+            # The branch is a claim, but no part of its task merged: a lane in flight, or abandoned.
+            "no subject": ([ticket("issue-10", 10, "integrator", "claimed")],
+                           "Merge the review records", "task/issue-10-x"),
+            # The subject names another id that shares the branch's prefix.
+            "another id": ([ticket("issue-10", 10, "integrator", "claimed")],
+                           "Merge part of task issue-1: something else", "task/issue-10-x"),
+            "a longer id": ([ticket("issue-1", 1, "integrator", "claimed")],
+                            "Merge part of task issue-10: something else", "task/issue-1-x"),
+            # Every box ticked: close-in-morning, not a held ticket.
+            "no open box": ([ticket("issue-10", 10, "integrator", "close-in-morning", open_boxes=0)],
+                            "Merge part of task issue-10: the whole of it", "task/issue-10-x"),
+            # No checkbox at all, which collect gives as -1.
+            "no box at all": ([ticket("issue-10", 10, "integrator", "claimed", open_boxes=-1)],
+                              "Merge part of task issue-10: the whole of it", "task/issue-10-x"),
+        }
+        for name, (tickets, subject, branch) in cases.items():
+            with self.subTest(name):
+                case = Case(self, tickets=tickets)
+                self.part_merged(case, subject)
+                case.git("branch", branch, cwd=case.checkout)
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertTrue(result.row("claims")[1].startswith("no ticket with an open box"),
+                                result.row("claims"))
+
+    def test_a_branch_on_origin_alone_is_not_listed(self):
+        # git branch -m renames a local branch; a branch only on origin is not this checkout's to move.
+        case = Case(self)
+        self.part_merged(case, "Merge part of task issue-10: the first half")
+        case.git("push", "-q", "origin", "main:refs/heads/task/issue-10-x", cwd=case.pusher)
+        case.git("fetch", "-q", "origin", cwd=case.checkout)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertTrue(result.row("claims")[1].startswith("no ticket with an open box"))
+
+    def test_a_failed_forecast_fails_the_line_for_want_of_the_open_boxes(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertOnlyFails(result, "forecast", "claims")
+        self.assertEqual("the forecast failed, so no ticket's open boxes are known and no claim was judged",
+                         result.row("claims")[1])
 
 
 class WritesNothingTests(PreflightTestCase):
     def test_the_tool_writes_nothing_to_the_checkout_its_refs_or_the_tracker(self):
-        for setup in ("clean", "stale and dirty", "demoted"):
+        for setup in ("clean", "stale and dirty", "demoted", "held"):
             with self.subTest(setup=setup):
                 case = Case(self)
                 if setup == "stale and dirty":
@@ -665,6 +755,11 @@ class WritesNothingTests(PreflightTestCase):
                     os.utime(collect, (moved, moved))
                 if setup == "demoted":
                     case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
+                if setup == "held":
+                    case.git("commit", "-q", "--allow-empty", "-m", "Merge part of task issue-10: half",
+                             cwd=case.pusher)
+                    case.git("push", "-q", "origin", "main", cwd=case.pusher)
+                    case.git("branch", "task/issue-10-x", cwd=case.checkout)
                 before = case.snapshot()
                 result = case.run()
                 self.assertEqual(before, case.snapshot(), result.stdout)
