@@ -216,6 +216,17 @@ async function execute() {
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
   return await new Function('return (async () => {' + src + '\n})()')()
 }
+// The script's meta, evaluated alone, as the Workflow tool reads it before any run.
+const loadMeta = () => {
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  const m = /^export const meta = ([\s\S]*?\n})\n/m.exec(src)
+  return m ? new Function(`return (${m[1]})`)() : null
+}
+// What whenToUse lacks of the working launch (#522): scriptPath, the script's path, and the three
+// required arguments, each a whole word. Empty when it names them all.
+const LAUNCH_WORDS = ['scriptPath', '.claude/workflows/review-queue.js', 'repo', 'date', 'wt']
+const launchGaps = (whenToUse) => LAUNCH_WORDS.filter((w) =>
+  !new RegExp(`(^|[^\\w.])${w.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?![\\w])`).test(whenToUse || ''))
 
 const failures = []
 const fail = (msg) => failures.push(msg)
@@ -1233,6 +1244,24 @@ try {
     if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
+
+  // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a
+  // session's snapshot with no arguments and halts as a bad launch. whenToUse names the working one:
+  // by scriptPath, with the required repo, date and wt. The check is held to itself: a whenToUse with
+  // any one of those words taken out is reported as lacking it.
+  checks++
+  {
+    const meta = loadMeta()
+    if (!meta) fail('meta could not be read from the script')
+    else {
+      const gaps = launchGaps(meta.whenToUse)
+      if (gaps.length) fail(`meta.whenToUse does not name ${gaps.join(', ')} of the scriptPath launch`)
+      for (const w of LAUNCH_WORDS) {
+        const cut = String(meta.whenToUse || '').split(w).join('')
+        if (!launchGaps(cut).includes(w)) fail(`the whenToUse check misses a whenToUse with ${w} taken out`)
+      }
+    }
   }
 } catch (e) {
   console.error(`review-queue tests: the script did not run: ${e && e.stack ? e.stack : e}`)

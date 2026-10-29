@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-queue',
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
-  whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them',
+  whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
     { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
