@@ -163,6 +163,20 @@ def record_comment(head: str, verdict: str, url: str = RECORD_URL, association: 
 
 CLEARS = [record_comment(HEAD, "merge")]
 
+# The table .claude/workflows/review-queue.js ends a record's findings with when the review carries
+# a finding rather than holding on it (docs/agents/review.md -> "Landing or holding"), written out
+# here in its shape rather than read from the reader, which is under test.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+
+
+def carrying(head: str, verdict: str, *findings: str) -> dict:
+    """A record comment whose findings end in a `## Follow-ups` table with one row per finding."""
+    entry = record_comment(head, verdict)
+    rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+    entry["body"] += "\n".join(["", "## Follow-ups", "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- |",
+                                *rows, ""])
+    return entry
+
 # Every standard error a case saw, for the closing completeness case.
 OBSERVED: list[str] = []
 
@@ -823,6 +837,73 @@ class ReviewRecordRefusalTests(LandTestCase):
         self.assertRefused(case, result, f"could not read the review records of #{PR}",
                            READS_HEAD + [LIST_COMMENTS])
         self.assertIn("HTTP 502", result.stderr)
+
+
+class FollowUpsTests(LandTestCase):
+    """A clearing record whose comment carries a `## Follow-ups` row owes the merge body an
+    `Outstanding:` line (#521): docs/agents/review.md -> "Landing or holding" records a carried
+    finding there. land.sh reads the rows with the reader's --follow-ups and refuses, before the
+    merge, a body with no such line, naming each row. A record with no table, and a landing made
+    with --unreviewed, are not checked. The merges here fail on purpose at gh, as MergeCallTests'
+    do, which is what shows the check let them through."""
+
+    FINDING = "AppDefinitionValidationTests cannot fail on an empty host"
+    OTHER_FINDING = "TraceTests reads the span name from the test's own string"
+    WITHOUT = "Verified by tools/land_tests.py.\n\nOutstanding test ids: none"
+    WITH = "Verified by tools/land_tests.py.\n\nOutstanding: the two carried findings, filed tomorrow"
+
+    def assertMerged(self, case: Case, result: Result, body: str, before: list[list[str]] = READS_RECORDS):
+        self.assertEqual(1, result.status, result.stderr)
+        self.assertIn("the merge fails on purpose", result.stderr)
+        self.assertEqual(before + [MERGE + ["--subject", "Merge task 9.9: x", "--body", body]],
+                         case.calls())
+        self.assertEqual([], result.land_lines())
+        self.assertNoStrayCall(case)
+
+    def test_a_body_with_no_outstanding_line_is_refused_naming_each_row(self):
+        for written in (self.WITHOUT, None):
+            with self.subTest(body=written):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, self.OTHER_FINDING)])
+                args = [PR, "--subject", "Merge task 9.9: x"]
+                if written is not None:
+                    (case.work / "body.md").write_bytes(written.encode())
+                    args += ["--body-file", "body.md"]
+                result = case.run(*args)
+                self.assertRefused(case, result, "has no Outstanding: line", READS_RECORDS)
+                line = next(line for line in result.land_lines() if "has no Outstanding: line" in line)
+                self.assertIn(self.FINDING, line)
+                self.assertIn(self.OTHER_FINDING, line)
+
+    def test_a_body_with_an_outstanding_line_merges(self):
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+        (case.work / "body.md").write_bytes(self.WITH.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}")
+
+    def test_the_line_is_read_wherever_it_stands_in_the_body(self):
+        # Indented, or first, or last with no newline after it: a line is a line.
+        for written in ("  Outstanding: one finding\nThe rest.", "Outstanding: one\n", "Why.\nOutstanding: x"):
+            with self.subTest(body=written):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+                (case.work / "body.md").write_bytes(written.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                self.assertMerged(case, result, f"{written.rstrip(chr(10))}\n\n{REVIEWED}")
+
+    def test_a_record_with_no_table_merges_without_the_line(self):
+        for comments in (CLEARS, [carrying(HEAD, "merge")]):
+            with self.subTest(table="empty" if comments is not CLEARS else "none"):
+                case = Case(self, comments=comments)
+                (case.work / "body.md").write_bytes(self.WITHOUT.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                self.assertMerged(case, result, f"{self.WITHOUT}\n\n{REVIEWED}")
+
+    def test_an_unreviewed_landing_is_not_checked(self):
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+        (case.work / "body.md").write_bytes(self.WITHOUT.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md",
+                          "--unreviewed", "main is red and cannot wait")
+        self.assertMerged(case, result, f"{self.WITHOUT}\n\nUnreviewed: main is red and cannot wait",
+                          before=READS_HEAD)
 
 
 class SilentExitTests(LandTestCase):
