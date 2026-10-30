@@ -384,6 +384,7 @@ the merge. A check holds a push or a merge to the rules; a gate is the ladder's 
 **Local check** — `tools/check.sh`: the checks a branch must pass on this machine, in one file that
 the pre-push hook, a person before a push and every overnight lane run as written. Its full mode,
 `--full`, adds the test suite, the smoke test and `terraform test`, which the hook leaves to CI, and
+the test companion of each script with one in `tools/` or `.github/` that the change touches; it
 ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themselves.
 
 **Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
