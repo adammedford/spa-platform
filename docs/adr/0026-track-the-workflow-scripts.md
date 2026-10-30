@@ -31,8 +31,8 @@ mask a stray import or export and subsequent syntax errors on Node 22. The check
 
 1. **The workflow scripts are tracked, and nothing else in the folder.** `.gitignore` un-ignores
    `.claude/workflows/`, ignores its contents again, and un-ignores `*.js` there alone. The mock
-   harness (`overnight_harness.mjs`) and its fixture stay ignored until #213 tracks the harness as
-   the script's test companion. The first commit carries the live file's bytes at
+   harness (`overnight_harness.mjs`) and its fixture stay ignored until #133's follow-up tracks the
+   harness as the script's test companion. The first commit carries the live file's bytes at
    commit time, post-run edits included, with no older version reconstructed into history (Q1 as
    confirmed, Q2, Q3).
 2. **A workflow script is integrator code.** No `OWNERSHIP.md` line: `.claude/workflows/` is the
@@ -76,10 +76,10 @@ mask a stray import or export and subsequent syntax errors on Node 22. The check
 - The landing closes #103, #104, #106 and #108 (Q13); #100 and #109 keep a box only a run's
   evidence can tick.
 - The skills under `~/.agents/skills` and `.claude/skills/`, and the mock harness, stay outside
-  review until #213 (Q11).
+  review until #133's follow-up (Q11).
 
 ## Evidence
 
-`.gitignore`, the `.claude` block. The collect step of `.claude/workflows/overnight.js` ("no
-tracked file may differ"). The node parse results and the fast-forward probe in #135's grilling
-record.
+`.gitignore`, the `.claude` block. The collect step of `.claude/workflows/overnight.js` ("sits at
+origin/main with no tracked change"). The node parse results and the fast-forward probe in #135's
+grilling record.
