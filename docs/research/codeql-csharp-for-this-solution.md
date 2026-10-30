@@ -59,7 +59,7 @@
   `Build and test`, `Terraform` and `Documents` (all `app_id` 15368, GitHub Actions), `strict: false`.
   `enforce_admins` is off.
 - `gh api .../rulesets` returned `[]`, so no ruleset exists, and in particular no "Require code
-  scanning results" rule. (`gh` also printed an `admin:repo_hook` scope warning for that call.)
+  scanning results" rule. Run alone, it exits 0.
 - The workflows are `.github/workflows/ci.yml` and `ticket-shape.yml`. `ci.yml` has the jobs
   `Documents`, `Scripts under bash 3.2`, `Build and test` (with
   `if: ${{ !cancelled() && needs.documents.outputs.build != 'false' }}`) and `Terraform`. The
@@ -270,7 +270,7 @@ no `warning` or `error`. Examples: `CA1859`, `CA1873`, `CA1861`, `SYSLIB1045`, `
 `xUnit2032`. Most are in `tests/` and `fixtures/`, and nine `CA1873` and a few others are in `src/`.
 NuGet advisories (`NU1903`) appear in the build output, not in these logs, because they are not
 compiler diagnostics. URIs are absolute (`file:///Users/...`). Rules carry
-`id`, `shortDescription`, `helpUri`, and `fullDescription` on 294 of 371, but `help` on none.
+`id`, `shortDescription`, `helpUri`, and `fullDescription` on 294 of 371 in the Identity project's log, the one checked for it. No rule in that log has `help`.
 Gzipped together the 29 files are about 1.09 MB. I deleted them afterwards.
 
 **Why only notes:** `Directory.Build.props` sets `TreatWarningsAsErrors`, so any warning fails the
