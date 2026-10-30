@@ -25,8 +25,9 @@ The data is in [`analyzer-diagnostic-count/`](analyzer-diagnostic-count/):
   so the two runs reconcile. The IDE half is 332 shipping and 2,413 test.
 - **Security is unchanged: 17 findings, one in shipping code** (CA5394 in `Platform.Registry`). The
   other 16 are CA5399 (13), CA5359 (2) and CA5351 (1), all in the test tier.
-- **The five third-party packages at their shipped defaults (S2) add 1,931**: Meziantou 1,806,
-  Threading 94, AsyncFixer 69, Roslynator 2, BannedApi 0. **One Meziantou rule defaults to error**
+- **The five third-party packages at their shipped defaults (S2) report 1,971 of their own**:
+  Meziantou 1,806, Threading 94, AsyncFixer 69, Roslynator 2, BannedApi 0. The total rises by
+  1,931, because the IDE findings fall by 40 at the same time. **One Meziantou rule defaults to error**
   (MA0049, type name matches namespace, in `tests/Gateway.ArchitectureTests/ArchitectureTests.cs`),
   so adding the package breaks the build even with warnings-as-errors off.
 - **Every third-party rule at warning (S3) gives 18,038: 1,538 shipping, 16,500 test**, from 183
@@ -35,6 +36,7 @@ The data is in [`analyzer-diagnostic-count/`](analyzer-diagnostic-count/):
   blank caveat): 235 SDK CA rules, 84 IDE rules, 179 Meziantou, 177 Roslynator, 21 Threading, 3
   AsyncFixer. **90 of the 94 SDK security rules are among them**; only CA5394, CA5399, CA5359 and
   CA5351 fire.
+  No rule that fired in S1 or S2 is silent in S3, so the list holds for all three settings.
 - **Above fifty in one project: 85 (rule, project) pairs in S3, 5 of them in shipping code**, all in
   `Platform.Identity`: CA2007 86, MA0004 86, VSTHRD111 86, IDE0022 69, RCS1002 68. At S1 only two of
   them remain (CA2007, IDE0022). The other 80 are test tier: ramp candidates, or relaxation candidates.
