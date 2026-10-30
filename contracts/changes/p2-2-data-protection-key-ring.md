@@ -320,7 +320,13 @@ task role's grants and teardown's deletion of the ring prefix (decisions 12 and 
     takes the API's own `KeyId` pattern and length, `^[a-zA-Z0-9:/_-]{1,256}$`: that admits a key id, a
     key ARN, an alias and an alias ARN, and refuses an empty string, which the package would read as
     no key. No third key: the application name is derived (decision 4) and the tier is fixed
-    (decision 13).
+    (decision 13). **Landed 2026-10-30:** the section is in `contracts/platform-config.schema.json`
+    in the shape decisions 14 and 15 record (a closed object, no `required`, the two patterns, not in
+    the root's `required`), with G3's tag as the gate, on #343;
+    `tests/Contracts.Tests/PlatformConfigurationTests.cs` ->
+    `The_data_protection_section_is_closed_and_optional` holds it. Decision 16's cross-section
+    `if`/`then` is not in the schema: neither the `continuity` spec's deferred list (#332) nor #343
+    names it, and `AddPlatformHosting` keeps enforcing it.
 16. **`Session:Store = dynamodb` requires the section, and `AddPlatformHosting` enforces it (item
     2).** Hosting already owns the absent-section path (decision 5). With `Session:Store` set to
     `dynamodb`, that path fails the start instead, with a message naming both keys. Hosting reads
