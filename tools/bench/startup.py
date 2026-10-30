@@ -66,7 +66,10 @@ the precision window on the verdict line; the floor and the gap are reported onl
 regardless of load. A breach on a run whose floor control shows a loaded machine (the floor's
 /healthz max above `--floor-load-ms`, 1.2 s) is `bench: no verdict:`, exit 2, and exactly one re-run
 by the caller gives the verdict, both runs' files kept; the benchmark itself never retries. N other
-than 10 is refused. Without `--verdict` a run reports as before and exits 0.
+than 10 is refused. A run that stops before judging (docker failed, the probe failed, the `--json`
+file could not be written) is also `bench: no verdict:`, exit 2, after its traceback: it says nothing
+about the gateway, so it is neither a pass nor a breach, and a check never ends without its verdict
+line (CODING_STANDARDS.md). Without `--verdict` a run reports as before and exits 0.
 """
 
 from __future__ import annotations
@@ -87,6 +90,7 @@ import statistics
 import subprocess
 import sys
 import time
+import traceback
 from typing import Dict, List, NamedTuple, Optional
 
 MOTO_IMAGE = "motoserver/moto:5.2.4"   # the research's pin (#170)
@@ -738,7 +742,8 @@ def parse_args(argv: List[str]):
     parser.add_argument("--verdict", action="store_true",
                         help="end on `bench: pass:` or `bench: fail:` against the --budget values (ADR-0033): "
                              "the max of N=10 per budgeted gateway clock at or under its budget; non-zero exit on fail, "
-                             "and 2 with no verdict (a loaded floor, which one re-run settles)")
+                             "and 2 with no verdict (a loaded floor, or a run that stopped before judging; "
+                             "one re-run settles either)")
     parser.add_argument("--budget", type=parse_budget, action="append", default=[], metavar="CLOCK=SECONDS",
                         help="a clock's budget, repeatable; ADR-0033's local values are healthz=4 readyz=6 app_host=7")
     parser.add_argument("--floor-load-ms", type=float, default=1200,
@@ -793,7 +798,23 @@ def main(argv: List[str]) -> int:
     if options.command == "stand-in":
         serve_discovery()
         return 0
-    return run_bench(options)
+    if not options.verdict:
+        return run_bench(options)
+    try:
+        return run_bench(options)
+    except (Exception, SystemExit) as error:
+        # A run that stopped before judging (docker failed, the probe failed, the --json file could
+        # not be written) says nothing about the gateway: ADR-0033 counts a breach as a max over its
+        # budget or an unreached clock, and this is neither, so it is no verdict, exit 2, like a
+        # loaded floor, and the caller's one re-run settles a transient. Left to propagate, Python's
+        # exit 1 is `bench: fail:`'s code and the traceback is the last line, so a Docker hiccup
+        # would read as a breach and open the tuning trigger (CODING_STANDARDS.md, a check fails
+        # closed: it ends on its verdict line). The traceback still goes to stderr, for the cause.
+        traceback.print_exc()
+        reason = error.code if isinstance(error, SystemExit) else f"{type(error).__name__}: {error}"
+        print(f"bench: no verdict: the run stopped before judging: {' '.join(str(reason).split())[:600]}",
+              flush=True)
+        return 2
 
 
 if __name__ == "__main__":

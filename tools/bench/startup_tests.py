@@ -22,8 +22,9 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+ROOT =pathlib.Path(__file__).resolve().parent.parent.parent
 spec = importlib.util.spec_from_file_location("startup", ROOT / "tools" / "bench" / "startup.py")
 startup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(startup)
@@ -360,6 +361,35 @@ class VerdictMode(unittest.TestCase):
         self.assertEqual("pass", written["verdict"]["status"])
         self.assertEqual({"healthz": 4000.0}, written["facts"]["budgets_ms"])
         self.assertEqual(20, len(written["runs"]))
+
+    def test_a_run_that_stops_before_judging_is_no_verdict_not_fail(self):
+        # Docker failing mid-run says nothing about the gateway. Left to propagate, Python's exit 1
+        # is `bench: fail:`'s code with no verdict line (CODING_STANDARDS.md, a check fails closed).
+        import io
+        import contextlib
+
+        class Stopped:
+            def __init__(self, options):
+                pass
+
+            def images(self):
+                raise RuntimeError("docker inspect failed:\n  no daemon")
+
+            def down(self):
+                pass
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(startup, "Bench", Stopped), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = startup.main(["--verdict", "--budget", "healthz=4"])
+        lines = out.getvalue().rstrip("\n").splitlines()
+        self.assertEqual(2, code)
+        self.assertEqual("bench: no verdict: the run stopped before judging: RuntimeError: docker inspect failed: no daemon",
+                         lines[-1])
+        self.assertIn("RuntimeError: docker inspect failed", err.getvalue())   # the traceback still names the cause
+        # Without the verdict mode nothing changes: the error propagates as it always did.
+        with mock.patch.object(startup, "Bench", Stopped), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(RuntimeError):
+                startup.main([])
 
 
 if __name__ == "__main__":
