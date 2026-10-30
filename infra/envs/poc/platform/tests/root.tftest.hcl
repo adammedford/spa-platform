@@ -484,9 +484,14 @@ run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
   }
 }
 
-# The G6 values plan at this root: the store, the cell's own ring prefix and no key id (#332 D6).
-# The module's validation, which refuses dynamodb with no prefix, is held in its own suite; this run
-# holds that the root accepts the pair it documents in terraform.tfvars.example.
+# The G6 values plan at this root, and reach the cell: the store, the cell's own ring prefix and no
+# key id (#332 D6). The module's validation, which refuses dynamodb with no prefix, is held in its
+# own suite; this run holds that the root accepts the pair it documents in terraform.tfvars.example
+# and that the gateway's task environment carries it, read through the module's
+# continuity_environment output, which the run before this one cannot see.
+#
+# Mutations that turn this run red: the module call given session_store = "memory" or
+# data_protection_parameter_prefix = "" in place of the variable; either one dropped from the call.
 run "the_g6_continuity_inputs_plan_at_this_root" {
   command = plan
 
@@ -496,8 +501,13 @@ run "the_g6_continuity_inputs_plan_at_this_root" {
   }
 
   assert {
-    condition     = var.session_store == "dynamodb" && var.data_protection_parameter_prefix == "/spa-platform/${var.cell}/data-protection/"
-    error_message = "The G6 inputs are the DynamoDB store and this cell's ring prefix."
+    condition     = module.cell.continuity_environment["Session__Store"] == "dynamodb" && module.cell.continuity_environment["Session__TableName"] != null
+    error_message = "With session_store = \"dynamodb\" at the root, the gateway's task environment carries Session:Store dynamodb and a session table."
+  }
+
+  assert {
+    condition     = module.cell.continuity_environment["DataProtection__ParameterPrefix"] == "/spa-platform/poc/data-protection/" && module.cell.continuity_environment["DataProtection__KmsKeyId"] == null
+    error_message = "With the G6 prefix at the root, the gateway's task environment carries this cell's ring prefix and no key id."
   }
 }
 
