@@ -142,11 +142,22 @@ VIEW_HEAD = ["pr", "view", PR, "--json", "headRefOid", "--jq", ".headRefOid"]
 VIEW_BODY = ["pr", "view", PR, "--json", "body", "--jq", ".body"]
 LIST_COMMENTS = ["api", "repos/{owner}/{repo}/issues/" + PR + "/comments", "--paginate", "--slurp"]
 LIST_REVIEWS = ["api", "repos/{owner}/{repo}/pulls/" + PR + "/reviews", "--paginate", "--slurp"]
+# The issues that may hold a carried finding as a filed follow-up, asked for only when the clearing
+# record has a `## Follow-ups` row (#573): the listing .claude/workflows/morning.js takes for its
+# filedAs, with a --jq that keeps the issues whose body has a `**Raised by:**` line naming #<pr>
+# and prints each one's title. Written out here, as the calls above are, so a change to what gh is
+# asked is a test edit; the double answers it from the case's `filed` fixture, so the filter's
+# own reading of a body is not run here.
+FILED_JQ = ('.[] | select(any(.body | split("\\n")[]; startswith("**Raised by:**") and test("#'
+            + PR + '([^0-9]|$)"))) | .title')
+LIST_FILED = ["issue", "list", "--state", "all", "--limit", "500", "--search",
+              f"Raised by #{PR} in:body", "--json", "number,title,body", "--jq", FILED_JQ]
 # What land.sh asks gh before it reads the review records, and with them, in order. A description
 # with Closes lines adds, between the two, the decision reader's calls for each ticket (#530):
 # get_issue(n), then list_issue_comments(n) for a change request.
 READS_HEAD = [VIEW_STATE, VIEW_BASE, VIEW_HEAD, VIEW_BODY]
 READS_RECORDS = READS_HEAD + [LIST_COMMENTS, LIST_REVIEWS]
+READS_FILED = READS_RECORDS + [LIST_FILED]
 
 
 def get_issue(n: int) -> list[str]:
@@ -234,6 +245,8 @@ GH_DOUBLE = """#!/bin/bash
 #
 #   gh pr view <number> --json <field> --jq <expression>     https://cli.github.com/manual/gh_pr_view
 #   gh api <endpoint> --paginate --slurp                     https://cli.github.com/manual/gh_api
+#   gh issue list --state all --limit 500 --search <query> --json <fields> --jq <expression>
+#                                                            https://cli.github.com/manual/gh_issue_list
 #   gh pr merge <number> --merge --match-head-commit <sha> [--subject <text>] --body <text>
 #                                                            https://cli.github.com/manual/gh_pr_merge
 #
@@ -245,8 +258,10 @@ base={base}
 heads={heads}
 comments={comments}
 reviews={reviews}
+filed={filed}
 view_fails={view_fails}
 api_fails={api_fails}
+list_fails={list_fails}
 server={server}
 during_merge={during_merge}
 description={description}
@@ -356,6 +371,15 @@ case "$1" in
       *) unexpected ;;
     esac
     exit 0 ;;
+  # The follow-ups listing (#573): the search names this pull request, and the answer is what the
+  # --jq would print, one title a line, from the case's fixture. The jq expression itself is the
+  # case's to assert from the recorded call, as the merge body's bytes are.
+  issue)
+    [ "$#" -eq 12 ] && [ "$2" = list ] && [ "$7" = --search ] && [ "${{11}}" = --jq ] || unexpected
+    case "$8" in *"#$pr "*) ;; *) unexpected ;; esac
+    if [ -n "$list_fails" ]; then printf '%s\\n' "$list_fails" >&2; exit 1; fi
+    /bin/cat -- "$filed"
+    exit 0 ;;
   *) unexpected ;;
 esac
 """
@@ -429,7 +453,8 @@ class Case:
 
     def __init__(self, test: unittest.TestCase, *, state: str = "OPEN", base: str = "main",
                  heads: tuple[str, ...] = (HEAD,), comments: list | None = None,
-                 reviews: list | None = None, view_fails: str = "", api_fails: str = "",
+                 reviews: list | None = None, filed: list[str] | None = None,
+                 view_fails: str = "", api_fails: str = "", list_fails: str = "",
                  description: str = "", issues: dict | None = None, gh: bool = True,
                  python3: bool = True):
         scratch = tempfile.TemporaryDirectory()
@@ -460,8 +485,8 @@ class Case:
             runner.link_tool(self.bin / tool, os.path.realpath(found))
         if gh:
             self.serve(state=state, base=base, heads=heads, comments=comments, reviews=reviews,
-                       view_fails=view_fails, api_fails=api_fails, description=description,
-                       issues=issues)
+                       filed=filed, view_fails=view_fails, api_fails=api_fails,
+                       list_fails=list_fails, description=description, issues=issues)
         if python3:
             self.write_python3(past_merge=False)
 
@@ -484,15 +509,18 @@ class Case:
         path.chmod(0o755)
 
     def serve(self, *, state: str = "OPEN", base: str = "main", heads: tuple[str, ...] = (HEAD,),
-              comments: list | None = None, reviews: list | None = None, view_fails: str = "",
-              api_fails: str = "", server: str = "", description: str = "",
+              comments: list | None = None, reviews: list | None = None,
+              filed: list[str] | None = None, view_fails: str = "", api_fails: str = "",
+              list_fails: str = "", server: str = "", description: str = "",
               issues: dict | None = None):
-        """Writes the gh double, the two listings, the description and the issues it answers from.
-        Given a `server`, a clone of origin, its merge goes through; without one the merge fails,
-        as every case outside PostMergeTests, ClosesTests and DecisionCitationTests needs. The
-        default description has no Closes line, so land.sh reads no commit of the head, which in
-        most cases git does not hold. `issues` maps an issue number to {"issue": <the issue>,
-        "comments": [<its comments>]}, for the tickets a Closes line names (#530)."""
+        """Writes the gh double, the two listings, the filed titles, the description and the issues
+        it answers from. Given a `server`, a clone of origin, its merge goes through; without one
+        the merge fails, as every case outside PostMergeTests, ClosesTests and DecisionCitationTests
+        needs. The default description has no Closes line, so land.sh reads no commit of the head,
+        which in most cases git does not hold. `filed` is each title the follow-ups listing's --jq
+        prints (#573), none by default; `list_fails` makes that listing fail with the text. `issues`
+        maps an issue number to {"issue": <the issue>, "comments": [<its comments>]}, for the
+        tickets a Closes line names (#530)."""
         # One page each, as `gh api --paginate --slurp` wraps them (`gh api --help`).
         listings = {"comments": CLEARS if comments is None else comments, "reviews": reviews or []}
         for name, entries in listings.items():
@@ -504,12 +532,15 @@ class Case:
             (issues_dir / f"{number}-comments.json").write_text(
                 json.dumps([fixture.get("comments", [])]))
         (self.dir / "description").write_bytes(f"{description}\n".encode())
+        (self.dir / "filed").write_text("".join(f"{title}\n" for title in filed or []))
         self.write_executable("gh", GH_DOUBLE.format(
             log=shlex.quote(str(self.log)), pr=shlex.quote(PR), state=shlex.quote(state),
             base=shlex.quote(base), heads=shlex.quote(" ".join(heads)),
             comments=shlex.quote(str(self.dir / "comments.json")),
             reviews=shlex.quote(str(self.dir / "reviews.json")),
+            filed=shlex.quote(str(self.dir / "filed")),
             view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails),
+            list_fails=shlex.quote(list_fails),
             server=shlex.quote(server), during_merge=shlex.quote(str(self.dir / "during-merge")),
             description=shlex.quote(str(self.dir / "description")),
             issues=shlex.quote(str(issues_dir))))
@@ -955,20 +986,95 @@ class FollowUpsTests(LandTestCase):
     finding there. land.sh reads the rows with the reader's --follow-ups and refuses, before the
     merge, a body with no such line, naming each row. A record with no table, and a landing made
     with --unreviewed, are not checked. The merges here fail on purpose at gh, as MergeCallTests'
-    do, which is what shows the check let them through."""
+    do, which is what shows the check let them through.
+
+    A row with the line still owes an issue (#573): the morning files a record's rows from open
+    pull requests only (#514), so before the merge land.sh lists the issues raised by the pull
+    request and names each row no issue answers, matched as morning.js's filedAs matches, the
+    finding as the title once lowercased and its whitespace collapsed. It warns and merges; a row
+    an issue answers, and a record with no row, print nothing, and a listing gh cannot make is
+    said and not held against the merge."""
 
     FINDING = "AppDefinitionValidationTests cannot fail on an empty host"
     OTHER_FINDING = "TraceTests reads the span name from the test's own string"
     WITHOUT = "Verified by tools/land_tests.py.\n\nOutstanding test ids: none"
     WITH = "Verified by tools/land_tests.py.\n\nOutstanding: the two carried findings, filed tomorrow"
+    UNFILED = "no issue has filed"
 
-    def assertMerged(self, case: Case, result: Result, body: str, before: list[list[str]] = READS_RECORDS):
+    def assertMerged(self, case: Case, result: Result, body: str, before: list[list[str]] = READS_RECORDS,
+                     lines: list[str] | None = None):
+        """The merge was asked for after exactly `before`, and the `land:` lines, each matched by
+        a fragment of `lines`, in order, were the only ones."""
         self.assertEqual(1, result.status, result.stderr)
         self.assertIn("the merge fails on purpose", result.stderr)
         self.assertEqual(before + [MERGE + ["--subject", "Merge task 9.9: x", "--body", body]],
                          case.calls())
-        self.assertEqual([], result.land_lines())
+        printed = result.land_lines()
+        self.assertEqual(len(lines or []), len(printed), result.stderr)
+        for fragment, line in zip(lines or [], printed):
+            self.assertIn(fragment, line)
         self.assertNoStrayCall(case)
+
+    def unfiled(self, finding: str) -> str:
+        """The warning's fragment naming one row, with the finding as the record wrote it."""
+        return f"{self.UNFILED}: {finding}."
+
+    def test_an_unfiled_row_is_named_and_the_merge_goes_on(self):
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+        (case.work / "body.md").write_bytes(self.WITH.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
+                          lines=[self.unfiled(self.FINDING)])
+        line = result.land_lines()[0]
+        # It says what the morning will not do once the merge is made, and how the row is filed.
+        self.assertIn("morning", line)
+        self.assertIn(f"#{PR} merges", line)
+        self.assertIn(f"**Raised by:** #{PR}", line)
+
+    def test_a_row_a_filed_issue_answers_names_nothing(self):
+        # The title is matched as morning.js's filedAs matches it: case and runs of whitespace are
+        # not differences. The listing already holds only the issues whose Raised-by line names the
+        # pull request, so a title alone answers a row here.
+        for title in (self.FINDING, self.FINDING.upper(), f"  {self.FINDING.replace(' ', '   ')} "):
+            with self.subTest(title=title):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)], filed=[title])
+                (case.work / "body.md").write_bytes(self.WITH.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED)
+
+    def test_only_the_rows_no_issue_answers_are_named(self):
+        # Two rows, one filed and one whose title differs by a word: one warning, one line.
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, self.OTHER_FINDING)],
+                    filed=[self.OTHER_FINDING, self.FINDING.replace("empty", "blank")])
+        (case.work / "body.md").write_bytes(self.WITH.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
+                          lines=[self.unfiled(self.FINDING)])
+
+    def test_a_listing_gh_cannot_make_is_said_and_the_merge_goes_on(self):
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)],
+                    list_fails="error connecting to api.github.com")
+        (case.work / "body.md").write_bytes(self.WITH.encode())
+        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
+                          lines=["could not list the issues"])
+        self.assertIn("error connecting to api.github.com", result.stderr)
+
+    def test_the_filter_keeps_the_issues_raised_by_the_pull_request(self):
+        # The filter gh is handed, run by jq over issues as `gh issue list --json` lists them: the
+        # body's Raised-by line names #5 and not #50, wherever it stands, and the title comes out
+        # as written. gh evaluates it with its own jq, which this stands in for. A machine with no
+        # jq fails here and is told so, rather than skipping: a skipped test reads as a pass in the
+        # check's verdict line (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        self.assertTrue(shutil.which("jq"), "jq is not on this machine, and this is the one test of the "
+                        "--jq filter land.sh hands gh; install jq (https://jqlang.org) and run again")
+        issues = [{"number": 1, "title": "  Filed As Written ", "body": "**Owner:** x\r\n**Raised by:** #5, record\r\n"},
+                  {"number": 2, "title": "Another pull request's", "body": "**Raised by:** #50"},
+                  {"number": 3, "title": "Named in prose", "body": "Raised by #5 in prose"},
+                  {"number": 4, "title": "Line last, no newline", "body": "text\n**Raised by:** #5"}]
+        printed = subprocess.run(["jq", "-r", FILED_JQ], input=json.dumps(issues), text=True,
+                                 capture_output=True, check=True).stdout
+        self.assertEqual("  Filed As Written \nLine last, no newline\n", printed)
 
     def test_a_body_with_no_outstanding_line_is_refused_naming_each_row(self):
         # A landing with no body file at all is refused before any gh call (#552), a case of
@@ -982,19 +1088,20 @@ class FollowUpsTests(LandTestCase):
         self.assertIn(self.OTHER_FINDING, line)
 
     def test_a_body_with_an_outstanding_line_merges(self):
-        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)], filed=[self.FINDING])
         (case.work / "body.md").write_bytes(self.WITH.encode())
         result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
-        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}")
+        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED)
 
     def test_the_line_is_read_wherever_it_stands_in_the_body(self):
         # Indented, or first, or last with no newline after it: a line is a line.
         for written in ("  Outstanding: one finding\nThe rest.", "Outstanding: one\n", "Why.\nOutstanding: x"):
             with self.subTest(body=written):
-                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)], filed=[self.FINDING])
                 (case.work / "body.md").write_bytes(written.encode())
                 result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
-                self.assertMerged(case, result, f"{written.rstrip(chr(10))}\n\n{REVIEWED}")
+                self.assertMerged(case, result, f"{written.rstrip(chr(10))}\n\n{REVIEWED}",
+                                  before=READS_FILED)
 
     def test_a_record_with_no_table_merges_without_the_line(self):
         for comments in (CLEARS, [carrying(HEAD, "merge")]):
