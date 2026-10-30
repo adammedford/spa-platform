@@ -1077,6 +1077,91 @@ class ADeletionLeavesItsRestoreCommandsInAFile(Case):
         self.assertEqual(before, self.tips())
 
 
+class OnlyLimitsADeletionToTheBranchesItNames(Case):
+    """`--delete --only <branch>...` deletes the named branches and no other (#574). A --delete
+    whose command line says nothing of what goes was refused by an auto-mode classifier on
+    2026-10-29 as a deletion of unverifiable scope, and the session fell back to `git branch -d`,
+    which writes no restore line. A named branch the listing keeps, or does not list, refuses the
+    whole run with the listing's reason, and nothing is deleted: the names are a claim about what
+    the listing marks, and one wrong name means the claim is wrong.
+    """
+
+    def test_only_deletes_the_named_branch_and_leaves_another_marked_one(self):
+        registry = self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/2.2-hosting", "hosting.txt")
+        self.land("Merge task 2.2: hosting", "task/2.2-hosting")
+        self.assertEqual({"delete"}, {verdict for verdict, _ in self.verdicts(self.prune()[1]).values()},
+                         "the premise: both branches are marked for deletion")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry")
+
+        self.assertEqual(0, code, err)
+        verdicts = self.verdicts(out)
+        self.assertEqual("deleted", verdicts[("task/2.1-registry", "local")][0], out)
+        self.assertEqual("deleted", verdicts[("task/2.1-registry", "origin")][0], out)
+        self.assertNotIn("task/2.1-registry", self.local())
+        self.assertNotIn("task/2.1-registry", self.remote())
+        self.assertIn("task/2.2-hosting", self.local())
+        self.assertIn("task/2.2-hosting", self.remote())
+        self.assertEqual([("local", "task/2.1-registry"), ("origin", "task/2.1-registry")],
+                         sorted(set(before) - set(self.tips())))
+        self.assertIn("prune_branches: deleted 2 and kept 2.", out)
+        self.assertIn("prune_branches: kept 2 because it is not named by --only; --verbose names each.",
+                      out)
+        lines = [f"git branch task/2.1-registry {registry}",
+                 f"git push origin {registry}:refs/heads/task/2.1-registry"]
+        self.assertEqual(lines, self.restore_lines(out))
+        files = self.restore_files()
+        self.assertEqual(1, len(files), out)
+        self.assertEqual("".join(f"{line}\n" for line in lines), files[0].read_text())
+
+    def test_only_naming_a_kept_branch_deletes_nothing_and_names_the_reason(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/3.1-scheme", "scheme.txt")
+        self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
+        before = self.tips()
+
+        # The marked branch is named too: one kept name refuses the whole run.
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry", "task/3.1-scheme")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/3.1-scheme is kept local: 3.1 is part-landed, so the branch is its claim",
+                      err)
+        self.assertIn("task/3.1-scheme is kept origin: 3.1 is part-landed, so the branch is its claim",
+                      err)
+        self.assertIn("nothing was deleted", err)
+        self.assertEqual({}, self.verdicts(out), "nothing is listed as deleted")
+        self.assertEqual(before, self.tips())
+        self.assertEqual([], self.restore_files())
+
+    def test_only_naming_a_branch_the_listing_lacks_deletes_nothing(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry", "task/9.9-gone")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/9.9-gone is not listed", err)
+        self.assertEqual(before, self.tips())
+        self.assertEqual([], self.restore_files())
+
+    def test_only_without_delete_is_an_argument_error(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+
+        code, out, err = self.prune("--only", "task/2.1-registry")
+
+        self.assertEqual(2, code, out)
+        self.assertEqual("", out)
+        self.assertIn("--only needs --delete", err)
+        self.assertIn("task/2.1-registry", self.local())
+        self.assertIn("task/2.1-registry", self.remote())
+
+
 class LandingCase(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
