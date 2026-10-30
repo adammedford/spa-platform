@@ -270,8 +270,9 @@ frozen export, and a spec is one feature's working statement.
 Phase 2 package table (I-4, 2.1, P2-1), and the unit the roadmap counts. Not a ticket: one row may be
 built by several. _Avoid_: bare "task" where a ticket could be meant.
 
-**Carrier** — the one ticket whose `Plan row` line names a row that several tickets build; its merge
-is the one that can name the row. _Avoid_: "the row's ticket", when the row has parts.
+**Carrier** — the one ticket whose `Plan row` line names a row that several tickets build. How its
+merge and the part tickets' merges name the row is #332 D7's rule. _Avoid_: "the row's ticket",
+when the row has parts.
 
 **Part ticket** — a ticket that builds part of a plan row it does not carry, and declares that in its
 `Plan row` line as `none (part of <row>...)`. _Avoid_: "sibling", "sub-ticket" (a sub-issue is
@@ -397,7 +398,7 @@ copy of its parts. _Avoid_: harness, suite, for these.
 **Harness** — one of two things, and never a script's tests. Either the gateway test harness, task
 6.1's in-process host of the composed gateway that the hermetic suites drive, or a G0 feasibility
 harness under `spikes/g0/`, which probes one mechanism and records its evidence ids. Say which when
-the sentence does not. _Avoid_: harness, for a test companion.
+the sentence does not. _Avoid_: harness, for a test companion or for the startup benchmark.
 
 **Test host** — a workstream's own cut-down gateway in its test project: the real stages it owns, in
 the contract's order, between stand-ins for the rest and a terminal, started on a stage host.
@@ -429,11 +430,36 @@ provider, an in-memory object store, the real mock API and an echo upstream.
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
 task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client.
 
+**Local (L)** — the test tier that runs a fresh container of the built gateway image under the
+task's limits, against stand-ins for the AWS services and the provider, on a workstation or a CI
+runner. It proves the method and the local budget, and never the platform's pull, placement or
+health checks. _Avoid_: local check, hermetic, for an L run.
+
+**Startup clock** — one named interval of a gateway cold start, from a stated zero to the first
+observation of a stated event, such as the first `/readyz` 200. Some clocks are budgeted and some
+are only reported. _Avoid_: timer, latency, for this.
+
+**Startup floor** — the time an empty application on the gateway's own image chain, under the
+task's limits, takes to start listening and to answer healthy, measured in the same run as the
+gateway. It is the least a gateway start could cost: a reference, never a budget. It exists only for
+the clocks the empty application has. _Avoid_: baseline, target, budget. "The minimum" is avoided as
+a name, as for Terraform floor.
+
+**Startup budget** — the most a gateway cold start may take to reach one startup clock, checked
+against the slowest start in a run. It is set per environment: a local budget never stands in for
+a deployed one. _Avoid_: floor, target, SLO.
+
+**Startup benchmark** — the repeatable timing of cold starts of the gateway against the startup
+floor, under the ECS task's CPU and memory, reported per startup clock. Its tests are its test
+companion. _Avoid_: "harness", "bench harness"; "benchmark" alone where a Fargate run and a local
+run need telling apart.
+
 **Test ids** — `F-` functional, `N-` negative security, `P-` infrastructure and architecture
-properties, `A-` architecture reference rules. A test id in a task names a behaviour: the owning
-workstream proves it in its own project, and workstream 6 proves it again in the composed suites.
-The ids in the frozen export are listed there; an id named after it continues its prefix's
-sequence and is listed in the test id register.
+properties, `A-` architecture reference rules, `B-` startup benchmark. A test id in a task names a
+behaviour: the owning workstream proves it in its own project, and workstream 6 proves it again in
+the composed suites, except `B-`, which the startup benchmark's verdict proves on its tier, never a
+test project. The ids in the frozen export are listed there; an id named after it continues its
+prefix's sequence and is listed in the test id register.
 
 **Test id register** — the live list of test ids named after the frozen export, each with its
 tier and the decision that named it, and the tiers of the export's rows that carry none, and the
