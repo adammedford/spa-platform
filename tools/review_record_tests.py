@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -509,6 +510,19 @@ class FollowUpsTests(ReaderTestCase):
     record's `## Follow-ups` table: its Finding cell, read as morning.js's followUpsOf reads it, so
     land.sh can refuse a merge body with no `Outstanding:` line that carries them (#521). Without the
     flag nothing changes, so what docs/agents/landing-work.md says the reader prints stays true."""
+
+    def test_the_header_is_the_one_review_queue_writes_and_morning_reads(self):
+        # The cases below prove the reader reads a table under FOLLOW_UP_HEAD; this one reads that
+        # header back from the script that writes the table and the one that files its rows. Were
+        # either renamed, the reader would find no table, land.sh's check would pass on every
+        # record, and every other case here would still be green: a guard reads the thing it
+        # guards (CODING_STANDARDS.md), and a check that reads nothing must not read as a pass.
+        for script in ("review-queue.js", "morning.js"):
+            with self.subTest(script=script):
+                source = (ROOT / ".claude" / "workflows" / script).read_text(encoding="utf-8")
+                found = re.search(r"^const FOLLOW_UP_HEAD = '([^']*)'$", source, re.MULTILINE)
+                self.assertIsNotNone(found, f"{script} no longer defines FOLLOW_UP_HEAD on one line")
+                self.assertEqual(FOLLOW_UP_HEAD, found.group(1))
 
     def test_each_row_follows_the_url(self):
         body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail", "An unread flag")
