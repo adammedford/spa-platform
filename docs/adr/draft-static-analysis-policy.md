@@ -108,8 +108,9 @@ config (#585, #589).
    - **Batch 4:** Reliability apart from the declined CA2007, and the residual Style findings.
 
    A firing third-party rule rides the batch of its category; MA0049, which fires once on a class
-   named like its namespace, is pending until `ArchitectureTests` is renamed, not declined. Batches
-   2 to 4 are filed when the batch before them is promoted. The ramp's state is the file: this
+   named like its namespace, is a Design rule and pending in batch 3, not declined: workstream 6's
+   rename of `ArchitectureTests` is one of batch 3's fix tickets. Each batch's promotion ticket is
+   filed with the first; batches 2 to 4's fix tickets are filed when the batch before is promoted. The ramp's state is the file: this
    record holds the policy and the declines, and no copy of the pending list.
 
 7. **The house style settles the opposing IDE pairs before day one.** Four `.editorconfig` options
@@ -295,13 +296,13 @@ config (#585, #589).
   2. **The style options** in `.editorconfig`.
   3. **The switch-on task:** the analysis properties and `SpaRelaxedTier` in `Directory.Build.props`;
      the root `.globalconfig` with its pending lines and declines; the relaxation section; the
-     local check's guards for the section and for suppressions; a probe of one per-id line against
-     a package's `global_level = -100` file; the CI runner's clean-build time before and after; and
+     local check's guards for the section and for suppressions; the CI runner's clean-build time before and after; and
      `AGENTS.md` → "Build and test", which says analyzers run in every build and how to read a
      diagnostic id.
   4. **The package lines:** `Directory.Packages.props`, the references in `Directory.Build.props`,
-     the pins inventory's `analyzers` family, the `docs/dependencies.md` rows, and pending lines for
-     the firing Meziantou and Threading rules.
+     the pins inventory's `analyzers` family, the `docs/dependencies.md` rows, pending lines for
+     the firing Meziantou and Threading rules, and a probe of one per-id line against a package's
+     `global_level = -100` file, the first point a package is in the build.
   5. **The banned lists:** the four `BannedSymbols.*.txt` files and their `AdditionalFiles`.
   6. **The `CodeQL` job** in `ci.yml` and the weekly rescan workflow.
   7. **A ready-for-human ticket** for Adam to switch default setup off and add `CodeQL` to main's
