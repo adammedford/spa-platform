@@ -1137,6 +1137,30 @@ class OnlyLimitsADeletionToTheBranchesItNames(Case):
         self.assertEqual(before, self.tips())
         self.assertEqual([], self.restore_files())
 
+    def test_only_naming_a_branch_with_one_copy_kept_deletes_neither_copy(self):
+        # Every copy of a named branch must be marked: a local commit made after the merge and not
+        # pushed keeps the local copy while origin's is marked, and naming the branch refuses the
+        # run rather than deleting origin's copy alone.
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/2.1-registry", "late.txt", push=False)
+        dry = self.verdicts(self.prune()[1])
+        self.assertEqual(("keep", "delete"), (dry[("task/2.1-registry", "local")][0],
+                                              dry[("task/2.1-registry", "origin")][0]),
+                         "the premise: the local copy is kept and origin's is marked")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/2.1-registry is kept local: ", err)
+        self.assertIn("1 commit on it has no equivalent on origin/main", err)
+        self.assertNotIn("task/2.1-registry is kept origin", err)
+        self.assertEqual({}, self.verdicts(out), "nothing is listed as deleted")
+        self.assertEqual(before, self.tips())
+        self.assertIn("task/2.1-registry", self.remote())
+        self.assertEqual([], self.restore_files())
+
     def test_only_naming_a_branch_the_listing_lacks_deletes_nothing(self):
         self.commit("task/2.1-registry", "registry.txt")
         self.land("Merge task 2.1: the registry", "task/2.1-registry")
