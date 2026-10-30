@@ -150,7 +150,9 @@ branch is deleted when the **task** is done, not when a pull request merges.
 
 In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
 box that asks for something in the merge body is met there, and the landing body cites those merges
-by sha rather than copying them.
+by sha rather than copying them. The morning drafts that landing body at
+`.scratch/overnight/log/morning-<date>/merge-body.md`: start from it, and add the commits since
+the head it names and the review record's carried findings as `Outstanding:` lines.
 
 **A task merge's message is changed by rebuilding the run branch.** A fix to what a ticket built
 goes on top as a commit of its own, but git changes a message only by rewriting its commit and every
