@@ -26,9 +26,10 @@
 #   4. The tag query in the selected Region. An ECS cluster, service or task definition whose
 #      describe says INACTIVE is dropped, and so is a task definition teardown.sh deleted
 #      (DELETE_IN_PROGRESS) or one ECS no longer knows; an EC2 id is dropped when EC2's describe does
-#      not know it, the cell's session table when DynamoDB's does not (#338), and the identity
-#      root's user pool when Cognito's does not (#466). Anything else listed stands: the key ring's
-#      parameters among them, which teardown.sh deletes first.
+#      not know it, a NAT gateway or a VPC endpoint also when EC2 says it is deleted (#347), the
+#      cell's session table when DynamoDB's does not know it (#338), and the identity root's user
+#      pool when Cognito's does not (#466). Anything else listed stands: the key ring's parameters
+#      among them, which teardown.sh deletes first.
 # A reader that finds something is asked again, every SPA_TEARDOWN_TAG_POLL seconds, until it finds
 # nothing or SPA_TEARDOWN_TAG_WAIT runs out: the tagging API can lag a deletion, so the query retries
 # for a few minutes first (docs/plan/05-infrastructure-and-cost.md, Teardown). A reader that has
@@ -184,6 +185,7 @@ read_role_names() {
 INACTIVE=0
 DELETED=0
 UNKNOWN=0
+EGRESS=0
 TABLES=0
 POOLS=0
 
@@ -223,6 +225,42 @@ ec2_describe() {
       ;;
     "$5") UNKNOWN=$((UNKNOWN + 1)) ;;
     *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
+  esac
+}
+
+# The two-task cell's NAT gateway and VPC endpoints (#347 Q8), which EC2 goes on describing after
+# their deletion, in the state "deleted", and only later not at all: so the describe reads the
+# state, and "deleted" is gone as the not-found code is. Any other state stands and is named,
+# "deleting" included, which the wait asks again (CODING_STANDARDS.md, "A check fails closed"). $1
+# the ARN, $2 the describe, $3 its id option, $4 the query, then the codes EC2 answers for an id it
+# does not know: the errors page lists two for a NAT gateway.
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeNatGateways.html
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_VpcEndpoint.html
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+ec2_state() {
+  local arn="$1" state code
+  aws_call ec2 "$2" "$3" "${arn##*/}" --query "$4"
+  shift 4
+  case "$OUTCOME" in
+    success)
+      state="$(printed)"
+      case "$state" in
+        # The API documents the endpoint's states capitalised and the CLI prints them in lower case,
+        # so both spellings count.
+        deleted | Deleted) EGRESS=$((EGRESS + 1)) ;;
+        "") stands "${arn} (EC2 answered no state)" ;;
+        *) stands "${arn} (EC2 says ${state})" ;;
+      esac
+      ;;
+    *)
+      for code in "$@"; do
+        if [ "$OUTCOME" = "$code" ]; then
+          EGRESS=$((EGRESS + 1))
+          return 0
+        fi
+      done
+      fail "describing $(redact "$arn"): ${OUTCOME}"
+      ;;
   esac
 }
 
@@ -284,6 +322,17 @@ judge() {
         'InternetGateways[].InternetGatewayId' InvalidInternetGatewayID.NotFound
       ;;
     ec2:route-table/*) ec2_describe "$arn" describe-route-tables --route-table-ids 'RouteTables[].RouteTableId' InvalidRouteTableID.NotFound ;;
+    # The two-task cell's egress (#347): the NAT gateway and the two gateway endpoints by state, and
+    # the NAT gateway's Elastic IP by allocation id, which a release makes unknown at once.
+    ec2:natgateway/*)
+      ec2_state "$arn" describe-nat-gateways --nat-gateway-ids 'NatGateways[].State' \
+        NatGatewayNotFound InvalidNatGatewayID.NotFound
+      ;;
+    ec2:vpc-endpoint/*)
+      ec2_state "$arn" describe-vpc-endpoints --vpc-endpoint-ids 'VpcEndpoints[].State' \
+        InvalidVpcEndpointId.NotFound InvalidVpcEndpoint.NotFound
+      ;;
+    ec2:elastic-ip/*) ec2_describe "$arn" describe-addresses --allocation-ids 'Addresses[].AllocationId' InvalidAllocationID.NotFound ;;
     # The cell's session table under session_store = "dynamodb" (#338), which goes with the platform
     # root. The index lags its deletion as it lags every other, so a table DescribeTable no longer
     # knows is dropped; one it still describes stands with its status, DELETING included, and is
@@ -321,6 +370,7 @@ read_tag_index() {
   INACTIVE=0
   DELETED=0
   UNKNOWN=0
+  EGRESS=0
   TABLES=0
   POOLS=0
   # --tag-filters matches a value exactly: no prefix, no wildcard (contracts/resource-tags.md).
@@ -336,6 +386,7 @@ read_tag_index() {
   [ "$INACTIVE" -eq 0 ] || dropped="${dropped}, ${INACTIVE} ECS records INACTIVE"
   [ "$DELETED" -eq 0 ] || dropped="${dropped}, ${DELETED} ECS records deleted"
   [ "$UNKNOWN" -eq 0 ] || dropped="${dropped}, ${UNKNOWN} EC2 ids describe does not know"
+  [ "$EGRESS" -eq 0 ] || dropped="${dropped}, ${EGRESS} NAT gateways or VPC endpoints EC2 says deleted or does not know"
   [ "$TABLES" -eq 0 ] || dropped="${dropped}, ${TABLES} DynamoDB tables DynamoDB does not know"
   [ "$POOLS" -eq 0 ] || dropped="${dropped}, ${POOLS} Cognito user pools Cognito does not know"
   SUMMARY="${count} listed, none standing${dropped:+:}${dropped#,}"

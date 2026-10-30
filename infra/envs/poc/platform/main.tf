@@ -113,4 +113,10 @@ module "cell" {
   issuers               = var.issuers
   allowed_host_suffixes = var.allowed_host_suffixes
   allowed_upstreams     = var.allowed_upstreams
+
+  # Continuity (#347 Q7). The durable store, the shared key ring and its key, each defaulting to
+  # Phase 1's value and set by the G6 sitting in terraform.tfvars (terraform.tfvars.example).
+  session_store                    = var.session_store
+  data_protection_parameter_prefix = var.data_protection_parameter_prefix
+  data_protection_kms_key_id       = var.data_protection_kms_key_id
 }

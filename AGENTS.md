@@ -54,7 +54,7 @@ dotnet test --solution SpaPlatform.slnx --ignore-exit-code 8   # every test proj
 dotnet test --project tests/Platform.Registry.Tests
 tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
 tools/check.sh                                  # the pre-push hook's checks, by hand
-tools/check.sh --full --port 5180               # and the tests, the smoke test and terraform test
+tools/check.sh --full --port 5180               # and the tests, the smoke test, terraform test and the touched scripts' test companions
 ```
 
 - **`tools/check.sh` is the local check.** The pre-push hook runs it, and every overnight lane runs

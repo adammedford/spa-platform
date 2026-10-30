@@ -114,7 +114,9 @@ public static class PlatformIdentityExtensions
         // the app's issuer (ADR-0017), one refresh at a time per session: under the session gate, and
         // across tasks under the refresh lease when one resolves (ADR-0024), which is the DynamoDB lease
         // above or a host's own. Under the memory store none resolves: one replica, where the gate is the
-        // whole refresh gate.
+        // whole refresh gate. The source also takes the host's IHostApplicationLifetime, which every host
+        // builder registers, and reads its ApplicationStopping at admission: once the host is stopping, no
+        // provider refresh starts on either path (change request P2-3's second amendment, decision 3).
         services.AddOpenIdConnectAccessTokenManagement(o => o.ChallengeScheme = Scheme.Parse(ProfileTokenEndpoints.SentinelScheme));
         Type endpointType = ProfileTokenEndpoints.RegisteredEndpointType(services);
         services.TryAddSingleton(sp => new ProfileTokenEndpoints(sp, endpointType));

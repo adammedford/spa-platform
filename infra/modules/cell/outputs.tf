@@ -88,3 +88,18 @@ output "gateway_image" {
   EOT
   value       = var.gateway_image
 }
+
+# --- Continuity (#347) -------------------------------------------------------------------------
+
+output "continuity_environment" {
+  description = <<-EOT
+    The continuity keys of the gateway's task environment, each null when the inputs leave it out:
+    Session:Store, Session:TableName and the DataProtection pair. Read from the environment the task
+    definition carries rather than echoed from the inputs, so the platform root's test sees what its
+    pass-through delivered, which a root test cannot read off the module's resources.
+  EOT
+  value = {
+    for key in ["Session__Store", "Session__TableName", "DataProtection__ParameterPrefix", "DataProtection__KmsKeyId"] :
+    key => lookup(local.platform_configuration, key, null)
+  }
+}

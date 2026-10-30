@@ -93,10 +93,10 @@ Session Manager session on the task can forward a port to the task's own address
 the gateway's port. That connection never leaves the task, so no security group sees
 it, and the gateway trusts the `X-Forwarded-For` and `X-Forwarded-Proto` it carries.
 A forward to 127.0.0.1 is not trusted, because the gateway clears the framework's
-loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Only operators
-hold that session, and they can already run commands in the task. Phase 1 accepts
-this (ticket 03, question 5); it closes when Phase 2 moves the task to private
-subnets (P2-4) and drops ECS Exec (P2-9), both in `docs/plan/06-phase-2-and-risks.md`.
+loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Phase 1 accepts
+this (ticket 03, question 5). The register's entry is `docs/gaps.md` → GAP-1, which
+holds who can reach it, the risk it leaves and what closes it; this section holds the
+module's part, the path through the subnets.
 
 ## The load balancer
 
@@ -127,11 +127,20 @@ needs credentials, a state bucket and the first-deployment order in
   only route out. ECS Exec is on and the root filesystem stays writable: those are two
   of the three conditions the Session Manager tunnel comes with, and the third is the
   four `ssmmessages` permissions below.
-- **The deployment.** One service, desired count 1, circuit breaker on with rollback.
-  Both images are variables with no default that names a tag: `deploy.sh` passes a
-  digest and every other apply passes the digest already in state, which is what keeps
-  a routine apply from moving a running image. `mock_api_image` defaults to absent, so
-  the service applies before task 5.3's image exists.
+- **The deployment.** One service, desired count 1, circuit breaker on with rollback,
+  minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
+  stops a task. Both images are variables with no default that names a tag:
+  `deploy.sh` passes a digest and every other apply passes the digest already in
+  state, which is what keeps a routine apply from moving a running image.
+  `mock_api_image` defaults to absent, so the service applies before task 5.3's image
+  exists.
+- **The shutdown** (#332 F1, #347). A roll stops a task in this order: the target
+  group's `deregistration_delay`, 30 s, drains it, then ECS sends SIGTERM, then after
+  the gateway container's `stopTimeout`, 30 s, SIGKILL. The gateway's own
+  `ShutdownTimeout` is 25 s (`Platform.Hosting`, #363). The drain covers the 21 s a
+  session refresh is bounded by, and `stopTimeout` covers `ShutdownTimeout`, so the
+  process ends its shutdown on its own terms; an `/api` call longer than the window can
+  be cut by a roll. `stopTimeout` is on the gateway container only.
 - **The task environment** is generated from `contracts/platform-config.schema.json`
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come

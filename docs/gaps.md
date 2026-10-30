@@ -96,6 +96,9 @@ refusal a test proves.
 - **Risk.** An S3 outage stops every app's assets, and a login storm reaches the provider unbounded.
 - **Found.** `docs/plan/01-plan.md` → "Threats", T16, and `docs/plan/06-phase-2-and-risks.md`,
   risk 10.
-- **Closes with.** Phase 2's caching and limits, which T16 and risk 10 name and no Phase 2 row yet
-  holds: the deferred-features table there leaves asset caching to hosting and rate limiting to the
-  request gate, with no trigger. GAP-6 and GAP-7 are the written-plan half.
+- **Closes with.** Phase 2's caching and limits, which T16 and risk 10 name and no Phase 2 row's
+  "What changes" column adds. The enterprise-gaps table in `docs/plan/06-phase-2-and-risks.md`
+  sends "every asset request reads S3" to P2-10, whose load test measures that cost and adds no
+  cache (GAP-5 is why the measurement has no pass mark yet). The cache and the limit themselves sit
+  only in the deferred-features table there, which leaves asset caching to hosting and rate limiting
+  to the request gate, with no trigger. GAP-6 and GAP-7 are the written-plan half.

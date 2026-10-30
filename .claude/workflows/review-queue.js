@@ -22,7 +22,7 @@ export const meta = {
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot:
 //   scriptPath: /Users/adammedford/Projects/spa-platform/.claude/workflows/review-queue.js
 //   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-22",
-//           "wt": "/Users/adammedford/.worktrees/review-queue-2026-10-22", "prs": [255] }
+//           "wt": "/Users/adammedford/.worktrees/review-queue-2026-10-22", "prs": [<pull request number>] }
 // Leave prs out to review the open queue: every open pull request into main (#86).
 // Arguments. Every required one is required because the script can derive none of them: it has no
 // clock, environment or filesystem.
@@ -136,7 +136,7 @@ const badArguments = (a) => {
   if (typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) bad.push('date: YYYY-MM-DD, which names the run\'s log directory')
   if (!abs(a.wt)) bad.push('wt: the root for throwaway worktrees, an absolute path outside repo')
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; no worktree is made under the repository')
-  if (a.prs !== undefined && (!Array.isArray(a.prs) || a.prs.length === 0 || !a.prs.every(count))) bad.push('prs: a non-empty array of pull request numbers, e.g. [255], or left out for every open pull request into main')
+  if (a.prs !== undefined && (!Array.isArray(a.prs) || a.prs.length === 0 || !a.prs.every(count))) bad.push('prs: a non-empty array of pull request numbers, e.g. [<pull request number>], or left out for every open pull request into main')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
   if (a.maxMutationsPerPr !== undefined && !count(a.maxMutationsPerPr)) bad.push('maxMutationsPerPr: a positive integer (default 3)')
   if (a.skipRecorded !== undefined && typeof a.skipRecorded !== 'boolean') bad.push('skipRecorded: true or false, a boolean (default true)')

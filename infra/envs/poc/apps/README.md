@@ -10,7 +10,7 @@ exactly three resources:
 | | Access and ID tokens 5 minutes; refresh token the registry's longest session (720 minutes, read from `contracts/registry.schema.json`) plus an hour | Refresh happens during a test run; a session never outlives its refresh token |
 | | Refresh rotation with a 60-second grace, Cognito's maximum (#332 D1), token revocation on, `ALLOW_REFRESH_TOKEN_AUTH` off | Rotation rules that flow out; a successor can recover a refresh whose holder died after rotation; logout revokes |
 | Managed-login branding style | Cognito's default values | Managed login serves a client only once it has a style |
-| `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/client-secret` | The client secret; later value changes ignored | A rotation (docs/plan/05 -> Rotating a client secret) is not undone by the next apply |
+| `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/client-secret` | The client secret; later value changes ignored; re-created when its client's id changes | A rotation (docs/plan/05 -> Rotating a client secret) is not undone by the next apply, and a replaced client does not leave its old secret in the parameter (#554) |
 
 Nothing else. Onboarding an app is copying its definition into `fixtures/apps/`; the plan then
 shows those three resources only (P-02). The identity and platform roots plan nothing.
@@ -124,3 +124,8 @@ client, branding style or parameter. It compares every argument `main.tf` sets o
 blocks with `existing_app_resources` in the test file, and the run before it holds the plan
 without the addition to the same map. That run also fails when `main.tf` sets an argument the map
 does not name, so a new argument is compared from the change that adds it.
+
+One run applies the fixtures, then applies them again with app1's client replaced, and holds
+every parameter to its client's secret: the mock gives the new client a new secret, and only the
+parameter's `replace_triggered_by` on the client's id lets it follow (#554). Deleting that line
+fails this run alone.

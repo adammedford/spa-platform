@@ -188,6 +188,24 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertEqual(["ecs wait services-stable", "wait"], order)
         self.assertIn("pass:", result.stdout)
 
+    def test_two_running_tasks_both_healthy_and_both_sampled_pass(self):
+        # The two-task cell (#347, P2-4): a roll under it leaves two running tasks of the applied
+        # deployment, each with its own healthy target, and the wait covers both by id. Nothing in
+        # deploy.sh counts tasks, which is what this case holds: the second task is one more target
+        # to find healthy and one more id to wait on, not a different shape.
+        world = seeded_world()
+        world["faults"]["extra_tasks"] = 1
+        case, result = self.deployed(world)
+        self.assertIn("pass:", result.stdout)
+        running = [task["id"] for task in case.load()["tasks"]]
+        self.assertEqual(2, len(running))
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertEqual(",".join(running), wait[wait.index("--instances") + 1])
+        world = case.load()
+        self.assertEqual(sorted([[cell.task_ip(task), "healthy"] for task in world["tasks"]]
+                                + [[cell.task_ip(cell.default_world()["tasks"][0]), "draining"]]),
+                         sorted([t["id"], t["state"]] for t in world["target_group"]["targets"]))
+
     def test_the_wait_takes_the_origin_given_with_url(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
         result = case.run(SCRIPT, "--url", "https://app2.spa-poc.test:9443")

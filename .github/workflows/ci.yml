@@ -15,9 +15,11 @@
 # for changes to its workflow, the classifier, tools/smoke.sh or tools/image-check.sh, or when the
 # base cannot be resolved.
 #
-# A job skipped that way still satisfies main's protection, which requires `Build and test` and
-# `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
-# skipped by an `on.paths` filter leaves the required check pending and the pull request stuck --
+# A job skipped that way still satisfies main's protection, which requires `Documents`, `Build and
+# test` and `Terraform` by name -- every check the protection listed as required when this sentence
+# was last written (#552; `gh api repos/adammedford/spa-platform/branches/main/protection` lists
+# them): GitHub reports a job skipped by its `if` as a success, where a workflow skipped by an
+# `on.paths` filter leaves the required check pending and the pull request stuck --
 # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
 # -- which is why the filter is an `if` on each job and not a `paths` on the workflow. Each `if`
 # says `!cancelled()` rather than the implied success(): if the documents job failed before it could
@@ -226,8 +228,9 @@ jobs:
         # carries every generated test-user password and the apps root's carries the OAuth client
         # secrets. Change request 1.1's first half put *.tfplan in .gitignore; this is its second
         # half, and it is a check rather than a sentence because the sentence is what the author of
-        # any future plan pipeline would read last. It starts green: nothing here uploads an
-        # artifact or writes a plan yet.
+        # any future plan pipeline would read last. Nothing writes a plan, and the one artifact
+        # upload it admits is the startup benchmark's own files in .github/workflows/startup-bench.yml
+        # (#576), pinned there to that file and that path.
         run: |
           python3 -I .github/plan-secrecy-tests.py
           python3 -I .github/plan-secrecy.py
@@ -258,6 +261,15 @@ jobs:
         # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
         # case of each.
         run: python3 -I tools/review_record_tests.py
+
+      - name: The decision reader names the decision a merge body owes a citation to
+        # tools/land.sh refuses a merge whose body closes a change request decided `ADR: no` without
+        # citing its decision comment (#530), and this is the code that decides which decision that
+        # is. Its companion feeds it GitHub's shapes of an issue and its comments built to trip each
+        # rule -- an issue without the label, ADR: yes, a decline, a later decision, a comment in
+        # the form from another account, lines close to the form, a decision on a later page -- and
+        # the land.sh companion below runs only one case of each.
+        run: python3 -I tools/decision_citation_tests.py
 
       - name: The retro's record reader reads each record line the way its rules say
         # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line
@@ -347,6 +359,15 @@ jobs:
         # each case's tool input against real git in a throwaway repository with a linked
         # worktree, and runs the settings entry as written.
         run: python3 -I tools/main_checkout_guard_tests.py
+
+      - name: The nightly startup benchmark job re-runs once on no verdict, never on a fail, and stays informational until promoted
+        # .github/workflows/startup-bench.yml runs tools/bench/startup.py's local tier on an ARM64
+        # runner nightly, through .github/startup-bench.sh (#576; ADR-0033 -> Decision, the cadence).
+        # That job never runs on a workstation and nothing here is ARM64, so the script's rules are
+        # proved with the benchmark doubled: the three local budgets, exactly one re-run on exit 2 and
+        # none on exit 1, both runs' files kept, the verdict as the last line, and the exit code
+        # read only once STARTUP_BENCH_ASSERTS is true. A step of its own, as every companion here.
+        run: python3 -I .github/startup_bench_tests.py
 
       - name: The overnight collect resolves tickets by its rules, lists specs apart and refuses a shared id
         # The overnight run's lanes are built from what tools/overnight_collect.py resolves (#187):

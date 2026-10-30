@@ -66,6 +66,22 @@ class PlanSecrecyTests(unittest.TestCase):
             self.assertTrue(self.check_source(source, ".github/workflows/ci.yml"))
         self.assertTrue(self.check_source(safe))
 
+    def test_startup_bench_upload_exception_is_narrow(self):
+        # The one admitted upload: the startup benchmark's own files, from its own directory under the
+        # runner's temp, in its own workflow (#576; ADR-0033 -> Decision, the reporting). The same
+        # step with any other path, a second path, or in any other file is refused as before.
+        safe = ("- uses: actions/upload-artifact@v4\n  if: always()\n  with:\n"
+                "    name: startup-bench-${{ github.run_id }}\n    path: ${{ runner.temp }}/startup-bench/\n")
+        self.assertEqual([], self.check_source(safe, ".github/workflows/startup-bench.yml"))
+        for source in (safe.replace("${{ runner.temp }}/startup-bench/", "."),
+                       safe.replace("${{ runner.temp }}/startup-bench/", "${{ runner.temp }}"),
+                       safe.replace("${{ runner.temp }}/startup-bench/", "|\n      ${{ runner.temp }}/startup-bench/\n      infra"),
+                       safe.replace("    path: ${{ runner.temp }}/startup-bench/\n", "")):
+            with self.subTest(source=source):
+                self.assertTrue(self.check_source(source, ".github/workflows/startup-bench.yml"))
+        self.assertTrue(self.check_source(safe))
+        self.assertTrue(self.check_source(safe, ".github/workflows/ci.yml"))
+
     def test_repository_has_sources_and_is_safe(self):
         root = pathlib.Path(__file__).resolve().parent.parent
         self.assertIn(root / ".github/workflows/ci.yml", policy.targets(root))

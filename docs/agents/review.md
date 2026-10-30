@@ -44,7 +44,9 @@ contracts rows naming it, cited by path. In practice:
 | A decision the task was handed | the change requests blocking the ticket, with their decision comments; an archived request under `contracts/changes/`; `docs/adr/` |
 
 The pull request body is the author's claim, not the spec. Check it against the diff and say which
-claims you verified and how.
+claims you verified and how. When it closes a change request whose decision comment says
+`ADR: no`, it states that request's why for the merge body to carry and cites the decision comment
+(`docs/agents/tracker-policy.md` → "Landing"); a body without them is a finding.
 
 ## CI has already run
 

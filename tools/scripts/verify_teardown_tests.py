@@ -56,6 +56,14 @@ GROUP = "sg-0123456789abcdef0"
 TABLE = re.search(r'session_table_name\s*=\s*"([^"]+)"', _IAM)[1].replace("${local.name_prefix}", cell.FAMILY)
 TABLE_ARN = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{TABLE}"
 RULES = [f"sgr-0123456789abcde{n}" for n in "0123"]
+# The two-task cell's three egress types (#347): the NAT gateway, its Elastic IP by allocation id,
+# and the S3 and DynamoDB gateway endpoints, as the tagging index names them.
+NAT = "nat-0123456789abcdef0"
+NAT_ARN = f"{EC2}:natgateway/{NAT}"
+EIP = "eipalloc-0123456789abcdef0"
+EIP_ARN = f"{EC2}:elastic-ip/{EIP}"
+ENDPOINTS = ["vpce-0123456789abcdef0", "vpce-0123456789abcdef1"]
+ENDPOINT_ARNS = [f"{EC2}:vpc-endpoint/{endpoint}" for endpoint in ENDPOINTS]
 # The identity root's user pool, as the doubles' destroy of that root names it.
 _, POOL_ARN, POOL = cell.DESTROYED["idp"]
 
@@ -235,6 +243,54 @@ class ATornDownCellPasses(Verify):
         self.assertEqual(0, result.status, result.output)
         self.assertEqual(3, len(self.index_queries(case)))
 
+    # The three types the two-task cell adds (#347 Q8): the NAT gateway, its Elastic IP and the two
+    # gateway endpoints. EC2 goes on describing a deleted NAT gateway and a deleted endpoint for a
+    # while, in the state "deleted", and only later answers that it does not know the id; a released
+    # Elastic IP is unknown at once. Without these cases each type would stand under the catch-all,
+    # and P-05 would fail after a correct destroy; a leaked NAT gateway is the cell's costliest leak.
+
+    def test_a_nat_gateway_ec2_says_deleted_passes_and_is_counted(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleted"))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([[NAT]], [call["options"]["nat-gateway-ids"] for call in case.aws("ec2 describe-nat-gateways")])
+        self.assertIn("1 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
+
+    def test_a_nat_gateway_ec2_does_not_know_passes(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", describe_knows=0))
+        _, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("1 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
+
+    def test_a_deleting_nat_gateway_passes_once_it_is_deleted(self):
+        # Deleting takes EC2 a minute or two, and the state says so: it stands, and is asked again
+        # within the wait.
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleting", describe_knows=2))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(case.aws("ec2 describe-nat-gateways")))
+
+    def test_an_elastic_ip_ec2_does_not_know_passes_and_is_counted_with_the_other_ids(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(EIP_ARN, "ec2:elastic-ip", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([[EIP]], [call["options"]["allocation-ids"] for call in case.aws("ec2 describe-addresses")])
+        self.assertIn("6 EC2 ids describe does not know", result.stdout)
+
+    def test_a_vpc_endpoint_ec2_says_deleted_or_does_not_know_passes_and_both_are_counted(self):
+        world = torn_down_world()
+        world["tagged"] += [tagged(ENDPOINT_ARNS[0], "ec2:vpc-endpoint", state="deleted"),
+                            tagged(ENDPOINT_ARNS[1], "ec2:vpc-endpoint", describe_knows=0)]
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(sorted([[e] for e in ENDPOINTS]),
+                         sorted(call["options"]["vpc-endpoint-ids"] for call in case.aws("ec2 describe-vpc-endpoints")))
+        self.assertIn("2 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
+
 
 class AStandingResourceFails(Verify):
     """Each case fails through exactly one reader, and names what stands without the account."""
@@ -299,6 +355,35 @@ class AStandingResourceFails(Verify):
         case, result = self.failed(world, f"the tag query in {REGION}")
         self.assertIn(f"arn:aws:dynamodb:{REGION}:<account>:table/{TABLE} (DynamoDB says ACTIVE)", result.stderr)
         self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_standing_nat_gateway_names_its_state(self):
+        # The cell's costliest leak (#347 Q8): one EC2 still says available fails by name.
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:natgateway/{NAT} (EC2 says available)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_standing_elastic_ip(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(EIP_ARN, "ec2:elastic-ip"))
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:elastic-ip/{EIP} (EC2 still describes it)", result.stderr)
+
+    def test_a_standing_vpc_endpoint_names_its_state(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(ENDPOINT_ARNS[0], "ec2:vpc-endpoint", state="available"))
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:vpc-endpoint/{ENDPOINTS[0]} (EC2 says available)", result.stderr)
+
+    def test_a_nat_gateway_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleted"))
+        world["faults"]["ec2 describe-nat-gateways"] = ["UnauthorizedOperation", "DescribeNatGateways"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("UnauthorizedOperation", result.stderr)
+        self.assertNotIn(ACCOUNT, result.output)
 
     def test_a_table_describe_refused(self):
         world = torn_down_world()

@@ -102,6 +102,20 @@ The subject is read by a check: `tools/roadmap.py` derives the roadmap's state f
 subjects, so "Merge task 2.4: ..." lands the row and "Merge part of task 2.4: ..." does not. Run the
 script before the push and commit what it writes, or `.githooks/pre-push` will say so.
 
+**Two halves that must land together land as one combined branch**
+(`docs/agents/tracker-policy.md` rule 4). Each half commits on its own owner's branch, and neither
+is pushed alone when it fails the check without the other: on 2026-10-29 #504's half failed
+`.github/steering.py` on its own, because
+`AGENTS.md` names the `docs/gaps.md` that only #503 writes, so the halves reached `origin` only
+combined (#568). The combined branch is `task/<a>-and-<b>-<slug>`, the form `tools/prune_branches.py`
+reads, such as `task/issue-503-and-issue-504-gap-register`: make it from the base and merge each
+half into it with `--no-ff`, so every commit that changes a file keeps one owner and A-05 still
+reads each commit as single-owner. One pull request carries a `Closes` line per half, and its merge
+subject is `Merge tasks <a>, <b>: ...`. A half's acceptance boxes are judged on the combined tree, so
+a half red on its own is the expected state, not a defect. Before running `tools/land.sh`, a session
+removes its own task worktrees, because the prune below deletes no branch a worktree has checked
+out: on 2026-10-29 both halves' branches stayed behind for that reason.
+
 **Merge with `tools/land.sh <pr> --subject "..."`.** The merge subject is the input to that
 derivation and `docs/roadmap.md` is its output, so the merge commit is the one commit that moves the
 roadmap — and a merge made through the GitHub API or the web UI is created on the server, where the
@@ -150,7 +164,9 @@ branch is deleted when the **task** is done, not when a pull request merges.
 
 In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
 box that asks for something in the merge body is met there, and the landing body cites those merges
-by sha rather than copying them.
+by sha rather than copying them. The morning drafts that landing body at
+`.scratch/overnight/log/morning-<date>/merge-body.md`: start from it, and add the commits since
+the head it names and the review record's carried findings as `Outstanding:` lines.
 
 **A task merge's message is changed by rebuilding the run branch.** A fix to what a ticket built
 goes on top as a commit of its own, but git changes a message only by rewriting its commit and every

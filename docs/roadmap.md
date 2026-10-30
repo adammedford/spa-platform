@@ -35,7 +35,7 @@ ongoing.
 | S5 The same gateway on real infrastructure | G3, tagged `g3-deployed-slice` | 2 of 9 | `6.9`; part-landed: `1.3`, `1.4`, `1.5`, `1.6b`, `1.7`, `6.5` |
 | S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 0 of 1 | part-landed: `6.3` |
 | S7 Operable, and accepted for Phase 1 | G5, tagged `g5-phase-1-accepted` | 0 of 1 | part-landed: `6.7` |
-| S8 Continuous: it survives its own deployment | G6, not tagged | 4 of 5 | `P2-4` |
+| S8 Continuous: it survives its own deployment | G6, not tagged | 4 of 5 | part-landed: `P2-4` |
 | S9 Portable: a second provider behind the same seam | G7, not tagged | 0 of 1 | `P2-6` |
 | S10 Mature: bounded, assured and supported | G8, not tagged | 0 of 4 | `P2-7`, `P2-8`, `P2-9`, `P2-10` |
 | SX Throughout | none | ongoing | — |
@@ -310,8 +310,9 @@ the ladder's coverage of the plan is complete rather than nearly complete.
 
 Ten gaps, found by reading the plan against the question "could another team adopt this". Each is a
 gap in the **written plan**, not a task: `docs/plan/` is a frozen export and never edited in place,
-so nothing here is committed work until it is an ADR, a row in a fresh export, or a change request
-under `contracts/changes/`. Each names where it would land.
+so nothing here is committed work until it is an ADR, a row in a fresh export, or a change request,
+an issue labelled `change-request` that the human decides in a decision comment
+(`docs/agents/tracker-policy.md`, "Change requests"). Each names where it would land.
 
 | # | Gap | Where it lands |
 | --- | --- | --- |

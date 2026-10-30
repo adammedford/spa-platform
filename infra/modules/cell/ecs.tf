@@ -156,6 +156,18 @@ locals {
       protocol      = "tcp"
     }]
 
+    # Continuity (#347, #332 F1). The seconds between SIGTERM and SIGKILL. A roll stops a task in this
+    # order: the target group's deregistration delay (alb.tf, 30 s) drains it first, then ECS sends
+    # SIGTERM, then after stopTimeout SIGKILL. The gateway's own ShutdownTimeout, the time the process
+    # gives its in-flight work after SIGTERM, is 25 s, a Platform.Hosting constant (#363) this module
+    # names and does not read. The relations F1 rests on: the drain (30) covers the 21 s a refresh is
+    # bounded by (G1 on #332), ShutdownTimeout (25) covers it too, and stopTimeout (30) is at least
+    # ShutdownTimeout, so the process ends its shutdown on its own terms and is never killed through
+    # it. On the gateway alone: the mock API holds no session and no lease. 30 is also Fargate's
+    # default, written down because F1 depends on it.
+    # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
+    stopTimeout = 30
+
     environment = [
       for key in sort(keys(local.gateway_environment)) : {
         name  = key
@@ -270,6 +282,17 @@ resource "aws_ecs_service" "gateway" {
   # the internal load balancer is unreachable from a workstation and task 1.6b has nothing to
   # connect through.
   enable_execute_command = true
+
+  # Continuity (#347). One task always serves during a roll: the replacement is started, and healthy
+  # in the target group, before a task is deregistered and drained. These are ECS's defaults for a
+  # replica service, written down because F1 rests on them. ECS keeps desiredCount x
+  # minimumHealthyPercent/100 tasks running, rounded up, and starts up to desiredCount x
+  # maximumPercent/100, rounded down
+  # (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeploymentConfiguration.html). So
+  # 100 keeps every task serving at any count; 50 would keep the one task of a one-task cell, by the
+  # rounding, but would let a two-task cell stop one of its two before its replacement is healthy.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
 
   # A bad image rolls back rather than retrying forever (plan row 1.4). rollback is the half that
   # matters: docs/plan/05-infrastructure-and-cost.md names the circuit breaker beside rollback.sh as
