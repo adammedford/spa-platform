@@ -9,6 +9,9 @@ Answer; the accepted ADR the map ends in decides which survive.
     tools/bench/startup.py                     N=10 cold starts each of the floor and the gateway
     tools/bench/startup.py --runs 3 --json out.json --unconstrained
     tools/bench/startup.py --no-build          reuse the spa-bench/*:<commit> images already built
+    tools/bench/startup.py --verdict --budget healthz=4 --budget readyz=6 --budget app_host=7 --json out.json
+                                               the verdict mode: ADR-0033's local budgets, a last line
+                                               `bench: pass:` / `bench: fail:` / `bench: no verdict:`
 
 Needs Docker and git on the host and nothing else but this python3 (3.9, as macOS ships it). It
 binds no host port: everything it reaches is on a bench network of its own.
@@ -55,6 +58,15 @@ the gateway see the same network.
 
 The same file runs inside the containers, mounted read-only at /bench, as the subcommands `probe`,
 `seed` and `stand-in`; their interpreter is the moto image's python, so nothing else is pulled.
+
+**The verdict mode** (`--verdict`, ADR-0033 Decision, the assertion; #175 Q7; #176 Q3 and Q6) is how
+a `B-` id is proved on tier L. The max of N=10 per budgeted gateway clock must be at or under its
+`--budget`; a start that never reaches a budgeted clock is a breach; marks are asserted raw, with
+the precision window on the verdict line; the floor and the gap are reported only. A pass counts
+regardless of load. A breach on a run whose floor control shows a loaded machine (the floor's
+/healthz max above `--floor-load-ms`, 1.2 s) is `bench: no verdict:`, exit 2, and exactly one re-run
+by the caller gives the verdict, both runs' files kept; the benchmark itself never retries. N other
+than 10 is refused. Without `--verdict` a run reports as before and exits 0.
 """
 
 from __future__ import annotations
@@ -278,6 +290,79 @@ def windows_ms(runs: List[dict]) -> Dict[str, float]:
                 continue
             widest[name] = max(widest.get(name, 0.0), (mark["at_ns"] - mark["after_ns"]) / 1e6)
     return widest
+
+
+# --- the verdict -----------------------------------------------------------------------------------
+
+VERDICT_N = 10            # N is fixed at 10 for a verdict (ADR-0033 Decision, the assertion; #176 Q3)
+LABELS = dict(CLOCKS)
+# The clocks a budget may name: healthy, ready and the first app-host 401 (#175 Q1). Listening and
+# `docker start` are reported only, so a budget on them is refused rather than silently held.
+BUDGETED = ("healthz", "readyz", "app_host")
+
+
+class Verdict(NamedTuple):
+    status: str           # "pass", "fail" or "no verdict"
+    line: str             # the last line a verdict run prints: `bench: <status>: ...`
+    exit_code: int        # 0 on pass; a fail and a no-verdict are both non-zero, and differ
+
+    def as_json(self) -> dict:
+        return {"status": self.status, "line": self.line, "exit_code": self.exit_code}
+
+
+def verdict(runs: List[dict], budgets_ms: Dict[str, float], floor_load_ms: float = 1200.0,
+            expected_n: int = VERDICT_N) -> Verdict:
+    """The startup benchmark's verdict over one run's constrained starts (ADR-0033 Decision, the
+    assertion): the max of N=10 per budgeted gateway clock is at or under its budget, a start that
+    never reached a budgeted clock is a breach, marks are asserted raw. A pass counts regardless of
+    load; a breach on a run whose floor control shows a loaded machine (the floor's /healthz max
+    above `floor_load_ms`, about 1.2 s) is no verdict, which exactly one re-run settles (#175 Q7).
+    The re-run is the caller's: this never retries (#176 Q6). N other than `expected_n` is no
+    verdict either, so a short run can never pass or fail."""
+    chosen = [one for one in runs if one.get("constrained", True)]
+    gateway = [one for one in chosen if one["kind"] == "gateway"]
+    floor = [one for one in chosen if one["kind"] == "floor"]
+    if len(gateway) != expected_n or len(floor) != expected_n:
+        return Verdict("no verdict", f"bench: no verdict: {len(floor)} floor and {len(gateway)} gateway starts; "
+                                     f"a verdict takes N={expected_n} of each (ADR-0033)", 2)
+
+    summary = summarise(gateway)
+    breaches: List[str] = []
+    held: List[str] = []
+    for name, budget in budgets_ms.items():
+        entry = summary.get(name)
+        if entry is None or entry["reached"] < entry["runs"]:
+            short = entry["runs"] - entry["reached"] if entry else len(gateway)
+            breaches.append(f"{LABELS[name]} not reached in {short} of {len(gateway)} starts")
+        if entry and entry["max"] is not None:
+            if entry["max"] > budget:
+                breaches.append(f"{LABELS[name]} max {entry['max']:.0f} ms over its budget of {budget:.0f} ms")
+            else:
+                held.append(f"{LABELS[name]} max {entry['max']:.0f} ms <= {budget:.0f} ms")
+
+    # The floor control: reported beside the verdict, never asserted (#176 Q1). A floor start that
+    # never reached /healthz is slower than any load threshold, so it counts as load.
+    floor_healthz = summarise(floor).get("healthz")
+    if floor_healthz is None or floor_healthz["reached"] < floor_healthz["runs"]:
+        floor_text = "floor /healthz 200 not reached in every start"
+        loaded = True
+    else:
+        floor_text = f"floor /healthz 200 max {floor_healthz['max']:.0f} ms"
+        loaded = floor_healthz["max"] > floor_load_ms
+    medians = ", ".join(f"{LABELS[name]} {summary[name]['median']:.0f} ms"
+                        for name in budgets_ms if summary.get(name) and summary[name]["median"] is not None)
+    windows = windows_ms(gateway)
+    precision = ", ".join(f"{LABELS[name]} {windows[name]:.0f} ms" for name in budgets_ms if name in windows)
+    tail = f"{floor_text}; medians {medians or '-'}; precision {precision or '-'}"
+
+    if breaches and loaded:
+        # A breach under load is not a breach (#175 Q7): no verdict, and the caller's one re-run
+        # gives it. Not a pass either, so the exit is non-zero (CODING_STANDARDS.md, fails closed).
+        return Verdict("no verdict", f"bench: no verdict: {floor_text} shows a loaded machine; re-run once "
+                                     f"(ADR-0033, #175 Q7); withheld: {'; '.join(breaches)}; precision {precision or '-'}", 2)
+    if breaches:
+        return Verdict("fail", f"bench: fail: {'; '.join(breaches)}; {tail}", 1)
+    return Verdict("pass", f"bench: pass: N={expected_n}; {'; '.join(held)}; {tail}", 0)
 
 
 # --- the gateway's environment ---------------------------------------------------------------------
@@ -598,6 +683,23 @@ def report(facts: dict, runs: List[dict]) -> str:
     return "\n".join(lines)
 
 
+def conclude(options, facts: dict, runs: List[dict]) -> int:
+    """Prints the report and, in the verdict mode, the verdict as the last line; writes the --json
+    file; returns the exit code. Without --verdict a run reports as it always did and returns 0."""
+    print()
+    print(report(facts, runs))
+    outcome = verdict(runs, options.budgets_ms, floor_load_ms=options.floor_load_ms) if options.verdict else None
+    if options.json:
+        document = {"facts": {**facts, "budgets_ms": options.budgets_ms}, "runs": runs}
+        if outcome:
+            document["verdict"] = outcome.as_json()
+        pathlib.Path(options.json).write_text(json.dumps(document, indent=2) + "\n")
+    if outcome is None:
+        return 0
+    print(outcome.line, flush=True)
+    return outcome.exit_code
+
+
 def run_bench(options) -> int:
     bench = Bench(options)
     runs: List[dict] = []
@@ -615,16 +717,32 @@ def run_bench(options) -> int:
         facts = bench.facts(tags)
     finally:
         bench.down()
-    print()
-    print(report(facts, runs))
-    if options.json:
-        pathlib.Path(options.json).write_text(json.dumps({"facts": facts, "runs": runs}, indent=2) + "\n")
-    return 0
+    return conclude(options, facts, runs)
 
 
-def main(argv: List[str]) -> int:
+def parse_budget(text: str) -> "tuple[str, float]":
+    """`<clock>=<seconds>`, the clock by its name in the marks (healthz, readyz, app_host)."""
+    name, separator, seconds = text.partition("=")
+    if not separator or name not in BUDGETED:
+        raise argparse.ArgumentTypeError(
+            f"a budget is <clock>=<seconds>, the clock one of {', '.join(BUDGETED)}: {text!r}")
+    try:
+        return name, float(seconds) * 1000
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {seconds!r}")
+
+
+def parse_args(argv: List[str]):
     parser = argparse.ArgumentParser(description="PROTOTYPE startup benchmark (#173): the floor and the gateway.")
     parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--verdict", action="store_true",
+                        help="end on `bench: pass:` or `bench: fail:` against the --budget values (ADR-0033): "
+                             "the max of N=10 per budgeted gateway clock at or under its budget; non-zero exit on fail, "
+                             "and 2 with no verdict (a loaded floor, which one re-run settles)")
+    parser.add_argument("--budget", type=parse_budget, action="append", default=[], metavar="CLOCK=SECONDS",
+                        help="a clock's budget, repeatable; ADR-0033's local values are healthz=4 readyz=6 app_host=7")
+    parser.add_argument("--floor-load-ms", type=float, default=1200,
+                        help="the floor's /healthz max above which the machine counts as loaded (#175 Q7)")
     parser.add_argument("--cpus", default="0.25")
     parser.add_argument("--memory", default="1g")
     parser.add_argument("--unconstrained", action="store_true",
@@ -651,6 +769,17 @@ def main(argv: List[str]) -> int:
     sub.add_parser("stand-in", help="(inside the bench network) hold the namespace and serve discovery")
 
     options = parser.parse_args(argv)
+    options.budgets_ms = dict(options.budget)
+    if options.verdict and not options.budgets_ms:
+        parser.error("--verdict needs at least one --budget CLOCK=SECONDS")
+    if options.verdict and options.runs != VERDICT_N:
+        # Refused here rather than after ten minutes of starts: N is fixed at 10 for a verdict.
+        parser.error(f"--verdict takes --runs {VERDICT_N} (ADR-0033), not {options.runs}")
+    return options
+
+
+def main(argv: List[str]) -> int:
+    options = parse_args(argv)
     if options.command == "probe":
         # The startup benchmark starts the container on this line, so the probe is polling before it starts.
         print("ready", flush=True)
