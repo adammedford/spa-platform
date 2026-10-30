@@ -514,6 +514,24 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertEqual(["8443"], json.loads(case.start_sessions()[0]["options"]["parameters"])["localPortNumber"])
 
 
+    def test_with_two_running_tasks_the_first_reachable_is_the_hop_and_one_session_starts(self):
+        # The two-task cell (#347, P2-4): both tasks run, both reach the agent, and the tunnel's hop is
+        # a gateway task as before, the first one; a roll replaces it and the tunnel is restarted
+        # (#349 Q20). No claim here that a session survives its hop's drain.
+        world = default_world()
+        world["clusters"][CLUSTER][SERVICE] = [
+            task("aaaa0000aaaa0000aaaa0000aaaa0000"),
+            task("bbbb0000bbbb0000bbbb0000bbbb0000"),
+        ]
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        sessions = case.start_sessions()
+        self.assertEqual(1, len(sessions))
+        self.assertEqual(f"ecs:{CLUSTER}_aaaa0000aaaa0000aaaa0000aaaa0000_aaaa0000aaaa0000aaaa0000aaaa0000-2222222222",
+                         sessions[0]["options"]["target"])
+
     def test_it_takes_the_first_task_a_session_can_reach(self):
         world = default_world()
         world["clusters"][CLUSTER][SERVICE] = [

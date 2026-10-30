@@ -33,3 +33,13 @@ health_check_path = "/"
 # well; it is appended to the role, never instead of it. Role or user ARNs only,
 # never the assumed-role session ARN `aws sts get-caller-identity` prints.
 additional_teardown_principal_arns = []
+
+# Continuity (#347 Q7). Phase 1 and G3 run with these three unset: sessions in
+# memory, no shared key ring, and so a deployment that signs every user out.
+# The G6 sitting (#348) sets the first two, which is the cutover to the durable
+# store (#332 D6): the DynamoDB table and the cell's own ring prefix, which the
+# module holds to exactly /spa-platform/<cell>/data-protection/. The key id
+# stays empty at G6 (the account's aws/ssm key; no customer-managed key).
+# session_store                    = "dynamodb"
+# data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+# data_protection_kms_key_id       = ""

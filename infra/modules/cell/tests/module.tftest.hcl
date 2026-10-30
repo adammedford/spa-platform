@@ -596,6 +596,54 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
   }
 }
 
+# Continuity (#347, #332 F1). A roll replaces a task in three steps, in this order: ECS deregisters
+# the target and waits out the target group's deregistration delay, then sends SIGTERM, then after
+# the container's stopTimeout sends SIGKILL. The two numbers are F1's, 30 and 30, pinned exactly:
+# the drain covers the 21 s a refresh is bounded by (ProviderDeadline 10 + LeaseMargin 11, G1 on
+# #332), and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363). Mutations that turn this
+# run red: deregistration_delay left to the provider's default, or 300; stopTimeout 25 or absent;
+# stopTimeout on the mock API too; minimum healthy 50.
+run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_task_always_serving" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    mock_api_app1_client_id = "app1client"
+    mock_api_app2_client_id = "app2client"
+  }
+
+  # A string in the provider's schema (`terraform providers schema -json`, read for #347), so the
+  # comparison is to "30": an integer here would error rather than fail.
+  assert {
+    condition     = aws_lb_target_group.gateway.deregistration_delay == "30"
+    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, which covers the 21 s a refresh is bounded by. The provider's default is 300 s, which only slows a roll."
+  }
+
+  assert {
+    condition = one([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+    ]).stopTimeout == 30
+    error_message = "The gateway container's stopTimeout is exactly 30 s (#332 F1): at least the gateway's 25 s ShutdownTimeout (#363), so the process finishes its shutdown before SIGKILL."
+  }
+
+  # The gateway alone: the mock API holds no session and no lease, and a second number would be a
+  # second thing to keep in step with F1 for nothing.
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : !can(c.stopTimeout) if c.name != "gateway"
+    ])
+    error_message = "stopTimeout goes on the gateway container only (#347 Q6): the mock API keeps Fargate's default."
+  }
+
+  # One task always serves during a roll: the new task is started and healthy before the old one is
+  # deregistered. Explicit rather than left to ECS's defaults, which are these two numbers, because
+  # F1 rests on them.
+  assert {
+    condition     = aws_ecs_service.gateway.deployment_minimum_healthy_percent == 100 && aws_ecs_service.gateway.deployment_maximum_percent == 200
+    error_message = "Minimum healthy 100% and maximum 200% (#347): a roll starts the replacement before it stops a task, so one task always serves."
+  }
+}
+
 run "ecs_exec_is_on_and_the_task_s_root_filesystem_stays_writable" {
   command = plan
 
@@ -2161,7 +2209,11 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 #
 # A digest is a literal, so a Phase 1 change that is meant to alter either object fails here too.
 # That is the point: the author then says, in the same change, that the Phase 1 plan moved. The
-# failing assertion prints the new digest as its "actual" value.
+# failing assertion prints the new digest as its "actual" value. It moved once: #347 put
+# stopTimeout = 30 on the gateway container, whichever the inputs, because F1's shutdown relations
+# hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
+# so the running task is unchanged and the definition's bytes are not; the digest below is the
+# definition with that one key.
 #
 # Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
 # any environment value on the default changed, or one added or removed (Session__MaxSessions to
@@ -2181,8 +2233,8 @@ run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
   }
 
   assert {
-    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "3f5bc9bef62ca40978f8a6f8b168a086a8269bbc951e803e382cef021b552d88"
-    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338, byte for byte."
+    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "c5e7e8285b7e7ca075c6d778a906442971f31a8a29b1a8bcee288e8b4e5a1144"
+    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout, byte for byte."
   }
 
   assert {
