@@ -181,7 +181,8 @@ the request. _Avoid_: error body.
 **Rule id** — the identifier of the rule a rejection fired under, from the table in
 `contracts/request-gate.md` → Rule ids, held once as `Platform.Abstractions.RuleIds` (ADR-0015). It
 is the `rule` field of the request line and the tag of `security.rejections`; the `code` in a
-problem body is deliberately less specific.
+problem body is deliberately less specific. _Avoid_: "diagnostic id", which is an analyzer rule's
+identifier.
 
 **Problem code** — the stable `code` of a problem body, from the Errors table of
 `contracts/http-contract.md`, held once as `Platform.Abstractions.Problems`. It is less specific
@@ -426,15 +427,18 @@ and the snapshot; in a test host its stand-in does the same by the host's own ru
 the host. _Avoid_: host stub, resolver.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
-provider, an in-memory object store, the real mock API and an echo upstream.
+provider, an in-memory object store, the real mock API and an echo upstream. _Avoid_: analysis
+tier, which is a set of source files the analyzers hold to one profile.
 
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
-task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client.
+task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client. _Avoid_:
+analysis tier, which is a set of source files the analyzers hold to one profile.
 
 **Local (L)** — the test tier that runs a fresh container of the built gateway image under the
 task's limits, against stand-ins for the AWS services and the provider, on a workstation or a CI
 runner. It proves the method and the local budget, and never the platform's pull, placement or
-health checks. _Avoid_: local check, hermetic, for an L run.
+health checks. _Avoid_: local check, hermetic, for an L run; analysis tier, which is a set of
+source files the analyzers hold to one profile.
 
 **Startup clock** — one named interval of a gateway cold start, from a stated zero to the first
 observation of a stated event, such as the first `/readyz` 200. Some clocks are budgeted and some
@@ -480,3 +484,32 @@ source, then repeated on the shipped package with the overrides on. 32 of 32 exp
 **Reserve design** — the gateway-owned locking over the library's refresh call, proven in the harness
 and adopted for task 3.8 after the Cognito inside-window successor failure (C-2.17).
 The late-replay control C-2.18 is a separate observation. See ADR-0005 and ADR-0017.
+
+## Static analysis
+
+**Diagnostic id** — the identifier of one analyzer rule, such as CA2007, IDE0160 or MA0009: what a
+finding is reported under, and what a severity line or a suppression names. _Avoid_: "rule id",
+which is the request gate's rejection id.
+
+**Analysis tier** — a set of source files the analyzers hold to one severity profile. There are
+two, the strict tier and the relaxed tier, and a file's folder decides which it is in. _Avoid_:
+"test tier", which means Hermetic, Deployed or Local; "shipping tier", since a shipped tool sits in
+the relaxed one.
+
+**Strict tier** — the gateway and the platform libraries it is built from: every file the solution
+builds outside the relaxed tier, held to every rule at error. See ADR-0035.
+
+**Relaxed tier** — tests, fixtures, the support library tests build on and the operator and bench
+tools: the strict tier's rules less a short list of relaxations, each a permanent reason that holds
+for such code by its nature. It relaxes no security rule. _Avoid_: exception, suppression (one site,
+with a justification), pending (a rule not yet at error).
+
+**Pending rule** — an enabled diagnostic held below error until every project is clean for it,
+naming the ticket that will promote it. Temporary, unlike a declined rule or a relaxation.
+
+**Declined rule** — a diagnostic turned off for the whole solution, each with its reason in an ADR.
+_Avoid_: pending, relaxation, for this.
+
+**Banned API** — a symbol the build refuses in a named set of strict-tier projects, with the reason
+shown where it is called. It forbids a call, not a value: it cannot prove that no token is logged,
+which N-16 proves.
