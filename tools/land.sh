@@ -231,8 +231,9 @@ if [ -n "$closes" ]; then
     || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
 fi
 
-# The body, read once here and reused below: a named pipe or an inherited descriptor gives its
-# bytes once. $(<) drops the file's trailing newlines, which is what the trailer's gap below rests on.
+# The body, read once here and reused below, because it may be a named pipe or an inherited
+# descriptor, which gives its bytes once (#72). $(<) drops the file's trailing newlines, which
+# is what the trailer's gap below rests on.
 text=""
 if [ -n "$body_file" ]; then text="$(< "$body_file")"; fi
 

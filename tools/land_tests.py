@@ -354,7 +354,8 @@ esac
 """
 
 PYTHON_DOUBLE = """#!/bin/bash
-# A double for python3, written by tools/land_tests.py. land.sh runs python3 up to three times.
+# A double for python3, written by tools/land_tests.py. land.sh runs python3 once for each ticket
+# its description closes and up to three more times.
 # Before its merge it runs the decision reader beside it for each ticket the description closes,
 # and then the review record reader beside it, and each of those calls goes to the real
 # interpreter in every case, so the readers under test are the real ones. After the merge it derives
