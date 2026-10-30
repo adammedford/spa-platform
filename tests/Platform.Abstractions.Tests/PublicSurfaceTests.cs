@@ -14,8 +14,9 @@ public sealed class PublicSurfaceTests
 {
     /// <summary>
     /// Every public type the contract names, from docs/plan/02-contracts.md -> Interfaces. Adding a
-    /// line here is a contract change: the integrator decides it, and a workstream asks for it with
-    /// contracts/changes/&lt;task-id&gt;-&lt;slug&gt;.md.
+    /// line here is a contract change: a workstream asks for it with a change request, an issue
+    /// labelled change-request that the human decides in a decision comment and the integrator
+    /// lands (docs/agents/tracker-policy.md, "Change requests").
     /// </summary>
     private static readonly string[] Contracted =
     [

@@ -310,8 +310,9 @@ the ladder's coverage of the plan is complete rather than nearly complete.
 
 Ten gaps, found by reading the plan against the question "could another team adopt this". Each is a
 gap in the **written plan**, not a task: `docs/plan/` is a frozen export and never edited in place,
-so nothing here is committed work until it is an ADR, a row in a fresh export, or a change request
-under `contracts/changes/`. Each names where it would land.
+so nothing here is committed work until it is an ADR, a row in a fresh export, or a change request,
+an issue labelled `change-request` that the human decides in a decision comment
+(`docs/agents/tracker-policy.md`, "Change requests"). Each names where it would land.
 
 | # | Gap | Where it lands |
 | --- | --- | --- |
