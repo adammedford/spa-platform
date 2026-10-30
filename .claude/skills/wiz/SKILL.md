@@ -340,34 +340,55 @@ line of it:
 
 - **The shell.** The notes assume one shell (`README.md` → "Before any note: the operator session")
   and this tool's keeps none (the prelude), so each call sets again the variables the step reads
-  (`APP`, `BUCKET`, `RELEASE`, the revision `N` or `M` a step printed, and the like), from the
-  record's values. A read whose value a later step needs runs as `X=$(captured <the runbook's
-  command>)`, every other command as `shown <the runbook's command>`.
+  (`APP`, `RELEASE`, `RUN`, the revision `N` or `M` a step printed, and the like), from the
+  record's values. A value rule 3 keeps off the terminal (`BUCKET`, which carries the account id;
+  `CLIENT_ID`, `PARAMETER`, `POOL_ID`; a secret's id) is never typed from the record: the call that
+  uses it runs the runbook's own read of it again, and where no read gives it again
+  (`OLD_SECRET_ID`, once the second secret exists) the call that read it writes it to a file under
+  `"$RUN"` and the later call reads it back from there. A read whose value a later step needs runs
+  as `X=$(captured <the runbook's command>)`, every other simple command as `shown <the runbook's
+  command>`. `shown` and `captured` wrap one simple command: a runbook line that is a pipeline or
+  writes to a file runs bare, as written, with its command echoed into `"$R"` and its printed
+  output appended by `tee -a "$R"`, because wrapping its first command would send that command's
+  output to the terminal and the record, which for secret rotation's `openssl` line is the secret
+  itself and for its `printf | wc -w` line a secret's id.
 - **`RUN` and `CONFIG`.** The notes' `$RUN` is a private directory of rule 6's kind: `RUN=$(mktemp
   -d)` under `umask 077`, printed once, set by hand in each later call and removed with `rm -rf
   "$RUN"` at the walk's end; secret rotation keeps the new secret there between its steps 2 and 3.
   `$CONFIG` is the platform configuration C2 rebuilt, `"$E/platform-config.json"`: the README says
   to rebuild it after a deployment or a rollback, and C1 was the last of either.
-- **Rule 2.** Secret rotation's step 4 refreshes the apps root's state with an apply: its plan is
-  shown, must move the parameter's `version` and nothing else (the runbook's own test), and runs on
-  confirm. Its step 7 deletes the old secret at the provider, and step 2 of ending an app's
-  sessions removes app 1's entry: each runs on a confirm that names what goes (the secret's count
-  before, the app and the release it comes back at). Every other step writes the registry through
-  `spactl` or the provider through the CLI and runs on rule 1's approval.
+- **Rule 2.** Secret rotation's refresh-only apply (its step 4) asks for a `yes` this tool's shell
+  cannot type: run without one it prints its plan and exits 1 with `error asking for approval:
+  EOF`, applying nothing. So first `shown terraform -chdir=infra/envs/poc/apps plan -refresh-only`,
+  a read, whose plan must move the parameter's `version` and nothing else (the runbook's own
+  test); then, on confirm, the runbook's apply line as written with the approval on its standard
+  input, `printf 'yes\n' | shown terraform ...`, which is rule 2's confirm given through the shell
+  and not an edit of the line. The deletion of the old secret at the provider (secret rotation's
+  step 7) and the removal of app 1's entry (step 2 of ending an app's sessions) each run on a
+  confirm that names what goes (the secret's count before, the app and the release it comes back
+  at). Every other step writes the registry through `spactl` or the provider through the CLI and
+  runs on rule 1's approval.
 - **Rule 3 and the browser.** No post carries a secret: the second secret's value is written to
   `"$RUN/secret"` and to the parameter and never read back, and the post names the parameter's
   version before and after and the count the runbook's last line prints, never a value, a secret's
   id or a client id. A step that signs in, or reads what a signed-in page shows, is the human's:
   wiz asks, and records the UTC time and what the page showed (signed in, sent to sign in again, a
-  404, a 401), never a cookie or a session's name.
+  404, a 401, the `index.html` marker's text), never a cookie or a session's name. An app host's
+  `/` is behind the shell gate (`GLOSSARY.md` → Shell gate: an unauthenticated navigation is
+  challenged), so what an app serves is read in the human's signed-in tab, never by a `shown`
+  request.
 
 **The setup before walk 1.** A cell seeded once holds one release of app 1, so release rollback's
 step 1 finds no earlier registry version whose release for app 1 differs, and the runbook has
 nothing to roll back to; Q99's "app 1 on its first release" presumes a second. On approval, publish
-a second release of app 1 from `fixtures/spa/app1` and activate it (the two `spactl release`
-commands C3's step 2 and the runbook's step 2 show, the release named `walk-` and twelve hex
-digits, a name `contracts/registry.schema.json`'s release pattern admits), wait for its revision, and post both lines under "## Release rollback" as setup, apart from
-the runbook's steps. The walk then rolls app 1 back to the release it served before the setup and
+a second release of app 1 and activate it (the two `spactl release` commands C3's step 2 and the
+runbook's step 2 show, the release named `walk-` and twelve hex digits, a name
+`contracts/registry.schema.json`'s release pattern admits), wait for its revision, and post both
+lines under "## Release rollback" as setup, apart from the runbook's steps. Publish it from a copy
+of `fixtures/spa/app1` under `"$RUN"` whose `<h1 id="marker">` line names the walk release, as
+`tests/e2e/Functional/ShellTests.cs` makes its second release: the fixture published unchanged
+would serve the same `index.html` as the first release, and Q96's marker could not tell the two
+apart. The walk then rolls app 1 back to the release it served before the setup and
 leaves it there: the roll-forward the runbook's last line offers is not run, so that the cell ends
 where Q99 asks. Walk 2 reads the revisions walk 1 made (Q95): its plain rollback restores the
 content before walk 1's activation, under a new revision, and the runbook's second plain rollback,
@@ -378,15 +399,17 @@ for, and the two revisions restored differ in app 1's entry alone.
 CLI with what the operator session offers, each read named in the post, and none needing a session
 key, a cookie or a secret:
 
-- release rollback: the served `index.html`'s release marker and `/readyz`'s revision, before and
-  after each activation, the setup's included;
+- release rollback: the served `index.html`'s release marker, read in the human's signed-in tab
+  (the browser binding), and `/readyz`'s revision, before and after each activation, the setup's
+  included;
 - registry rollback: the two revisions restored, with only app 1's entry differing between them;
 - secret rotation: a session signed in before step 1 still calling app 1's API after the old secret
   is deleted; a fresh login succeeding once the entry points at the new version and again after the
   deletion; the parameter's version moved; and the apps root's `plan -detailed-exitcode` exiting 0
   at the end, with the file's "Checks for the first walk (#244)" settled (#244 names these steps by
-  an older numbering of the runbook; the post cites the file's section headings as they read at the
-  commit walked);
+  the plan's four-step count of `docs/plan/05-infrastructure-and-cost.md` → Rotating a client
+  secret, where step 3 points the entry and step 4 deletes the old secret, not by the runbook's
+  seven headings; the post cites the file's section headings as they read at the commit walked);
 - ending an app's sessions: `/bff/user` answering 200 before, the host 404 between the removal and
   the re-add, 401 after the re-add, the purge line step 3 reads through `logs.sh`, and app 2's
   session answering 200 throughout;
@@ -407,15 +430,17 @@ change to run (a path, a flag, a name), or one of the file's "Checks for the fir
 does not hold. Post the walk as not passed at that step, with the command, its exit and its lines,
 and print under "Held" the ws6 follow-up the human files (`**Raised by:** #244`) that fixes the
 runbook; that runbook is walked again in a later sitting once the fix is on `main`. Secret rotation
-stops the same way when the CLI or the SCP refuses Cognito's second-secret call (an `AccessDenied` at
-step 2 or 7) or the apps root's plan is not empty after step 7, and the follow-up named is ws1's
+stops the same way when the CLI or the SCP refuses Cognito's second-secret call (an `AccessDenied`
+adding the second secret, step 2, or deleting the old one, step 7) or the apps root's plan is not
+empty after the deletion, and the follow-up named is ws1's
 (Q98). That refusal is the walk's stop, not rule 7's: it is the first such call, not one that worked
 before, so the sitting goes on to the next walk. Its post names the step and says the provider
 refused the call; the refusing line stays in the record and never enters the draft, since the post
 mode exits 3 on that word and posts nothing. Before the next walk, put back what the stopped
 walk's finished steps changed, on approval and with the runbook's own means where it offers one
-(release rollback's roll-forward line, a second registry rollback, step 4 of ending an app's
-sessions); where it offers none, record what now differs, so that R's end-state line is true.
+(release rollback's roll-forward line, a second registry rollback, the re-add that ends an app's
+sessions, its step 4); where it offers none, record what now differs, so that R's end-state line is
+true.
 
 W ends after walk 4's post. R follows, and the end state Q99 names goes in its post; when R
 neither runs nor posts, because #244's box already ticks on #242's run and #242 needs no rollback,
