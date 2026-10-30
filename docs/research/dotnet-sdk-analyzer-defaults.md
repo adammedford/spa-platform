@@ -133,7 +133,7 @@ Web sources, all read 2026-10-29:
 | W3 | https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/configuration-files | ms.date 2021-07-07, updated 2024-08-31 |
 | W4 | https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/configuration-options | ms.date 2026-02-13 |
 | W5 | https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/security-warnings | ms.date 2019-10-02, updated 2025-07-18 (index page; the fetched text carried no table) |
-| W6 | https://raw.githubusercontent.com/dotnet/sdk/main/src/Microsoft.CodeAnalysis.NetAnalyzers/src/Microsoft.CodeAnalysis.NetAnalyzers.md | `main` as of 2026-10-29 (the analyzer source moved from dotnet/roslyn-analyzers into dotnet/sdk; W1 and W4 link there) |
+| W6 | https://raw.githubusercontent.com/dotnet/sdk/main/src/Microsoft.CodeAnalysis.NetAnalyzers/src/Microsoft.CodeAnalysis.NetAnalyzers.md | `main` as of 2026-10-29 (the analyzer source moved from dotnet/roslyn-analyzers into dotnet/sdk; W4 links there, W1 links both repositories) |
 | W7 | https://learn.microsoft.com/en-us/visualstudio/code-quality/disable-code-analysis | ms.date 2026-04-21, updated 2026-10-20 |
 | W8 | https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/errors-warnings | ms.date 2025-05-30, updated 2026-05-01 |
 | W9 | https://raw.githubusercontent.com/dotnet/roslyn/main/src/Analyzers/Core/Analyzers/EnforceOnBuildValues.cs | `main` as of 2026-10-29 |
@@ -171,7 +171,7 @@ second is W6's "Enabled" and "Severity" columns.
 
 **Tier A: disabled by default (70 rules).** These report nothing until you enable them by id,
 or with `AnalysisModeSecurity=All` or `AnalysisLevelSecurity=latest-all`. A category-level
-`dotnet_analyzer_diagnostic` entry does **not** reach them (W4, "Important"). W6 gives each a
+`dotnet_analyzer_diagnostic` entry does **not** reach them (W4, "Important"; probe case I). W6 gives each a
 default severity of Warning once it is enabled.
 
 - CA2xxx: CA2100 (SQL queries), CA2119, CA2153.
@@ -193,7 +193,7 @@ default severity of Warning once it is enabled.
 
 **Tier B: enabled by default but Hidden (24 rules).** These run at build and report nothing
 (W4: Hidden corresponds to `silent`). `Recommended` and `All` raise them to warning, and so does
-`dotnet_analyzer_diagnostic.category-Security.severity = warning`:
+`dotnet_analyzer_diagnostic.category-Security.severity = warning` (probe case H):
 CA3061, CA3075, CA3076, CA3077, CA3147, CA5350, CA5351, CA5359, CA5360, CA5363, CA5364,
 CA5365, CA5366, CA5368, CA5369, CA5370, CA5371, CA5372, CA5373, CA5374, CA5379, CA5384, CA5385,
 CA5397.
@@ -269,6 +269,8 @@ Probe results (E9). The probe was a scratch library with `new System.Random().Ne
 | E | as C, test file `global_level = 100` | `warning MultipleGlobalAnalyzerKeys ... It has been unset`; CA5394 not reported; build succeeded (this warning was not escalated) |
 | F | root `= warning`, `-p:WarningsNotAsErrors=CA5394` | `warning CA5394`, build succeeds |
 | G | root `.globalconfig` `= error`, `.editorconfig` `[sub/**.cs]` `CA5394 = none` | only the root file errors; `sub/Q.cs` is silent |
+| H | no `AnalysisLevelSecurity`; `MD5.Create()`; root `.globalconfig` `dotnet_analyzer_diagnostic.category-Security.severity = warning` | `warning CA5351` (silent without the line): a category entry raises Tier B in Default mode |
+| I | as H, but `new Random().Next()` (CA5394, Tier A) | nothing reported: a category entry does not reach a disabled-by-default rule |
 
 Ways to give the test tier a different severity from the one `Directory.Build.props`:
 
