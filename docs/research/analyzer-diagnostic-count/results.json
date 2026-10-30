@@ -1,0 +1,282 @@
+[
+ {
+  "setting": "S0",
+  "kind": "cold-clean",
+  "round": 0,
+  "seconds": 13.97,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "cold-clean",
+  "round": 0,
+  "seconds": 27.02,
+  "exit": 0
+ },
+ {
+  "setting": "S2",
+  "kind": "cold-clean",
+  "round": 0,
+  "seconds": 35.6,
+  "exit": 1
+ },
+ {
+  "setting": "S3",
+  "kind": "cold-clean",
+  "round": 0,
+  "seconds": 35.42,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "clean",
+  "round": 1,
+  "seconds": 4.33,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "noop",
+  "round": 1,
+  "seconds": 2.2,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "touch-gateway",
+  "round": 1,
+  "seconds": 2.04,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "clean",
+  "round": 1,
+  "seconds": 8.43,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "noop",
+  "round": 1,
+  "seconds": 1.27,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "touch-gateway",
+  "round": 1,
+  "seconds": 1.33,
+  "exit": 0
+ },
+ {
+  "setting": "S2",
+  "kind": "clean",
+  "round": 1,
+  "seconds": 6.45,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "noop",
+  "round": 1,
+  "seconds": 1.43,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "touch-gateway",
+  "round": 1,
+  "seconds": 1.26,
+  "exit": 1
+ },
+ {
+  "setting": "S3",
+  "kind": "clean",
+  "round": 1,
+  "seconds": 8.1,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "noop",
+  "round": 1,
+  "seconds": 1.6,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "touch-gateway",
+  "round": 1,
+  "seconds": 1.69,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "clean",
+  "round": 2,
+  "seconds": 3.04,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "noop",
+  "round": 2,
+  "seconds": 1.83,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "touch-gateway",
+  "round": 2,
+  "seconds": 1.53,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "clean",
+  "round": 2,
+  "seconds": 8.45,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "noop",
+  "round": 2,
+  "seconds": 1.83,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "touch-gateway",
+  "round": 2,
+  "seconds": 1.8,
+  "exit": 0
+ },
+ {
+  "setting": "S2",
+  "kind": "clean",
+  "round": 2,
+  "seconds": 11.11,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "noop",
+  "round": 2,
+  "seconds": 2.0,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "touch-gateway",
+  "round": 2,
+  "seconds": 2.07,
+  "exit": 1
+ },
+ {
+  "setting": "S3",
+  "kind": "clean",
+  "round": 2,
+  "seconds": 7.25,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "noop",
+  "round": 2,
+  "seconds": 1.58,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "touch-gateway",
+  "round": 2,
+  "seconds": 2.14,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "clean",
+  "round": 3,
+  "seconds": 3.75,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "noop",
+  "round": 3,
+  "seconds": 1.58,
+  "exit": 0
+ },
+ {
+  "setting": "S0",
+  "kind": "touch-gateway",
+  "round": 3,
+  "seconds": 1.71,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "clean",
+  "round": 3,
+  "seconds": 8.25,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "noop",
+  "round": 3,
+  "seconds": 1.76,
+  "exit": 0
+ },
+ {
+  "setting": "S1",
+  "kind": "touch-gateway",
+  "round": 3,
+  "seconds": 1.84,
+  "exit": 0
+ },
+ {
+  "setting": "S2",
+  "kind": "clean",
+  "round": 3,
+  "seconds": 9.67,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "noop",
+  "round": 3,
+  "seconds": 1.64,
+  "exit": 1
+ },
+ {
+  "setting": "S2",
+  "kind": "touch-gateway",
+  "round": 3,
+  "seconds": 1.27,
+  "exit": 1
+ },
+ {
+  "setting": "S3",
+  "kind": "clean",
+  "round": 3,
+  "seconds": 7.96,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "noop",
+  "round": 3,
+  "seconds": 1.65,
+  "exit": 0
+ },
+ {
+  "setting": "S3",
+  "kind": "touch-gateway",
+  "round": 3,
+  "seconds": 1.54,
+  "exit": 0
+ }
+]

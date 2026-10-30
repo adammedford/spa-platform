@@ -1,0 +1,7 @@
+<Project>
+  <!-- S3: S2 with every third-party rule at warning, the off-by-default ones included. -->
+  <Import Project="s2.props" />
+  <ItemGroup>
+    <GlobalAnalyzerConfigFiles Include="$(MSBuildThisFileDirectory)s3.globalconfig" />
+  </ItemGroup>
+</Project>
