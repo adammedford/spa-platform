@@ -339,15 +339,16 @@ deployment order from the first root that is absent:
    #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
    block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
    client id in another shape before it goes.
-3. `infra/envs/poc/platform/terraform.tfvars`: back it up first (`cp -p` to `terraform.tfvars.bak`),
-   then rewrite `issuers` from the identity root's outputs (`authority` is its `issuer`,
-   `browser_origin` is `https://` plus its `cognito_domain`; the map's key and `profile` stay as
-   the backed-up file has them), and `gateway_image` to the sample
-   image by digest with `health_check_path = "/"`. Read the digest with
-   `docker buildx imagetools inspect public.ecr.aws/nginx/nginx-unprivileged:stable-alpine` and write
-   it only when it matches `sha256:[0-9a-f]{64}`: ECR Public can answer 429, and an empty digest was
-   written once. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a plain `terraform
-   destroy` leaves it, and it overrides the sample image).
+3. `infra/envs/poc/platform/terraform.tfvars` (git-ignored: on a fresh checkout copy
+   `terraform.tfvars.example` to it first): back it up first (`cp -p` to `terraform.tfvars.bak`),
+   then `shown tools/scripts/platform-tfvars.sh` (#470), which rewrites `issuers` from the identity
+   root's outputs and pins `gateway_image` to the sample image by its current digest, with
+   `health_check_path = "/"`, and leaves the file as it was unless every value is well formed. Show
+   its output: it names which keys changed and prints no value but the digest. When it exits 1 on
+   the digest lookup (ECR Public can answer 429, and an empty digest was written once by hand), run
+   it again as `shown tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>` with the
+   digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
+   plain `terraform destroy` leaves it, and it overrides the sample image).
 4. The platform root on the sample image, as `shown`: `plan`, read for the certificate found, no
    per-app resource, and P-01's counts (one load balancer, one listener, one target group, one
    service, one bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs
