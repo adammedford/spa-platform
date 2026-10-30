@@ -3,7 +3,7 @@
 # delete the branches the landing finished.
 # Owner: integrator.
 #
-#     tools/land.sh <pr-number> [--subject "<merge subject>"] [--body-file <path>]
+#     tools/land.sh <pr-number> --body-file <path> [--subject "<merge subject>"]
 #                   [--unreviewed "<reason>"]
 #
 # Run it from a worktree sitting at the pull request's base with nothing uncommitted, because the
@@ -23,7 +23,9 @@
 # process substitution such as `--body-file <(...)` -- but never standard input, `-` included,
 # because with no --subject standard input answers the confirmation. The body says what was
 # verified and how, and it carries the `Outstanding:` line and the `Outstanding test ids:` line
-# when a row landed without being finished.
+# when a row landed without being finished. So it is required: a landing with no --body-file, or
+# one whose body is empty or only whitespace, is refused before anything is asked of gh (#552),
+# where before it merged with the trailer alone.
 # Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
 #
 # It merges only a head a review record clears (#67). A review record is one line a review leaves on
@@ -97,8 +99,8 @@ while [ $# -gt 0 ]; do
       # `--body-file <(...)` hands over, both of which gh reads (#72). -p follows the path to what
       # it names, so a /dev/fd/N whose descriptor this process did not inherit names nothing and is
       # refused here, the way a missing path is. The descriptor stays open until the body is read
-      # below, because nothing in this script closes one it inherited; tools/land_tests.py reads
-      # the body through one.
+      # after this loop, because nothing in this script closes one it inherited; tools/land_tests.py
+      # reads the body through one.
       [ -f "$2" ] || [ -p "$2" ] || die "--body-file: $2 is not a file or a pipe."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       # Made absolute here, because the script changes to the repository root before the merge and
@@ -129,6 +131,21 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$pr" ] || die "which pull request? tools/land.sh <pr-number>"
+
+# The body is required, and read here, once, before anything is asked of gh (#552, R3 of #98).
+# Until then a missing --body-file, an empty file or an empty pipe merged with the trailer alone,
+# although docs/agents/landing-work.md -> "Land it" says the body says what was verified and how.
+# Read once because a pipe cannot be read twice, and the text is kept for the merge. $(<) drops the
+# file's trailing newlines; the blank test is the one --unreviewed's reason gets, so a body of
+# newlines, spaces and tabs is as empty as no file.
+[ -n "$body_file" ] \
+  || die "--body-file is required: the merge body says what was verified and how (docs/agents/landing-work.md -> Land it). Pass --body-file <path>."
+text="$(< "$body_file")"
+case "$text" in
+  *[![:space:]]*) ;;
+  *) die "--body-file: $body_file is empty or only whitespace, and the merge body says what was verified and how (docs/agents/landing-work.md -> Land it)." ;;
+esac
+
 command -v gh >/dev/null 2>&1 || die "gh is not on PATH. tools/preflight.sh says what is missing."
 command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH, so the roadmap cannot be derived."
 
@@ -231,13 +248,9 @@ else
   trailer="Reviewed: $head $record"
 fi
 
-# The trailer is the body's last line, after one blank line. $(<) drops the file's trailing newlines,
-# so the gap is always one blank line however the file ended.
-body="$trailer"
-if [ -n "$body_file" ]; then
-  text="$(< "$body_file")"
-  [ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
-fi
+# The trailer is the body's last line, after one blank line. The text was read above with its
+# trailing newlines dropped, so the gap is always one blank line however the file ended.
+body="$(printf '%s\n\n%s' "$text" "$trailer")"
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
 if [ -z "$subject" ]; then

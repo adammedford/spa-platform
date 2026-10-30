@@ -1084,8 +1084,14 @@ class LandingCase(Case):
     merges, into the case's origin from a clone standing in for GitHub's side. tools/land_tests.py
     covers the steps between that merge and the cleanup, and answers the cleanup with a double;
     these cases run the real one. --unreviewed spares the review records, which tools/land_tests.py
-    covers.
+    covers. land.sh refuses a landing with no --body-file (#552), so each run passes one, written
+    among the fixtures, outside the trees whose status the cases read.
     """
+
+    def body_file(self):
+        body = self.fixtures / "body.md"
+        body.write_text("Verified by tools/prune_branches_tests.py.\n")
+        return str(body)
 
     def land_tree(self, *how):
         """A linked worktree at origin/main, detached unless `how` says otherwise (`-b <name>`),
@@ -1106,7 +1112,7 @@ class LandingCase(Case):
         # One stream, in the order a terminal shows it, so its last line is the one a session
         # reading `tools/land.sh ... 2>&1 | tail -1` would see.
         return subprocess.run(
-            [BASH, str(LAND), "5", "--subject", subject,
+            [BASH, str(LAND), "5", "--subject", subject, "--body-file", self.body_file(),
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
             cwd=cwd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False,
@@ -1315,6 +1321,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         (self.fixtures / "number").write_text("5\n")
         done = subprocess.run(
             [BASH, str(LAND), "5", "--subject", "Merge task 2.1: the registry",
+             "--body-file", self.body_file(),
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
             cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False)
