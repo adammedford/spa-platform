@@ -15,8 +15,11 @@
 # for changes to its workflow, the classifier, tools/smoke.sh or tools/image-check.sh, or when the
 # base cannot be resolved.
 #
-# A job skipped that way still satisfies main's protection, which requires `Build and test` and
-# `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
+# A job skipped that way still satisfies main's protection, which requires `Documents`, `Build and
+# test` and `Terraform` by name -- every check the protection listed as required when this sentence
+# was last written (#552; `gh api repos/adammedford/spa-platform/branches/main/protection` lists
+# them, and `Scripts under bash 3.2` joins the sentence once it is made required): GitHub reports a
+# job skipped by its `if` as a success, where a workflow
 # skipped by an `on.paths` filter leaves the required check pending and the pull request stuck --
 # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
 # -- which is why the filter is an `if` on each job and not a `paths` on the workflow. Each `if`
@@ -258,6 +261,15 @@ jobs:
         # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
         # case of each.
         run: python3 -I tools/review_record_tests.py
+
+      - name: The decision reader names the decision a merge body owes a citation to
+        # tools/land.sh refuses a merge whose body closes a change request decided `ADR: no` without
+        # citing its decision comment (#530), and this is the code that decides which decision that
+        # is. Its companion feeds it GitHub's shapes of an issue and its comments built to trip each
+        # rule -- an issue without the label, ADR: yes, a decline, a later decision, a comment in
+        # the form from another account, lines close to the form, a decision on a later page -- and
+        # the land.sh companion below runs only one case of each.
+        run: python3 -I tools/decision_citation_tests.py
 
       - name: The retro's record reader reads each record line the way its rules say
         # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line

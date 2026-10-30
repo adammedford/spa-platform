@@ -23,7 +23,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   3. No box depends on a push or a landing.
   4. Cross-owner work is a spec with one sub-issue per owner in build order, the integrator's
      `Platform.Abstractions` change first. Two halves that must land together stay single-owner on
-     two branches, and the landing merges them.
+     two branches, and the landing merges them; how that landing is built is in
+     `docs/agents/landing-work.md` → "Land it".
   5. Every ticket carries a `**Touches:**` line of the paths it writes; its owner is derived from
      those paths through `OWNERSHIP.md`.
 - **The ticket-shape check holds them where a ticket is written.** `tools/ticket_shape.py` reads one
