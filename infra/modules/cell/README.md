@@ -93,10 +93,10 @@ Session Manager session on the task can forward a port to the task's own address
 the gateway's port. That connection never leaves the task, so no security group sees
 it, and the gateway trusts the `X-Forwarded-For` and `X-Forwarded-Proto` it carries.
 A forward to 127.0.0.1 is not trusted, because the gateway clears the framework's
-loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Only operators
-hold that session, and they can already run commands in the task. Phase 1 accepts
-this (ticket 03, question 5); it closes when Phase 2 moves the task to private
-subnets (P2-4) and drops ECS Exec (P2-9), both in `docs/plan/06-phase-2-and-risks.md`.
+loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Phase 1 accepts
+this (ticket 03, question 5). The register's entry is `docs/gaps.md` → GAP-1, which
+holds who can reach it, the risk it leaves and what closes it; this section holds the
+module's part, the path through the subnets.
 
 ## The load balancer
 
