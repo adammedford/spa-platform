@@ -329,7 +329,8 @@ each walk, fast-forward (rule 8), name the commit, and read the file to the huma
 section:
 
 ```bash
-git fetch origin --tags && git merge --ff-only --quiet origin/main   # a call of its own, as Stage 0 runs it
+git fetch origin --tags
+git merge --ff-only --quiet origin/main  # a call of its own, as Stage 0 runs it: the guard admits exactly this form
 git rev-parse HEAD; cat docs/runbooks/<the walk's file>
 ```
 
@@ -347,9 +348,9 @@ line of it:
   "$RUN"` at the walk's end; secret rotation keeps the new secret there between its steps 2 and 3.
   `$CONFIG` is the platform configuration C2 rebuilt, `"$E/platform-config.json"`: the README says
   to rebuild it after a deployment or a rollback, and C1 was the last of either.
-- **Rule 2.** Secret rotation's `terraform apply -refresh-only` in the apps root is an apply: its plan
-  is shown, must move the parameter's `version` and nothing else (the runbook's own test), and runs
-  on confirm. Its step 7 deletes the old secret at the provider, and step 2 of ending an app's
+- **Rule 2.** Secret rotation's step 4 refreshes the apps root's state with an apply: its plan is
+  shown, must move the parameter's `version` and nothing else (the runbook's own test), and runs on
+  confirm. Its step 7 deletes the old secret at the provider, and step 2 of ending an app's
   sessions removes app 1's entry: each runs on a confirm that names what goes (the secret's count
   before, the app and the release it comes back at). Every other step writes the registry through
   `spactl` or the provider through the CLI and runs on rule 1's approval.
@@ -365,7 +366,7 @@ step 1 finds no earlier registry version whose release for app 1 differs, and th
 nothing to roll back to; Q99's "app 1 on its first release" presumes a second. On approval, publish
 a second release of app 1 from `fixtures/spa/app1` and activate it (the two `spactl release`
 commands C3's step 2 and the runbook's step 2 show, the release named `walk-` and twelve hex
-digits), wait for its revision, and post both lines under "## Release rollback" as setup, apart from
+digits, a name `contracts/registry.schema.json`'s release pattern admits), wait for its revision, and post both lines under "## Release rollback" as setup, apart from
 the runbook's steps. The walk then rolls app 1 back to the release it served before the setup and
 leaves it there: the roll-forward the runbook's last line offers is not run, so that the cell ends
 where Q99 asks. Walk 2 reads the revisions walk 1 made (Q95): its plain rollback restores the
@@ -409,12 +410,16 @@ runbook; that runbook is walked again in a later sitting once the fix is on `mai
 stops the same way when the CLI or the SCP refuses Cognito's second-secret call (an `AccessDenied` at
 step 2 or 7) or the apps root's plan is not empty after step 7, and the follow-up named is ws1's
 (Q98). That refusal is the walk's stop, not rule 7's: it is the first such call, not one that worked
-before, so the sitting goes on to the next walk. Before the next walk, put back what the stopped
+before, so the sitting goes on to the next walk. Its post names the step and says the provider
+refused the call; the refusing line stays in the record and never enters the draft, since the post
+mode exits 3 on that word and posts nothing. Before the next walk, put back what the stopped
 walk's finished steps changed, on approval and with the runbook's own means where it offers one
 (release rollback's roll-forward line, a second registry rollback, step 4 of ending an app's
 sessions); where it offers none, record what now differs, so that R's end-state line is true.
 
-W ends after walk 4's post. R follows, and the end state Q99 names goes in its post.
+W ends after walk 4's post. R follows, and the end state Q99 names goes in its post; when R
+neither runs nor posts, because #244's box already ticks on #242's run and #242 needs no rollback,
+the end-state paragraph goes in walk 4's post, with the gateway on C1's build.
 
 **R, gateway rollback: `rollback.sh` by its runbook (#242 box 6, #244 box 6; #286 Q70, Q97),**
 after W, so that the G3 to G5 rows share one deploy (#63's Q84) and because it signs every user out
@@ -434,9 +439,10 @@ Post on #242: the revision and digest it left, and its pass line. Post on #244 u
 rollback" the walk's shape, ending with the end state Q99 names, as the last walk's post: app 1 on
 its first release, the registry content as before under a later revision, the new secret live and
 the old one deleted, app 1 re-added, and the gateway on the build the rollback chose; where a walk
-was not passed, not run or put back by hand, say what differs. When R is not run, that end-state
-paragraph goes in its "not run" post, with the gateway on C1's build. The cell is then back to what
-it served before W, before T and C5.
+was not passed, not run or put back by hand, say what differs. When R is not run for want of a
+second build, that end-state paragraph goes in its "not run" post, with the gateway on C1's build;
+when R neither runs nor posts, it went in walk 4's post. The cell is then back to what it served
+before W, before T and C5.
 
 **T, `teardown.sh --yes` and P-05 (#242 box 4, P-05 on #63).** Show the header's step list as the
 case list; it destroys the platform, apps and identity roots, the imported certificate and the key
