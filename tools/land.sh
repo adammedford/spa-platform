@@ -173,10 +173,13 @@ full_sha='^[0123456789abcdef]{40}$'
 # work change request #551 still carried; only a sub-agent's reading caught it. Every n a Closes
 # line names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
 # trailer) of a non-merge commit between the base and the pinned head. `issue-n` is how an
-# overnight lane's task commit names its ticket, `Task issue-<n>: ...` in
+# overnight lane's task commit names a ticket with no plan row, `Task issue-<n>: ...` in
 # .claude/workflows/overnight.js, where only the lane's merge carries `Ticket: #n`; without it the
 # check refused 13 of the 23 Closes lines of #529, on the overnight route (decided on #566:
-# https://github.com/adammedford/spa-platform/issues/566#issuecomment-6511060750).
+# https://github.com/adammedford/spa-platform/issues/566#issuecomment-6511060750). A ticket whose
+# body has a `**Plan row:** X` line gets task id X, so its lane commit, `Task X: ...`, names it
+# only where the lane wrote #n in the body; one that did not is refused, failing closed, and the
+# refusal's remedy applies.
 # A merge is left out because its message names what it joins, which a rebuild can keep after the
 # commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
 # not a description, which can change after it.

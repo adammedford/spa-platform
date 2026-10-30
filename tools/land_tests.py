@@ -1187,6 +1187,15 @@ class ClosesTests(LandTestCase):
         self.assertEqual([], result.land_lines())
         self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
 
+    def test_a_message_that_opens_with_the_issue_token_names_its_ticket(self):
+        # The newest non-merge commit's message is the first text the check reads, so issue-479
+        # there has nothing before it, which the start of the message has to stand for.
+        case = MergingCase(self, commits=("issue-479: the work",), description="Closes #479")
+        result = case.run(PR, "--subject", self.SUBJECT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], result.land_lines())
+        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
     def test_an_issue_token_is_matched_whole(self):
         # Each way round, as for #n: issue-35 is not read inside issue-352, nor issue-352 as
         # issue-35; and a word ending in issue, such as reissue-352, is not the token.
