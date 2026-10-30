@@ -229,8 +229,9 @@ jobs:
         # carries every generated test-user password and the apps root's carries the OAuth client
         # secrets. Change request 1.1's first half put *.tfplan in .gitignore; this is its second
         # half, and it is a check rather than a sentence because the sentence is what the author of
-        # any future plan pipeline would read last. It starts green: nothing here uploads an
-        # artifact or writes a plan yet.
+        # any future plan pipeline would read last. Nothing writes a plan, and the one artifact
+        # upload it admits is the startup benchmark's own files in .github/workflows/startup-bench.yml
+        # (#576), pinned there to that file and that path.
         run: |
           python3 -I .github/plan-secrecy-tests.py
           python3 -I .github/plan-secrecy.py
@@ -359,6 +360,15 @@ jobs:
         # each case's tool input against real git in a throwaway repository with a linked
         # worktree, and runs the settings entry as written.
         run: python3 -I tools/main_checkout_guard_tests.py
+
+      - name: The nightly startup benchmark job re-runs once on no verdict, never on a fail, and stays informational until promoted
+        # .github/workflows/startup-bench.yml runs tools/bench/startup.py's local tier on an ARM64
+        # runner nightly, through .github/startup-bench.sh (#576; ADR-0033 -> Decision, the cadence).
+        # That job never runs on a workstation and nothing here is ARM64, so the script's rules are
+        # proved with the benchmark doubled: the three local budgets, exactly one re-run on exit 2 and
+        # none on exit 1, both runs' files kept, the verdict as the last line, and the exit code
+        # read only once STARTUP_BENCH_ASSERTS is true. A step of its own, as every companion here.
+        run: python3 -I .github/startup_bench_tests.py
 
       - name: The overnight collect resolves tickets by its rules, lists specs apart and refuses a shared id
         # The overnight run's lanes are built from what tools/overnight_collect.py resolves (#187):
