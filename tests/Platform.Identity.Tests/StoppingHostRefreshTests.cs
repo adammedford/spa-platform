@@ -57,7 +57,7 @@ public sealed class StoppingHostRefreshTests
         Assert.Empty(answer.Cookies);
         string line = Assert.Single(RefreshLeaseTests.SourceLines(logs), l => l.Contains("stopping", StringComparison.Ordinal));
         Assert.Contains(SessionRef.Of(key), line, StringComparison.Ordinal);
-        AssertNoSecretOnAnyLine(logs, key, leases);
+        AssertNoSecretOnAnyLine(logs, key, await StoredTokensAsync(gateway, key), leases);
     }
 
     [Fact]
@@ -115,18 +115,32 @@ public sealed class StoppingHostRefreshTests
         Assert.Empty(answer.Cookies);
         string line = Assert.Single(RefreshLeaseTests.SourceLines(logs), l => l.Contains("stopping", StringComparison.Ordinal));
         Assert.Contains(SessionRef.Of(key), line, StringComparison.Ordinal);
-        AssertNoSecretOnAnyLine(logs, key);
+        AssertNoSecretOnAnyLine(logs, key, await StoredTokensAsync(gateway, key));
     }
 
     /// <summary>
-    /// N-16 on the new paths: neither the session key nor any lease token is on any line the host wrote.
+    /// The session's refresh and access tokens as the store holds them: the refused path read the refresh
+    /// token before admission, so both are canaries N-16's search must plant, not only the key.
     /// </summary>
-    private static void AssertNoSecretOnAnyLine(CapturedLog logs, string key, ScriptedLeases? leases = null)
+    private static async Task<string[]> StoredTokensAsync(IdentityGateway gateway, string key) =>
+    [
+        await RefreshLeaseTests.StoredTokenAsync(gateway.Sessions, key, "refresh_token"),
+        await RefreshLeaseTests.StoredTokenAsync(gateway.Sessions, key, "access_token"),
+    ];
+
+    /// <summary>
+    /// N-16 on the new paths: neither the session key, nor the session's tokens, nor any lease token is
+    /// on any line the host wrote. Each value is planted from the test's own state, so the assertion can
+    /// fail (CODING_STANDARDS.md, "An assertion must be able to fail").
+    /// </summary>
+    private static void AssertNoSecretOnAnyLine(CapturedLog logs, string key, string[] tokens, ScriptedLeases? leases = null)
     {
         Assert.NotEmpty(logs.Lines);
+        Assert.NotEmpty(tokens);
         Assert.All(logs.Lines, line =>
         {
             Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal);
+            Assert.All(tokens, token => Assert.DoesNotContain(token, line.Text, StringComparison.Ordinal));
             foreach (RefreshLease lease in leases?.Acquired ?? [])
             {
                 Assert.DoesNotContain(lease.Token, line.Text, StringComparison.Ordinal);

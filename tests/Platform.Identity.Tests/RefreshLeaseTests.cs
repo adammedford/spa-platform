@@ -230,7 +230,12 @@ public sealed class RefreshLeaseTests
         Assert.Equal(leases.Acquired.Count, SourceLines(logs).Count(line => line.Contains("Too little of the refresh lease", StringComparison.Ordinal)));
         string warning = Assert.Single(SourceLines(logs), line => line.Contains("within two times to live", StringComparison.Ordinal));
         Assert.Contains(SessionRef.Of(key), warning, StringComparison.Ordinal);
-        Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal));
+        string[] tokens = [await StoredTokenAsync(gateway.Sessions, key, "refresh_token"), await StoredTokenAsync(gateway.Sessions, key, "access_token")];
+        Assert.All(logs.Lines, line =>
+        {
+            Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal);
+            Assert.All(tokens, token => Assert.DoesNotContain(token, line.Text, StringComparison.Ordinal));
+        });
     }
 
     [Theory]
