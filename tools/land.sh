@@ -59,6 +59,17 @@
 # #495, #497 and #498, each decided `ADR: no`, citing none of them, and a merge body cannot be
 # edited afterwards.
 #
+# Before it merges, it lists the overnight answers that wait on this landing (#531). A grill on an
+# `Overnight <date>` issue often answers a question in terms of another pull request ("closes when
+# #492 merges", "state this in #492's merge body"), provisionally until a Confirm, and the session
+# landing that pull request had no reason to read them: on 2026-10-29 three such answers on #528
+# went stale at #492's merge. So tools/overnight_answers.py, beside this script, reads the open
+# issues titled `Overnight <date>` for `## Questions:` comments naming this pull request's number
+# or a number its description closes, and this script prints each such question as one `land:`
+# line: the Overnight issue, the Q number, whether a Confirm comment on that issue covers it, and
+# its first line. It only reports: nothing it finds stops the merge, and when the reader fails one
+# line says so and the merge proceeds, with the reader's own words above it.
+#
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
 # with `Unreviewed: <reason>`. That review stays open until a record naming the merged head says
@@ -315,6 +326,28 @@ if [ -n "${follow_ups:-}" ]; then
     done <<< "$follow_ups"
     die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
   fi
+fi
+
+# The overnight answers that wait on this landing (#531): the reader beside this script lists, from
+# the open `Overnight <date>` issues, each question naming this pull request or a ticket its
+# description closes, one line each, with whether a Confirm comment covers it; its gh calls live in
+# the reader alone. It runs after every refusal above and before the confirmation below, so the
+# human reads what waits before answering, and with --unreviewed too. It only reports: a question
+# it lists is the human's to act on, so none stops the merge, and a reader that fails (status 2,
+# its reason above) or a line it cannot print is said in one line and the merge proceeds. That is a
+# deliberate departure from CODING_STANDARDS.md -> "A check fails closed", decided on #531 for a
+# reader whose answer is advice, not a gate.
+echo "--- reading the overnight answers that wait on #$pr"
+waiting_on=(--number "$pr")
+for ticket in $closes; do waiting_on=("${waiting_on[@]}" --number "${ticket#\#}"); done
+status=0
+waiting="$(python3 -I "$here/overnight_answers.py" "${waiting_on[@]}" --lookup)" || status=$?
+if [ "$status" -ne 0 ]; then
+  echo "land: could not read the Overnight issues' questions (the reader exited $status; its reason is above), so none is listed and the merge proceeds."
+else
+  while IFS= read -r line; do
+    [ -z "$line" ] || echo "land: $line"
+  done <<< "$waiting"
 fi
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
