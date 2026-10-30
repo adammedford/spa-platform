@@ -479,3 +479,33 @@ source, then repeated on the shipped package with the overrides on. 32 of 32 exp
 **Reserve design** — the gateway-owned locking over the library's refresh call, proven in the harness
 and adopted for task 3.8 after the Cognito inside-window successor failure (C-2.17).
 The late-replay control C-2.18 is a separate observation. See ADR-0005 and ADR-0017.
+
+## Static analysis
+
+**Diagnostic id** — the identifier of one analyzer rule, such as CA2007, IDE0160 or MA0009: what a
+finding is reported under, and what a severity line or a suppression names. _Avoid_: "rule id",
+which is the request gate's rejection id.
+
+**Analysis tier** — a set of source files the analyzers hold to one severity profile. There are
+two, the strict tier and the relaxed tier, and a file's folder decides which it is in. _Avoid_:
+"test tier", which means Hermetic, Deployed or Local; "shipping tier", since a shipped tool sits in
+the relaxed one.
+
+**Strict tier** — the gateway and the platform libraries it is built from: every file the solution
+builds outside the relaxed tier, held to every rule at error. See
+`docs/adr/draft-static-analysis-policy.md`, numbered when it lands.
+
+**Relaxed tier** — tests, fixtures, the support library tests build on and the operator and bench
+tools: the strict tier's rules less a short list of relaxations, each a permanent reason that holds
+for such code by its nature. It relaxes no security rule. _Avoid_: exception, suppression (one site,
+with a justification), pending (a rule not yet at error).
+
+**Pending rule** — an enabled diagnostic held below error until every project is clean for it,
+naming the ticket that will promote it. Temporary, unlike a declined rule or a relaxation.
+
+**Declined rule** — a diagnostic turned off for the whole solution, each with its reason in an ADR.
+_Avoid_: pending, relaxation, for this.
+
+**Banned API** — a symbol the build refuses in a named set of strict-tier projects, with the reason
+shown where it is called. It forbids a call, not a value: it cannot prove that no token is logged,
+which N-16 proves.
