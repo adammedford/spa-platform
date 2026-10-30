@@ -43,9 +43,10 @@
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
 #
-# It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
-# between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
-# closes each one (#566). A refusal names each #n no commit names, and --unreviewed does not lift it.
+# It merges only a description whose every closing reference, `Closes #n` or any other form GitHub
+# closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
+# names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
+# names each #n no commit names, and --unreviewed does not lift it.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
@@ -191,25 +192,38 @@ full_sha='^[0123456789abcdef]{40}$'
 # commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
 # not a description, which can change after it.
 #
-# A Closes line is read in the form docs/agents/landing-work.md -> "Land it" gives it and
-# .claude/workflows/morning.js reads, one `Closes #n` to a line, with the keyword in any case, as
-# GitHub reads it, and whatever follows the number, such as the carriage return that ends each line
-# of a description edited on the web. n is every digit after the `#`. `#n` and `issue-n` are
-# matched in a message only where no digit follows, so #35 is not found inside #352 nor issue-35
-# inside issue-352, and `issue-n` only where no letter, digit or underscore comes before it. The
-# head's commits are read only when there is a Closes line, and fetched by sha when this clone
-# lacks them, the way actions/checkout fetches a pull request's commit from GitHub:
-# https://github.com/actions/checkout.
+# The form docs/agents/landing-work.md -> "Land it" asks for, and .claude/workflows/morning.js
+# reads, is one `Closes #n` to a line. The check reads what GitHub reads (#578): any of its closing
+# keywords (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved), in any case, an
+# optional colon after it, then `#n`, anywhere in a line and as many times to a line as it occurs,
+# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue,
+# so a `Fixes #n` written by hand still has to name a ticket the branch did work for. The keyword
+# is a whole word (`prefixes #3` closes nothing), n is every digit after the `#`, and what follows
+# the number, such as the carriage return that ends each line of a description edited on the web,
+# is ignored. A keyword before `owner/repo#n` is not read: that form names another repository's
+# ticket. bash's =~ finds one match, so a line is read from its right end, each match's prefix
+# becoming the next line to read, and the numbers are put back in the line's order. `#n` and
+# `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
+# nor issue-35 inside issue-352, and `issue-n` only where no letter, digit or underscore comes
+# before it. The head's commits are read only when there is a closing reference, and fetched by
+# sha when this clone lacks them, the way actions/checkout fetches a pull request's commit from
+# GitHub: https://github.com/actions/checkout.
 description="$(gh pr view "$pr" --json body --jq .body)"
-closes_line='^[[:space:]]*[Cc][Ll][Oo][Ss][Ee][Ss][[:space:]]+#([0-9]+)'
+keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
+closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
 closes=""
 while IFS= read -r line; do
-  if [[ $line =~ $closes_line ]]; then closes="$closes #${BASH_REMATCH[1]}"; fi
+  in_line=""
+  while [[ $line =~ $closing ]]; do
+    in_line=" #${BASH_REMATCH[6]}$in_line"
+    line="${BASH_REMATCH[1]}"
+  done
+  closes="$closes$in_line"
 done <<< "$description"
 if [ -n "$closes" ]; then
   { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
     && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
-    || die "could not read the commits of #$pr up to $head, so the tickets its Closes lines name cannot be checked."
+    || die "could not read the commits of #$pr up to $head, so the tickets its closing references name cannot be checked."
   unnamed=""
   for ticket in $closes; do
     named="($ticket|(^|[^[:alnum:]_])issue-${ticket#\#})([^0-9]|\$)"

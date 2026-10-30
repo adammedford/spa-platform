@@ -1208,9 +1208,9 @@ class PostMergeTests(LandTestCase):
 
 
 class ClosesTests(LandTestCase):
-    """The description's Closes lines against the branch's commits (#566): every #n a `Closes #n`
-    line names must be in the message of a non-merge commit between the base and the head, or
-    nothing merges. The cases run MergingCase, whose merge would go through and whose landing clone
+    """The description's closing references against the branch's commits (#566): every #n a
+    `Closes #n` line, or any other form GitHub closes a ticket on (#578), names must be in the
+    message of a non-merge commit between the base and the head, or nothing merges. The cases run MergingCase, whose merge would go through and whose landing clone
     holds none of the branch's commits, so a refusal is land.sh's own and a pass shows land.sh
     fetching the head before it read its commits."""
 
@@ -1318,6 +1318,48 @@ class ClosesTests(LandTestCase):
         self.assertEqual(READS_RECORDS + [["pr", "merge", PR, "--merge", "--match-head-commit",
                                            case.head, "--subject", self.SUBJECT, "--body",
                                            f"Reviewed: {case.head} {RECORD_URL}"]], case.calls())
+        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
+    def test_every_closing_keyword_is_read(self):
+        # GitHub's closing keywords (#578), each with no commit naming the ticket:
+        # https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
+        for keyword in ("close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves",
+                        "resolved", "Fixed", "RESOLVES"):
+            with self.subTest(keyword=keyword):
+                case = MergingCase(self, description=f"{keyword} #352")
+                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+
+    def test_a_closing_reference_anywhere_in_a_line_is_read(self):
+        # The forms the review of #567 named (#578): a colon after the keyword, a keyword mid-line,
+        # and a second keyword on one line, each with no commit naming the ticket.
+        for description in ("Closes: #352", "This change fixes #352 for good.",
+                            "Resolves #177, resolves #352", "\tResolved: #352\r"):
+            with self.subTest(description=description):
+                case = MergingCase(self, commits=("Task issue-177: the work",),
+                                   description=description)
+                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+
+    def test_the_tickets_are_named_in_the_description_order(self):
+        # Two on one line and one on the next, none named: the refusal lists them as written.
+        case = MergingCase(self, description="Fixes #352, closes #35\nResolves #388")
+        self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT),
+                                 "#352", "#35", "#388")
+
+    def test_a_word_ending_in_a_keyword_closes_nothing(self):
+        # GitHub reads a keyword as a word: `prefixes #3` and `unclosed #3` close nothing, so the
+        # ticket needs no commit and the description merges.
+        case = MergingCase(self, description="The prefixes #352 uses, and the unclosed #35 case.")
+        result = case.run(PR, "--subject", self.SUBJECT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], result.land_lines())
+        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
+    def test_another_repository_s_ticket_is_not_read(self):
+        # `Fixes owner/repo#n` closes a ticket of another repository, which no commit here names.
+        case = MergingCase(self, description="Fixes octo-org/octo-repo#352")
+        result = case.run(PR, "--subject", self.SUBJECT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], result.land_lines())
         self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
 
     def test_a_head_whose_commits_cannot_be_read_is_refused(self):
