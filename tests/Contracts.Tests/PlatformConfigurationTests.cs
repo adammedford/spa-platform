@@ -170,7 +170,8 @@ public sealed class PlatformConfigurationTests
     {
         // Change request P2-1 Decision 3 deferred the requirement to the next gate; #343 landed it with
         // G3's tag, so the schema says what the store's FromConfiguration has enforced since P2-1.
-        // Mutation: drop the if/then under Session, and the first case passes.
+        // Mutation: drop the if/then under Session, and the schema accepts the first document, so the
+        // first refusal fails.
         Schemas.RejectsPlatformConfig(
             Documents.PlatformConfig(c =>
             {
