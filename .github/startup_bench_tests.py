@@ -57,7 +57,7 @@ exit "$status"
 
 class Run:
     def __init__(self, test: unittest.TestCase, answers: list[tuple[int, str]], *,
-                 asserts: str | None = None, summary: bool = False):
+                 asserts: str | None = None, summary: bool = False, out_arg: str | None = None):
         scratch = tempfile.TemporaryDirectory()
         test.addCleanup(scratch.cleanup)
         self.dir = pathlib.Path(scratch.name).resolve()
@@ -83,7 +83,8 @@ class Run:
             env["STARTUP_BENCH_ASSERTS"] = asserts
         if summary:
             env["GITHUB_STEP_SUMMARY"] = str(self.summary)
-        completed = subprocess.run(["bash", str(SCRIPT), str(self.out)], cwd=self.dir, env=env,
+        # The out-dir as the job passes it, absolute, unless a case passes its own (a relative one).
+        completed = subprocess.run(["bash", str(SCRIPT), out_arg or str(self.out)], cwd=self.dir, env=env,
                                    capture_output=True, text=True, timeout=60)
         self.status = completed.returncode
         self.stdout = completed.stdout
@@ -168,12 +169,47 @@ class StartupBenchTests(unittest.TestCase):
     def test_a_benchmark_that_did_not_run_fails_the_job_in_either_mode(self):
         # Exit codes other than 0, 1 and 2 are not the benchmark's verdicts: startup.py's verdict
         # mode ends on one of its three lines whatever happens inside it, so another code means
-        # the job itself is broken (no python3, a refused argument), which no calibration run
-        # should read as informational.
+        # the job itself is broken (no python3), which no calibration run should read as
+        # informational.
         run = Run(self, [(127, "bash: python3: command not found")])
         self.assertEqual(127, run.status, run.stdout + run.stderr)
         self.assertEqual(1, len(run.call_args), run.call_args)
         self.assertTrue(run.lines[-1].startswith("startup-bench: the benchmark did not run"), run.stdout)
+
+    def test_a_refused_argument_is_not_a_no_verdict_and_fails_the_job_without_a_re_run(self):
+        # argparse refuses an argument with exit 2 and a usage line, the code `bench: no verdict:`
+        # shares; read by the exit code alone it earned a re-run and then an informational pass
+        # (#576's review). A verdict is a verdict line, so this fails the job in both modes, once.
+        for asserts in (None, "true"):
+            with self.subTest(asserts=asserts):
+                run = Run(self, [(2, "startup.py: error: unrecognized arguments: --bogus")], asserts=asserts)
+                self.assertEqual(2, run.status, run.stdout + run.stderr)
+                self.assertEqual(1, len(run.call_args), run.call_args)
+                self.assertTrue(run.lines[-1].startswith("startup-bench: the benchmark did not run"), run.stdout)
+
+    def test_a_verdict_line_under_another_exit_code_is_not_a_verdict(self):
+        # Both halves of the rule: the line and the code. startup.py never pairs a verdict line with
+        # a code outside 0, 1 and 2, so one that does is not startup.py's verdict mode.
+        run = Run(self, [(3, PASS)])
+        self.assertEqual(3, run.status, run.stdout + run.stderr)
+        self.assertTrue(run.lines[-1].startswith("startup-bench: the benchmark did not run"), run.stdout)
+
+    def test_an_exit_zero_without_a_verdict_line_still_fails_the_job(self):
+        # A pass is `bench: pass:`, not exit 0: a benchmark that ended on something else measured
+        # nothing the job can read (CODING_STANDARDS.md -> "A check fails closed").
+        run = Run(self, [(0, "a report line and no verdict")])
+        self.assertNotEqual(0, run.status, run.stdout + run.stderr)
+        self.assertTrue(run.lines[-1].startswith("startup-bench: the benchmark did not run"), run.stdout)
+
+    def test_a_relative_out_dir_is_the_callers_and_the_verdict_still_ends_the_log(self):
+        # The job passes an absolute path; a workstation may pass `out`. Before #576's review the
+        # directory was made in the caller's cwd and written to under the checkout's root, so tee
+        # and tail failed and the last line was an empty verdict with exit 0, failing open.
+        run = Run(self, [(0, PASS)], out_arg="out")
+        self.assertEqual(0, run.status, run.stdout + run.stderr)
+        self.assertEqual(["run-1.json", "run-1.txt"], run.kept())
+        self.assertBenchmarkCall(run.call_args[0], f"--json {run.out}/run-1.json")
+        self.assertEqual(f"startup-bench: informational: {PASS}", run.lines[-1])
 
     def test_the_verdict_goes_to_the_step_summary_when_github_offers_one(self):
         run = Run(self, [(2, NO_VERDICT), (0, PASS)], summary=True)

@@ -30,10 +30,17 @@
 #     STARTUP_BENCH_ASSERTS is `true`, which the workflow sets at the promotion the ADR names (ten
 #     calibration runs fitting the budgets with their headroom). An informational breach prompts a
 #     workstation run and is not the tuning trigger (ADR-0033 -> Decision, the tuning trigger).
-#   - An exit code that is none of 0, 1 and 2 is not a verdict: the verdict mode ends on one of its
-#     three lines whatever happens inside it (#575, b3a0926), so another code means the job itself
-#     did not run the benchmark (no python3, a refused argument). That fails the job in both modes,
-#     because a calibration run that measured nothing must not count as one of the ten.
+#   - A run is a verdict only when its exit code is 0, 1 or 2 AND its last line is one of the three
+#     verdict lines: the verdict mode ends on one of those lines whatever happens inside it (#575,
+#     b3a0926). Another exit code means the job itself did not run the benchmark (no python3); so
+#     does exit 2 with another last line, because argparse refuses an argument with exit 2 and a
+#     usage line (https://docs.python.org/3/library/argparse.html#exiting-methods), which the exit
+#     code alone would read as `bench: no verdict:` and re-run. Either fails the job in both modes,
+#     without a re-run, because a calibration run that measured nothing must not count as one of
+#     the ten (found in #576's review: a refused argument ended informational, exit 0).
+#   - <out-dir> may be relative to the caller's directory: it is resolved before the change to the
+#     checkout's root, so a workstation's `out` lands where the caller said (#576's review: before
+#     this, tee and tail failed and the script ended on an empty verdict with exit 0, failing open).
 #
 # bash 3.2 is enough: a workstation can run it the same way, and the macOS job parses it.
 
@@ -45,6 +52,8 @@ if [ $# -ne 1 ] || [ -z "$1" ]; then
 fi
 out="$1"
 mkdir -p "$out" || { echo "startup-bench: the benchmark did not run: cannot create $out"; exit 73; }
+# Absolute before the cd below, or a relative <out-dir> is created here and written to under the root.
+out="$(cd "$out" && pwd)" || { echo "startup-bench: the benchmark did not run: cannot enter $1"; exit 73; }
 cd "$(dirname "$0")/.." || { echo "startup-bench: the benchmark did not run: cannot reach the checkout's root"; exit 73; }
 
 mode=informational
@@ -70,20 +79,34 @@ run_once() {
   verdict="$(tail -n 1 "$out/run-$number.txt")"
 }
 
+# The last run was a verdict: exit 0, 1 or 2 and one of the verdict mode's three last lines. Anything
+# else (no python3, a refused argument's usage line under exit 2) is a benchmark that did not run,
+# which fails the job in both modes and is never re-run, with a non-zero code even if the exit was 0.
+is_verdict() {
+  case "$status" in
+    0 | 1 | 2) ;;
+    *) return 1 ;;
+  esac
+  case "$verdict" in
+    "bench: pass:"* | "bench: fail:"* | "bench: no verdict:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+did_not_run() {
+  echo "::error::startup-bench: the benchmark did not run (exit $status): $verdict"
+  echo "startup-bench: the benchmark did not run (exit $status): $verdict"
+  if [ "$status" -ne 0 ]; then exit "$status"; fi
+  exit 70
+}
+
 run_once 1
+is_verdict || did_not_run
 if [ "$status" -eq 2 ]; then
   echo "startup-bench: run 1 gave no verdict, so the one re-run ADR-0033 allows follows on the same images; both runs' files are kept (#175 Q7)."
   run_once 2 --no-build
+  is_verdict || did_not_run
 fi
-
-case "$status" in
-  0 | 1 | 2) ;;
-  *)
-    echo "::error::startup-bench: the benchmark did not run (exit $status): $verdict"
-    echo "startup-bench: the benchmark did not run (exit $status): $verdict"
-    exit "$status"
-    ;;
-esac
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {

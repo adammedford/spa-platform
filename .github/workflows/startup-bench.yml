@@ -67,7 +67,7 @@ jobs:
         # The benchmark's `.json` carries its own facts (commit, image ids, Docker, host); this puts
         # the runner's shape at the top of the log too, because a calibration run is compared with
         # the next one, and a runner image change between them is the first thing to rule out.
-        # Informational: no value fails it.
+        # Informational: no value fails it; a missing tool does, before the benchmark would have.
         run: |
           uname -m
           nproc
@@ -84,7 +84,8 @@ jobs:
         # Every run's `.txt` and `.json`, kept as this run's artifact (#176 Q6): both files of the
         # re-run too, when there was one. `if: always()` so a breach, a no-verdict and a stopped run
         # keep their files, which are the whole point of an informational run. 90 days is the most a
-        # public repository keeps, and ten calibration nights fit inside it.
+        # public repository keeps (https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/storing-and-sharing-data-from-a-workflow#configuring-a-custom-artifact-retention-period),
+        # and ten calibration nights fit inside it.
         if: always()
         with:
           name: startup-bench-${{ github.run_id }}
