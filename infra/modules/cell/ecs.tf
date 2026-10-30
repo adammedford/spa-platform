@@ -284,8 +284,13 @@ resource "aws_ecs_service" "gateway" {
   enable_execute_command = true
 
   # Continuity (#347). One task always serves during a roll: the replacement is started, and healthy
-  # in the target group, before a task is deregistered and drained. These are ECS's defaults, written
-  # down because F1 rests on them: at minimum healthy 50 a one-task service would be stopped first.
+  # in the target group, before a task is deregistered and drained. These are ECS's defaults for a
+  # replica service, written down because F1 rests on them. ECS keeps desiredCount x
+  # minimumHealthyPercent/100 tasks running, rounded up, and starts up to desiredCount x
+  # maximumPercent/100, rounded down
+  # (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeploymentConfiguration.html). So
+  # 100 keeps every task serving at any count; 50 would keep the one task of a one-task cell, by the
+  # rounding, but would let a two-task cell stop one of its two before its replacement is healthy.
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
