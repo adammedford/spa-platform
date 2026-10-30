@@ -1210,9 +1210,10 @@ class PostMergeTests(LandTestCase):
 class ClosesTests(LandTestCase):
     """The description's closing references against the branch's commits (#566): every #n a
     `Closes #n` line, or any other form GitHub closes a ticket on (#578), names must be in the
-    message of a non-merge commit between the base and the head, or nothing merges. The cases run MergingCase, whose merge would go through and whose landing clone
-    holds none of the branch's commits, so a refusal is land.sh's own and a pass shows land.sh
-    fetching the head before it read its commits."""
+    message of a non-merge commit between the base and the head, or nothing merges. The cases run
+    MergingCase, whose merge would go through and whose landing clone holds none of the branch's
+    commits, so a refusal is land.sh's own and a pass shows land.sh fetching the head before it
+    read its commits."""
 
     SUBJECT = "Merge task issue-566: a change that closes tickets"
 
@@ -1354,13 +1355,22 @@ class ClosesTests(LandTestCase):
         self.assertEqual([], result.land_lines())
         self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
 
-    def test_another_repository_s_ticket_is_not_read(self):
-        # `Fixes owner/repo#n` closes a ticket of another repository, which no commit here names.
-        case = MergingCase(self, description="Fixes octo-org/octo-repo#352")
-        result = case.run(PR, "--subject", self.SUBJECT)
-        self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual([], result.land_lines())
-        self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+    def test_the_owner_repo_form_is_refused(self):
+        # `Fixes owner/repo#n` closes a ticket of another repository, or of this one by its full
+        # name, and the check cannot tell which, so the form is refused before the commits are read
+        # (#578): a commit naming #352 does not lift it, and the refusal names the form and asks for
+        # `Closes #n`.
+        for description in ("Fixes octo-org/octo-repo#352",
+                            "Closes #177\nCLOSES: adammedford/spa-platform#352\r"):
+            with self.subTest(description=description):
+                case = MergingCase(self, commits=("Task issue-352: the work, for #177",),
+                                   description=description)
+                result = case.run(PR, "--subject", self.SUBJECT)
+                self.assertRefused(case, result, "the owner/repo#n form", READS_HEAD)
+                self.assertTrue(any("Write Closes #n" in line for line in result.land_lines()),
+                                result.stderr)
+                self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head},
+                                 case.origin_refs())
 
     def test_a_head_whose_commits_cannot_be_read_is_refused(self):
         # The double's head is a sha origin does not hold, so the fetch for it fails.

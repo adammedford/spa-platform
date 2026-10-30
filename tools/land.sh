@@ -46,7 +46,9 @@
 # It merges only a description whose every closing reference, `Closes #n` or any other form GitHub
 # closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
 # names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
-# names each #n no commit names, and --unreviewed does not lift it.
+# names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
+# GitHub's form for another repository's ticket, is refused outright, because the check cannot tell
+# whether it names a ticket here; the remedy is `Closes #n`.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
@@ -200,8 +202,12 @@ full_sha='^[0123456789abcdef]{40}$'
 # so a `Fixes #n` written by hand still has to name a ticket the branch did work for. The keyword
 # is a whole word (`prefixes #3` closes nothing), n is every digit after the `#`, and what follows
 # the number, such as the carriage return that ends each line of a description edited on the web,
-# is ignored. A keyword before `owner/repo#n` is not read: that form names another repository's
-# ticket. bash's =~ finds one match, so a line is read from its right end, each match's prefix
+# is ignored. A keyword before `owner/repo#n`, GitHub's form for a ticket of another repository,
+# also closes a ticket here when owner/repo is this repository, and telling the two apart would
+# take a read of this repository's name, so the form is refused before anything is read, failing
+# closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
+# form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
+# bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
 # nor issue-35 inside issue-352, and `issue-n` only where no letter, digit or underscore comes
@@ -210,9 +216,15 @@ full_sha='^[0123456789abcdef]{40}$'
 # GitHub: https://github.com/actions/checkout.
 description="$(gh pr view "$pr" --json body --jq .body)"
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
+# In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
+# endings, and group 6 the ticket: `n` of `#n`, or the whole `owner/repo#n`.
 closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+)"
 closes=""
 while IFS= read -r line; do
+  if [[ $line =~ $other_repository ]]; then
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+  fi
   in_line=""
   while [[ $line =~ $closing ]]; do
     in_line=" #${BASH_REMATCH[6]}$in_line"
