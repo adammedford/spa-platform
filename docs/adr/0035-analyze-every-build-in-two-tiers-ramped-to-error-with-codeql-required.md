@@ -1,9 +1,9 @@
-# ADR draft: Analyze source in every build at `10-all`, in a strict and a relaxed tier, with every security rule at error, ramped through pending lines in `.globalconfig`; CodeQL `security-extended` as a required job
+# ADR-0035: Analyze source in every build at `10-all`, in a strict and a relaxed tier, with every security rule at error, ramped through pending lines in `.globalconfig`; CodeQL `security-extended` as a required job
 
 - **Status:** Accepted. Three routes change it later:
   1. **A Status-line amendment** records the CI runner's clean-build time before and after, which
-     the switch-on task measures, and a declined package that becomes eligible under the admission
-     rule (decision 9), once its own ticket has admitted it.
+     the switch-on task, #606, measures, and a declined package that becomes eligible under the
+     admission rule (decision 9), once its own ticket has admitted it.
   2. **A new ADR** is needed to decline another rule (a diagnostic at `none` or `silent` in the
      strict tier), to move the `10-all` pin to a new .NET major, to change the folders that make up
      either tier, to weaken "every security rule at error, with no exceptions", or to make CodeQL
@@ -113,12 +113,17 @@ config (#585, #589).
    filed with the first; batches 2 to 4's fix tickets are filed when the batch before is promoted. The ramp's state is the file: this
    record holds the policy and the declines, and no copy of the pending list.
 
-7. **The house style settles the opposing IDE pairs before day one.** Four `.editorconfig` options
-   follow the style the code already shows: file-scoped namespaces (113 of 113 `src` files),
-   explicit types rather than `var` (shipping code has none), expression bodies at
-   `when_on_single_line`, and no requirement to discard an unused value. They remove 2,504 of the
-   2,745 IDE findings (IDE0160 445, IDE0008 357, IDE0022 779, IDE0058 923) and must land before any
-   IDE rule is promoted, or a later option change makes a promoted rule fire.
+7. **The house style settles the opposing IDE pairs before day one.** `.editorconfig` holds three
+   groups of options that follow the style the code already shows: file-scoped namespaces (113 of
+   113 `src` files), explicit types rather than `var` (shipping code has none), and expression
+   bodies at `when_on_single_line` for methods, constructors and local functions. The other
+   expression-bodied options (operators, properties, indexers, accessors, lambdas) keep the SDK's
+   defaults, under which their rules are already clean. Decision 8 completes the house style with
+   IDE0022 and IDE0058 at `silent`, so an unused value need not be discarded. The namespace option
+   removes IDE0160's 445 findings and the two declines remove IDE0022's 779 and IDE0058's 923: 2,147
+   of the 2,745 IDE findings go before the ramp. The `var` options write down the SDK's defaults;
+   IDE0008's 357 findings are test-tier `var` declarations and ride the ramp. The options must land
+   before any IDE rule is promoted, or a later option change makes a promoted rule fire.
 
 8. **The declined rules**, each set solution-wide in `.globalconfig`:
 
@@ -255,7 +260,8 @@ config (#585, #589).
     alone. There is no build-time budget. Measured locally on SDK 10.0.401 (#588): a clean build
     took 3.8 s with no analyzers, 8.4 s with the SDK tier and 8 to 10 s with the packages (14, 27
     and 35 s with no build server); a no-op build and a one-file gateway edit stayed at 1.3 to
-    1.8 s. The CI runner's number arrives by a Status-line amendment from the switch-on task.
+    1.8 s. The CI runner's number arrives by a Status-line amendment from the
+    switch-on task, #606.
 
 15. **No test id.** "The build is analyzer-clean" is not a test id and not a roadmap row: under
     `TreatWarningsAsErrors` a promoted rule with a finding fails the required `Build and test`
@@ -291,27 +297,29 @@ config (#585, #589).
 
 - The integrator tasks this record authorises, one spec with one ticket per landing step, each
   green on its own and each blocked by the one before:
-  1. **Land this record** at the next free number, with the glossary's analysis terms and the
+  1. **Land this record**, #604, at the next free number, with the glossary's analysis terms and the
      suppression paragraph in `CODING_STANDARDS.md`.
-  2. **The style options** in `.editorconfig`.
-  3. **The switch-on task:** the analysis properties and `SpaRelaxedTier` in `Directory.Build.props`;
-     the root `.globalconfig` with its pending lines and declines; the relaxation section; the
-     local check's guards for the section and for suppressions; the CI runner's clean-build time before and after; and
-     `AGENTS.md` → "Build and test", which says analyzers run in every build and how to read a
-     diagnostic id.
-  4. **The package lines:** `Directory.Packages.props`, the references in `Directory.Build.props`,
-     the pins inventory's `analyzers` family, the `docs/dependencies.md` rows, pending lines for
-     the firing Meziantou and Threading rules, and a probe of one per-id line against a package's
-     `global_level = -100` file, the first point a package is in the build.
-  5. **The banned lists:** the four `BannedSymbols.*.txt` files and their `AdditionalFiles`.
-  6. **The `CodeQL` job** in `ci.yml` and the weekly rescan workflow.
-  7. **A ready-for-human ticket** for Adam to switch default setup off and add `CodeQL` to main's
-     required checks.
+  2. **The style options**, #605, in `.editorconfig`.
+  3. **The switch-on task**, #606: the analysis properties and `SpaRelaxedTier` in
+     `Directory.Build.props`; the root `.globalconfig` with its pending lines and declines; the
+     relaxation section; the local check's guards for the section and for suppressions; the CI
+     runner's clean-build time before and after; and `AGENTS.md` → "Build and test", which says
+     analyzers run in every build and how to read a diagnostic id.
+  4. **The package lines**, #607: `Directory.Packages.props`, the references in
+     `Directory.Build.props`, the pins inventory's `analyzers` family, the `docs/dependencies.md`
+     rows, pending lines for the firing Meziantou and Threading rules, and a probe of one per-id
+     line against a package's `global_level = -100` file, the first point a package is in the
+     build.
+  5. **The banned lists**, #608: the four `BannedSymbols.*.txt` files and their `AdditionalFiles`.
+  6. **The `CodeQL` job**, #609, in `ci.yml` and the weekly rescan workflow.
+  7. **A ready-for-human ticket**, #610, for Adam to switch default setup off and add `CodeQL` to
+     main's required checks.
 
-  Batch 1's promotion ticket and its per-owner fix tickets follow: the CA5xxx fixes are blocked by
-  the switch-on task and the MA0009 fixes by the package lines.
+  Batch 1's promotion ticket, #611, and its per-owner fix tickets, #615 to #619, follow: the
+  CA5xxx fixes are blocked by the switch-on task, #606, and the MA0009 fixes by the package lines,
+  #607.
 - Each steering edit lands with the task that makes it true; `AGENTS.md` says analyzers run in
-  every build only from the switch-on task.
+  every build only from the switch-on task, #606.
 - About 1,600 awaits are never given `ConfigureAwait`.
 - What is pending is read from `.globalconfig`, not from this record or the roadmap.
 - A package upgrade goes through the pins sweep's whole-solution trial, because a new

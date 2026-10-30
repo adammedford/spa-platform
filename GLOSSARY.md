@@ -181,7 +181,8 @@ the request. _Avoid_: error body.
 **Rule id** — the identifier of the rule a rejection fired under, from the table in
 `contracts/request-gate.md` → Rule ids, held once as `Platform.Abstractions.RuleIds` (ADR-0015). It
 is the `rule` field of the request line and the tag of `security.rejections`; the `code` in a
-problem body is deliberately less specific.
+problem body is deliberately less specific. _Avoid_: "diagnostic id", which is an analyzer rule's
+identifier.
 
 **Problem code** — the stable `code` of a problem body, from the Errors table of
 `contracts/http-contract.md`, held once as `Platform.Abstractions.Problems`. It is less specific
@@ -425,15 +426,18 @@ and the snapshot; in a test host its stand-in does the same by the host's own ru
 the host. _Avoid_: host stub, resolver.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
-provider, an in-memory object store, the real mock API and an echo upstream.
+provider, an in-memory object store, the real mock API and an echo upstream. _Avoid_: analysis
+tier, which is a set of source files the analyzers hold to one profile.
 
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
-task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client.
+task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client. _Avoid_:
+analysis tier, which is a set of source files the analyzers hold to one profile.
 
 **Local (L)** — the test tier that runs a fresh container of the built gateway image under the
 task's limits, against stand-ins for the AWS services and the provider, on a workstation or a CI
 runner. It proves the method and the local budget, and never the platform's pull, placement or
-health checks. _Avoid_: local check, hermetic, for an L run.
+health checks. _Avoid_: local check, hermetic, for an L run; analysis tier, which is a set of
+source files the analyzers hold to one profile.
 
 **Startup clock** — one named interval of a gateway cold start, from a stated zero to the first
 observation of a stated event, such as the first `/readyz` 200. Some clocks are budgeted and some
@@ -492,8 +496,7 @@ two, the strict tier and the relaxed tier, and a file's folder decides which it 
 the relaxed one.
 
 **Strict tier** — the gateway and the platform libraries it is built from: every file the solution
-builds outside the relaxed tier, held to every rule at error. See
-`docs/adr/draft-static-analysis-policy.md`, numbered when it lands.
+builds outside the relaxed tier, held to every rule at error. See ADR-0035.
 
 **Relaxed tier** — tests, fixtures, the support library tests build on and the operator and bench
 tools: the strict tier's rules less a short list of relaxations, each a permanent reason that holds

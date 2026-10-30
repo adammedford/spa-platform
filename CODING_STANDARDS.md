@@ -145,12 +145,12 @@ name carries it. A reviewer reads a bare number as a copy to be replaced.
 An analyzer suppression, a `[SuppressMessage]` or a `#pragma warning disable`, turns a finding off
 at one site, so it must say why the finding is wrong there: its `Justification`, or the pragma's
 trailing comment, cites the evidence id, test id, issue or ADR that makes the code right as it
-stands. The local check refuses a suppression with no citation and any `GlobalSuppressions.cs`;
-what it cannot decide is whether the citation actually answers the finding. A suppression whose
-citation does not, such as a jitter site's CA5394 citing a ticket about something else, or one that
-quiets a finding the code should fix, is a Standards-axis finding. A security rule is never relaxed
-for a tier, so its suppressions are where this matters most. See
-`docs/adr/draft-static-analysis-policy.md`, numbered when it lands.
+stands. The local check, `tools/check.sh`, refuses a suppression with no citation and any
+`GlobalSuppressions.cs` (#606); what it cannot decide is whether the citation actually answers the
+finding. A suppression whose citation does not, such as a jitter site's CA5394 citing a ticket about
+something else, or one that quiets a finding the code should fix, is a Standards-axis finding. A
+security rule is never relaxed for a tier, so its suppressions are where this matters most. See
+[ADR-0035](docs/adr/0035-analyze-every-build-in-two-tiers-ramped-to-error-with-codeql-required.md).
 
 ## A universal names its exceptions by the writer
 
