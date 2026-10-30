@@ -18,9 +18,8 @@
 # A job skipped that way still satisfies main's protection, which requires `Documents`, `Build and
 # test` and `Terraform` by name -- every check the protection listed as required when this sentence
 # was last written (#552; `gh api repos/adammedford/spa-platform/branches/main/protection` lists
-# them, and `Scripts under bash 3.2` joins the sentence once it is made required): GitHub reports a
-# job skipped by its `if` as a success, where a workflow
-# skipped by an `on.paths` filter leaves the required check pending and the pull request stuck --
+# them): GitHub reports a job skipped by its `if` as a success, where a workflow skipped by an
+# `on.paths` filter leaves the required check pending and the pull request stuck --
 # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
 # -- which is why the filter is an `if` on each job and not a `paths` on the workflow. Each `if`
 # says `!cancelled()` rather than the implied success(): if the documents job failed before it could
