@@ -153,8 +153,13 @@ resource "aws_ssm_parameter" "client_secret" {
   value       = aws_cognito_user_pool_client.app[each.key].client_secret
 
   # A rotation writes a new version by hand (docs/plan/05-infrastructure-and-cost.md -> Rotating
-  # a client secret); the next apply must not put the old secret back.
+  # a client secret); the next apply must not put the old secret back. That also keeps a replaced
+  # client's new secret out of an existing parameter, so the parameter is re-created with its
+  # client (#554): the trigger is the client's id, which changes only on replacement, where the
+  # whole resource would fire on an in-place change too (a callback URL) and reset the parameter's
+  # versions under a clientSecretRef that names one.
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes       = [value]
+    replace_triggered_by = [aws_cognito_user_pool_client.app[each.key].id]
   }
 }
