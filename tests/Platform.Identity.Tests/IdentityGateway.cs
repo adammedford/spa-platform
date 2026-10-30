@@ -157,6 +157,20 @@ internal sealed class IdentityGateway : IAsyncDisposable
 
     public IServiceProvider Services => host.Services;
 
+    /// <summary>The host's lifetime, whose <c>ApplicationStopping</c> the token source reads at admission.</summary>
+    public IHostApplicationLifetime Lifetime => Services.GetRequiredService<IHostApplicationLifetime>();
+
+    /// <summary>
+    /// Stops the host <c>AddPlatformIdentity</c> was called on, as the container's SIGTERM does, so
+    /// <see cref="Lifetime"/>'s <c>ApplicationStopping</c> is signalled through production's own wiring
+    /// (change request P2-3, second amendment, decision 3). This host is built and never started, and
+    /// the host's <c>StopAsync</c> signals <c>ApplicationStopping</c> on that path too: it calls
+    /// <c>StopApplication</c> straight away when the host never started
+    /// (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs,
+    /// <c>StopAsync</c>'s <c>!_hostStarting</c> branch). <see cref="StoppingHostRefreshTests"/> pins it.
+    /// </summary>
+    public Task StopAsync() => host.StopAsync(TestContext.Current.CancellationToken);
+
     /// <summary>
     /// Returns once the session module has a gate held, which a due token's refresh takes before it
     /// reads the session and asks the provider, or fails if <paramref name="refresh"/> ends first: how a

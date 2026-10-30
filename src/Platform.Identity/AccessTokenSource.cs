@@ -4,6 +4,7 @@ using Duende.AccessTokenManagement.OpenIdConnect;
 using Duende.IdentityModel;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 
@@ -44,14 +45,25 @@ namespace Platform.Identity;
 /// holding the session's refresh lease, taken under the gate before the provider is called and given
 /// back in a <c>finally</c> on every outcome, fenced by its token. Holding it, the holder reads the
 /// record again, since another task may have written it since the turn began, and then checks, on the
-/// monotonic clock and with the acquisition's latency already spent, that at least
-/// <see cref="AccessTokenSourceOptions.ReservedBudget"/> remains of its lease; with less, it gives the
-/// lease back and waits as a loser rather than call the provider (D2). A loser re-reads the record every
+/// monotonic clock and timed from the acquire's send, that the acquire and the re-read together took
+/// at most <see cref="AccessTokenSourceOptions.StoreDeadline"/>, which is what leaves at least the lease
+/// budget (<see cref="AccessTokenSourceOptions.ReservedBudget"/>) of its lease for the call, the write
+/// and skew; with less left, it gives the lease back and waits as a loser rather than call the provider
+/// (D2; change request P2-3's second amendment, 2026-10-29, decision 1). A loser re-reads the record every
 /// <see cref="LoserPoll"/> and asks for the lease again: a record gone answers
 /// <see cref="AccessTokenResult.Unauthenticated"/>, a token no longer due is the answer, and a lease
 /// that lapsed with the session unmoved is taken over and the refresh made (F3's recovery path). A host
 /// that registers no <see cref="IRefreshLeases"/> runs one replica, where the gate is the whole refresh
 /// gate (plan row 3.4).</para>
+///
+/// <para><b>Admission at shutdown</b> (P2-3's second amendment, decision 3; #560). Once the host's
+/// <see cref="IHostApplicationLifetime.ApplicationStopping"/> is observed at admission, after the awaited
+/// acquire and re-read and before the provider call, no provider refresh starts on either refresh path.
+/// The refusal gives any acquired lease back and answers <see cref="AccessTokenResult.ProviderUnavailable"/>
+/// with the session kept, which the next host's call refreshes (F3's bounded recovery). A refresh admitted
+/// before the stop keeps its own provider deadline and writes with no shutdown cancellation: the token
+/// is read once, at admission, and reaches no deadline and no store call, so the durable write is what
+/// the shutdown bound of decision 2 promises.</para>
 ///
 /// <para>What the lease does not give: an exactly-once provider call. A holder paused between the check
 /// and the send, past its lease, sends a refresh another task may also be sending; the grace window, the
@@ -66,6 +78,7 @@ internal sealed partial class AccessTokenSource(
     AccessTokenSourceOptions options,
     TimeProvider clock,
     ILogger<AccessTokenSource> logger,
+    IHostApplicationLifetime lifetime,
     IRefreshLeases? leases = null) : IAccessTokenSource
 {
     /// <summary>
@@ -147,8 +160,9 @@ internal sealed partial class AccessTokenSource(
         long arrived = clock.GetTimestamp();
         while (true)
         {
-            // The clock starts before the request is sent, so the acquisition's latency is spent off the
-            // lease before anything else is (#332 D2).
+            // The clock starts before the request is sent: what the check charges against the lease is
+            // the acquire and the re-read under it together, timed from here (#332 D2; change request
+            // P2-3's second amendment).
             long asked = clock.GetTimestamp();
             if (await table.TryAcquireAsync(key, timeToLive, CancellationToken.None) is { } lease)
             {
@@ -229,6 +243,17 @@ internal sealed partial class AccessTokenSource(
             // Nothing to refresh with, so the session can never yield a token again.
             await EndAsync(context, app, turn);
             return Finished(turn, new AccessTokenResult.SessionEnded(), new RefreshOutcome.Ended());
+        }
+
+        // Admission (P2-3's second amendment, decision 3): read once, here, after the acquire and the
+        // re-read on the lease path and after the gated read on the other, and never passed on. A stop
+        // observed now refuses the refresh with the session kept; one observed a moment later finds a
+        // refresh in flight, which finishes and writes under its own deadline. The callers queued on the
+        // gate share the refusal (T-D6), and the lease path's finally gives the lease back.
+        if (lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            RefusedAtStop(logger, app.AppId, SessionRef.Of(key));
+            return Finished(turn, new AccessTokenResult.ProviderUnavailable(), new RefreshOutcome.Unavailable());
         }
 
         (UserToken? token, string? error) = await CallProviderAsync(app, refreshToken);
@@ -459,6 +484,10 @@ internal sealed partial class AccessTokenSource(
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "No refresh lease for app {AppId}, session {SessionRef} could be held long enough to refresh, within two times to live. The session is kept.")]
     private static partial void NoLease(ILogger logger, string appId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "The host is stopping, so no refresh was started for app {AppId}, session {SessionRef}. The session is kept.")]
+    private static partial void RefusedAtStop(ILogger logger, string appId, string sessionRef);
 }
 
 /// <summary>Settings for <see cref="AccessTokenSource"/>.</summary>
@@ -491,8 +520,10 @@ internal sealed class AccessTokenSourceOptions
 
     /// <summary>
     /// What the lease holds beyond <see cref="ProviderDeadline"/>: by default <c>2 × StoreDeadline + 1 s</c>,
-    /// 11 s today, covering taking the lease, the versioned write after the refresh and clock skew between
-    /// tasks (change request P2-3, item 3 as amended 2026-10-24; #332 G1). Set, it is that value instead.
+    /// 11 s today. One <see cref="StoreDeadline"/> covers the acquire and the re-read under the lease
+    /// together, the other the versioned write after the refresh, and the second is clock skew between
+    /// tasks (change request P2-3, item 3 as amended 2026-10-24, and its second amendment of 2026-10-29;
+    /// #332 G1). Set, it is that value instead.
     /// </summary>
     public TimeSpan LeaseMargin
     {
@@ -504,22 +535,29 @@ internal sealed class AccessTokenSourceOptions
     public TimeSpan LeaseTimeToLive => ProviderDeadline + LeaseMargin;
 
     /// <summary>
-    /// What must remain of the lease just before the provider is called: <c>ProviderDeadline +
-    /// StoreDeadline + 1 s</c>, 16 s today, for the call, the write after it and skew (#332 D2).
+    /// The lease budget: what must remain of the lease just before the provider is called,
+    /// <c>ProviderDeadline + StoreDeadline + 1 s</c>, 16 s today, for the call, the versioned write after
+    /// it and skew (#332 D2; change request P2-3's second amendment, 2026-10-29). "Lease budget" is this
+    /// figure's name in prose and records; "the reserve" is <c>GLOSSARY.md</c>'s Reserve design, ADR-0017's
+    /// locking, and is not this figure. The property keeps the name the amendment's table gives it.
     /// </summary>
     public TimeSpan ReservedBudget => ProviderDeadline + StoreDeadline + Allowance;
 
     /// <summary>
     /// D2's check: whether a holder whose lease was asked for <paramref name="sinceAsked"/> ago, on the
-    /// monotonic clock, still has <see cref="ReservedBudget"/> of it. "At least", so the boundary passes:
-    /// an acquisition that takes its whole <see cref="StoreDeadline"/> leaves exactly the reserve.
+    /// monotonic clock, still has the lease budget, <see cref="ReservedBudget"/>, of it. It is timed from
+    /// the acquire's send and read after the re-read under the lease, so the acquire and the re-read
+    /// together may take at most <see cref="StoreDeadline"/> (<see cref="LeaseTimeToLive"/> less the lease
+    /// budget): two 3 s operations fail it while each is inside its own deadline. "At least", so the
+    /// boundary passes: the two together taking exactly <see cref="StoreDeadline"/> leaves exactly the
+    /// lease budget (P2-3's second amendment, decision 1).
     /// </summary>
     public bool MayCallProvider(TimeSpan sinceAsked) => LeaseTimeToLive - sinceAsked >= ReservedBudget;
 
     /// <summary>
     /// These settings, refused when no holder could ever pass <see cref="MayCallProvider"/>: a time to live
-    /// shorter than the reserve would release and retake the lease until the loser's bound, and fail every
-    /// refresh. It is what the 15 s lease did before #332 G1.
+    /// shorter than the lease budget would release and retake the lease until the loser's bound, and fail
+    /// every refresh. It is what the 15 s lease did before #332 G1.
     /// </summary>
     public AccessTokenSourceOptions Validated()
     {
