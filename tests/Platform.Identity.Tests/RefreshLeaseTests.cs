@@ -24,7 +24,7 @@ public sealed class RefreshLeaseTests
     public void The_margin_is_twice_the_store_deadline_and_a_second_and_the_time_to_live_follows_the_store_deadline()
     {
         // #332 G1: LeaseMargin = 2 × StoreDeadline + 1 s, so 10 s + 11 s = 21 s today, and the check's
-        // reserve is ProviderDeadline + StoreDeadline + 1 s = 16 s. Changing StoreDeadline moves the time
+        // lease budget is ProviderDeadline + StoreDeadline + 1 s = 16 s. Changing StoreDeadline moves the time
         // to live with it. Mutation: a fixed 11 s LeaseMargin; the 2 s StoreDeadline row reads 21 s, not
         // 15 s, and this fails.
         AccessTokenSourceOptions today = new();
@@ -56,12 +56,14 @@ public sealed class RefreshLeaseTests
     }
 
     [Fact]
-    public void The_pre_call_check_passes_at_its_boundary_and_a_lease_shorter_than_the_reserve_is_refused()
+    public void The_pre_call_check_passes_at_its_boundary_and_a_lease_shorter_than_the_lease_budget_is_refused()
     {
-        // #332 D2: "at least" ProviderDeadline + StoreDeadline + 1 s must remain, so an acquisition that
-        // spent its whole StoreDeadline passes, and one tick more does not. A 15 s lease, the figure
-        // before G1, leaves less than the 16 s reserve even at zero latency, so the options are refused
-        // rather than left to release and retake the lease until the loser's bound.
+        // #332 D2: "at least" the lease budget, ProviderDeadline + StoreDeadline + 1 s, must remain, so an
+        // acquire and re-read that together spent the whole StoreDeadline pass, and one tick more does
+        // not. A 15 s lease, the figure before G1, leaves less than the 16 s budget even at zero latency,
+        // so the options are refused rather than left to release and retake the lease until the loser's
+        // bound. The same boundary through the token source, with the time split between the acquire and
+        // the re-read, is the test below on ManualMonotonicClock.
         // Mutation: compare with ">" instead of ">="; the boundary row fails.
         AccessTokenSourceOptions options = new();
 
@@ -74,8 +76,8 @@ public sealed class RefreshLeaseTests
     [Fact]
     public async Task A_holder_whose_acquisition_took_less_than_the_store_deadline_calls_the_provider()
     {
-        // #341: an acquisition that takes 4.5 s of its 5 s StoreDeadline still leaves the 16 s reserve on a
-        // 21 s lease, so the holder refreshes. The latency is placed on the monotonic clock by putting it
+        // #341: an acquisition that takes 4.5 s of its 5 s StoreDeadline still leaves the 16 s lease budget
+        // on a 21 s lease, so the holder refreshes. The latency is placed on the monotonic clock by putting it
         // forward inside the acquisition. Mutation: the 15 s lease (LeaseMargin = 5 s); the options are
         // refused, no token source is built, and this fails.
         SteppedClock clock = new();
@@ -99,9 +101,9 @@ public sealed class RefreshLeaseTests
     }
 
     [Fact]
-    public async Task A_holder_left_with_less_than_the_reserve_gives_the_lease_back_without_calling_the_provider()
+    public async Task A_holder_left_with_less_than_the_lease_budget_gives_the_lease_back_without_calling_the_provider()
     {
-        // #332 D2: an acquisition that took 6 s leaves 15 s of a 21 s lease, under the 16 s reserve, so
+        // #332 D2: an acquisition that took 6 s leaves 15 s of a 21 s lease, under the 16 s lease budget, so
         // the holder gives the lease back before any grant, says so, and waits as a loser. Its next
         // acquisition is quick, and it refreshes then. Mutation: drop the check (always call the
         // provider); the grant is made before the release, and this fails.
@@ -132,6 +134,103 @@ public sealed class RefreshLeaseTests
         TokenGrant grant = Assert.Single(gateway.Idp.RefreshGrants);
         Assert.Equal((200, grant.AccessToken), (answer.Status, answer.Body));
         Assert.Contains(SourceLines(logs), line => line.Contains("Too little of the refresh lease", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0, 200, 1)]
+    [InlineData(1, 200, 2)]
+    public async Task The_acquire_and_the_reread_together_are_admitted_at_the_store_deadline_and_refused_one_tick_over(
+        int extraTicks, int expected, int acquisitions)
+    {
+        // Change request P2-3's second amendment, decision 1 (#560): the check is timed from the acquire's
+        // send and read after the re-read under the lease, so the two together may take at most
+        // StoreDeadline. Here each takes half of it: at exactly 5 s the holder is admitted and refreshes on
+        // its first lease; one tick over, it gives the lease back before any grant, waits as a loser, and
+        // refreshes on a second, quick lease. Mutation: start the clock after the acquire, or check before
+        // the re-read; the one-tick row is then admitted on its first lease, and its acquisition count fails.
+        ManualMonotonicClock clock = new();
+        ScriptedReadStore store = new(new InMemorySessionStore());
+        TimeSpan half = new AccessTokenSourceOptions().StoreDeadline / 2;
+        ScriptedLeases leases = new(new InMemoryRefreshLeases(clock))
+        {
+            AfterAcquire = attempt =>
+            {
+                if (attempt == 1)
+                {
+                    clock.Advance(half);
+                    store.OnNextGet = () =>
+                    {
+                        clock.Advance(half + TimeSpan.FromTicks(extraTicks));
+                        return Task.CompletedTask;
+                    };
+                }
+
+                return Task.CompletedTask;
+            },
+        };
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], leases: leases,
+            sessions: new RecordingSessionStore(store), services: s => s.AddSingleton<TimeProvider>(clock));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway);
+        int grantsAtTheRelease = -1;
+        leases.OnRelease = _ => grantsAtTheRelease = grantsAtTheRelease < 0 ? gateway.Idp.RefreshGrants.Count : grantsAtTheRelease;
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        TokenGrant grant = Assert.Single(gateway.Idp.RefreshGrants);
+        Assert.Equal((expected, grant.AccessToken), (answer.Status, answer.Body));
+        Assert.Equal(acquisitions, leases.Acquired.Count);
+        Assert.Equal(leases.Acquired, leases.Released);
+        Assert.Equal(acquisitions == 1 ? 1 : 0, grantsAtTheRelease);
+    }
+
+    [Fact]
+    public async Task A_store_too_slow_for_any_pass_fails_the_call_after_twice_the_time_to_live_with_the_session_kept()
+    {
+        // Decision 1's exhaustion: every pass's acquire and re-read take 3 s each, inside their own 5 s
+        // deadline and over it together, so every pass fails the check and gives the lease back, and once
+        // an unsuccessful pass ends after 2 × TTL (42 s) has elapsed the call answers ProviderUnavailable
+        // with no grant and the record as it was. 2 × TTL is the threshold a pass is checked against, not a
+        // request deadline, so the call ends on the first pass to finish past it. Mutation: take the
+        // threshold as a deadline on the acquire; the pass that straddles it ends on a cancelled store
+        // call, not on this answer, and this fails.
+        CapturedLog logs = new();
+        ManualMonotonicClock clock = new();
+        ScriptedReadStore store = new(new InMemorySessionStore());
+        AccessTokenSourceOptions options = new();
+        TimeSpan slow = TimeSpan.FromSeconds(3);
+        ScriptedLeases leases = new(new InMemoryRefreshLeases(clock))
+        {
+            AfterAcquire = _ =>
+            {
+                clock.Advance(slow);
+                store.OnNextGet = () =>
+                {
+                    clock.Advance(slow);
+                    return Task.CompletedTask;
+                };
+                return Task.CompletedTask;
+            },
+        };
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], leases: leases,
+            sessions: new RecordingSessionStore(store), services: s => s.AddSingleton<TimeProvider>(clock).AddSingleton(logs.Provider));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway);
+        (string key, SessionRecord atLogin) = await gateway.Sessions.SingleAsync();
+        TimeSpan started = clock.Offset;
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal((503, "idp_unavailable"), (answer.Status, answer.Body));
+        Assert.Empty(gateway.Idp.RefreshGrants);
+        Assert.Equal(atLogin, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
+        Assert.Empty(answer.Cookies);
+        Assert.Equal(leases.Acquired, leases.Released);
+        TimeSpan elapsed = clock.Offset - started;
+        Assert.True(elapsed > options.LeaseTimeToLive * 2, $"the call gave up after {elapsed}");
+        Assert.True(elapsed <= (options.LeaseTimeToLive * 2) + slow + slow, $"the call went on past one pass over the threshold, to {elapsed}");
+        Assert.Equal(leases.Acquired.Count, SourceLines(logs).Count(line => line.Contains("Too little of the refresh lease", StringComparison.Ordinal)));
+        string warning = Assert.Single(SourceLines(logs), line => line.Contains("within two times to live", StringComparison.Ordinal));
+        Assert.Contains(SessionRef.Of(key), warning, StringComparison.Ordinal);
+        Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal));
     }
 
     [Theory]
