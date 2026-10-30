@@ -40,6 +40,18 @@
 # between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
 # closes each one (#566). A refusal names each #n no commit names, and --unreviewed does not lift it.
 #
+# It merges only a body that cites each decision it owes (#530). A `Closes #n` line that names a
+# change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
+# docs/agents/tracker-policy.md -> "Landing" has that body state the why and cite the decision
+# comment (#413). The citation half is mechanical: tools/decision_citation.py, beside this script,
+# reads each closed issue's labels and, for a change request, the latest decision comment by the
+# human's account, and prints the URL the body owes when that decision accepts with `ADR: no`; this
+# script refuses unless the body file carries that URL, naming the request and the URL to cite. A
+# request decided `ADR: yes`, a declined one and an issue without the label owe nothing, and the
+# why stays the reviewer's to judge. --unreviewed does not lift it either. #492's merge closed
+# #495, #497 and #498, each decided `ADR: no`, citing none of them, and a merge body cannot be
+# edited afterwards.
+#
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
 # with `Unreviewed: <reason>`. That review stays open until a record naming the merged head says
@@ -212,6 +224,39 @@ if [ -n "$closes" ]; then
     || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
 fi
 
+# The body, read once here and reused below: a named pipe or an inherited descriptor gives its
+# bytes once. $(<) drops the file's trailing newlines, which is what the trailer's gap below rests on.
+text=""
+if [ -n "$body_file" ]; then text="$(< "$body_file")"; fi
+
+# Each ticket a Closes line names, against the decision it may owe a citation (#530). The reader
+# beside this script judges one issue a run, with its own gh calls, and answers on its status: 0
+# and the decision comment's URL on standard output, which the body has to carry; 1 when nothing is
+# owed; 2 when it could not read the issue. Its output is held and shown only when it could not
+# read, so a landing that closes twenty tickets owing nothing stays quiet, and gh's own words reach
+# the reader of a refusal. A status 0 that printed no URL is read as unreadable, not as nothing
+# owed: a check fails closed (CODING_STANDARDS.md). The URL is matched as the bytes GitHub keeps
+# the comment at, anywhere in the body. It runs with --unreviewed too, as the check above does,
+# and before the review records are read, so a body that owes a citation is refused before any
+# gh call that reads the records.
+if [ -n "$closes" ]; then
+  echo "--- reading the decisions of the tickets #$pr closes"
+  uncited=""
+  for ticket in $closes; do
+    status=0
+    said="$(python3 -I "$here/decision_citation.py" --issue "${ticket#\#}" 2>&1)" || status=$?
+    case "$status:$said" in
+      0:?*) case "$text" in *"$said"*) ;; *) uncited="$uncited $ticket ($said)" ;; esac ;;
+      1:*) ;;
+      *)
+        [ -z "$said" ] || printf '%s\n' "$said" >&2
+        die "could not read the decision of $ticket (the reader exited $status), so it does not merge; the reader says why above." ;;
+    esac
+  done
+  [ -z "$uncited" ] \
+    || die "the merge body cites no decision for$uncited, so it does not merge. Each was decided ADR: no, so the body states the why and cites the decision comment's URL (docs/agents/tracker-policy.md -> Landing)."
+fi
+
 if [ -n "$unreviewed" ]; then
   trailer="Unreviewed: $unreviewed"
 else
@@ -231,13 +276,10 @@ else
   trailer="Reviewed: $head $record"
 fi
 
-# The trailer is the body's last line, after one blank line. $(<) drops the file's trailing newlines,
-# so the gap is always one blank line however the file ended.
+# The trailer is the body's last line, after one blank line. The body was read above with its
+# trailing newlines dropped, so the gap is always one blank line however the file ended.
 body="$trailer"
-if [ -n "$body_file" ]; then
-  text="$(< "$body_file")"
-  [ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
-fi
+[ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
 if [ -z "$subject" ]; then
