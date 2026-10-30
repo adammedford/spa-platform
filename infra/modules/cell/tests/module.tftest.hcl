@@ -2212,8 +2212,8 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 # failing assertion prints the new digest as its "actual" value. It moved once: #347 put
 # stopTimeout = 30 on the gateway container, whichever the inputs, because F1's shutdown relations
 # hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
-# so the running task is unchanged and the definition's bytes are not; the digest below is the
-# definition with that one key.
+# so a task behaves as before, but the definition's bytes changed, the next apply registers a new
+# revision and rolls the service once; the digest below is the definition with that one key.
 #
 # Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
 # any environment value on the default changed, or one added or removed (Session__MaxSessions to

@@ -109,7 +109,9 @@ resource "aws_lb_target_group" "gateway" {
   # the container's stopTimeout; the relations between the three are stated at the gateway's
   # stopTimeout in ecs.tf. An /api call whose entry's timeoutSeconds runs past this window can be
   # cut by a roll; F1 accepts that. The provider's default is 300 s, which only slows a roll. Not
-  # the still-open MR-2's 120 (#359 updates MR-2 to F1's numbers).
+  # MR-2's 120, which #332 F1 supersedes (#359). That ECS waits for the load balancer to report the
+  # target drained before it sends the stop signal is the vendor's:
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/load-balancer-connection-draining.html
   deregistration_delay = 30
 
   tags = { Name = local.lb_name }
