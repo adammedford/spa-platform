@@ -135,7 +135,14 @@ public sealed class PlatformConfigurationTests
     public void Session_store_is_memory_in_phase_1_and_dynamodb_in_phase_2()
     {
         Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["Store"] = "memory"), "the in-memory store");
-        Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["Store"] = "dynamodb"), "the Phase 2 store");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c =>
+            {
+                // With its table, since #343: The_dynamodb_store_requires_a_table_name holds the rule.
+                c["Session"]!.AsObject()["Store"] = "dynamodb";
+                c["Session"]!.AsObject()["TableName"] = "spa-platform-poc-sessions";
+            }),
+            "the Phase 2 store");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["Store"] = "redis"), "a store the plan does not name");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["MaxSessions"] = 0), "a zero session bound");
     }
@@ -145,7 +152,7 @@ public sealed class PlatformConfigurationTests
     {
         // Change request P2-1 Decision 3: optional, flat, DynamoDB's naming rule
         // (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html).
-        // The requirement under Store = dynamodb is the store's FromConfiguration until the next gate.
+        // The requirement under Store = dynamodb is the test below, since G3's tag (#343).
         Schemas.AcceptsPlatformConfig(
             Documents.PlatformConfig(c =>
             {
@@ -156,5 +163,70 @@ public sealed class PlatformConfigurationTests
         Schemas.AcceptsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject().Remove("TableName")), "no table name");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["TableName"] = "ab"), "a two-character table name");
         Schemas.RejectsPlatformConfig(Documents.PlatformConfig(c => c["Session"]!.AsObject()["TableName"] = "spa-platform/sessions"), "a table name carrying a slash");
+    }
+
+    [Fact]
+    public void The_dynamodb_store_requires_a_table_name()
+    {
+        // Change request P2-1 Decision 3 deferred the requirement to the next gate; #343 landed it with
+        // G3's tag, so the schema says what the store's FromConfiguration has enforced since P2-1.
+        // Mutation: drop the if/then under Session, and the schema accepts the first document, so the
+        // first refusal fails.
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c =>
+            {
+                c["Session"]!.AsObject()["Store"] = "dynamodb";
+                c["Session"]!.AsObject().Remove("TableName");
+            }),
+            "the dynamodb store with no table name");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c =>
+            {
+                c["Session"]!.AsObject()["Store"] = "dynamodb";
+                c["Session"]!.AsObject()["TableName"] = "spa-platform-poc-sessions";
+            }),
+            "the dynamodb store with a table name");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c =>
+            {
+                c["Session"]!.AsObject()["Store"] = "memory";
+                c["Session"]!.AsObject().Remove("TableName");
+            }),
+            "the memory store with no table name");
+    }
+
+    [Fact]
+    public void The_data_protection_section_is_closed_and_optional()
+    {
+        // Change request P2-2 Decisions 14 and 15: a closed object with no required member, so a cell
+        // with no ring (every memory cell, every hermetic host) still validates and the Terraform test
+        // that walks each section's required keeps passing. The prefix is a Parameter Store path and
+        // KmsKeyId takes the API's own KeyId pattern. The code refuses the section without its prefix
+        // at start (Hosting, decision 15); the schema only shapes it. Landed with G3's tag (#343).
+        // Mutation: drop the section from the schema, and the open root accepts the first two refusals.
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "/spa-platform/poc/data-protection/", ["Prefix"] = "/x/" }),
+            "a DataProtection section with an unknown key");
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "spa-platform/poc/data-protection/" }),
+            "a prefix with no leading slash");
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "/spa-platform//poc/" }),
+            "a prefix with an empty segment");
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "/spa-platform/poc/data-protection/", ["KmsKeyId"] = "" }),
+            "an empty key id, which the package would read as no key");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "/spa-platform/poc/data-protection/", ["KmsKeyId"] = "alias/spa-platform-poc" }),
+            "a prefix and a key alias");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject { ["ParameterPrefix"] = "/spa-platform/poc/data-protection", ["KmsKeyId"] = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab" }),
+            "a prefix with no trailing slash and a key ARN");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["DataProtection"] = new JsonObject()),
+            "an empty section, which the schema leaves to the code to refuse");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c.Remove("DataProtection")),
+            "a cell with no section");
     }
 }

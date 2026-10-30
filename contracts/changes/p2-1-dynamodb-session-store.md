@@ -270,7 +270,12 @@ issue. Workstream 3's store ticket is blocked by it, because nothing compiles wi
    `AddPlatformRegistry` does. The integrator's ticket adds an accepted name and a refused one (two
    characters, or one carrying a `/`) beside `Session_store_is_memory_in_phase_1_and_dynamodb_in_phase_2`
    (`tests/Contracts.Tests/PlatformConfigurationTests.cs:135-140`). `MaxSessions` stays required,
-   with its description unchanged.
+   with its description unchanged. **Landed 2026-10-30:** the deferred `if`/`then` is in
+   `contracts/platform-config.schema.json` under `Session` (`Store` = `dynamodb` requires
+   `TableName`), with G3's tag as the gate, on #343;
+   `tests/Contracts.Tests/PlatformConfigurationTests.cs` ->
+   `The_dynamodb_store_requires_a_table_name` holds it. The store's `FromConfiguration` keeps its
+   refusal, so the code and the schema now say the same thing.
 4. **The assertion change lands between gates** (item 4). `contracts/README.md` -> "What may land
    between gates" admits prose and a new type, and a corrected assertion in a suite under the G1b
    freeze is neither. It meets the rule's reason instead: nothing built against the frozen contract

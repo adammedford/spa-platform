@@ -144,6 +144,27 @@
           "pattern": "^[A-Za-z0-9_.-]{3,255}$",
           "description": "The session table. Required when `Store` is `dynamodb`; ignored otherwise."
         }
+      },
+      "if": { "required": ["Store"], "properties": { "Store": { "const": "dynamodb" } } },
+      "then": { "required": ["TableName"] },
+      "$comment": "The if/then is the narrowing change request P2-1 Decision 3 deferred to the next gate; it landed with G3's tag (#343). The store's FromConfiguration enforces the same rule at start."
+    },
+    "DataProtection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The cell's shared key ring, in Parameter Store (change request P2-2). Absent, the ring is the framework's default and the gateway behaves as in Phase 1. Set, ParameterPrefix is required, by the code at start and not by the schema, so that the Terraform test which walks each section's required demands nothing of a memory cell (P2-2 Decision 15). Not in the root's required.",
+      "$comment": "A closed object with no required: the shape P2-2 Decisions 14 and 15 recorded for the next gate, landed with G3's tag (#343).",
+      "properties": {
+        "ParameterPrefix": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*/?$",
+          "description": "The Parameter Store prefix the ring lives under, for example /spa-platform/poc/data-protection/. A prefix of its own, beside the client secrets' /spa-platform/{cell}/apps/, because the package expects only its keys under it."
+        },
+        "KmsKeyId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9:/_-]{1,256}$",
+          "description": "The key id, key ARN, alias or alias ARN the SecureString parameters are encrypted under: the API's own KeyId pattern, which refuses the empty string the package would read as no key. Absent means the account's aws/ssm key."
+        }
       }
     }
   },
