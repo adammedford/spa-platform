@@ -3,7 +3,7 @@
 # delete the branches the landing finished.
 # Owner: integrator.
 #
-#     tools/land.sh <pr-number> [--subject "<merge subject>"] [--body-file <path>]
+#     tools/land.sh <pr-number> --body-file <path> [--subject "<merge subject>"]
 #                   [--unreviewed "<reason>"]
 #
 # Run it from a worktree sitting at the pull request's base with nothing uncommitted, because the
@@ -23,7 +23,9 @@
 # process substitution such as `--body-file <(...)` -- but never standard input, `-` included,
 # because with no --subject standard input answers the confirmation. The body says what was
 # verified and how, and it carries the `Outstanding:` line and the `Outstanding test ids:` line
-# when a row landed without being finished.
+# when a row landed without being finished. So it is required: a landing with no --body-file, or
+# one whose body is empty or only whitespace, is refused before anything is asked of gh (#552),
+# where before it merged with the trailer alone.
 # Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
 #
 # It merges only a head a review record clears (#67). A review record is one line a review leaves on
@@ -42,6 +44,11 @@
 # with --follow-ups, which prints each row's Finding after the URL, and a merge body with no line
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
+# Each such row also names, before the merge, whether an issue has filed it (#573): the morning
+# files a record's rows from open pull requests only (#514), so once this merges nobody files a row
+# still open. A row no issue answers (one titled with the finding, with a `**Raised by:** #<pr>`
+# line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
+# says so; nothing is refused for it.
 #
 # It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
 # between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
@@ -127,8 +134,8 @@ while [ $# -gt 0 ]; do
       # `--body-file <(...)` hands over, both of which gh reads (#72). -p follows the path to what
       # it names, so a /dev/fd/N whose descriptor this process did not inherit names nothing and is
       # refused here, the way a missing path is. The descriptor stays open until the body is read
-      # below, because nothing in this script closes one it inherited; tools/land_tests.py reads
-      # the body through one.
+      # after this loop, because nothing in this script closes one it inherited; tools/land_tests.py
+      # reads the body through one.
       [ -f "$2" ] || [ -p "$2" ] || die "--body-file: $2 is not a file or a pipe."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       # Made absolute here, because the script changes to the repository root before the merge and
@@ -159,6 +166,21 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$pr" ] || die "which pull request? tools/land.sh <pr-number>"
+
+# The body is required, and read here, once, before anything is asked of gh (#552, R3 of #98).
+# Until then a missing --body-file, an empty file or an empty pipe merged with the trailer alone,
+# although docs/agents/landing-work.md -> "Land it" says the body says what was verified and how.
+# Read once because a pipe cannot be read twice, and the text is kept for the merge. $(<) drops the
+# file's trailing newlines; the blank test is the one --unreviewed's reason gets, so a body of
+# newlines, spaces and tabs is as empty as no file.
+[ -n "$body_file" ] \
+  || die "--body-file is required: the merge body says what was verified and how (docs/agents/landing-work.md -> Land it). Pass --body-file <path>."
+text="$(< "$body_file")"
+case "$text" in
+  *[![:space:]]*) ;;
+  *) die "--body-file: $body_file is empty or only whitespace, and the merge body says what was verified and how (docs/agents/landing-work.md -> Land it)." ;;
+esac
+
 command -v gh >/dev/null 2>&1 || die "gh is not on PATH. tools/preflight.sh says what is missing."
 command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH, so the roadmap cannot be derived."
 
@@ -242,11 +264,9 @@ if [ -n "$closes" ]; then
     || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
 fi
 
-# The body, read once here and reused below, because it may be a named pipe or an inherited
-# descriptor, which gives its bytes once (#72). $(<) drops the file's trailing newlines, which
-# is what the trailer's gap below rests on.
-text=""
-if [ -n "$body_file" ]; then text="$(< "$body_file")"; fi
+# The body is $text, read once after the argument loop (#552) and reused from here on, because
+# it may be a named pipe or an inherited descriptor, which gives its bytes once (#72). $(<)
+# dropped the file's trailing newlines, which is what the trailer's gap below rests on.
 
 # Each ticket a Closes line names, against the decision it may owe a citation (#530). The reader
 # beside this script judges one issue a run, with its own gh calls, and answers on its status: 0
@@ -300,11 +320,11 @@ else
   trailer="Reviewed: $head $record"
 fi
 
-# The trailer is the body's last line, after one blank line. The body was read above with its
-# trailing newlines dropped, so the gap is always one blank line however the file ended, and
-# the Outstanding: check below reads it from $text (#521).
-body="$trailer"
-[ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
+# The trailer is the body's last line, after one blank line. The text was read once after the
+# argument loop, never blank (#552), with its trailing newlines dropped, so the gap is always
+# one blank line however the file ended, and the Outstanding: check below reads it from $text
+# (#521).
+body="$(printf '%s\n\n%s' "$text" "$trailer")"
 
 # A carried finding owes the merge body an `Outstanding:` line (#521): docs/agents/review.md ->
 # "Landing or holding" puts it there, and docs/agents/landing-work.md -> "Land it" asks for the
@@ -325,6 +345,35 @@ if [ -n "${follow_ups:-}" ]; then
       [ -z "$line" ] || rows="$rows; $line"
     done <<< "$follow_ups"
     die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
+  fi
+
+  # A carried row also owes an issue, and the morning files a record's rows from open pull requests
+  # only (#514), so a row still unfiled when this merges is nobody's to file unless somebody is
+  # told (#573): on 2026-10-29 #568's two rows reached #569 and #570 only because the session read
+  # the record before it merged. So each row no issue answers is named here, and the merge goes on;
+  # this warns and refuses nothing. A row is answered as .claude/workflows/morning.js's filedAs
+  # answers it: an issue whose title is the finding, the two compared lowercased with each run of
+  # whitespace one space and none at the ends, and whose body has a `**Raised by:**` line naming
+  # #<pr> with no digit after it. The issues are the listing the morning takes, every state, and
+  # the --jq keeps the ones whose Raised-by line names this pull request and prints their titles;
+  # the match on the title is made here, with awk's tolower and its field splitting, which
+  # collapses blanks and trims them. A listing gh cannot make is said, and the rows are not
+  # checked: a warning that cannot be computed is not a reason to hold a merge a record clears.
+  filed_jq='.[] | select(any(.body | split("\n")[]; startswith("**Raised by:**") and test("#'"$pr"'([^0-9]|$)"))) | .title'
+  if filed="$(gh issue list --state all --limit 500 --search "Raised by #$pr in:body" --json number,title,body --jq "$filed_jq")"; then
+    filed_titles="$(printf '%s\n' "$filed" | awk '{ $0 = tolower($0); $1 = $1; print }')"
+    while IFS= read -r finding; do
+      [ -n "$finding" ] || continue
+      wanted="$(printf '%s\n' "$finding" | awk '{ $0 = tolower($0); $1 = $1; print }')"
+      answered=""
+      while IFS= read -r title; do
+        if [ "$title" = "$wanted" ]; then answered=1; break; fi
+      done <<< "$filed_titles"
+      [ -n "$answered" ] \
+        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514); file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" >&2
+    done <<< "$follow_ups"
+  else
+    printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2
   fi
 fi
 

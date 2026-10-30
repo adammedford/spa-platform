@@ -5,6 +5,7 @@ Owner: integrator.
     tools/prune_branches.py                      say what --delete would do, and delete nothing
     tools/prune_branches.py --delete             delete the finished branches locally and on origin
     tools/prune_branches.py --delete --verbose   and list each kept branch, not only a count
+    tools/prune_branches.py --delete --only <branch>...   delete the named branches alone
 
 docs/agents/landing-work.md makes a task's branch its claim and says the claim is deleted when the
 task is done, and nothing deleted it (#71). On 17 October 2026 this repository held 44 `task/*`
@@ -63,10 +64,19 @@ merge and most branches are kept for the same few reasons every time: the landin
 48 kept lines and deleted nothing (#524). --verbose lists each kept copy with its full reason, as a
 dry run does.
 
+--delete --only <branch>... deletes the named branches alone, each as --delete would, with its
+restore line, and counts every other copy as kept because it is not named. A named branch the
+listing keeps, or does not list, refuses the whole run with the listing's reason, and nothing is
+deleted (#574): on 29 October 2026 a session's `--delete`, whose command line said nothing of which
+branches would go, was refused in auto mode as a deletion of unverifiable scope, and the session
+fell back to `git branch -d`, which writes no restore line. --only without --delete is an argument
+error: a dry run already lists every branch with its verdict.
+
 HEAD must be origin/main or behind it: the roadmap reads HEAD's merge subjects as well as main's, and
 one only HEAD has would call a row landed that main has not landed. It exits 0 once every branch is
-judged, whatever it kept; 1, deleting nothing, when it cannot judge, and 1 when it cannot write the
-file of restore lines, deleting nothing after that; 2 for an unknown argument.
+judged, whatever it kept; 1, deleting nothing, when it cannot judge or when --only names a branch
+the listing keeps or lacks, and 1 when it cannot write the file of restore lines, deleting nothing
+after that; 2 for an unknown argument, or --only without --delete.
 """
 
 from __future__ import annotations
@@ -351,6 +361,34 @@ def judge(copy: Copy, kind: Judged, trees: dict[str, str]) -> Verdict:
     return Verdict(copy, work.ok, f"{kind.reason}, and {work.reason}", work.group)
 
 
+def only(verdicts: list[Verdict], names: list[str]) -> list[Verdict]:
+    """The verdicts with the deletion limited to the named branches (#574).
+
+    Every copy of a named branch must be marked for deletion, and a branch with no copy at all is
+    not listed: either refuses the whole run, with the listing's reason, before anything goes. The
+    names are the caller's claim about what the listing marks, and one wrong name means the claim
+    is wrong. A branch with one copy left, the other already deleted by hand, is listed by that
+    copy, so naming it deletes what remains. Every copy not named is kept under one reason, so the
+    counts and the restore lines say what this run did and nothing more.
+    """
+    listed = {verdict.copy.branch for verdict in verdicts}
+    named = set(names)
+    wrong = []
+    for name in names:
+        if name not in listed:
+            wrong.append(f"{name} is not listed: no task/ or overnight/ branch of that name is here "
+                         "or on origin")
+    for verdict in verdicts:
+        if verdict.copy.branch in named and not verdict.delete:
+            wrong.append(f"{verdict.copy.branch} is kept {verdict.copy.where}: {verdict.reason}")
+    if wrong:
+        raise Refused("--only names what the listing does not mark for deletion, so nothing was "
+                      "deleted:\n  " + "\n  ".join(wrong))
+    return [verdict if verdict.copy.branch in named
+            else Verdict(verdict.copy, False, "it is not named by --only", "it is not named by --only")
+            for verdict in verdicts]
+
+
 def remove(copy: Copy) -> str | None:
     """Delete one copy if its tip is still the one judged. None when it went, or why it stays."""
     if copy.where == "origin":
@@ -417,7 +455,12 @@ def main(argv: list[str]) -> int:
                         help="delete what the listing marks; without it nothing is deleted")
     parser.add_argument("--verbose", action="store_true",
                         help="with --delete, list each kept branch rather than a count per reason")
+    parser.add_argument("--only", nargs="+", metavar="BRANCH",
+                        help="with --delete, delete these branches alone; one the listing keeps, "
+                             "or does not list, refuses the run and nothing is deleted")
     arguments = parser.parse_args(argv)
+    if arguments.only and not arguments.delete:
+        parser.error("--only needs --delete: a dry run already lists every branch with its verdict")
     # A --delete run counts what it keeps unless asked to list it; a dry run lists everything.
     counting = arguments.delete and not arguments.verbose
 
@@ -438,6 +481,8 @@ def main(argv: list[str]) -> int:
         # overnight branch costs one question to GitHub.
         kinds = {name: finished(name, states) for name in {copy.branch for copy in found}}
         verdicts = [judge(copy, kinds[copy.branch], trees) for copy in found]
+        if arguments.only:
+            verdicts = only(verdicts, arguments.only)
         # Named before anything is deleted, so a git that cannot say where it goes deletes nothing.
         # Only a deletion writes it.
         restore_path = restore_file() if arguments.delete else None
