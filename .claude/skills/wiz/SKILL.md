@@ -139,12 +139,13 @@ names each missing piece (a tag not merged, each open edge by number and title, 
 git tag --merged origin/main | grep -x -E 'g3-deployed-slice|g4-negative-green|g5-phase-1-accepted'   # all three lines, or D is not offered
 gh api "repos/{owner}/{repo}/issues/348/dependencies/blocked_by" --jq '[.[] | select(.state == "open")] | length'   # 0, or D is not offered
 python3 -I - <<'EOF'
-import re
+import os, re
 root = "infra/envs/poc/platform/"
 def keys(path, commented): return {m.group(1) for m in re.finditer(r"^(?:#\s*)?([a-z_]+)\s*=" if commented else r"^([a-z_]+)\s*=", open(root + path).read(), re.M)}
 phase1 = {"region", "cell", "vpc_cidr", "certificate_domain", "health_check_path", "additional_teardown_principal_arns", "gateway_image", "issuers"}
 g6 = keys("terraform.tfvars.example", True) - phase1
-print("G6 keys of the example:", sorted(g6)); print("G6 keys set in terraform.tfvars:", sorted(g6 & keys("terraform.tfvars", False)))
+present = os.path.exists(root + "terraform.tfvars")   # git-ignored: absent on a fresh checkout, and N step 3 writes it
+print("G6 keys of the example:", sorted(g6)); print("G6 keys set in terraform.tfvars:", sorted(g6 & keys("terraform.tfvars", False)) if present else "none (the file is absent)")
 EOF
 ```
 
@@ -160,8 +161,10 @@ EOF
 - `infra/envs/poc/platform/terraform.tfvars` carries none of the G6 keys. The script prints the
   example's G6 keys (every key it names, set or commented out, beyond the Phase 1 eight) and the
   ones `terraform.tfvars` sets; a second list that is not empty is a G6 input, and D is not offered
-  until the human removes it, since D0 needs the Phase 1 shape and D2 is what adds the block. An
-  empty first list means the block is not in the tree yet (#338, #347), and D is not offered.
+  until the human removes it, since D0 needs the Phase 1 shape and D2 is what adds the block. A
+  `terraform.tfvars` that is absent (it is git-ignored, and N step 3 writes it) carries no key and
+  holds nothing against D. An empty first list means the block is not in the tree yet (#338, #347),
+  and D is not offered.
 
 D runs alone: a sitting that runs D runs no C stage, and D ends after D10.
 
@@ -485,10 +488,10 @@ Two tasks RUNNING in two zones on the new revision, and `spactl wait --instances
 each task's `/readyz` answered at the registry's revision, is convergence; the `--instances` ids are
 the two task ids, comma-separated, as `deploy.sh`'s own wait passes them (`cell-common.sh`
 `wait_for_revision`), and the revision is the one D0's `deploy.sh` read from the live registry,
-which the cutover does not change. A `services-stable` that times out, or a wait that returns naming a task that
-never answered, is a failed row. After convergence the human reloads the tab once more and logs in:
-that login is #348 Q32's post-convergence login, and "carries into row 3" means row 3 runs on this
-converged cell with no further apply; row 3's own login is #358's.
+which the cutover does not change. A `services-stable` that times out, or a wait that returns
+naming a task that never answered, is a failed row. After convergence the human reloads the tab once
+more and logs in: that login is #348 Q32's post-convergence login, and "carries into row 3" means
+row 3 runs on this converged cell with no further apply; row 3's own login is #358's.
 
 Post `## D2, row 2` on #348: the plan's counts and its one replacement address, the apply's exit,
 the sign-outs observed with their times, the tunnel gap as missing coverage, the two task ids with
