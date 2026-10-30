@@ -1,20 +1,21 @@
 ---
 name: wiz
-description: Walk a sitting in the platform project. Reads preflight, the tracker and the cell, then runs sitting C from a standing or an absent platform root (deploy, the G3 to G5 rows and P-04 to P-06, rollback, teardown, from nothing) or sitting D from an absent one (the G6 continuity run of #348, a fresh Phase 1 deploy, the cutover apply to the two-task cell, rows 1 to 10 and the teardown), each command on the human's approval, posts each stage's evidence to its ticket from captured and redacted output, and stops where only the human can act. Never writes a Confirm comment, never applies or destroys without a confirm on the plan it showed.
+description: Walk a sitting in the platform project. Reads preflight, the tracker and the cell, then runs sitting C from a standing or an absent platform root (deploy, the G3 to G5 rows and P-04 to P-06, the runbook walks of #244, rollback, teardown, from nothing) or sitting D from an absent one (the G6 continuity run of #348, a fresh Phase 1 deploy, the cutover apply to the two-task cell, rows 1 to 10 and the teardown), each command on the human's approval, posts each stage's evidence to its ticket from captured and redacted output, and stops where only the human can act. Never writes a Confirm comment, never applies or destroys without a confirm on the plan it showed.
 ---
 
 # /wiz: a sitting in the platform project
 
 Tracked in the repository since #135; #468 rewrote sitting C as the sittings of 2026-10-27 ran it,
-and #361 added sitting D, the G6 continuity run of #348. Sittings A and B are done; they, and the H
-items that no longer fire, are in `a-and-b.md` beside this file, for a cell that needs the read pass
-again.
+#361 added sitting D, the G6 continuity run of #348, and #547 added W, the runbook walks of #244.
+Sittings A and B are done; they, and the H items that no longer fire, are in `a-and-b.md` beside
+this file, for a cell that needs the read pass again.
 
 Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level
 HIGH: explain each step before running it), `tools/aws-project.env`, `GLOSSARY.md` → *Sitting*,
 *Unattended run*, *Read-back*, *Sample image*, *Platform project*, and the tickets this sitting
 serves: #242 (the four scripts), #63 (the deployed gate rows), #236 (seed with the profile alone),
-and for D #348 (the G6 run, its rows and their questions) and #358 (the deployed continuity class).
+#244 (the runbook walks, their observables and their end state), and for D #348 (the G6 run, its
+rows and their questions) and #358 (the deployed continuity class).
 
 ## Rules that hold in every stage
 
@@ -109,7 +110,7 @@ answer governs Stage 0 too. Then, each line after the prelude:
 tools/preflight.sh                       # must end ready; it compares the account with the pin; read its Container engine row
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
 git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
-for n in 63 242 236 348; do
+for n in 63 242 236 244 348; do
   gh issue view "$n" --json number,state,title,body \
     --jq '"#\(.number) \(.state) \(.title)", (.body | split("\n")[] | select(test("^- \\[ \\]")))'
   gh api "repos/{owner}/{repo}/issues/$n/dependencies/blocked_by" --jq '.[] | select(.state == "open") | "  blocked by #\(.number) \(.state) \(.title)"'
@@ -123,10 +124,10 @@ The open boxes are what this sitting can still tick; a box already ticked is not
 `blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
 which rows it holds and offer the rest. Then say which root is standing:
 
-- **Standing**, a service with a running task: C1, C2, C3, R, T, N, C4, C5.
+- **Standing**, a service with a running task: C1, C2, C3, W, R, T, N, C4, C5.
 - **Absent**, no service: N first, then C2 onwards; R needs two gateway builds, so after one
   deploy from nothing it is "not run: one gateway build" (#242's Q70) unless the human deploys again
-  at a later commit that changes `src/`.
+  at a later commit that changes `src/`. W's four walks need one build only and run either way.
 
 Offer C2 and C3 only when `tests/e2e/Stack/DeployedStack.cs` (#209) is on `main`. List the stages
 with their tickets, and ask the human which to run.
@@ -193,7 +194,9 @@ shown tools/scripts/verify-tunnel.sh /healthz
 If `deploy.sh` fails with `rollout is IN_PROGRESS` right after the service is stable (#467), the
 deployment completes anyway: a re-run plans no changes and reaches its pass line. Post the run on
 #242: the commit, the plan's counts, the pass line, the task definition revision and the gateway
-digest's first eight hex digits.
+digest's first eight hex digits, and one line naming the runbook followed, `docs/runbooks/deploy.md`
+at that commit, with any step that differed from it: #244's first box ticks on this post and T's
+(#286 Q86), and a step that differed is posted on #244 too.
 
 **C2, the G3 and G4 rows, P-04 and P-06 (#63, one comment per test id, Q75).** The configuration
 the suite's F-06 and F-07 need, rebuilt read-only from the running task definition:
@@ -307,16 +310,133 @@ comment of 2026-10-27 is the worked example; post the same shape.
 
 Post on #63: the test's run, and the clause's five steps with addresses and actions only.
 
-**R, `rollback.sh` (#242 box 6),** after F-07, so that the G3 to G5 rows share one deploy (#63's
-Q84). It needs two gateway builds in ECR (Stage 0's `describe-images` count); with one, post the box
-as "not run: one gateway build" (Q70). It plans and applies with no pause, so preview as C1 does and
-confirm on launch with the same shape:
+**W, the runbook walks (#244 boxes 2 to 6; #286 Q86 to Q99).** After C3 and before R, where Adam
+placed them once #468 had put R, T and N between C3 and C4
+(https://github.com/adammedford/spa-platform/issues/286#issuecomment-6507230119). A walk runs every
+command of one runbook once, as written on `main`, against the deployed cell, and passes only if the
+runbook worked unedited (Q87). Five walks, in Q95's order, each from its file under `docs/runbooks/`:
+
+1. Release rollback, `release-rollback.md`.
+2. Registry rollback, `registry-rollback.md`.
+3. Secret rotation, `secret-rotation.md`.
+4. Ending an app's sessions, `end-app-sessions.md`.
+5. Gateway rollback, `rollback.md`: this one is R itself, below, last because it signs every user
+   out.
+
+This file holds no copy of any runbook command (Q90): the runbook, read from the tree at the walk,
+is the text that runs, so a fix to a runbook reaches the next sitting without a change here. Before
+each walk, fast-forward (rule 8), name the commit, and read the file to the human section by
+section:
 
 ```bash
-shown tools/scripts/rollback.sh                  # the previous gateway image; --to-revision N for another
+git fetch origin --tags && git merge --ff-only --quiet origin/main   # a call of its own, as Stage 0 runs it
+git rev-parse HEAD; cat docs/runbooks/<the walk's file>
 ```
 
-Post on #242: the revision and digest it left, and its pass line.
+Then run its steps in order, each command as the runbook writes it, under rules 1 to 8. Four
+bindings make a runbook written for one shell run through this tool's, and none of them edits a
+line of it:
+
+- **The shell.** The notes assume one shell (`README.md` → "Before any note: the operator session")
+  and this tool's keeps none (the prelude), so each call sets again the variables the step reads
+  (`APP`, `BUCKET`, `RELEASE`, the revision `N` or `M` a step printed, and the like), from the
+  record's values. A read whose value a later step needs runs as `X=$(captured <the runbook's
+  command>)`, every other command as `shown <the runbook's command>`.
+- **`RUN` and `CONFIG`.** The notes' `$RUN` is a private directory of rule 6's kind: `RUN=$(mktemp
+  -d)` under `umask 077`, printed once, set by hand in each later call and removed with `rm -rf
+  "$RUN"` at the walk's end; secret rotation keeps the new secret there between its steps 2 and 3.
+  `$CONFIG` is the platform configuration C2 rebuilt, `"$E/platform-config.json"`: the README says
+  to rebuild it after a deployment or a rollback, and C1 was the last of either.
+- **Rule 2.** Secret rotation's `terraform apply -refresh-only` in the apps root is an apply: its plan
+  is shown, must move the parameter's `version` and nothing else (the runbook's own test), and runs
+  on confirm. Its step 7 deletes the old secret at the provider, and step 2 of ending an app's
+  sessions removes app 1's entry: each runs on a confirm that names what goes (the secret's count
+  before, the app and the release it comes back at). Every other step writes the registry through
+  `spactl` or the provider through the CLI and runs on rule 1's approval.
+- **Rule 3 and the browser.** No post carries a secret: the second secret's value is written to
+  `"$RUN/secret"` and to the parameter and never read back, and the post names the parameter's
+  version before and after and the count the runbook's last line prints, never a value, a secret's
+  id or a client id. A step that signs in, or reads what a signed-in page shows, is the human's:
+  wiz asks, and records the UTC time and what the page showed (signed in, sent to sign in again, a
+  404, a 401), never a cookie or a session's name.
+
+**The setup before walk 1.** A cell seeded once holds one release of app 1, so release rollback's
+step 1 finds no earlier registry version whose release for app 1 differs, and the runbook has
+nothing to roll back to; Q99's "app 1 on its first release" presumes a second. On approval, publish
+a second release of app 1 from `fixtures/spa/app1` and activate it (the two `spactl release`
+commands C3's step 2 and the runbook's step 2 show, the release named `walk-` and twelve hex
+digits), wait for its revision, and post both lines under "## Release rollback" as setup, apart from
+the runbook's steps. The walk then rolls app 1 back to the release it served before the setup and
+leaves it there: the roll-forward the runbook's last line offers is not run, so that the cell ends
+where Q99 asks. Walk 2 reads the revisions walk 1 made (Q95): its plain rollback restores the
+content before walk 1's activation, under a new revision, and the runbook's second plain rollback,
+which it says goes forward again, restores the content walk 1 left. Both are the walk, each waited
+for, and the two revisions restored differ in app 1's entry alone.
+
+**The observables (Q96)**, read before and after each walk as `shown`, through the tunnel or the
+CLI with what the operator session offers, each read named in the post, and none needing a session
+key, a cookie or a secret:
+
+- release rollback: the served `index.html`'s release marker and `/readyz`'s revision, before and
+  after each activation, the setup's included;
+- registry rollback: the two revisions restored, with only app 1's entry differing between them;
+- secret rotation: a session signed in before step 1 still calling app 1's API after the old secret
+  is deleted; a fresh login succeeding once the entry points at the new version and again after the
+  deletion; the parameter's version moved; and the apps root's `plan -detailed-exitcode` exiting 0
+  at the end, with the file's "Checks for the first walk (#244)" settled (#244 names these steps by
+  an older numbering of the runbook; the post cites the file's section headings as they read at the
+  commit walked);
+- ending an app's sessions: `/bff/user` answering 200 before, the host 404 between the removal and
+  the re-add, 401 after the re-add, the purge line step 3 reads through `logs.sh`, and app 2's
+  session answering 200 throughout;
+- gateway rollback: R's, below.
+
+**The post**, one comment per walk on #244 through the post mode, headed by the walk's name as
+#244's boxes read it (`## Release rollback`, `## Registry rollback`, `## Secret rotation`, `## Ending
+an app's sessions`, `## Gateway rollback`; Q88), and carrying, per rule 4 and Q87: the runbook file
+and the `main` commit followed; each command, its exit code and its key lines; the observables before
+and after; the setup where one ran; each bundle file by name and SHA-256; and the footer. The walk
+is posted as passed only when every step ran unedited and the observables read as Q96 says. A walk
+the human skips is posted "not run" with the reason (rule 1). W makes no other tracker write: the
+box ticks are Adam's, under rule 5.
+
+**The stop rule (Q87, Q98).** The first step that does not work unedited ends the walk: an exit the
+runbook does not expect, an output other than the one it says the step prints, a line that had to
+change to run (a path, a flag, a name), or one of the file's "Checks for the first walk (#244)" that
+does not hold. Post the walk as not passed at that step, with the command, its exit and its lines,
+and print under "Held" the ws6 follow-up the human files (`**Raised by:** #244`) that fixes the
+runbook; that runbook is walked again in a later sitting once the fix is on `main`. Secret rotation
+stops the same way when the CLI or the SCP refuses Cognito's second-secret call (an `AccessDenied` at
+step 2 or 7) or the apps root's plan is not empty after step 7, and the follow-up named is ws1's
+(Q98). That refusal is the walk's stop, not rule 7's: it is the first such call, not one that worked
+before, so the sitting goes on to the next walk. Before the next walk, put back what the stopped
+walk's finished steps changed, on approval and with the runbook's own means where it offers one
+(release rollback's roll-forward line, a second registry rollback, step 4 of ending an app's
+sessions); where it offers none, record what now differs, so that R's end-state line is true.
+
+W ends after walk 4's post. R follows, and the end state Q99 names goes in its post.
+
+**R, gateway rollback: `rollback.sh` by its runbook (#242 box 6, #244 box 6; #286 Q70, Q97),**
+after W, so that the G3 to G5 rows share one deploy (#63's Q84) and because it signs every user out
+(Q95). It is W's fifth walk, run from `docs/runbooks/rollback.md` under W's bindings, read and
+named as W reads each file; the script is one of that runbook's commands, and this file does not
+copy it. First, from Stage 0's read of the boxes: when #244's gateway-rollback box is open while
+#242's box 6 is ticked, ask whether that run followed `rollback.md` on `main` unedited and its post
+names the runbook and the commit. If so, #244's box ticks on that run (Q97): print the tick under
+"Held", post nothing new on #244 for it, and R runs only if #242 still needs a rollback. Otherwise R
+is the walk. It needs two gateway builds in ECR with different `src/` (Stage 0's `describe-images`
+count, Q70); with one, post the box on #242 and the walk on #244 as "not run: one gateway build",
+and never rely on a rebuild of the same commit (Q97). The script plans and applies with no pause, so
+preview as C1 does and confirm on launch with the same shape (rule 2). Before and after: the
+running digest, the targets healthy, and a fresh login (Q96).
+
+Post on #242: the revision and digest it left, and its pass line. Post on #244 under "## Gateway
+rollback" the walk's shape, ending with the end state Q99 names, as the last walk's post: app 1 on
+its first release, the registry content as before under a later revision, the new secret live and
+the old one deleted, app 1 re-added, and the gateway on the build the rollback chose; where a walk
+was not passed, not run or put back by hand, say what differs. When R is not run, that end-state
+paragraph goes in its "not run" post, with the gateway on C1's build. The cell is then back to what
+it served before W, before T and C5.
 
 **T, `teardown.sh --yes` and P-05 (#242 box 4, P-05 on #63).** Show the header's step list as the
 case list; it destroys the platform, apps and identity roots, the imported certificate and the key
@@ -326,8 +446,9 @@ ring, and ends with `verify-teardown.sh`, whose exit is its own. Confirm on laun
 shown tools/scripts/teardown.sh --yes
 ```
 
-Post the run on #242 and P-05 (the verify-teardown lines and the exit) on #63. The bootstrap root
-stays.
+Post the run on #242 and P-05 (the verify-teardown lines and the exit) on #63, the #242 post with
+one line naming the runbook followed, `docs/runbooks/teardown.md` at the commit, and any step that
+differed from it (#286 Q86, as C1's post does). The bootstrap root stays.
 
 **N, from nothing (#242, Q61 and Q79).** `docs/plan/05-infrastructure-and-cost.md`'s First
 deployment order from the first root that is absent:
