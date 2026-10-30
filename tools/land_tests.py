@@ -951,11 +951,14 @@ class FollowUpsTests(LandTestCase):
                           lines=["could not list the issues"])
         self.assertIn("error connecting to api.github.com", result.stderr)
 
-    @unittest.skipUnless(shutil.which("jq"), "jq is not on this machine; the filter runs under gh's own")
     def test_the_filter_keeps_the_issues_raised_by_the_pull_request(self):
         # The filter gh is handed, run by jq over issues as `gh issue list --json` lists them: the
         # body's Raised-by line names #5 and not #50, wherever it stands, and the title comes out
-        # as written. gh evaluates it with its own jq, which this stands in for.
+        # as written. gh evaluates it with its own jq, which this stands in for. A machine with no
+        # jq fails here and is told so, rather than skipping: a skipped test reads as a pass in the
+        # check's verdict line (CODING_STANDARDS.md -> "An assertion must be able to fail").
+        self.assertTrue(shutil.which("jq"), "jq is not on this machine, and this is the one test of the "
+                        "--jq filter land.sh hands gh; install jq (https://jqlang.org) and run again")
         issues = [{"number": 1, "title": "  Filed As Written ", "body": "**Owner:** x\r\n**Raised by:** #5, record\r\n"},
                   {"number": 2, "title": "Another pull request's", "body": "**Raised by:** #50"},
                   {"number": 3, "title": "Named in prose", "body": "Raised by #5 in prose"},
