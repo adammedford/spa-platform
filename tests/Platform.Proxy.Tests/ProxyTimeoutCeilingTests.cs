@@ -72,8 +72,9 @@ public sealed class ProxyTimeoutCeilingTests
             + $"{Seconds(YarpActivityTimeout.LargestSecondsAppliedExactly())} exactly. The registry would "
             + "accept a timeout the proxy silently replaces. Either the contract's maximum has moved above "
             + "the ceiling or a YARP or .NET upgrade has lowered the ceiling below it. The maximum is the "
-            + "integrator's, so the fix is a change request under contracts/changes/ or a dependency held "
-            + "back, not an edit here (ADR-0015 decision 3, ADR-0019 decision 3).");
+            + "integrator's, so the fix is a change request, an issue labelled change-request that the "
+            + "human decides in a decision comment (docs/agents/tracker-policy.md, \"Change requests\"), "
+            + "or a dependency held back, not an edit here (ADR-0015 decision 3, ADR-0019 decision 3).");
     }
 
     [Fact]
