@@ -1,0 +1,93 @@
+# The startup benchmark's local tier (L), nightly on ARM64. Owner: integrator, written for #576,
+# the follow-up ADR-0033 names (#286 Q125).
+#
+# One job, apart from ci.yml's x64 `Build and test` job and never in tools/check.sh (ADR-0033 ->
+# Decision, the cadence; #176 Q4 and Q5): it runs tools/bench/startup.py in its verdict mode (#575)
+# on `ubuntu-24.04-arm`, the architecture the gateway's task runs on, free for this public repository
+# (#176 Q4's feasibility facts). A file of its own rather than a job in ci.yml because ci.yml's jobs
+# answer a push or a pull request, diff against their base and cancel each other in progress, none of
+# which a timed run of a benchmark wants.
+#
+# When it runs: nightly on main, and on demand. A `schedule` fires on the default branch's latest
+# commit and on no other (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule),
+# which is the "nightly on main" ADR-0033 asks for; `workflow_dispatch` is the "on demand", from the
+# Actions tab or `gh workflow run startup-bench.yml`. The hour is 03:17 UTC: off the hour, as GitHub
+# asks for cron, and after the day's landings in Adam's time zone. GitHub pauses a schedule when the
+# repository has had no activity for 60 days, which the same page says; a dispatch wakes it.
+#
+# What the run does is in .github/startup-bench.sh, whose rules .github/startup_bench_tests.py proves
+# on every push with the benchmark doubled, because nothing here runs on a workstation: the three
+# local budgets, the one re-run on `bench: no verdict:` (never on `bench: fail:`), both runs' files
+# kept, the verdict as the last line and in the step summary. The `.txt` and `.json` of every run are
+# uploaded as this run's artifact (#176 Q6); CI files no issue; there is no retry-until-green.
+#
+# Informational until promoted (ADR-0033 -> Decision, the cadence; #176 Q4): STARTUP_BENCH_ASSERTS is
+# `false` below, so the job passes whatever the verdict and a breach is a `::warning::` annotation
+# and a line in the step summary, not a red run, and not the tuning trigger ("an informational CI
+# breach prompts a workstation run and is not itself the trigger"). The promotion is one edit, in a
+# commit that cites the runs: once ten calibration runs of this job have ended on `bench: pass:` with
+# their maxima leaving headroom under the budgets, set STARTUP_BENCH_ASSERTS to `true`. From then a
+# `bench: fail:` fails the job (exit 1), a second `bench: no verdict:` fails it too (exit 2), and a
+# breach opens the tuning effort (ADR-0033 -> Decision, the tuning trigger). Whether ten runs fit,
+# and what headroom is enough, is the promoter's judgement, as ADR-0033 leaves it; ten runs is ten
+# nights, and the artifacts are kept 90 days so the ten are still there to cite.
+
+name: Startup benchmark
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time, queued rather than cancelled: a cancelled benchmark is a lost calibration run,
+# and a dispatch beside the nightly must not cut either short.
+concurrency:
+  group: startup-bench
+  cancel-in-progress: false
+
+env:
+  # The promotion step: `false` is informational, `true` asserts. The header says when it flips.
+  STARTUP_BENCH_ASSERTS: 'false'
+
+jobs:
+  local-tier:
+    name: Startup benchmark, tier L on ARM64
+    runs-on: ubuntu-24.04-arm
+    # Two runs at most, each N=10 of the floor and the gateway at up to --timeout 120 s a start, after
+    # the image builds; well under this, or the daemon has hung, and a hung job is cancelled rather
+    # than billed for six hours.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The runner the numbers come from
+        # The benchmark's `.json` carries its own facts (commit, image ids, Docker, host); this puts
+        # the runner's shape at the top of the log too, because a calibration run is compared with
+        # the next one, and a runner image change between them is the first thing to rule out.
+        # Informational: no value fails it.
+        run: |
+          uname -m
+          nproc
+          cat /proc/loadavg
+          docker --version
+          python3 --version
+
+      - name: One run of the local tier, and its one re-run on no verdict
+        # The script says why each rule is what it is. It is informational until the promotion the
+        # header describes, so its exit code is the job's only once STARTUP_BENCH_ASSERTS is true.
+        run: .github/startup-bench.sh "$RUNNER_TEMP/startup-bench"
+
+      - uses: actions/upload-artifact@v4
+        # Every run's `.txt` and `.json`, kept as this run's artifact (#176 Q6): both files of the
+        # re-run too, when there was one. `if: always()` so a breach, a no-verdict and a stopped run
+        # keep their files, which are the whole point of an informational run. 90 days is the most a
+        # public repository keeps, and ten calibration nights fit inside it.
+        if: always()
+        with:
+          name: startup-bench-${{ github.run_id }}
+          path: ${{ runner.temp }}/startup-bench/
+          if-no-files-found: error
+          retention-days: 90
