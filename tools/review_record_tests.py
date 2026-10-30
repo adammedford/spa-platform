@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -87,14 +88,15 @@ class Outcome:
         self.stderr = completed.stderr.decode("utf-8")
 
 
-def read(head: str = HEAD, comments: list | None = None, reviews: list | None = None, *,
+def read(head: str = HEAD, *flags: str, comments: list | None = None, reviews: list | None = None,
          pages: dict | None = None, raw: bytes | None = None) -> Outcome:
-    """Run the reader as land.sh does. `comments` and `reviews` go in as one page each."""
+    """Run the reader as land.sh does, with `flags` after the head. `comments` and `reviews` go in
+    as one page each."""
     if raw is None:
         payload = pages if pages is not None else {"comments": [comments or []],
                                                    "reviews": [reviews or []]}
         raw = json.dumps(payload).encode("utf-8")
-    completed = subprocess.run([sys.executable, "-I", str(READER), head], input=raw,
+    completed = subprocess.run([sys.executable, "-I", str(READER), head, *flags], input=raw,
                                capture_output=True, timeout=30)
     return Outcome(completed)
 
@@ -492,6 +494,97 @@ class PullRequestFormInputTests(ReaderTestCase):
         self.assertUnreadable(ask("--pr", NUMBER, gh=False), "gh")
 
 
+# A review comment carrying a record and a `## Follow-ups` table, in the shape review-queue.js
+# writes (its followUpLines and cell): each Finding cell with `|` escaped as `\|`.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+
+
+def with_follow_ups(line: str, *findings: str) -> str:
+    rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+    return "\n".join(["## Review", "", line, "", "## Follow-ups", "", FOLLOW_UP_HEAD,
+                      "| --- | --- | --- | --- |", *rows, "", "## Outstanding", "", "- none"])
+
+
+class FollowUpsTests(ReaderTestCase):
+    """With `--follow-ups` last, the reader prints, after the URL, one line per row of the clearing
+    record's `## Follow-ups` table: its Finding cell, read as morning.js's followUpsOf reads it, so
+    land.sh can refuse a merge body with no `Outstanding:` line that carries them (#521). Without the
+    flag nothing changes, so what docs/agents/landing-work.md says the reader prints stays true."""
+
+    def test_the_header_is_the_one_review_queue_writes_and_morning_reads(self):
+        # The cases below prove the reader reads a table under FOLLOW_UP_HEAD; this one reads that
+        # header back from the script that writes the table and the one that files its rows. Were
+        # either renamed, the reader would find no table, land.sh's check would pass on every
+        # record, and every other case here would still be green: a guard reads the thing it
+        # guards (CODING_STANDARDS.md), and a check that reads nothing must not read as a pass.
+        for script in ("review-queue.js", "morning.js"):
+            with self.subTest(script=script):
+                source = (ROOT / ".claude" / "workflows" / script).read_text(encoding="utf-8")
+                found = re.search(r"^const FOLLOW_UP_HEAD = '([^']*)'$", source, re.MULTILINE)
+                self.assertIsNotNone(found, f"{script} no longer defines FOLLOW_UP_HEAD on one line")
+                self.assertEqual(FOLLOW_UP_HEAD, found.group(1))
+
+    def test_each_row_follows_the_url(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail", "An unread flag")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(0, outcome.status, outcome.stderr)
+        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\nAn unread flag\n",
+                         outcome.stdout)
+
+    def test_without_the_flag_the_url_stands_alone(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
+        outcome = read(comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_a_record_with_no_table_prints_the_url_alone(self):
+        outcome = read(HEAD, "--follow-ups",
+                       comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_a_table_with_no_row_prints_the_url_alone(self):
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, with_follow_ups(record(HEAD, "merge")),
+                                                               "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_an_escaped_pipe_in_a_finding_is_read_back_as_a_pipe(self):
+        body = with_follow_ups(record(HEAD, "merge"), "`a \\| b` is split wrong")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\n`a | b` is split wrong\n", outcome.stdout)
+
+    def test_the_table_ends_at_the_first_line_that_is_not_a_row(self):
+        # A row with the wrong number of cells, or an empty Finding, is not a follow-up; the table
+        # ends at the first line not bracketed by pipes, as morning.js reads it.
+        body = "\n".join([record(HEAD, "merge"), "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- |",
+                          "| First | Spec | here | this record |", "|  | Spec | here | this record |",
+                          "| Three | cells | only |", "", "| After the table | Spec | here | x |"])
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\nFirst\n", outcome.stdout)
+
+    def test_only_the_clearing_record_s_table_is_read(self):
+        held = with_follow_ups(record(HEAD, "hold"), "Carried by the hold")
+        outcome = read(HEAD, "--follow-ups",
+                       comments=[comment(11, held, "2026-10-18T01:00:00Z"),
+                                 comment(12, record(HEAD, "merge"), "2026-10-18T02:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-12")
+
+    def test_a_refusal_prints_no_rows(self):
+        body = with_follow_ups(record(HEAD, "hold"), "A finding")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertRefused(outcome, "says hold")
+
+    def test_the_two_forms_agree_with_the_flag(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
+        pages = {"comments": [[comment(11, body, "2026-10-18T01:00:00Z")]], "reviews": [[]]}
+        piped = read(HEAD, "--follow-ups", pages=pages)
+        for arguments in (["--pr", NUMBER, "--follow-ups"],
+                          ["--pr", NUMBER, "--head", HEAD, "--follow-ups"]):
+            with self.subTest(arguments=arguments):
+                asked = ask(*arguments, pages=pages)
+                self.assertEqual((piped.status, piped.stdout, piped.stderr),
+                                 (asked.outcome.status, asked.outcome.stdout, asked.outcome.stderr))
+        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\n", piped.stdout)
+
+
 class ArgumentTests(ReaderTestCase):
     """A wrong argument is refused, before any input is read or any gh call made, with both forms
     named, so a caller holding a number or a head learns the form that takes it."""
@@ -514,7 +607,9 @@ class ArgumentTests(ReaderTestCase):
         for arguments in ([], ["--pr"], ["--pr", "0"], ["--pr", "-7"], ["--pr", NUMBER, HEAD],
                           ["--head", HEAD], ["--pr", NUMBER, "--head"],
                           ["--pr", NUMBER, "--head", HEAD[:7]], ["--pr", NUMBER, "--head", NUMBER],
-                          ["--pr", NUMBER, "--pr", NUMBER], [HEAD, HEAD], ["--merge"]):
+                          ["--pr", NUMBER, "--pr", NUMBER], [HEAD, HEAD], ["--merge"],
+                          ["--follow-ups"], ["--follow-ups", HEAD], ["--pr", NUMBER, "--follow-ups", HEAD],
+                          [HEAD, "--follow-ups", "--follow-ups"], ["--pr", "--follow-ups", NUMBER]):
             with self.subTest(arguments=arguments):
                 self.assertWrongArguments(*arguments)
 

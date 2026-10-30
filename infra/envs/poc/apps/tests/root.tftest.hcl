@@ -228,7 +228,7 @@ run "parameter_value_changes_are_ignored" {
   # terraform test cannot see a lifecycle block, so this reads the root's own source: a guard on
   # the one line that keeps a rotation from being undone (docs/plan/05, Rotating a client secret).
   assert {
-    condition     = length(aws_ssm_parameter.client_secret) > 0 && can(regex("(?s)resource \"aws_ssm_parameter\" \"client_secret\".*?lifecycle \\{\\s*ignore_changes = \\[value\\]", file("main.tf")))
+    condition     = length(aws_ssm_parameter.client_secret) > 0 && can(regex("(?s)resource \"aws_ssm_parameter\" \"client_secret\".*?lifecycle \\{\\s*ignore_changes\\s*= \\[value\\]", file("main.tf")))
     error_message = "Terraform must ignore later changes to the parameter's value."
   }
 }
@@ -252,6 +252,32 @@ run "outputs_follow_the_infra_outputs_contract" {
   assert {
     condition     = alltrue([for c in output.clients : c.clientId == "1example23456789" && c.secretVersion == 1])
     error_message = "clientId and secretVersion come from the client and the parameter."
+  }
+}
+
+# A replaced client re-creates its parameter (#554). The apply before this one holds every app's
+# client and parameter; this one replaces app1's client, as a changed user_pool_id or
+# generate_secret would, and the mock gives the new client a new secret. ignore_changes = [value]
+# keeps an update from writing it into the existing parameter, so the parameter follows the new
+# secret only when the client's replacement replaces the parameter too: without that trigger the
+# parameter keeps the old client's secret, and nothing shows it until a sign-in fails.
+run "a_replaced_client_re_creates_its_parameter" {
+  command = apply
+
+  plan_options {
+    replace = [aws_cognito_user_pool_client.app["app1"]]
+  }
+
+  assert {
+    condition     = contains(keys(var.fixture_apps), "app1")
+    error_message = "This run replaces app1's client; fixtures/apps/ no longer defines app1, so change the address above."
+  }
+
+  assert {
+    condition = length(aws_ssm_parameter.client_secret) > 0 && alltrue([
+      for id, c in aws_cognito_user_pool_client.app : aws_ssm_parameter.client_secret[id].value == c.client_secret
+    ])
+    error_message = "A replaced client's parameter still holds the old client's secret: the parameter must be re-created when its client is (#554)."
   }
 }
 

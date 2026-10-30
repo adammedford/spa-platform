@@ -36,6 +36,13 @@
 # than take an unreviewed head.
 # The merge body ends with `Reviewed: <head> <record URL>`, which this script writes, not its caller.
 #
+# When the comment holding the clearing record ends its findings with a `## Follow-ups` table that
+# has a row, the review carried a finding rather than holding on it, and docs/agents/review.md ->
+# "Landing or holding" has the merge body record it as an `Outstanding:` line. So the reader is run
+# with --follow-ups, which prints each row's Finding after the URL, and a merge body with no line
+# beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
+# no such row is not checked, and nor is an --unreviewed landing, which reads no record.
+#
 # It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
 # between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
 # closes each one (#566). A refusal names each #n no commit names, and --unreviewed does not lift it.
@@ -262,24 +269,52 @@ if [ -n "$unreviewed" ]; then
 else
   # The reader's --pr form lists the pull request's comments and reviews itself, every page of each
   # (#488), and judges the head passed with --head: the one this script pinned above, not whatever
-  # a second read would report. It prints the clearing record's URL, or says on standard error, above
-  # the line below, why nothing clears the head (status 1) or why it could not read the records
-  # (status 2: a gh call failed, or what came back was not GitHub's shape).
+  # a second read would report. It prints the clearing record's URL on its first line and, with
+  # --follow-ups, the Finding of each row of that record's `## Follow-ups` table on the lines after
+  # it (#521); or it says on standard error, above the line below, why nothing clears the head
+  # (status 1) or why it could not read the records (status 2: a gh call failed, or what came back
+  # was not GitHub's shape).
   echo "--- reading the review records of #$pr at $head"
   status=0
-  record="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head")" || status=$?
+  read_out="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head" --follow-ups)" || status=$?
   case "$status" in
     0) ;;
     1) die "no review record clears #$pr at $head, so it does not merge. An agent session that wrote none of its commits reviews it and posts the record; docs/agents/review.md -> Landing or holding." ;;
     *) die "could not read the review records of #$pr, so it does not merge; the reader says why above." ;;
   esac
+  record="${read_out%%"$newline"*}"
+  follow_ups=""
+  [ "$read_out" = "$record" ] || follow_ups="${read_out#*"$newline"}"
   trailer="Reviewed: $head $record"
 fi
 
 # The trailer is the body's last line, after one blank line. The body was read above with its
-# trailing newlines dropped, so the gap is always one blank line however the file ended.
+# trailing newlines dropped, so the gap is always one blank line however the file ended, and
+# the Outstanding: check below reads it from $text (#521).
 body="$trailer"
 [ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
+
+# A carried finding owes the merge body an `Outstanding:` line (#521): docs/agents/review.md ->
+# "Landing or holding" puts it there, and docs/agents/landing-work.md -> "Land it" asks for the
+# line whenever a row lands unfinished. The line is one beginning `Outstanding:`, after any
+# indentation, in the body passed with --body-file; `Outstanding test ids:` is the other line that
+# section asks for and not this one, and `Outstanding: none` is a line, whose truth is the human's.
+# The record landed #507 on 2026-10-28 with one follow-up, and the body named it under a heading of
+# its own that no reader looks for. Each row is named so the line can be written from the refusal.
+if [ -n "${follow_ups:-}" ]; then
+  has_outstanding=""
+  outstanding_line='^[[:space:]]*Outstanding:'
+  while IFS= read -r line; do
+    if [[ $line =~ $outstanding_line ]]; then has_outstanding=1; break; fi
+  done <<< "$text"
+  if [ -z "$has_outstanding" ]; then
+    rows=""
+    while IFS= read -r line; do
+      [ -z "$line" ] || rows="$rows; $line"
+    done <<< "$follow_ups"
+    die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
+  fi
+fi
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
 if [ -z "$subject" ]; then

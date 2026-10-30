@@ -5,8 +5,9 @@ tools/bench/.
 The startup benchmark's Docker half needs a Docker daemon and minutes of wall time, so it is proved by running
 it (the numbers in #173's Answer), not here. What runs here is everything that decides a number
 without Docker: reading dockerd's timestamps, the probe's clocks against a real socket, the summary's
-medians, maxima and gaps, and the gateway's environment, read from the contract's example rather
-than from a copy.
+medians, maxima and gaps, the verdict mode's rules and command line (ADR-0033, where a `B-` id is
+proved by the benchmark's verdict and the verdict's logic here), and the gateway's environment, read
+from the contract's example rather than from a copy.
 
 Run: python3 -I tools/bench/startup_tests.py
 """
@@ -21,8 +22,9 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+ROOT =pathlib.Path(__file__).resolve().parent.parent.parent
 spec = importlib.util.spec_from_file_location("startup", ROOT / "tools" / "bench" / "startup.py")
 startup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(startup)
@@ -217,6 +219,177 @@ class GatewayEnvironment(unittest.TestCase):
         self.assertEqual("us-east-1", self.env["AWS_REGION"])
         self.assertIn("AWS_ACCESS_KEY_ID", self.env)
         self.assertIn("AWS_SECRET_ACCESS_KEY", self.env)
+
+
+def starts(kind: str, count: int, **after_ms):
+    """`count` constrained cold starts of one kind, each with the same clocks, as run_bench records them."""
+    return [dict(run(100 * i + (1 if kind == "gateway" else 0), **after_ms), kind=kind, constrained=True, index=i,
+                 start_cli_ms=50.0)
+            for i in range(count)]
+
+
+QUIET_FLOOR = starts("floor", 10, listening=200, healthz=450)
+GOOD_GATEWAY = starts("gateway", 10, listening=800, healthz=1200, readyz=2200, app_host=2600)
+BUDGETS_MS = {"healthz": 4000.0, "readyz": 6000.0, "app_host": 7000.0}
+
+
+class Verdict(unittest.TestCase):
+    """The verdict mode's rules (ADR-0033 Decision, the assertion; #175 Q7; #176 Q3 and Q6)."""
+
+    def test_a_max_over_its_budget_fails(self):
+        slow = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=6100, app_host=6500)
+        verdict = startup.verdict(QUIET_FLOOR + slow, BUDGETS_MS)
+        self.assertEqual("fail", verdict.status)
+        self.assertTrue(verdict.line.startswith("bench: fail: "), verdict.line)
+        self.assertIn("/readyz 200 max 6100 ms over its budget of 6000 ms", verdict.line)
+        self.assertNotEqual(0, verdict.exit_code)
+
+    def test_a_start_that_never_reached_a_budgeted_clock_fails(self):
+        # Today's summary drops such a start from the max (#176 Q3); the verdict counts it.
+        stalled = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=2200, app_host=None)
+        verdict = startup.verdict(QUIET_FLOOR + stalled, BUDGETS_MS)
+        self.assertEqual("fail", verdict.status)
+        self.assertIn("first app-host 401 not reached in 1 of 10 starts", verdict.line)
+
+    def test_n_other_than_ten_gives_no_verdict(self):
+        verdict = startup.verdict(QUIET_FLOOR[:3] + GOOD_GATEWAY[:3], BUDGETS_MS)
+        self.assertEqual("no verdict", verdict.status)
+        self.assertTrue(verdict.line.startswith("bench: no verdict: "), verdict.line)
+        self.assertIn("3 gateway starts", verdict.line)
+        self.assertNotEqual(0, verdict.exit_code)
+
+    def test_a_breach_on_a_loaded_floor_gives_no_verdict(self):
+        # The floor's /healthz max above about 1.2 s shows a loaded machine (#175 Q7).
+        loaded = QUIET_FLOOR[:9] + starts("floor", 1, listening=900, healthz=1300)
+        slow = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=6100, app_host=6500)
+        verdict = startup.verdict(loaded + slow, BUDGETS_MS)
+        self.assertEqual("no verdict", verdict.status)
+        self.assertIn("floor /healthz 200 max 1300 ms", verdict.line)
+        self.assertIn("re-run once", verdict.line)
+        self.assertNotEqual(0, verdict.exit_code)
+        self.assertNotEqual(startup.verdict(QUIET_FLOOR + slow, BUDGETS_MS).exit_code, verdict.exit_code)
+
+    def test_a_pass_counts_regardless_of_load(self):
+        loaded = QUIET_FLOOR[:9] + starts("floor", 1, listening=900, healthz=1300)
+        self.assertEqual("pass", startup.verdict(loaded + GOOD_GATEWAY, BUDGETS_MS).status)
+
+    def test_a_floor_that_never_reached_healthz_counts_as_loaded(self):
+        stalled = QUIET_FLOOR[:9] + starts("floor", 1, listening=900, healthz=None)
+        slow = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=6100, app_host=6500)
+        self.assertEqual("no verdict", startup.verdict(stalled + slow, BUDGETS_MS).status)
+
+    def test_a_pass_names_each_max_against_its_budget_and_exits_zero(self):
+        verdict = startup.verdict(QUIET_FLOOR + GOOD_GATEWAY, BUDGETS_MS)
+        self.assertEqual("pass", verdict.status)
+        self.assertEqual(0, verdict.exit_code)
+        self.assertTrue(verdict.line.startswith("bench: pass: "), verdict.line)
+        self.assertIn("/healthz 200 max 1200 ms <= 4000 ms", verdict.line)
+        self.assertIn("/readyz 200 max 2200 ms <= 6000 ms", verdict.line)
+        self.assertIn("first app-host 401 max 2600 ms <= 7000 ms", verdict.line)
+        # The floor is reported only (#176 Q1), and the median is the headline, never the check.
+        self.assertIn("floor /healthz 200 max 450 ms", verdict.line)
+        self.assertIn("medians", verdict.line)
+
+    def test_unconstrained_starts_are_reported_and_never_judged(self):
+        # The budget holds under --cpus 0.25 --memory 1g (ADR-0033, the method).
+        unconstrained = [dict(one, constrained=False) for one in
+                         starts("gateway", 10, listening=800, healthz=1200, readyz=9000, app_host=9500)]
+        self.assertEqual("pass", startup.verdict(QUIET_FLOOR + GOOD_GATEWAY + unconstrained, BUDGETS_MS).status)
+
+
+FACTS = {"commit": "0" * 40, "uncommitted_changes_not_measured": False,
+         "images": {"floor": {"tag": "f", "id": "sha256:" + "a" * 64}, "gateway": {"tag": "g", "id": "sha256:" + "b" * 64}},
+         "docker": {"server": "29.9.1", "os": "Docker Desktop", "arch": "aarch64", "cpus": 12, "memory": 8 * 2**30},
+         "host": {"machine": "arm64", "system": "macOS", "python": "3.9.6"},
+         "runs": 10, "cpus": "0.25", "memory": "1g", "interval_ms": 10}
+
+
+class VerdictMode(unittest.TestCase):
+    """The command line of the verdict mode, and what a run prints and returns with and without it."""
+
+    def test_budgets_are_named_per_clock_in_seconds(self):
+        options = startup.parse_args(["--verdict", "--budget", "healthz=4", "--budget", "readyz=6", "--budget", "app_host=7"])
+        self.assertEqual({"healthz": 4000.0, "readyz": 6000.0, "app_host": 7000.0}, options.budgets_ms)
+
+    def test_a_budget_on_a_clock_that_is_not_budgeted_is_refused(self):
+        with self.assertRaises(SystemExit):
+            startup.parse_args(["--verdict", "--budget", "ready=6"])
+        # Listening is reported only (#175 Q1), so a budget on it is refused, not held.
+        with self.assertRaises(SystemExit):
+            startup.parse_args(["--verdict", "--budget", "listening=1"])
+
+    def test_a_verdict_without_a_budget_is_refused(self):
+        with self.assertRaises(SystemExit):
+            startup.parse_args(["--verdict"])
+
+    def test_a_verdict_with_n_other_than_ten_is_refused_before_any_start(self):
+        with self.assertRaises(SystemExit):
+            startup.parse_args(["--verdict", "--budget", "healthz=4", "--runs", "3"])
+
+    def conclude(self, argv, runs):
+        import io
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = startup.conclude(startup.parse_args(argv), FACTS, runs)
+        return code, out.getvalue().rstrip("\n").splitlines()
+
+    def test_without_the_verdict_mode_a_run_reports_as_before_and_returns_zero(self):
+        slow = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=6100, app_host=6500)
+        code, lines = self.conclude([], QUIET_FLOOR + slow)
+        self.assertEqual(0, code)
+        self.assertFalse(any(line.startswith("bench: ") for line in lines), lines)
+        self.assertTrue(lines[-1].startswith("`docker start` took"), lines[-1])
+
+    def test_with_the_verdict_mode_the_verdict_is_the_last_line_and_the_exit_code(self):
+        slow = GOOD_GATEWAY[:9] + starts("gateway", 1, listening=800, healthz=1200, readyz=6100, app_host=6500)
+        argv = ["--verdict", "--budget", "healthz=4", "--budget", "readyz=6", "--budget", "app_host=7"]
+        code, lines = self.conclude(argv, QUIET_FLOOR + slow)
+        self.assertEqual(1, code)
+        self.assertTrue(lines[-1].startswith("bench: fail: /readyz 200 max 6100 ms"), lines[-1])
+        code, lines = self.conclude(argv, QUIET_FLOOR + GOOD_GATEWAY)
+        self.assertEqual(0, code)
+        self.assertTrue(lines[-1].startswith("bench: pass: "), lines[-1])
+
+    def test_the_json_file_carries_the_verdict(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = pathlib.Path(folder) / "run.json"
+            argv = ["--verdict", "--budget", "healthz=4", "--json", str(path)]
+            self.conclude(argv, QUIET_FLOOR + GOOD_GATEWAY)
+            written = json.loads(path.read_text())
+        self.assertEqual("pass", written["verdict"]["status"])
+        self.assertEqual({"healthz": 4000.0}, written["facts"]["budgets_ms"])
+        self.assertEqual(20, len(written["runs"]))
+
+    def test_a_run_that_stops_before_judging_is_no_verdict_not_fail(self):
+        # Docker failing mid-run says nothing about the gateway. Left to propagate, Python's exit 1
+        # is `bench: fail:`'s code with no verdict line (CODING_STANDARDS.md, a check fails closed).
+        import io
+        import contextlib
+
+        class Stopped:
+            def __init__(self, options):
+                pass
+
+            def images(self):
+                raise RuntimeError("docker inspect failed:\n  no daemon")
+
+            def down(self):
+                pass
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(startup, "Bench", Stopped), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = startup.main(["--verdict", "--budget", "healthz=4"])
+        lines = out.getvalue().rstrip("\n").splitlines()
+        self.assertEqual(2, code)
+        self.assertEqual("bench: no verdict: the run stopped before judging: RuntimeError: docker inspect failed: no daemon",
+                         lines[-1])
+        self.assertIn("RuntimeError: docker inspect failed", err.getvalue())   # the traceback still names the cause
+        # Without the verdict mode nothing changes: the error propagates as it always did.
+        with mock.patch.object(startup, "Bench", Stopped), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(RuntimeError):
+                startup.main([])
 
 
 if __name__ == "__main__":
