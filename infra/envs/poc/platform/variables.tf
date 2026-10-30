@@ -147,3 +147,37 @@ variable "allowed_upstreams" {
   type        = list(string)
   default     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
 }
+
+# --- Continuity (#347 Q7): the inputs #338 gave the cell, passed through ---------------------------
+#
+# Each defaults to Phase 1's value, so a terraform.tfvars that names none of them plans the one-task
+# cell G3 ran. The G6 sitting (#348) sets them in its untracked terraform.tfvars; the values are in
+# terraform.tfvars.example. The module holds each value's rule and refuses dynamodb with no prefix.
+
+variable "session_store" {
+  description = <<-EOT
+    Where sessions live: memory in Phase 1, dynamodb from G6 (ADR-0004, ADR-0012; #332 D6). The
+    module's rule: dynamodb needs data_protection_parameter_prefix.
+  EOT
+  type        = string
+  default     = "memory"
+}
+
+variable "data_protection_parameter_prefix" {
+  description = <<-EOT
+    The Parameter Store prefix of the cell's shared data-protection key ring, or empty for none, which
+    is Phase 1. Set, it is exactly /spa-platform/{cell}/data-protection/ (P2-2 decision 8); the module
+    refuses any other value.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "data_protection_kms_key_id" {
+  description = <<-EOT
+    The KMS key the ring's parameters are encrypted under, or empty for the account's aws/ssm key,
+    which is G6's value (#332 D6: no customer-managed key).
+  EOT
+  type        = string
+  default     = ""
+}

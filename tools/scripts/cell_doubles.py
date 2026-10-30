@@ -225,6 +225,20 @@ EC2_DESCRIBES = {
     "describe-internet-gateways": ("internet-gateway-ids", "internet-gateway", "InvalidInternetGatewayID.NotFound",
                                    "InternetGateways[].InternetGatewayId"),
     "describe-route-tables": ("route-table-ids", "route-table", "InvalidRouteTableID.NotFound", "RouteTables[].RouteTableId"),
+    # The NAT gateway's Elastic IP (#347): released, EC2 answers InvalidAllocationID.NotFound for its
+    # allocation id, with nothing to describe in between.
+    "describe-addresses": ("allocation-ids", "elastic-ip", "InvalidAllocationID.NotFound", "Addresses[].AllocationId"),
+}
+
+# The two EC2 types verify-teardown.sh reads a state from rather than an id (#347): a NAT gateway and a
+# VPC endpoint are described for a while after their deletion, in the state "deleted", and only later
+# not at all. The entry's "state" is what the describe answers, "available" unless the world says
+# otherwise; "describe_knows" counts the describes that still find it, as above.
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeNatGateways.html
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_VpcEndpoint.html
+EC2_STATE_DESCRIBES = {
+    "describe-nat-gateways": ("nat-gateway-ids", "natgateway", "NatGatewayNotFound", "NatGateways[].State"),
+    "describe-vpc-endpoints": ("vpc-endpoint-ids", "vpc-endpoint", "InvalidVpcEndpointId.NotFound", "VpcEndpoints[].State"),
 }
 
 
@@ -241,7 +255,8 @@ def text(value) -> str:
 
 
 MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
-                "clusters", "names", *(entry[0] for entry in EC2_DESCRIBES.values())}
+                "clusters", "names", *(entry[0] for entry in EC2_DESCRIBES.values()),
+                *(entry[0] for entry in EC2_STATE_DESCRIBES.values())}
 
 
 def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
@@ -527,6 +542,17 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         if "describe_knows" in entry:
             entry["describe_knows"] -= 1
         return [ident]
+    if words[:1] == ["ec2"] and words[1:2] and words[1] in EC2_STATE_DESCRIBES:
+        option, kind, missing, expected = EC2_STATE_DESCRIBES[words[1]]
+        if query != expected or len(options.get(option, [])) != 1:
+            raise Unexpected(f"ec2 {words[1]} {options}")
+        ident = options[option][0]
+        entry = next((entry for entry in world["tagged"] if entry["arn"].endswith(f":{kind}/{ident}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError(missing, words[1])
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return [entry.get("state", "available")]
     if command == "acm delete-certificate":
         arn = options["certificate-arn"]
         # ACM counts a certificate in use for a while after the listener that held it is deleted:

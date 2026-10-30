@@ -457,6 +457,50 @@ run "the_policy_bounds_this_root_defaults_are_the_contract_s_own_example" {
   }
 }
 
+# Continuity (#347 Q7). The three inputs #338 gave the cell reach it through root variables that
+# default to Phase 1's values, so a tfvars with none of them plans the cell G3 ran, and the G6
+# sitting (#348) sets them in its untracked terraform.tfvars. Read from main.tf's source, because a
+# root test cannot address the module's resources: what this root holds is that each variable is
+# passed, under its own name, to the one module call.
+#
+# Mutations that turn this run red: a root default of "dynamodb"; a variable declared but not
+# passed; the prefix passed as a literal rather than the variable.
+run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
+  command = plan
+
+  assert {
+    condition     = var.session_store == "memory" && var.data_protection_parameter_prefix == "" && var.data_protection_kms_key_id == ""
+    error_message = "The root's continuity inputs default to Phase 1's: session_store memory, no ring prefix and no key id, so a terraform.tfvars that names none of them plans the one-task cell unchanged."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["session_store", "data_protection_parameter_prefix", "data_protection_kms_key_id"] :
+      length(regexall("(?m)^  ${name}\\s*=\\s*var\\.${name}$",
+        one([for m in regexall("(?ms)^module\\s+\"cell\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) : m[0]])
+      )) == 1
+    ])
+    error_message = "The module call passes session_store, data_protection_parameter_prefix and data_protection_kms_key_id through from the root variable of the same name, each on its own line."
+  }
+}
+
+# The G6 values plan at this root: the store, the cell's own ring prefix and no key id (#332 D6).
+# The module's validation, which refuses dynamodb with no prefix, is held in its own suite; this run
+# holds that the root accepts the pair it documents in terraform.tfvars.example.
+run "the_g6_continuity_inputs_plan_at_this_root" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition     = var.session_store == "dynamodb" && var.data_protection_parameter_prefix == "/spa-platform/${var.cell}/data-protection/"
+    error_message = "The G6 inputs are the DynamoDB store and this cell's ring prefix."
+  }
+}
+
 run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
   command = plan
 
