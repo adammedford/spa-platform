@@ -31,7 +31,6 @@ Run: python3 -I tools/overnight_answers_tests.py
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import shlex
 import subprocess
