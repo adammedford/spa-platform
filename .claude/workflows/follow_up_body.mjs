@@ -4,9 +4,11 @@
 //
 // <pr> is the pull request's number, <record-url> the record's link on it (the html_url of the
 // comment or review that carries the record line), <record.md> a file holding the record's body
-// verbatim ("-" reads it from stdin), and <row> the 1-based row of its "## Follow-ups" table, the
-// <k> of the morning's followups/pr-<pr>-<k>.md. It prints the body the morning would file for that
-// row, byte for byte with no newline added, so `> body.md` gives the file `gh issue create
+// verbatim ("-" reads it from stdin), and <row> the 1-based row of its "## Follow-ups" table, every
+// row counted. That is the <k> of the morning's followups/pr-<pr>-<k>.md only while no row before it
+// is filed: followUpsToFile counts the rows still to file, so a filed row shifts the later rows' <k>,
+// and this command does not read the tracker to know which are filed. It prints the body the
+// morning would file for that row, byte for byte with no newline added, so `> body.md` gives the file `gh issue create
 // --body-file` takes; on stderr it names the row's title and the label the morning would file it
 // under, and why when that label is ready-for-human. It writes nothing and calls nothing.
 //

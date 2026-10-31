@@ -1559,6 +1559,23 @@ try {
         const r = run(args)
         if (r.status !== code || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected ${code}), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
       }
+      // The inputs beside the command fail closed too (CODING_STANDARDS.md, "A check fails closed"): an
+      // OWNERSHIP.md with no block, none at all, or a morning.js missing a follow-ups section prints no
+      // body. Without the first, every row would print as ready-for-human with "no line owns" and exit 0.
+      const layout = (label, ownership, script) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'follow-up-body-layout-'))
+        made.push(root)
+        const wf = path.join(root, '.claude', 'workflows')
+        fs.mkdirSync(wf, { recursive: true })
+        fs.writeFileSync(path.join(wf, 'morning.js'), script)
+        fs.copyFileSync(CLI, path.join(wf, 'follow_up_body.mjs'))
+        if (ownership !== null) fs.writeFileSync(path.join(root, 'OWNERSHIP.md'), ownership)
+        const r = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(wf, 'follow_up_body.mjs') })
+        if (r.status !== 2 || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected 2), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
+      }
+      layout('an OWNERSHIP.md with no ownership block', '# Ownership\n\nNo block here.\n', src)
+      layout('no OWNERSHIP.md', null, src)
+      layout('a morning.js with no "follow-ups, their bodies" section', OWNERSHIP_MD, src.replace(/^(\/\/ -+ )follow-ups, their bodies$/m, '$1their bodies'))
 
       // The command is in the repository, and carries no copy of the three functions.
       const ignored = spawnSync('git', ['-C', top, 'check-ignore', '-q', path.join('.claude', 'workflows', 'follow_up_body.mjs')], { encoding: 'utf8' })
@@ -1583,11 +1600,11 @@ try {
         fs.writeFileSync(path.join(mwf, 'morning.js'), src.replace(fn, changed))
         fs.copyFileSync(CLI, path.join(mwf, 'follow_up_body.mjs'))
         fs.writeFileSync(path.join(mroot, 'OWNERSHIP.md'), OWNERSHIP_MD)
-        const unmutated = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(mwf, 'follow_up_body.mjs') })
-        if (unmutated.stdout === direct(443, R443, REC443.body, 2)) fail(`#643: the ${name} mutation of morning.js did not change the command's output, so it does not run the script's ${name}`)
+        const mutated = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(mwf, 'follow_up_body.mjs') })
+        if (mutated.stdout === direct(443, R443, REC443.body, 2)) fail(`#643: the ${name} mutation of morning.js did not change the command's output, so it does not run the script's ${name}`)
         const mport = portOf(src.replace(fn, changed))
         const mf = mport.followUpsOf(REC443.body, R443)[1]
-        if (unmutated.stdout !== mport.followUpBody(443, R443, mf, mport.placeOf(mport.ownershipRules(OWNERSHIP_MD), mf.where))) fail(`#643: under the ${name} mutation the command's output is not the mutated functions' direct result`)
+        if (mutated.stdout !== mport.followUpBody(443, R443, mf, mport.placeOf(mport.ownershipRules(OWNERSHIP_MD), mf.where))) fail(`#643: under the ${name} mutation the command's output is not the mutated functions' direct result`)
       }
     }
   }
