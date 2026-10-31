@@ -68,12 +68,7 @@ public sealed class RuleIdTelemetryTests
         CapturedLine line = Assert.Single(gateway.Log.LinesFor("api.unknown"));
         Assert.Equal("Platform.Proxy.UnknownApi", line.Category);
         Assert.Equal(LogLevel.Warning, line.Level);
-
-        // CapturedLine carries no event id (change request issue-145, section 4), so the template's is
-        // read from the same line as the project's recorder kept it.
-        LogLine recorded = Assert.Single(gateway.EventLines, recorded =>
-            recorded.Category == line.Category && recorded.Message == line.Message);
-        Assert.False(string.IsNullOrEmpty(recorded.EventId.Name), "the line was not written through a LoggerMessage template");
+        Assert.False(string.IsNullOrEmpty(line.EventId.Name), "the line was not written through a LoggerMessage template");
 
         // The path is attacker-chosen and stays out of the line.
         Assert.DoesNotContain("reports", line.Message, StringComparison.Ordinal);
