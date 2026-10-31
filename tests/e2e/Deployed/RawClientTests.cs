@@ -17,7 +17,7 @@ public sealed class RawClientTests
     {
         await using LocalStack stack = await LocalStack.StartAsync();
         HarnessApp app = stack.App("app1");
-        using HttpClient client = RawClient.To(stack.LoadBalancer.Endpoint, TlsLoadBalancer.TrustAnyCertificate);
+        using HttpClient client = RawClient.To(stack.LoadBalancer.Endpoint, TlsLoadBalancer.PinnedTo(stack.LoadBalancer.Spki));
 
         using HttpRequestMessage request = new(HttpMethod.Get, app.Url("/bff/session"));
         request.Headers.Add("Sec-Fetch-Site", "same-origin");
@@ -37,6 +37,21 @@ public sealed class RawClientTests
         // authority certs.sh installed fails rather than passing on a listener it never checked.
         await using LocalStack stack = await LocalStack.StartAsync();
         using HttpClient client = RawClient.To(stack.LoadBalancer.Endpoint);
+
+        using HttpRequestMessage request = new(HttpMethod.Get, stack.App("app1").Url("/healthz"));
+        HttpRequestException refused = await Assert.ThrowsAsync<HttpRequestException>(() => client.SendAsync(request, TestContext.Current.CancellationToken));
+        Assert.IsType<AuthenticationException>(refused.InnerException);
+        Assert.Empty(stack.LoadBalancer.Exchanges);
+    }
+
+    [Fact]
+    public async Task A_client_pinned_to_another_key_is_refused_by_the_stand_in()
+    {
+        // The pin trusts one key, not any certificate (CA5359; #589-Q5): pinned to a key the
+        // listener does not hold, the handshake fails before a request is carried.
+        await using LocalStack stack = await LocalStack.StartAsync();
+        using System.Security.Cryptography.X509Certificates.X509Certificate2 other = TlsLoadBalancer.SelfSigned("elsewhere.test");
+        using HttpClient client = RawClient.To(stack.LoadBalancer.Endpoint, TlsLoadBalancer.PinnedTo(ForeignSites.SpkiOf(other)));
 
         using HttpRequestMessage request = new(HttpMethod.Get, stack.App("app1").Url("/healthz"));
         HttpRequestException refused = await Assert.ThrowsAsync<HttpRequestException>(() => client.SendAsync(request, TestContext.Current.CancellationToken));

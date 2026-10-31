@@ -211,13 +211,19 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// </summary>
     public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
     {
-        // The certificate is this run's own, trusted by no store: the same trust the browser context gives it.
-        raw ??= RawClient.To(Endpoint, TrustAnyCertificate);
+        // The certificate is this run's own, trusted by no store, so the client trusts its key and no
+        // other, as the browser context's SPKI list does.
+        raw ??= RawClient.To(Endpoint, PinnedTo(Spki));
         return raw.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
-    /// <summary>Accepts any certificate: for this run's own, which no store trusts.</summary>
-    public static bool TrustAnyCertificate(object sender, X509Certificate? certificate, X509Chain? chain, System.Net.Security.SslPolicyErrors errors) => true;
+    /// <summary>
+    /// A validation that accepts the certificate with this key (<see cref="ForeignSites.SpkiOf"/>) and
+    /// no other: for this run's own, which no store trusts. It pins rather than accepting any
+    /// certificate, so a client given it validates against the stack's own certificate (CA5359; #589-Q5).
+    /// </summary>
+    public static System.Net.Security.RemoteCertificateValidationCallback PinnedTo(string spki) =>
+        (_, certificate, _, _) => certificate is X509Certificate2 presented && ForeignSites.SpkiOf(presented) == spki;
 
     /// <summary>A certificate for <c>*.{domain}</c>, made for this run and trusted by no one but the test context.</summary>
     internal static X509Certificate2 SelfSigned(string domain, params string[] alsoFor)
