@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
@@ -27,12 +28,13 @@ public sealed partial class DeployedSubsetTests
 
     /// <summary>
     /// Fails, naming each id, when a D row of the export's negative table or of the register's (#322) has
-    /// no <c>Task N</c><i>nn</i><c>_</c> test in the sources.
+    /// no <c>Task N</c><i>nn</i><c>_</c> test in the sources or explicitly named public continuity Fact (#657).
     /// </summary>
     internal static void AssertEveryDRowHasATest(string page, string register, Dictionary<string, string> sources)
     {
         string[] rows = DeployedRowIds(page, register);
-        string[] untested = [.. rows.Where(row => !sources.Values.Any(source => source.Contains($"Task N{row[2..]}_", StringComparison.Ordinal)))];
+        Dictionary<string, MethodInfo> continuity = ContinuityRowTests(register);
+        string[] untested = [.. rows.Where(row => !continuity.ContainsKey(row) && !sources.Values.Any(source => source.Contains($"Task N{row[2..]}_", StringComparison.Ordinal)))];
         Assert.Empty(untested);
     }
 
@@ -237,6 +239,44 @@ public sealed partial class DeployedSubsetTests
 
         static string[] Cells(string line) => [.. line.Trim().Trim('|').Split('|').Select(cell => cell.Trim())];
     }
+
+    /// <summary>
+    /// A registered D row may name an existing continuity Fact instead of an N-prefixed test (#657).
+    /// Resolve that explicit reference to the real public method; prose naming a missing method proves nothing.
+    /// </summary>
+    internal static Dictionary<string, MethodInfo> ContinuityRowTests(string register)
+    {
+        HashSet<string> rows = new(RegisterDeployedRows(register), StringComparer.Ordinal);
+        Dictionary<string, MethodInfo> tests = new(StringComparer.Ordinal);
+        foreach (string line in register.Split('\n'))
+        {
+            string id = line.Trim().Trim('|').Split('|')[0].Trim();
+            if (!rows.Contains(id) || !line.Contains("`tests/e2e/Deployed/ContinuityTests.cs`", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            Match reference = ContinuityReference().Match(line);
+            if (!reference.Success)
+            {
+                continue;
+            }
+
+            MethodInfo? method = typeof(ContinuityTests).GetMethod(reference.Groups["method"].Value,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            if (method?.GetCustomAttribute<FactAttribute>() is not null &&
+                method.GetCustomAttribute<TheoryAttribute>() is null &&
+                method.ReturnType == typeof(Task) && method.GetParameters().Length == 0)
+            {
+                tests.Add(id, method);
+            }
+        }
+
+        return tests;
+    }
+
+    [GeneratedRegex(@"`ContinuityTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`")]
+    private static partial Regex ContinuityReference();
 
     /// <summary>The files that start a stack of their own choosing rather than the one the switch chooses.</summary>
     internal static string[] LocalOnly(Dictionary<string, string> sources) =>
