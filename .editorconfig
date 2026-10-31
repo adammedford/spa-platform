@@ -31,3 +31,24 @@ csharp_style_var_elsewhere = false
 csharp_style_expression_bodied_methods = when_on_single_line
 csharp_style_expression_bodied_constructors = when_on_single_line
 csharp_style_expression_bodied_local_functions = when_on_single_line
+
+# The relaxed tier's relaxations (ADR-0035 decisions 3, 5 and 13). This section must stay the last
+# one matching *.cs, because a later matching section overrides it; its folders are the relaxed tier,
+# the same five Directory.Build.props reads for SpaRelaxedTier. Each line is a permanent relaxation,
+# true of test and tool code by its nature, at none, with its reason on the line above it. A rule that
+# is merely not yet clean here rides the ramp in .globalconfig instead, and a security rule is never
+# relaxed. tools/check.sh's analysis guard holds the section to those rules.
+[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]
+# Test names use underscores as sentences, and xunit has no suppressor for it.
+dotnet_diagnostic.CA1707.severity = none
+# xUnit supplies public test methods' arguments.
+dotnet_diagnostic.CA1062.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA2234.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA1054.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA1056.severity = none
+# Types that xUnit or a harness reaches must be public; xunit's CA1515 suppressor does not run in
+# src/Platform.Testing, Gateway.TestHarness, fixtures/TestIdp or tools/spactl, so the tier lists it.
+dotnet_diagnostic.CA1515.severity = none

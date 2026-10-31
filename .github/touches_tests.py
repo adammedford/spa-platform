@@ -27,6 +27,17 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
 
+    def test_the_analyzer_configs_trigger_the_build(self):
+        # The build enforces every analyzer severity, so a change to the files that set them is proved
+        # by building: a ramp batch's promotion deletes pending lines from .globalconfig alone (#606).
+        for path in (".globalconfig", ".editorconfig", "build/strict.globalconfig"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+        for path in ("docs/.editorconfig", ".globalconfig.bak", ".editorconfig.orig"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("build", [path]))
+
     def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
         # The build half builds the gateway's image too, and .dockerignore decides its context (#210).
         self.assertEqual(0, self.classify("build", [".dockerignore"]))

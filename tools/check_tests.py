@@ -146,9 +146,9 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
 # the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
-# the full-landing merges.
+# the full-landing merges; #606 added the analysis guard.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the full-landing merges, the roadmap, the artifacts, the file modes")
+            "the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -164,6 +164,8 @@ PYTHON_CHECKS = [
     STEERING + ["--base", "origin/main"],
     LANDING_SUBJECTS,
     ["python3", "-I", "tools/roadmap.py", "--check"],
+    # The analysis guard (#606) reads the tree, not the diff, so it runs with or without a base.
+    ["python3", "-I", "tools/analysis_guard.py"],
 ]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
@@ -414,6 +416,16 @@ class HookTests(CheckTestCase):
                           "pre-push: the steering check failed.", HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS[:2], case.calls())
 
+    def test_an_analysis_guard_that_fails(self):
+        # #606: the guard runs after the roadmap and before the artifacts, and its failure stops the hook.
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/analysis_guard.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines(["python3 double failed: -I tools/analysis_guard.py",
+                          "pre-push: the analyzer configs or a suppression break ADR-0035's rules, or were not judged.",
+                          HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
     def test_an_email_that_is_not_the_noreply_address(self):
         case = Case(self, change="docs/notes.md", email="someone@example.com")
         result = case.run(hook=True)
@@ -432,6 +444,7 @@ class HookTests(CheckTestCase):
             "pre-push: steering not checked: python3 is not on PATH.",
             "pre-push: the full-landing merges not checked: python3 is not on PATH.",
             "pre-push: the roadmap not checked: python3 is not on PATH.",
+            "pre-push: the analysis guard not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)

@@ -13,6 +13,34 @@
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
+  <!-- Source analysis in every build, dotnet build, tools/check.sh and CI alike (ADR-0035 decisions 5
+       and 14). Every SDK rule is on, at warning, which TreatWarningsAsErrors makes an error; the root
+       .globalconfig holds the per-id exceptions, a pending rule at suggestion or a decline, and the
+       relaxed tier's relaxations are .editorconfig's last *.cs section.
+       The level is pinned at 10, not latest, so that global.json's rollForward cannot add rules unseen.
+       AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
+       rules' config only when the two differ (or the modes do), so equal values turn every IDE rule
+       off without a word (#588). 10.0-all is the same level and bucket as 10-all, written so it
+       differs. -->
+  <PropertyGroup>
+    <AnalysisLevel>10-all</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <AnalysisLevelSecurity>10-all</AnalysisLevelSecurity>
+    <AnalysisLevelStyle>10.0-all</AnalysisLevelStyle>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!-- The analysis tier a project's files are in, by folder (ADR-0035 decision 3): the relaxed tier is
+       every project under tests/, fixtures/, tools/spactl/, tools/bench/floor/ or src/Platform.Testing/,
+       and everything else is the strict tier. The same five folders are .editorconfig's last *.cs
+       section, which carries the relaxations; this property is for what a section cannot express,
+       such as the strict tier's banned-symbol files (#608). -->
+  <PropertyGroup>
+    <_SpaProjectFolder>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').Replace('\', '/'))/</_SpaProjectFolder>
+    <SpaRelaxedTier>false</SpaRelaxedTier>
+    <SpaRelaxedTier Condition="$(_SpaProjectFolder.StartsWith('tests/')) or $(_SpaProjectFolder.StartsWith('fixtures/')) or $(_SpaProjectFolder.StartsWith('tools/spactl/')) or $(_SpaProjectFolder.StartsWith('tools/bench/floor/')) or $(_SpaProjectFolder.StartsWith('src/Platform.Testing/'))">true</SpaRelaxedTier>
+  </PropertyGroup>
+
   <!-- A project whose name ends in "Tests" is an xUnit v3 test project, set up as the xUnit template does:
        an executable that references xunit.v3 and runs on Microsoft Testing Platform (see global.json). -->
   <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('Tests'))">
