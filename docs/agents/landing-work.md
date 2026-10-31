@@ -281,6 +281,15 @@ Only one kind of change reaches `main` without a pull request: a generated roadm
 through a pull request whose head a review record names. This is a rule in prose, not a check, until
 the first time it is broken.
 
+### Launching the review
+
+`.claude/workflows/review-queue.js` reviews the open pull requests, or the ones `prs` names. Launch
+it with the Workflow tool by `scriptPath` and an `args` object `{ repo, date, wt }`; the script's
+header holds the full line and is its one source. The slash command's own text says
+`Workflow({ name: "review-queue" })` and a bare `/review-queue 325` passes a string, so both halt as
+a bad launch: copy the header's line instead. What to do with its findings is in
+`docs/agents/review.md` -> "Repairing findings".
+
 ### Reading the records
 
 To ask whether a pull request `<n>` is cleared, ask the record reader by its number. It gives the

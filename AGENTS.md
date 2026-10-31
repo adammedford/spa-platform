@@ -19,6 +19,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |
 | Tickets and specs on the tracker: their shape, body and comments, closing, citing, the human's account, a decision Adam gives in a session, lifecycle | `docs/agents/tracker-policy.md` |
+| Launching the review-queue workflow, repairing what a review found | `docs/agents/landing-work.md` -> "Launching the review", `docs/agents/review.md` -> "Repairing findings" |
 | AWS work: the Region, IAM and spend-limit rules of the new AWS experience, before any apply or credential step | `docs/agents/aws-rules.md` |
 
 ## Rules for every task
