@@ -43,8 +43,8 @@ machine.
 
 **What it refuses (exit 2, naming the test or line, writing no draft).** A gate test with no id
 prefix, or with an id neither register defines; a report that does not parse, or holds no gate test;
-a register file it cannot read, or one whose rows name a continuity Fact twice or name two in
-one row; and a --context line or gate-test name carrying an AWS account id, an
+a register file it cannot read, or one in which two rows name the same continuity Fact, or one row
+names two; and a --context line or gate-test name carrying an AWS account id, an
 ARN or an OAuth client id. The draft is posted to a ticket, so these are refused rather than
 rewritten, and the refusal names where, never the value. A client id is matched by its key
 (`client_id=`, `ClientId`) or by the bare shape of a Cognito app client id, 26 lowercase letters and

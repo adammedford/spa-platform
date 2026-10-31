@@ -92,6 +92,9 @@ public sealed class DeployedRunTests
     public async Task A_d_row_runs_on_the_deployed_stack_over_the_tunnels_local_port(string test)
     {
         MethodInfo method = RowTests()[test];
+        // A continuity Fact skips itself off the two-task cell, so a case of one here would pass by
+        // skipping: fail it, since only StandInExclusions keeps it out of this theory (#657).
+        Assert.False(method.DeclaringType == typeof(ContinuityTests), $"{test} needs the two-task continuity driver; the single-host stand-in cannot run it.");
         object?[][] cases = CasesOf(method);
         foreach (object?[] arguments in cases)
         {
@@ -168,6 +171,20 @@ public sealed class DeployedRunTests
     }
 
     [Fact]
+    public void Two_register_rows_naming_one_continuity_fact_fail_the_reader_naming_both()
+    {
+        // One run of the Fact would prove two ids; the Python reader refuses the same register
+        // (test_two_rows_naming_one_continuity_fact_are_refused), and StandInExclusions is never reached.
+        string row = ContinuityRegister.Split('\n').Single(line => line.TrimStart().StartsWith("| N-32 |", StringComparison.Ordinal));
+        string register = ContinuityRegister + "\n" + row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal);
+        Assert.NotEqual(row, row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal));
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Contains("N-32 and N-33 both name ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other", failure.Message, StringComparison.Ordinal);
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StandInExclusions(register));
+    }
+
+    [Fact]
     public void A_register_row_naming_one_continuity_fact_twice_names_one()
     {
         // A method named twice in one row is still one method, so the row resolves rather than being refused
@@ -185,7 +202,7 @@ public sealed class DeployedRunTests
     public void A_registered_continuity_method_that_is_not_a_plain_task_fact_is_not_the_rows_test()
     {
         // Each method below breaks one clause of the filter and meets the rest, so deleting any one
-        // clause lets its method through and fails the second assertion (CODING_STANDARDS.md, a check that
+        // clause lets its method through and fails the first assertion (CODING_STANDARDS.md, a check that
         // is vacuous today). They are emitted, since a public Theory without data, or a Fact with a
         // parameter, would be a test of this suite that xUnit's analyzers refuse and its runner would run.
         (string Method, Type Returns, Type[] Parameters, Type? Attribute)[] methods =

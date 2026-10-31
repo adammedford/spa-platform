@@ -279,6 +279,10 @@ public sealed partial class DeployedSubsetTests
                 method.GetCustomAttribute<TheoryAttribute>() is null &&
                 method.ReturnType == typeof(Task) && method.GetParameters().Length == 0)
             {
+                // One Fact, one row: two rows crediting one Fact would prove two ids with one run (the same
+                // refusal tools/bench/e2e_evidence.py makes), so fail the run naming both rows.
+                string? other = tests.FirstOrDefault(row => row.Value == method).Key;
+                Assert.True(other is null, $"{other} and {id} both name ContinuityTests.{method.Name}.");
                 tests.Add(id, method);
             }
         }
@@ -286,7 +290,7 @@ public sealed partial class DeployedSubsetTests
         return tests;
     }
 
-    [GeneratedRegex(@"`ContinuityTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`")]
+    [GeneratedRegex(@"`ContinuityTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex ContinuityReference();
 
     /// <summary>The files that start a stack of their own choosing rather than the one the switch chooses.</summary>
