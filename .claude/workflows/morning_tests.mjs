@@ -285,8 +285,8 @@ function stub(env, scriptArgs, served) {
         }
       } else if (label === 'comments') {
         // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with the
-        // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a). served.commentsIssue: the number it reports reading, as a reader that read the wrong
-        // issue would.
+        // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
+        // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
@@ -1164,7 +1164,8 @@ try {
     const bodyWords = [...prose.matchAll(/(.{0,3})\bbod(?:y|ies)\b/g)]
     if (!bodyWords.length || bodyWords.some((m) => !/no $/.test(m[1]))) fail(`the comments index prompt asks for bodies: ${bodyWords.map((m) => JSON.stringify(m[0])).join(', ')}`)
     // The index picks the questions and Confirm comments, not the carried list (comment 4), and packs
-    // them in order into batches of at most BATCH_BYTES (#659's 75 KB could not be returned whole, twice).
+    // them in order into batches of at most BATCH_BYTES (a precaution after #659's 75 KB return was stopped
+    // by a safety classifier, twice; that size is the cause is not established).
     const bp = ok.prompt('comments-batch:1')
     if (!/\.comments\[0,1,2,4\]/.test(bp)) fail(`the batch reader does not read the questions and Confirm comments alone, in order: ${(/\.comments\[[^\]]*\]/.exec(bp) || [''])[0]}`)
     const big = (n, kb) => comment(20 + n, `## Questions: ${cite(300 + n)}, issue-${300 + n}, Big ticket ${n}\n\n**Q${n}.** Big?\nRecommended: Yes.\n${PRE}\n${'x'.repeat(kb * 1000)}\n`, `2026-10-21T06:00:0${n}Z`)
@@ -1191,6 +1192,18 @@ try {
     const blanked = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), blank]) })
     const blankAt = (/\.comments\[([\d,]+)\]/.exec(blanked.prompt('comments-batch:1')) || ['', ''])[1]
     if (blankAt !== '0,1') fail(`a head of blanks: the batch reads ${blankAt}, expected 0,1: a comment whose head cannot be judged is read whole`)
+    // A heading whose head is cut before its second comma cannot be judged on the head either: HEADING
+    // matches the whole body's first line but not its first 200 characters, and it has 40 or more
+    // visible characters, so only the cut-heading rule keeps it from being dropped without a word.
+    const longHeading = { ...comment(44, ' '.repeat(130) + `## Questions: ${cite(344)}, ` + 'f'.repeat(80) + ', Cut ticket\n\n**Q9.** Cut?\nRecommended: Yes.\n' + PRE + '\n', '2026-10-21T09:45:00Z') }
+    const cutAt = (r) => (/\.comments\[([\d,]+)\]/.exec(r.prompt('comments-batch:1')) || ['', ''])[1]
+    const cut = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longHeading]) })
+    if (cutAt(cut) !== '0,1') fail(`a heading cut before its second comma: the batch reads ${cutAt(cut)}, expected 0,1: a comment the readers would read is never dropped unread`)
+    if (!cut.result.apply.answers[9] && !cut.result.refusals.length) fail('a heading cut before its second comma: its question was neither read nor refused')
+    // A note of the same length, whose head is no heading's start, is still left out.
+    const longNote = comment(45, ' '.repeat(130) + 'A review note of some length, ' + 'n'.repeat(80) + '\nAnd more.\n', '2026-10-21T09:50:00Z')
+    const noted = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longNote]) })
+    if (cutAt(noted) !== '0') fail(`a long note: the batch reads ${cutAt(noted)}, expected 0: only a comment the readers could read is fetched`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
     if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)

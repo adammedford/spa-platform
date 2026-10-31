@@ -1060,17 +1060,23 @@ Return comments and error.`
 const BATCH_BYTES = 24000
 // The comments Apply reads (readQuestions, readConfirmations), picked from the index in order by
 // the readers' own predicates (headingOf, isConfirm) run on each comment's head, and packed into
-// batches of at most BATCH_BYTES. A head that may have been cut before the readers' pattern could
-// show (it is full length, and less than MIN_VISIBLE characters of it follow its leading whitespace)
-// cannot be judged, so that comment is read whole and the readers decide: never dropped unread.
+// batches of at most BATCH_BYTES. A head the readers' pattern cannot be judged on is not skipped: the
+// comment is read whole and the readers decide, so a comment they would read is never dropped unread.
+// Two heads cannot be judged. One is full length with less than MIN_VISIBLE characters of it after
+// its leading whitespace: the cut may have fallen before the pattern could show. The other is full
+// length, its first line cut (no newline in it), and what is visible is only the start of a heading,
+// short of its second comma (a long padded or long second field): HEADING needs the whole line to
+// match, so a head cut there says nothing either way.
 const MIN_VISIBLE = 40
+const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*)?$/
+const undecidableHead = (head) => head.length >= HEAD_CHARS &&
+  (head.trim().length < MIN_VISIBLE || (!head.includes('\n') && HEADING_CUT.test(head.trim())))
 const batchesOf = (indexed) => {
   const out = []
   let cur = null
   indexed.forEach((c, i) => {
     const head = String(c.head || '')
-    const undecidable = head.length >= HEAD_CHARS && head.trim().length < MIN_VISIBLE
-    if (!undecidable && !headingOf(head) && !isConfirm(c.author, head)) return
+    if (!undecidableHead(head) && !headingOf(head) && !isConfirm(c.author, head)) return
     if (!cur || cur.bytes + (c.bytes || 0) > BATCH_BYTES) { cur = { at: [], urls: [], bytes: 0 }; out.push(cur) }
     cur.at.push(i); cur.urls.push(c.url); cur.bytes += c.bytes || 0
   })
