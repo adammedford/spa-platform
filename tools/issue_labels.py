@@ -23,6 +23,8 @@ labels and no session or agent decides them.
 Only the labels of those three groups are written: a stale one is removed by name and a missing
 one added, through the REST routes that add or remove the labels they name and leave the rest, so a
 triage relabel that .github/workflows/ticket-shape.yml makes at the same moment is never undone.
+GitHub documents them: POST "Adds labels to an issue", DELETE "Removes the specified label from the
+issue, and returns the remaining labels" (see write()), where PUT would remove "any previous labels".
 
     python3 -I tools/issue_labels.py check <number>|-|--all    say what would change; exit 1 on drift
     python3 -I tools/issue_labels.py apply <number>|--all      make it so
@@ -30,9 +32,11 @@ triage relabel that .github/workflows/ticket-shape.yml makes at the same moment 
 
 `-` reads `gh issue view --json` output (FIELDS) on stdin. `labels apply` creates or updates each
 label the table defines, and deletes each `retire` label that no issue or pull request carries; one
-still in use is refused, never stripped. Each line starts `issue-labels:`, and the last is the
-verdict: `issue-labels: pass: ...` with exit 0, or `issue-labels: fail: ...` with exit 1 when an
-issue drifted (check) or was skipped, and exit 2 when nothing could be judged or a write failed.
+still in use is refused, never stripped, and a listing too long to read in full is exit 2 (in_use()).
+Each line starts `issue-labels:`, and the last is the verdict: `issue-labels: pass: ...` with exit 0,
+or `issue-labels: fail: ...` with exit 1 when an issue drifted (check) or was skipped, and exit 2
+when nothing could be judged (`fail: nothing judged: ...`) or a write failed part-way
+(`fail: write failed: ...`, which counts what was written before it).
 .github/workflows/issue-labels.yml runs it.
 """
 from __future__ import annotations
@@ -69,6 +73,10 @@ def shape():
 
 class Unreadable(Exception):
     """The issue, the table or GitHub could not be read, so nothing was judged."""
+
+
+class WriteFailed(Exception):
+    """A write failed or was refused after the run had judged issues, and some may have been made."""
 
 
 class Table(typing.NamedTuple):
@@ -243,6 +251,11 @@ def quoted(name: str) -> str:
 
 
 def write(number: int, add: list[str], remove: list[str]) -> None:
+    # POST adds the labels it names and DELETE removes the one it names, each leaving the rest
+    # (https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue and
+    # https://docs.github.com/en/rest/issues/labels#remove-a-label-from-an-issue). The PUT route
+    # "removes any previous labels" (https://docs.github.com/en/rest/issues/labels#set-labels-for-an-issue)
+    # and would undo a triage label set at the same moment, so it is never used.
     if add:
         gh("api", "--method", "POST", f"repos/{{owner}}/{{repo}}/issues/{number}/labels",
            *[arg for name in add for arg in ("-f", f"labels[]={name}")])
@@ -280,11 +293,15 @@ def run_issues(apply: bool, target: str) -> int:
                                            remove and f"remove {', '.join(remove)}") if part)
         print(f"issue-labels: #{issue.number}: {said}")
         if apply:
-            missing = [name for name in add if name not in present]
-            if missing:
-                raise Unreadable(f"the repository has no label {', '.join(missing)}; run "
-                                 f"`labels apply` first")
-            write(issue.number, add, remove)
+            try:
+                missing = [name for name in add if name not in present]
+                if missing:
+                    raise Unreadable(f"the repository has no label {', '.join(missing)}; run "
+                                     f"`labels apply` first")
+                write(issue.number, add, remove)
+            except Unreadable as error:
+                raise WriteFailed(f"#{issue.number}: {error}; {written} issue(s) written before "
+                                  f"it") from error
             written += 1
     counted = f"{len(found)} issue(s) read, {drifted} drifted, {skipped} skipped"
     if apply:
@@ -296,13 +313,48 @@ def run_issues(apply: bool, target: str) -> int:
     return 0
 
 
-def in_use(name: str) -> bool:
+# The most issues or pull requests one listing is trusted to hold; a listing that reaches it may be
+# cut off, and a label read as unused from a cut-off listing is a label deleted while in use.
+SCAN_LIMIT = 1000
+
+
+def carried_by(kind: str) -> set[str]:
+    """Every label carried by an issue (`issue`) or a pull request (`pr`), open or closed, read from
+    the whole listing; a listing that fills SCAN_LIMIT is refused, not read as complete."""
+    listed = parse(gh(kind, "list", "--state", "all", "--limit", str(SCAN_LIMIT),
+                      "--json", "number,labels"))
+    if not isinstance(listed, list):
+        raise Unreadable(f"gh {kind} list gave no list")
+    if len(listed) >= SCAN_LIMIT:
+        raise Unreadable(f"gh {kind} list reached its limit of {SCAN_LIMIT}, so which labels are "
+                         f"in use is unknown")
+    return {label["name"] for item in listed for label in item["labels"]}
+
+
+def in_use(name: str, carried: set[str]) -> bool:
+    """Whether an issue or pull request carries the label. Deleting a label is the one irreversible
+    write, so two reads must agree it is unused: the listing GitHub filters by the label, and
+    `carried`, the labels found by reading every issue and pull request. A short listing that
+    exits 0 (the flake the steering check has seen) reads as empty in the first, and either read
+    finding the label keeps it."""
     for kind in ("issue", "pr"):
         listed = parse(gh(kind, "list", "--state", "all", "--label", name, "--limit", "1",
                           "--json", "number"))
         if listed:
             return True
-    return False
+    return name in carried
+
+
+def change(action: str, name: str, table: Table) -> None:
+    if action == "delete":
+        gh("api", "--method", "DELETE", f"repos/{{owner}}/{{repo}}/labels/{quoted(name)}")
+        return
+    fields = ["-f", f"color={table.labels[name]['color']}",
+              "-f", f"description={table.labels[name]['description']}"]
+    if action == "create":
+        gh("api", "--method", "POST", "repos/{owner}/{repo}/labels", "-f", f"name={name}", *fields)
+    else:
+        gh("api", "--method", "PATCH", f"repos/{{owner}}/{{repo}}/labels/{quoted(name)}", *fields)
 
 
 def run_labels(apply: bool) -> int:
@@ -317,26 +369,24 @@ def run_labels(apply: bool) -> int:
                 (wanted["color"].lower(), wanted["description"]):
             plan.append(("update", name))
     refused = []
-    for name in table.retire:
-        if name in present:
-            if in_use(name):
-                refused.append(name)
-            else:
-                plan.append(("delete", name))
+    retiring = [name for name in table.retire if name in present]
+    carried = carried_by("issue") | carried_by("pr") if retiring else set()
+    for name in retiring:
+        if in_use(name, carried):
+            refused.append(name)
+        else:
+            plan.append(("delete", name))
+    made = 0
     for action, name in plan:
         print(f"issue-labels: label: {action} {name}")
         if not apply:
             continue
-        if action == "create":
-            gh("api", "--method", "POST", "repos/{owner}/{repo}/labels", "-f", f"name={name}",
-               "-f", f"color={table.labels[name]['color']}",
-               "-f", f"description={table.labels[name]['description']}")
-        elif action == "update":
-            gh("api", "--method", "PATCH", f"repos/{{owner}}/{{repo}}/labels/{quoted(name)}",
-               "-f", f"color={table.labels[name]['color']}",
-               "-f", f"description={table.labels[name]['description']}")
-        else:
-            gh("api", "--method", "DELETE", f"repos/{{owner}}/{{repo}}/labels/{quoted(name)}")
+        try:
+            change(action, name, table)
+        except Unreadable as error:
+            raise WriteFailed(f"{action} {name}: {error}; {made} label change(s) made before "
+                              f"it") from error
+        made += 1
     for name in refused:
         print(f"issue-labels: label: refuse to delete {name}: an issue or pull request carries it")
     counted = f"{len(plan)} label change(s){' made' if apply else ' pending'}, {len(refused)} refused"
@@ -347,21 +397,36 @@ def run_labels(apply: bool) -> int:
     return 0
 
 
-USAGE = "usage: issue_labels.py check|apply <number>|-|--all, or issue_labels.py labels check|apply"
+USAGE = ("issue-labels: usage: issue_labels.py check|apply <number>|-|--all, "
+         "or issue_labels.py labels check|apply")
+
+
+def command_of(argv: list[str]) -> tuple[str, str] | None:
+    """The command an argument list asks for, as (verb, target), or None when the script takes no
+    such command. The workflow's invocations are held to this in tools/issue_labels_tests.py."""
+    if len(argv) == 2 and argv[0] == "labels" and argv[1] in ("check", "apply"):
+        return "labels", argv[1]
+    if len(argv) == 2 and argv[0] in ("check", "apply") and not (argv[0] == "apply" and argv[1] == "-"):
+        return argv[0], argv[1]
+    return None
 
 
 def main(argv: list[str]) -> int:
     try:
-        if len(argv) == 2 and argv[0] == "labels" and argv[1] in ("check", "apply"):
-            return run_labels(argv[1] == "apply")
-        if len(argv) == 2 and argv[0] in ("check", "apply") and not (argv[0] == "apply" and argv[1] == "-"):
-            return run_issues(argv[0] == "apply", argv[1])
-        print(USAGE)
-        print("issue-labels: fail: nothing judged: no command")
+        command = command_of(argv)
+        if command is None:
+            print(USAGE)
+            print("issue-labels: fail: nothing judged: no command")
+            return 2
+        verb, target = command
+        return run_labels(target == "apply") if verb == "labels" else run_issues(verb == "apply", target)
+    except WriteFailed as error:
+        print(f"issue-labels: fail: write failed: {error}")
         return 2
     except (Exception, SystemExit) as error:
-        # A read or a write that failed, path-ownership.py's refusal of OWNERSHIP.md, or the script
-        # broken: none of them is a judgement, so each ends on exit 2 with its verdict line.
+        # A read that failed, path-ownership.py's refusal of OWNERSHIP.md, or the script broken:
+        # none of them is a judgement, and none follows a write (WriteFailed is that one), so each
+        # ends on exit 2 with its verdict line.
         print(f"issue-labels: fail: nothing judged: {type(error).__name__}: {error}")
         return 2
 

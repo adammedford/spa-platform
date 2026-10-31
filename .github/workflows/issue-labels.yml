@@ -6,7 +6,11 @@
 # writes what it derives.
 #
 # - An issue opened, edited, reopened or relabelled gets its labels applied at once. The script
-#   adds and removes labels by name through the REST routes, so it never undoes a relabel
+#   adds and removes labels by name through the REST routes (POST "adds labels to an issue", DELETE
+#   "removes the specified label from the issue", each leaving the rest:
+#   https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue and
+#   https://docs.github.com/en/rest/issues/labels#remove-a-label-from-an-issue; the PUT route would
+#   "remove any previous labels"), so it never undoes a relabel
 #   ticket-shape.yml makes on the same event, and its own writes, made with this job's token, "will
 #   not create a new workflow run" (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
 # - Adding a sub-issue fires no `issues` event on its parent, so kind:parent, and any drift a

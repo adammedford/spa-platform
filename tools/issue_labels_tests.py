@@ -3,6 +3,12 @@
 
 Run: python3 -I tools/issue_labels_tests.py
 
+One case reads the checkout: Area.test_the_tables_cover_every_tracked_root_entry lists the tracked
+files, so a new file the table does not cover turns it red with no change here. The line below
+tells tools/check.sh --full to run this companion on any change, since any added path is such an input.
+
+Checkout inputs: *
+
 The derivation is proved on bodies built here, read against the table in tools/issue_labels.json as
 it stands and against small tables that isolate one rule. The command line runs against a fake `gh`
 on PATH that answers from a JSON file and logs each call, in an environment that inherits nothing,
@@ -13,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import re
 import stat
 import subprocess
 import sys
@@ -84,6 +91,21 @@ class Area(unittest.TestCase):
         self.assertEqual(group(derived(touching("tools/bench/run.sh")), "area"),
                          ["area:verification"])
         self.assertEqual(group(derived(touching("tools/land.sh")), "area"), ["area:process"])
+
+    def test_the_longest_prefix_wins_over_the_first_row_in_the_table(self):
+        # The table lists contracts/ and src/ before the longer prefixes under them, so a first-match
+        # reading would answer product for each of these.
+        for path, area in (("contracts/test-ids.md", "verification"),
+                           ("contracts/gates.md", "verification"),
+                           ("contracts/infra-outputs.schema.json", "deployment"),
+                           ("contracts/changes/I-9.md", "process"),
+                           ("contracts/README.md", "product"),
+                           ("src/Gateway/Dockerfile", "deployment"),
+                           ("src/Gateway/Program.cs", "product")):
+            with self.subTest(path):
+                self.assertEqual(group(derived(touching(path)), "area"), [f"area:{area}"])
+        self.assertLess(labels.TABLE.read_text().index('"contracts/"'),
+                        labels.TABLE.read_text().index('"contracts/test-ids.md"'))
 
     def test_every_area_a_ticket_reaches_is_carried(self):
         found = derived(touching("Directory.Build.props", "AGENTS.md", "src/Gateway/Program.cs"))
@@ -193,6 +215,12 @@ with open(os.environ["GH_LOG"], "a") as log:
     log.write(json.dumps(args) + "\\n")
 if os.environ.get("GH_FAIL"):
     print("gh: could not reach GitHub", file=sys.stderr); sys.exit(1)
+# GH_FAIL_WRITES_AFTER=N: the Nth write and every one after it fails (the log already holds this call).
+after = os.environ.get("GH_FAIL_WRITES_AFTER")
+if after is not None and args[0] == "api":
+    sent = [line for line in open(os.environ["GH_LOG"]) if json.loads(line)[0] == "api"]
+    if len(sent) > int(after):
+        print("gh: HTTP 502", file=sys.stderr); sys.exit(1)
 world = json.load(open(os.environ["GH_WORLD"]))
 def flag(name):
     return args[args.index(name) + 1] if name in args else None
@@ -201,9 +229,12 @@ if args[:2] == ["issue", "view"]:
 elif args[:2] == ["issue", "list"]:
     wanted = flag("--label")
     found = [i for i in world["issues"] if wanted is None or wanted in [l["name"] for l in i["labels"]]]
-    print(json.dumps(found))
+    # GH_SHORT: a listing filtered by label comes back empty with exit 0, as a flaky page does.
+    print(json.dumps([] if wanted and os.environ.get("GH_SHORT") else found))
 elif args[:2] == ["pr", "list"]:
-    print(json.dumps([p for p in world.get("prs", []) if flag("--label") in p["labels"]]))
+    wanted = flag("--label")
+    found = [p for p in world.get("prs", []) if wanted is None or wanted in [l["name"] for l in p["labels"]]]
+    print(json.dumps([] if wanted and os.environ.get("GH_SHORT") else found))
 elif args[:2] == ["label", "list"]:
     print(json.dumps(world["labels"]))
 elif args[0] == "api":
@@ -316,6 +347,27 @@ class CommandLine(unittest.TestCase):
         self.assertIn("refuse to delete duplicate", done.stdout)
         self.assertEqual(self.writes(), [])
 
+    def test_a_short_filtered_listing_does_not_delete_a_label_in_use(self):
+        defined = [{"name": name, **wanted} for name, wanted in TABLE.labels.items()]
+        self.world({"issues": [issue(have=("duplicate",))],
+                    "prs": [{"number": 3, "labels": [{"name": "question"}]}],
+                    "labels": [*defined, {"name": "duplicate", "color": "cfd3d7", "description": ""},
+                               {"name": "question", "color": "cfd3d7", "description": ""}]})
+        done = self.run_script("labels", "apply", GH_SHORT="1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("refuse to delete duplicate", done.stdout)
+        self.assertIn("refuse to delete question", done.stdout)
+        self.assertEqual(self.writes(), [])
+
+    def test_a_listing_that_may_be_cut_off_deletes_nothing(self):
+        defined = [{"name": name, **wanted} for name, wanted in TABLE.labels.items()]
+        self.world({"issues": [issue(number=n) for n in range(1, labels.SCAN_LIMIT + 1)],
+                    "labels": [*defined, {"name": "duplicate", "color": "cfd3d7", "description": ""}]})
+        done = self.run_script("labels", "apply")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn(f"reached its limit of {labels.SCAN_LIMIT}", self.last_line(done))
+        self.assertEqual(self.writes(), [])
+
     def test_labels_check_writes_nothing(self):
         self.world({"issues": [], "labels": []})
         done = self.run_script("labels", "check")
@@ -327,6 +379,29 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertTrue(self.last_line(done).startswith("issue-labels: fail: nothing judged:"))
 
+    def test_a_write_that_fails_after_others_were_made_says_so(self):
+        self.world({**self.current, "issues": [
+            issue(touching("tools/land.sh"), number=11), issue(touching("tools/land.sh"), number=12)]})
+        done = self.run_script("apply", "--all", GH_FAIL_WRITES_AFTER="1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: #12: "), last)
+        self.assertIn("1 issue(s) written before it", last)
+        self.assertNotIn("nothing judged", last)
+
+    def test_a_label_write_that_fails_says_what_was_made(self):
+        self.world({"issues": [], "labels": []})
+        done = self.run_script("labels", "apply", GH_FAIL_WRITES_AFTER="2")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("2 label change(s) made before it", self.last_line(done))
+
+    def test_every_line_starts_with_the_prefix(self):
+        done = self.run_script()
+        self.assertEqual(done.returncode, 2)
+        for line in done.stdout.splitlines():
+            with self.subTest(line):
+                self.assertTrue(line.startswith("issue-labels:"), line)
+
     def test_bad_arguments_are_nothing_judged(self):
         for args in ((), ("apply", "-"), ("check",), ("labels", "delete")):
             with self.subTest(args):
@@ -334,15 +409,34 @@ class CommandLine(unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    """The workflow runs only commands the script accepts."""
+    """The workflow runs only commands the script takes, each from the branch it belongs to."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    def invocations(self) -> list[tuple[str, str]]:
+        """Each (case label, script arguments) the workflow's run block holds."""
+        return [(label, args.strip()) for label, args in re.findall(
+            r'^\s*("[^"]+"|\w+)\)\s*python3 -I tools/issue_labels\.py ([^;\n]*?)\s*;;', self.text,
+            re.M)]
 
     def test_each_invocation_is_a_command_the_script_takes(self):
-        text = WORKFLOW.read_text(encoding="utf-8")
-        for needed in ('tools/issue_labels.py apply "$NUMBER"', "tools/issue_labels.py check --all",
-                       "schedule) python3 -I tools/issue_labels.py apply --all",
-                       "tools/issue_labels.py apply --all", "tools/issue_labels.py labels apply"):
-            with self.subTest(needed):
-                self.assertIn(needed, text)
+        found = self.invocations()
+        self.assertEqual(len(found), 6, found)
+        for label, args in found:
+            with self.subTest(label):
+                argv = args.replace('"$NUMBER"', "7").split()
+                self.assertIsNotNone(labels.command_of(argv), args)
+
+    def test_each_event_runs_its_own_command(self):
+        self.assertEqual(dict(self.invocations()), {
+            "issues": 'apply "$NUMBER"', "schedule": "apply --all", '"check --all"': "check --all",
+            '"apply --all"': "apply --all", '"labels check"': "labels check",
+            '"labels apply"': "labels apply"})
+
+    def test_every_dispatch_option_has_a_branch_that_runs_it(self):
+        listed = re.search(r"options: \[(.*?)\]", self.text).group(1).split(", ")
+        branches = {label.strip('"') for label, _ in self.invocations()} - {"issues", "schedule"}
+        self.assertEqual(sorted(listed), sorted(branches))
 
 
 if __name__ == "__main__":
