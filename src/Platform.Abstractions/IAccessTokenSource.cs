@@ -9,7 +9,11 @@ namespace Platform.Abstractions;
 public abstract record AccessTokenResult
 {
     /// <summary>A usable access token.</summary>
-    public sealed record Token(string Value) : AccessTokenResult;
+    public sealed record Token(string Value) : AccessTokenResult
+    {
+        /// <summary>Kept out of any string a log or an exception could carry.</summary>
+        public override string ToString() => nameof(Token);
+    }
 
     /// <summary>No session, so no token. The proxy answers 401.</summary>
     public sealed record Unauthenticated : AccessTokenResult;
