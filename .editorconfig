@@ -14,8 +14,9 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
-# The house style, which settles the opposing IDE rule pairs (ADR-0035 decision 7). Severities are
-# set in .globalconfig, never here.
+# The house style, which settles the opposing IDE rule pairs (ADR-0035 decision 7). This section
+# holds options only: the strict severities are in .globalconfig, and the test tier's relaxations
+# are this file's last *.cs section (ADR-0035 decision 5).
 [*.cs]
 # File-scoped namespaces. Settles IDE0160 and IDE0161.
 csharp_style_namespace_declarations = file_scoped
