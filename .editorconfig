@@ -13,3 +13,20 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+# The house style, which settles the opposing IDE rule pairs (ADR-0035 decision 7). Severities are
+# set in .globalconfig, never here.
+[*.cs]
+# File-scoped namespaces. Settles IDE0160 and IDE0161.
+csharp_style_namespace_declarations = file_scoped
+
+# Explicit types rather than var. Settles IDE0007 and IDE0008.
+csharp_style_var_for_built_in_types = false
+csharp_style_var_when_type_is_apparent = false
+csharp_style_var_elsewhere = false
+
+# Expression bodies when on a single line, for methods, constructors and local functions. Settles
+# IDE0022, IDE0021 and IDE0061.
+csharp_style_expression_bodied_methods = when_on_single_line
+csharp_style_expression_bodied_constructors = when_on_single_line
+csharp_style_expression_bodied_local_functions = when_on_single_line
