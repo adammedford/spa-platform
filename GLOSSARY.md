@@ -251,13 +251,13 @@ reads the checkout's settings when it starts, so a change to them reaches only a
 afterwards. _Avoid_: "fresh session" or "new session" for this; a new agent session can run in an
 old process.
 
-**Change request** — a ticket asking the human to decide a change on an integrator path: a contract,
-a package, a project, an ADR or a steering document. It is how a session asks for a change its own
-ticket does not authorise. Anyone may file one. The human decides it in a decision comment, the
-integrator makes the edit, and a task that needs it waits on it until it closes. Requests filed
-before ADR-0032 are read-only files under `contracts/changes/`, cited by their id, and are change
-requests all the same. _Avoid_: "CR" in prose, "proposal", "change-request file"
-for a new one.
+**Change request** — a ticket asking the human to decide a change on an integrator path: a
+contract, a package, a project, an ADR or a steering document. It is how a session asks for a
+change its own ticket does not authorise. Anyone may file one. The human decides it in a
+decision comment, the integrator makes the edit, and a task that needs it waits on it until it
+closes. Requests filed before ADR-0032 are files under `contracts/changes/`, closed to new files
+and edited only under an authority, cited by their id, and are change requests all the same.
+_Avoid_: "CR" in prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
 cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
