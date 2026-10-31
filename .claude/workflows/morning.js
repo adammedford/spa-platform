@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
     { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
-    { title: 'Apply', detail: 'one reader of the Overnight issue\'s comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
+    { title: 'Apply', detail: 'one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads every open pull request into main, the follow-ups already filed and the open Apply tickets of every night; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
@@ -63,10 +63,13 @@ export const meta = {
 // every comment verbatim, and on 2026-10-22, with no pending-writes file, it took 7.4 minutes and 108k
 // tokens, most of it carrying sheets of 263 questions through its return. Replay now checks for the
 // pending-writes file before any replay step and returns no comment; Apply's readers return them, for
-// the questions, the Confirm comments and the hand-over's open lists. On 2026-10-31 one reader could
-// not hand back #659's eleven comments, 77 KB verbatim, in one return, twice, while each comment came
-// back whole alone; so an index agent returns each comment's metadata and first line with no body,
-// the script picks the questions and Confirm comments, and one reader per batch of at most
+// the questions, the Confirm comments and the hand-over's open lists. On 2026-10-31 the one reader could
+// not hand back #659's comments, on two runs: both hand-overs on #659 (6543854407, 6545142123) say a
+// safety classifier stopped the verbatim return, and neither names a size or a return limit. #659's
+// eleven comments are about 75 KB, its Confirm comment 18 KB. Whether size is what trips the classifier is
+// not established; the change keeps any one return small and puts no body in the index. An index agent
+// returns each comment's author, URL, size and the head of its body, the script picks the questions
+// and Confirm comments with the readers' own predicates, and one reader per batch of at most
 // BATCH_BYTES returns those bodies.
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
@@ -221,7 +224,7 @@ const REPLAY = {
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
-const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, firstLine: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'firstLine'] }
+const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'head'] }
 const COMMENTS_INDEX = {
   type: 'object',
   properties: {
@@ -574,13 +577,16 @@ const openApplyTickets = (listed, filedToday) => {
 const HEADING = /^## Questions: #(\d+), ([^,]+), (.*)$/
 const PART = /\s*\(part (\d+) of (\d+)\)\s*$/
 const Q_MARK = /^[ \t]*(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.(?=[ \t]))[ \t]*/gm
+// What makes a comment one the readers read, said once: batchesOf picks the comments to fetch with
+// these two functions, on the head of each body, so it cannot pick a narrower set than the readers do.
+const headingOf = (body) => HEADING.exec(String(body || '').split('\n')[0].trim())
+const isConfirm = (author, body) => author === ADAM && /^Confirm\b/.test(String(body || '').trimStart())
 const readQuestions = (comments) => {
   const groups = new Map()
   for (const c of comments) {
     const body = String(c.body || '')
     const nl = body.indexOf('\n')
-    const first = (nl < 0 ? body : body.slice(0, nl)).trim()
-    const m = HEADING.exec(first)
+    const m = headingOf(body)
     if (!m) continue
     const pm = PART.exec(m[3])
     const title = m[3].replace(PART, '')
@@ -627,7 +633,7 @@ const readQuestions = (comments) => {
 // in order. A question no Confirm comment names or overrides stays as the night left it: provisional.
 const RANGE = /Q(\d+)\s*(?:to|through|–|—|-)\s*Q?(\d+)/g
 const readConfirmations = (comments) => {
-  const confirms = comments.filter((c) => c.author === ADAM && /^Confirm\b/.test(String(c.body || '').trimStart()))
+  const confirms = comments.filter((c) => isConfirm(c.author, c.body))
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
   const covered = new Map() // q -> the URL of the latest Confirm comment that names it
   const overrides = new Map() // q -> { answer, url }
@@ -1026,6 +1032,8 @@ Return every field: lanes from the issue's rows (issue, task, outcome, complete,
 
 // Its agent writes nothing anywhere and keeps no phase file, since a rerun must read the comments as
 // they are then, so it carries these rules rather than the house rules (as the draft check's does).
+// The head of each comment's body the index carries: enough to run the readers' predicates on.
+const HEAD_CHARS = 200
 const COMMENTS_RULES = `Rules (a comments read; you write nothing anywhere):
 - Write no file, anywhere, and post, edit, file or close nothing on GitHub: use only \`gh issue view\`, with \`cd ${REPO} &&\` in front so it resolves this repository.
 - Never commit, checkout, switch, stash, reset or build in ${REPO}, and make no worktree.`
@@ -1034,7 +1042,7 @@ const commentsPrompt = (issue) => `Comments: index the Overnight issue's comment
 ${COMMENTS_RULES}
 - Never quote a secret, token, cookie, code or state value in anything you return.
 
-1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), firstLine: ((.body | split("\\n") | map(select(test("\\\\S"))) | .[0]) // "" | .[0:120])}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, firstLine}. Return no body.
+1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), head: .body[0:${HEAD_CHARS}]}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, head}. head is the first ${HEAD_CHARS} characters of the comment, whatever they are; return nothing more of any comment.
 2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
 Return issue and error.`
 const batchPrompt = (issue, at) => `Comments: return ${at.length === 1 ? 'one comment' : `${at.length} comments`} of the Overnight issue verbatim for Apply (#319). You read; the script reads the questions and the Confirm comments from them.
@@ -1045,17 +1053,24 @@ ${COMMENTS_RULES}
 1. \`cd ${REPO} && gh issue view ${issue} --json comments --jq '[.comments[${at.join(',')}] | {author: .author.login, createdAt, url, body}]'\`. comments is its output: ${at.length} comment(s), in that order, each as {author, createdAt, url, body}, each body verbatim, byte for byte.
 2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
 Return comments and error.`
-// The bodies a batch reader carries back: a return of all of #659's 77 KB failed twice on 2026-10-31,
-// while its 16 KB Confirm comment came back whole alone. A comment larger than this is a batch alone.
+// The bodies a batch reader carries back are kept to this many bytes, so no one return is large:
+// #659's comments were about 75 KB, its Confirm comment 18 KB. A comment larger than this is a batch alone.
+// This is a precaution, not a known limit: what stopped the one reader on 2026-10-31 was a safety
+// classifier (see the header), and nothing on #659 shows size is what trips it.
 const BATCH_BYTES = 24000
-// The comments Apply reads (readQuestions, readConfirmations), picked from the index by first line,
-// in order, and packed into batches of at most BATCH_BYTES.
+// The comments Apply reads (readQuestions, readConfirmations), picked from the index in order by
+// the readers' own predicates (headingOf, isConfirm) run on each comment's head, and packed into
+// batches of at most BATCH_BYTES. A head that may have been cut before the readers' pattern could
+// show (it is full length, and less than MIN_VISIBLE characters of it follow its leading whitespace)
+// cannot be judged, so that comment is read whole and the readers decide: never dropped unread.
+const MIN_VISIBLE = 40
 const batchesOf = (indexed) => {
   const out = []
   let cur = null
   indexed.forEach((c, i) => {
-    const line = String(c.firstLine || '')
-    if (!HEADING.test(line) && !(c.author === ADAM && /^Confirm\b/.test(line))) return
+    const head = String(c.head || '')
+    const undecidable = head.length >= HEAD_CHARS && head.trim().length < MIN_VISIBLE
+    if (!undecidable && !headingOf(head) && !isConfirm(c.author, head)) return
     if (!cur || cur.bytes + (c.bytes || 0) > BATCH_BYTES) { cur = { at: [], urls: [], bytes: 0 }; out.push(cur) }
     cur.at.push(i); cur.urls.push(c.url); cur.bytes += c.bytes || 0
   })

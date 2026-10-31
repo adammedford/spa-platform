@@ -284,11 +284,11 @@ function stub(env, scriptArgs, served) {
           ...(served.replay || {}),
         }
       } else if (label === 'comments') {
-        // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with no
-        // body. served.commentsIssue: the number it reports reading, as a reader that read the wrong
+        // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with the
+        // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a). served.commentsIssue: the number it reports reading, as a reader that read the wrong
         // issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), firstLine: (c.body.split('\n').find((l) => /\S/.test(l)) || '').slice(0, 120) }))
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
@@ -634,8 +634,9 @@ try {
   }
 
   // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
-  //    file, dispatches at most ten agents (nine before #319 moved the comments read into Apply), and
-  //    the return counts what ran.
+  //    file, dispatches at most ten agents besides the comments-batch body readers (nine before #319
+  //    moved the comments read into Apply; the readers are one per 24 KB of questions), and the
+  //    return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
@@ -1132,9 +1133,38 @@ try {
     if (ok.labels.filter((l) => l === 'comments').length !== 1) fail(`the comments were read ${ok.labels.filter((l) => l === 'comments').length} times`)
     const cp = ok.prompt('comments')
     if (!new RegExp(`gh issue view ${ISSUE} --json number,comments`).test(cp)) fail('the comments reader does not read the run\'s issue by number')
-    if (/\{author, createdAt, url, body\}/.test(cp)) fail('the comments index returns bodies, so one return carries every comment again')
+    // The index returns no body: the jq the prompt hands the agent is run on gh's own shape, and what
+    // it prints is held to the fields and sizes the index promises, whatever the prompt's wording. The
+    // prose around the jq may name a body only to say there is none. (The stub above never runs the jq.)
+    const jqOf = /--jq '([^']*)'/.exec(cp)
+    if (!jqOf) fail('the comments index prompt carries no gh --jq filter to run')
+    else {
+      const canary = 'x'.repeat(300) + 'BODY-CANARY-' + 'z'.repeat(5000)
+      const fromGh = JSON.stringify({ number: ISSUE, comments: [
+        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'c', url: 'u3', body: 'é'.repeat(300) + canary },
+      ] })
+      const r = spawnSync('jq', ['-c', jqOf[1]], { input: fromGh, encoding: 'utf8' })
+      if (r.error || r.status !== 0) fail(`the comments index jq did not run (jq is needed for this check): ${r.error ? r.error.message : r.stderr}`)
+      else {
+        const out = JSON.parse(r.stdout)
+        const fields = ['author', 'bytes', 'createdAt', 'head', 'url']
+        if (out.number !== ISSUE || out.comments.length !== 3) fail(`the comments index jq returned ${r.stdout.slice(0, 200)}`)
+        for (const c of out.comments) {
+          if (Object.keys(c).sort().join() !== fields.join()) fail(`the comments index returns ${Object.keys(c).sort().join()}, not ${fields.join()}`)
+          if (c.head.length > 200 || c.head.includes('BODY-CANARY')) fail('the comments index returns more of a body than its first 200 characters')
+          if (typeof c.bytes !== 'number' || c.bytes < 5000) fail(`the comments index gives a size of ${c.bytes} for a body over 5000 bytes`)
+        }
+        if (out.comments[2].bytes !== Buffer.byteLength('é'.repeat(300) + canary)) fail(`the comments index counts ${out.comments[2].bytes} bytes, not the body's UTF-8 bytes`)
+        if (!out.comments[1].head.startsWith('## Questions: #1, issue-1, T\r')) fail('the comments index trims or rewrites the head the readers judge')
+      }
+    }
+    const prose = cp.replace(/--jq '[^']*'/, '')
+    const bodyWords = [...prose.matchAll(/(.{0,3})\bbod(?:y|ies)\b/g)]
+    if (!bodyWords.length || bodyWords.some((m) => !/no $/.test(m[1]))) fail(`the comments index prompt asks for bodies: ${bodyWords.map((m) => JSON.stringify(m[0])).join(', ')}`)
     // The index picks the questions and Confirm comments, not the carried list (comment 4), and packs
-    // them in order into batches of at most BATCH_BYTES (#659's 77 KB failed as one return).
+    // them in order into batches of at most BATCH_BYTES (#659's 75 KB could not be returned whole, twice).
     const bp = ok.prompt('comments-batch:1')
     if (!/\.comments\[0,1,2,4\]/.test(bp)) fail(`the batch reader does not read the questions and Confirm comments alone, in order: ${(/\.comments\[[^\]]*\]/.exec(bp) || [''])[0]}`)
     const big = (n, kb) => comment(20 + n, `## Questions: ${cite(300 + n)}, issue-${300 + n}, Big ticket ${n}\n\n**Q${n}.** Big?\nRecommended: Yes.\n${PRE}\n${'x'.repeat(kb * 1000)}\n`, `2026-10-21T06:00:0${n}Z`)
@@ -1144,6 +1174,23 @@ try {
     const at = (k) => (/\.comments\[([\d,]+)\]/.exec(wide.prompt(`comments-batch:${k}`)) || ['', ''])[1]
     if (at(1) !== '0,1' || at(2) !== '2' || at(3) !== '3') fail(`a 50 KB night: batches read ${[1, 2, 3].map(at).join(' | ')}, expected 0,1 | 2 | 3: a 30 KB comment rides alone`)
     if (!wide.result.apply.answers[3]) fail('a 50 KB night: the questions of a later batch were not read')
+    // The index picks with the readers' own predicates (headingOf, isConfirm), so what they would
+    // read is never left out unread: a heading line ending \r, a heading after leading spaces, a
+    // Confirm after blank lines. A Confirm by anyone but Adam and a note are not read, so not fetched.
+    const crlf = { ...big(1, 0), body: big(1, 0).body.replace(/\n/g, '\r\n') }
+    const padded = { ...big(2, 0), body: ' '.repeat(300) + big(2, 0).body }
+    const lateConfirm = comment(40, '\n\n  Confirm Q1 to Q3 as pre-accepted.\n', '2026-10-21T08:00:00Z')
+    const echoed = { ...comment(41, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:30:00Z'), author: 'someone-else' }
+    const shaped = await execute(newRepo(), { date: DATE }, { issue: issueWith([crlf, padded, big(3, 0), lateConfirm, comment(42, 'A review note.', '2026-10-21T09:00:00Z'), echoed]) })
+    const shapedAt = (/\.comments\[([\d,]+)\]/.exec(shaped.prompt('comments-batch:1')) || ['', ''])[1]
+    if (shapedAt !== '0,1,2,3') fail(`shaped heads: the batch reads ${shapedAt}, expected 0,1,2,3 (a \\r heading, a padded heading, a plain one, a late Confirm; not the note nor another author's Confirm)`)
+    for (const q of [1, 2, 3]) if (!shaped.result.apply.answers[q]) fail(`shaped heads: Q${q} was not read: ${JSON.stringify(shaped.result.refusals)}`)
+    if (shaped.result.refusals.length) fail(`shaped heads: refused: ${JSON.stringify(shaped.result.refusals)}`)
+    // A head full of blanks cannot show the pattern the readers look for, so its comment is read whole.
+    const blank = { ...comment(43, ' '.repeat(250) + '\nA note, far down.\n', '2026-10-21T09:30:00Z') }
+    const blanked = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), blank]) })
+    const blankAt = (/\.comments\[([\d,]+)\]/.exec(blanked.prompt('comments-batch:1')) || ['', ''])[1]
+    if (blankAt !== '0,1') fail(`a head of blanks: the batch reads ${blankAt}, expected 0,1: a comment whose head cannot be judged is read whole`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
     if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)
