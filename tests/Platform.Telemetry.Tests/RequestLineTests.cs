@@ -60,7 +60,7 @@ public sealed class RequestLineTests
     {
         const string key = "session-key-4b1e9c";
         await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
-        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false, CheckCertificateRevocationList = true });
         using HttpRequestMessage request = new(HttpMethod.Get, new Uri(host.BaseAddress, "/index.html"));
         request.Headers.Add("Cookie", TelemetryHost.SessionCookie + "=" + key);
 
@@ -79,7 +79,7 @@ public sealed class RequestLineTests
         // The feature is per request: a rejection or a session on one request is not carried into
         // the next on the same connection.
         await using TelemetryHost host = await TelemetryHost.StartAsync(Ct);
-        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false, CheckCertificateRevocationList = true });
         using HttpRequestMessage first = new(HttpMethod.Get, new Uri(host.BaseAddress, "/index.html"));
         first.Headers.Add(TelemetryHost.RejectHeader, "csrf.token");
         first.Headers.Add("Cookie", TelemetryHost.SessionCookie + "=first-key");

@@ -243,7 +243,7 @@ public sealed class RefreshAcrossHostsTests
         string main = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "apps", "main.tf"));
         System.Text.RegularExpressions.Match setting = Assert.Single(
             System.Text.RegularExpressions.Regex.Matches(main, @"^\s*retry_grace_period_seconds\s*=\s*(\d+)\s*$",
-                System.Text.RegularExpressions.RegexOptions.Multiline));
+                System.Text.RegularExpressions.RegexOptions.Multiline, RegexTimeout.Span));
         return TimeSpan.FromSeconds(int.Parse(setting.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
     }
 

@@ -80,12 +80,12 @@ public sealed partial class DeployedStackTests
         Assert.True(DeployedStack.CellRegistryPropagation >= 2 * interval, $"{DeployedStack.CellRegistryPropagation} is less than twice the cell's {interval} poll.");
     }
 
-    [GeneratedRegex(@"variable ""registry_poll_seconds"" \{.*?default\s*=\s*(\d+)", RegexOptions.Singleline)]
+    [GeneratedRegex(@"variable ""registry_poll_seconds"" \{.*?default\s*=\s*(\d+)", RegexOptions.Singleline, RegexTimeout.Milliseconds)]
     private static partial Regex RegistryPollDefault();
 
-    [GeneratedRegex(@"^\s*access_token_validity\s*=\s*(\d+)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\s*access_token_validity\s*=\s*(\d+)", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
     private static partial Regex AccessTokenValidity();
 
-    [GeneratedRegex(@"token_validity_units\s*\{[^}]*?access_token\s*=\s*""(\w+)""", RegexOptions.Singleline)]
+    [GeneratedRegex(@"token_validity_units\s*\{[^}]*?access_token\s*=\s*""(\w+)""", RegexOptions.Singleline, RegexTimeout.Milliseconds)]
     private static partial Regex AccessTokenUnits();
 }
