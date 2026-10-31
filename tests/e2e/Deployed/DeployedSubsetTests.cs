@@ -244,7 +244,14 @@ public sealed partial class DeployedSubsetTests
     /// A registered D row may name an existing continuity Fact instead of an N-prefixed test (#657).
     /// Resolve that explicit reference to the real public method; prose naming a missing method proves nothing.
     /// </summary>
-    internal static Dictionary<string, MethodInfo> ContinuityRowTests(string register)
+    internal static Dictionary<string, MethodInfo> ContinuityRowTests(string register) =>
+        ContinuityRowTests(register, typeof(ContinuityTests));
+
+    /// <summary>
+    /// <see cref="ContinuityRowTests(string)"/> over <paramref name="source"/>, the class whose public methods
+    /// a row may name, so a test can hand it methods the filter must refuse.
+    /// </summary>
+    internal static Dictionary<string, MethodInfo> ContinuityRowTests(string register, Type source)
     {
         HashSet<string> rows = new(RegisterDeployedRows(register), StringComparer.Ordinal);
         Dictionary<string, MethodInfo> tests = new(StringComparer.Ordinal);
@@ -262,7 +269,7 @@ public sealed partial class DeployedSubsetTests
                 continue;
             }
 
-            MethodInfo? method = typeof(ContinuityTests).GetMethod(reference.Groups["method"].Value,
+            MethodInfo? method = source.GetMethod(reference.Groups["method"].Value,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
             if (method?.GetCustomAttribute<FactAttribute>() is not null &&
                 method.GetCustomAttribute<TheoryAttribute>() is null &&

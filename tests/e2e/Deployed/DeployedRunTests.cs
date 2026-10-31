@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -149,6 +150,53 @@ public sealed class DeployedRunTests
         Xunit.Sdk.XunitException subset = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, register, []));
         Assert.Contains("N-32", run.Message, StringComparison.Ordinal);
         Assert.Contains("N-32", subset.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_registered_continuity_method_that_is_not_a_plain_task_fact_is_not_the_rows_test()
+    {
+        // Each method below breaks one clause of the filter and meets the rest, so deleting any one
+        // clause lets its method through and fails the second assertion (CODING_STANDARDS.md, a check that
+        // is vacuous today). They are emitted, since a public Theory without data, or a Fact with a
+        // parameter, would be a test of this suite that xUnit's analyzers refuse and its runner would run.
+        (string Method, Type Returns, Type[] Parameters, Type? Attribute)[] methods =
+        [
+            ("Row_fact_task_no_parameters", typeof(Task), [], typeof(FactAttribute)),
+            ("Row_theory", typeof(Task), [], typeof(TheoryAttribute)),
+            ("Row_no_attribute", typeof(Task), [], null),
+            ("Row_value_task", typeof(ValueTask), [], typeof(FactAttribute)),
+            ("Row_void", typeof(void), [], typeof(FactAttribute)),
+            ("Row_with_a_parameter", typeof(Task), [typeof(int)], typeof(FactAttribute)),
+        ];
+        TypeBuilder builder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("ContinuityFilterFixtures"), AssemblyBuilderAccess.Run)
+            .DefineDynamicModule("ContinuityFilterFixtures").DefineType("ContinuityTests", TypeAttributes.Public | TypeAttributes.Sealed);
+        builder.DefineDefaultConstructor(MethodAttributes.Public);
+        foreach ((string method, Type returns, Type[] parameters, Type? attribute) in methods)
+        {
+            MethodBuilder defined = builder.DefineMethod(method, MethodAttributes.Public | MethodAttributes.HideBySig, returns, parameters);
+            ILGenerator body = defined.GetILGenerator();
+            if (returns != typeof(void))
+            {
+                body.Emit(OpCodes.Ldnull);
+            }
+
+            body.Emit(OpCodes.Ret);
+            if (attribute is not null)
+            {
+                ConstructorInfo constructor = attribute.GetConstructors().Single();
+                object?[] defaults = [.. constructor.GetParameters().Select(parameter => parameter.DefaultValue is DBNull ? null : parameter.DefaultValue)];
+                defined.SetCustomAttribute(new CustomAttributeBuilder(constructor, defaults));
+            }
+        }
+
+        string register = "## Negative security (N)\n\n| ID | Attempt | Expect | Tier | Recorded by |\n| --- | --- | --- | --- | --- |\n" +
+            string.Concat(methods.Select((row, index) =>
+                $"| N-{40 + index} | x; `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.{row.Method}` | 401 | D | #539 |\n"));
+
+        Dictionary<string, MethodInfo> accepted = DeployedSubsetTests.ContinuityRowTests(register, builder.CreateType());
+
+        Assert.Equal("Row_fact_task_no_parameters", Assert.Single(accepted).Value.Name);
+        Assert.Equal("N-40", Assert.Single(accepted).Key);
     }
 
     /// <summary>An export page with no D row, so any row the run takes below comes from the register.</summary>

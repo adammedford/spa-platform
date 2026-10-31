@@ -12,13 +12,21 @@ given 5 where its gate tests were 3, and a draft of 2026-10-27 took an "N-28", w
 DeployedSubsetTests' InlineData. So:
 
 **What counts.** Only a testcase whose `classname` is in `Gateway.E2ETests.Functional.` or
-`Gateway.E2ETests.Negative.`, the namespaces of tests/e2e/Functional and tests/e2e/Negative. The class
-decides, never the test's name or data. The id is the method name's prefix, `F06_` meaning F-06, and
-its letter must be its class's: F in Functional, N in Negative. Every other testcase is a meta-test,
-counted in the totals and never toward an id.
+`Gateway.E2ETests.Negative.`, the namespaces of tests/e2e/Functional and tests/e2e/Negative, or the
+one registered Deployed class below. The class decides, never the test's name or data. In
+Functional and Negative the id is the method name's prefix, `F06_` meaning F-06, and its letter must
+be its class's: F in Functional, N in Negative. Every other testcase is a meta-test, counted in the
+totals and never toward an id.
+
+**The one Deployed class that counts.** `Gateway.E2ETests.Deployed.ContinuityTests` (tests/e2e/Deployed/
+ContinuityTests.cs) holds the deployed continuity Facts, which contracts/test-ids.md registers as the
+test of F-19 to F-23 and N-32. A testcase of exactly that class counts toward the id whose register
+row names its method as `ContinuityTests.<method>` beside that file's path, and toward no other. The
+method is read from the register, never from its name's prefix (`Row3_` is no id), and a method of the
+class that no row names (Row7_) stays a meta-test. Two rows naming one method are refused.
 
 **What an id is.** A row of a table in docs/plan/04-tests.md or contracts/test-ids.md, read from the
-row's first cell only: test-ids.md names "N-28" in prose as the next number, which defines nothing.
+row's first cell only: test-ids.md names "N-33" in prose as the next number, which defines nothing.
 
 **Outcome.** A testcase with a `failure` or `error` child failed, one with `skipped` was skipped, and
 any other passed. An id passed only when every one of its tests passed, so a skipped gate test leaves
@@ -60,6 +68,9 @@ REGISTERS = ("docs/plan/04-tests.md", "contracts/test-ids.md")
 GATE_CLASSES = {"Gateway.E2ETests.Functional.": "F", "Gateway.E2ETests.Negative.": "N"}
 PREFIX = re.compile(r"([FN])(\d{2,})_")
 ROW = re.compile(r"^\|\s*([FNPA]-\d{2,})\s*\|", re.MULTILINE)
+CONTINUITY_CLASS = "Gateway.E2ETests.Deployed.ContinuityTests"
+CONTINUITY_FILE = "`tests/e2e/Deployed/ContinuityTests.cs`"
+CONTINUITY_REFERENCE = re.compile(r"`ContinuityTests\.([A-Za-z_][A-Za-z0-9_]*)`")
 COMMIT = re.compile(r"[0-9a-f]{7,40}")
 
 # Shapes that must not reach a ticket, the ARN before the account id inside it. The account id
@@ -83,15 +94,26 @@ def sensitive(text: str) -> str | None:
     return None
 
 
-def read_register(root: pathlib.Path) -> set:
-    defined = set()
+def read_register(root: pathlib.Path) -> tuple:
+    """The defined ids, and the continuity Fact each row names: {method: id}."""
+    defined, continuity = set(), {}
     for name in REGISTERS:
         try:
             text = (root / name).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise Refusal(f"cannot read the id register {name}: {error}") from None
         defined.update(ROW.findall(text))
-    return defined
+        for line in text.splitlines():
+            row = ROW.match(line)
+            if row is None or CONTINUITY_FILE not in line:
+                continue
+            reference = CONTINUITY_REFERENCE.search(line)
+            if reference is None:
+                continue
+            method, test_id = reference.group(1), row.group(1)
+            if continuity.setdefault(method, test_id) != test_id:
+                raise Refusal(f"{continuity[method]} and {test_id} both name ContinuityTests.{method}")
+    return defined, continuity
 
 
 class Test:
@@ -142,9 +164,12 @@ def gate_letter(test: Test) -> str | None:
     return None
 
 
-def count(tests: list, defined: set) -> tuple:
+def count(tests: list, defined: set, continuity: dict) -> tuple:
     by_id, meta = {}, []
     for test in tests:
+        if test.classname == CONTINUITY_CLASS and test.method in continuity:
+            by_id.setdefault(continuity[test.method], []).append(test)
+            continue
         letter = gate_letter(test)
         if letter is None:
             meta.append(test)
@@ -161,7 +186,7 @@ def count(tests: list, defined: set) -> tuple:
             raise Refusal(f"{test.full}: {test_id} is not a row of {' or '.join(REGISTERS)}")
         by_id.setdefault(test_id, []).append(test)
     if not by_id:
-        raise Refusal("the report holds no Functional or Negative test")
+        raise Refusal("the report holds no Functional, Negative or registered continuity test")
     return by_id, meta
 
 
@@ -186,7 +211,7 @@ def draft(test_id: str, tests: list, gate: list, meta: list, report: pathlib.Pat
         context.strip(),
         "",
         f"**Run.** {len(everyone)} tests in the report: {tally(everyone)}. Of those, {len(gate)} are "
-        f"Functional and Negative gate tests ({tally(gate)}), and {len(meta)} are meta-tests "
+        f"gate tests, Functional, Negative and registered continuity ({tally(gate)}), and {len(meta)} are meta-tests "
         f"({tally(meta)}), which count toward no id.",
         "",
         f"**{test_id}'s tests** ({passed} of {len(tests)} passed):",
@@ -216,9 +241,9 @@ def run(args: argparse.Namespace) -> int:
         if kind:
             raise Refusal(f"the --context file {args.context.name}, line {number}: carries what looks like {kind}")
 
-    defined = read_register(args.root)
+    defined, continuity = read_register(args.root)
     tests = read_report(args.report)
-    by_id, meta = count(tests, defined)
+    by_id, meta = count(tests, defined, continuity)
     gate = [t for group in by_id.values() for t in group]
     try:
         digest = hashlib.sha256(args.report.read_bytes()).hexdigest()
