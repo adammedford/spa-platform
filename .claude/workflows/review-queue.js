@@ -765,7 +765,7 @@ const earlierLines = (d, v) => (d && d.verdict === 'hold'
   : [])
 const followUpLines = (list) => ['## Follow-ups', '',
   ...(list.length
-    ? ['Carried findings that name no open ticket; the morning run files each one (#292).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
+    ? ['Carried findings that name no open ticket; the morning run files each one while this pull request is still open (#292, #514), and `tools/land.sh` names any still unfiled when it merges, to be filed by hand (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
       ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD].map(cell).join(' | ')} |`)]
     : ['- None: the review carries no finding that names no open ticket.']),
   '']
