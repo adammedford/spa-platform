@@ -20,10 +20,11 @@
 case "${1:-}" in
   # Contracts are embedded by Platform.Registry and read by behavior tests; nuget.config controls
   # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50). .dockerignore
-  # decides what the gateway's image is built from, and the half builds that image (#210). The
-  # analyzer configs set the severities the build enforces, so only a build proves a change to them:
-  # a ramp batch's promotion deletes pending lines from the root .globalconfig and nothing else (#606).
-  # The root banned-symbol lists are the same: an entry is an error the build enforces (#608).
+  # decides what the gateway's image is built from, and the half builds that image (#210).
+  # .editorconfig and .globalconfig hold the analyzer options and severities the build enforces
+  # (ADR-0035 decisions 5 to 8), so a change to either can turn the build red: a ramp batch's
+  # promotion deletes pending lines from the root .globalconfig and nothing else (#606). The root
+  # banned-symbol lists are the same: an entry is an error the build enforces (#608).
   build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx|globalconfig)$|^(global\.json|nuget\.config|\.dockerignore|\.editorconfig)$|^BannedSymbols\.[^/]*\.txt$' ;;
   # Every Terraform root and module is under infra/. The floor's file and the helper that reads it
   # decide which Terraform checks them, so raising the floor runs them too (#69).

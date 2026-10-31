@@ -178,8 +178,12 @@ refuses a merge whose body lacks that comment's URL, naming the request and the 
 not yet landed is open.
 
 **The archived requests.** The files under `contracts/changes/` are the requests filed before
-change requests were issues. They are read-only records, cited by their id, and no file is added
-there. Their `**Status:**` lines, `moved to #NNN` included, are history.
+change requests were issues. They are closed records, cited by their id: no file is added there,
+and an edit to one needs an authority like any steering change (ADR-0032 decision 4), for a
+correction or an amendment a ticket's acceptance criteria or a confirmed answer asks for. A note
+that a decided item has landed is provenance, which lives in the merge body ("Where a decision
+lives", `docs/adr/README.md`), not in the file. Their `**Status:**` lines, `moved to #NNN`
+included, are history.
 
 ## The archive: tickets filed before ADR-0020
 
