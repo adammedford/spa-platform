@@ -20,10 +20,12 @@ totals and never toward an id.
 
 **The one Deployed class that counts.** `Gateway.E2ETests.Deployed.ContinuityTests` (tests/e2e/Deployed/
 ContinuityTests.cs) holds the deployed continuity Facts, which contracts/test-ids.md registers as the
-test of F-19 to F-23 and N-32. A testcase of exactly that class counts toward the id whose register
+tests of the rows that name them. A testcase of exactly that class counts toward the id whose register
 row names its method as `ContinuityTests.<method>` beside that file's path, and toward no other. The
 method is read from the register, never from its name's prefix (`Row3_` is no id), and a method of the
-class that no row names (Row7_) stays a meta-test. Two rows naming one method are refused.
+class that no row names (Row7_) stays a meta-test. Two rows naming one method are refused, and so is
+one row naming two methods, since crediting the first would leave the second unread; one method
+named twice in a row is one method.
 
 **What an id is.** A row of a table in docs/plan/04-tests.md or contracts/test-ids.md, read from the
 row's first cell only: test-ids.md names "N-33" in prose as the next number, which defines nothing.
@@ -41,7 +43,8 @@ machine.
 
 **What it refuses (exit 2, naming the test or line, writing no draft).** A gate test with no id
 prefix, or with an id neither register defines; a report that does not parse, or holds no gate test;
-a register file it cannot read; and a --context line or gate-test name carrying an AWS account id, an
+a register file it cannot read, or one whose rows name a continuity Fact twice or name two in
+one row; and a --context line or gate-test name carrying an AWS account id, an
 ARN or an OAuth client id. The draft is posted to a ticket, so these are refused rather than
 rewritten, and the refusal names where, never the value. A client id is matched by its key
 (`client_id=`, `ClientId`) or by the bare shape of a Cognito app client id, 26 lowercase letters and

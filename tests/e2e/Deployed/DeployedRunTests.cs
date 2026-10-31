@@ -168,6 +168,20 @@ public sealed class DeployedRunTests
     }
 
     [Fact]
+    public void A_register_row_naming_one_continuity_fact_twice_names_one()
+    {
+        // A method named twice in one row is still one method, so the row resolves rather than being refused
+        // as naming two; the Python reader's twin is test_a_row_naming_one_continuity_fact_twice_names_one.
+        const string fact = "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`";
+        string register = ContinuityRegister.Replace(fact, $"{fact}, {fact}", StringComparison.Ordinal);
+        Assert.NotEqual(ContinuityRegister, register);
+
+        KeyValuePair<string, MethodInfo> row = Assert.Single(DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Equal("N-32", row.Key);
+        Assert.Equal("Row9_a_session_ended_on_one_task_is_refused_by_the_other", row.Value.Name);
+    }
+
+    [Fact]
     public void A_registered_continuity_method_that_is_not_a_plain_task_fact_is_not_the_rows_test()
     {
         // Each method below breaks one clause of the filter and meets the rest, so deleting any one
