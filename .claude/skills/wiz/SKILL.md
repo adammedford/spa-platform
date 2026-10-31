@@ -222,10 +222,11 @@ bad flag with zero tests run, so a 5 is a failed stage and not a result.
 Count toward an id only the test cases whose class is under `Gateway.E2ETests.Functional.` or
 `Gateway.E2ETests.Negative.`, the id read from the method's prefix (`F01_` is F-01), and the
 registered continuity Facts: a test case of `Gateway.E2ETests.Deployed.ContinuityTests` counts toward
-the id whose row in `contracts/test-ids.md` names its method (F-19 to F-23 and N-32; `Row7_` names
-none). The other `Deployed/*` classes are meta-tests whose data carries ids of its own (`N-28` in
-`DeployedSubsetTests`); report their count beside the rows and credit them to no id.
-`tools/bench/e2e_evidence.py` applies this rule. Post one
+the id whose row in `contracts/test-ids.md` names its method. The register says which ids those are:
+read them there and not from a list here. A method no row names (`Row7_`) counts toward none, and a
+row naming two methods is refused. The other `Deployed/*` classes are meta-tests whose data carries
+ids of its own (`N-28` in `DeployedSubsetTests`); report their count beside the rows and credit them
+to no id. `tools/bench/e2e_evidence.py` applies this rule. Post one
 comment per id on #63, as the F-01 comment of 2026-10-27 does: the deploy it ran on, the command,
 the totals, the id's tests with their results, and the junit file's name and SHA-256.
 
