@@ -33,6 +33,13 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(1, self.classify("terraform", [".dockerignore"]))
         self.assertEqual(1, self.classify("build", ["docs/.dockerignore"]))
 
+    def test_analyzer_configuration_alone_triggers_the_build(self):
+        for path in (".editorconfig", ".globalconfig"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+                self.assertEqual(1, self.classify("workflows", [path]))
+
     def test_documentation_alone_triggers_neither_half(self):
         for half in ("build", "terraform"):
             with self.subTest(half=half):
@@ -128,6 +135,12 @@ class WorkflowDecisionTests(unittest.TestCase):
     def test_a_documentation_pull_request_skips_both_expensive_jobs(self):
         self.assertEqual({"build": "false", "terraform": "false"},
                          self.decide(["docs/note.md"], event="pull_request"))
+
+    def test_analyzer_configuration_alone_runs_build_and_tests(self):
+        for path in (".editorconfig", ".globalconfig"):
+            with self.subTest(path=path):
+                self.assertEqual({"build": "true", "terraform": "false"},
+                                 self.decide([path], event="pull_request"))
 
     def test_a_schema_only_push_runs_build_and_tests(self):
         self.assertEqual({"build": "true", "terraform": "false"},

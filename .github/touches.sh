@@ -21,7 +21,9 @@ case "${1:-}" in
   # Contracts are embedded by Platform.Registry and read by behavior tests; nuget.config controls
   # restore. Neither is documentation-only input (ADR-0020's CI filtering, PR #50). .dockerignore
   # decides what the gateway's image is built from, and the half builds that image (#210).
-  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config|\.dockerignore)$' ;;
+  # .editorconfig and .globalconfig hold the analyzer options and severities the build enforces
+  # (ADR-0035 decisions 5 to 8), so a change to either can turn the build red.
+  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx)$|^(global\.json|nuget\.config|\.dockerignore|\.editorconfig|\.globalconfig)$' ;;
   # Every Terraform root and module is under infra/. The floor's file and the helper that reads it
   # decide which Terraform checks them, so raising the floor runs them too (#69).
   terraform) pattern='^infra/|^\.terraform-version$|^tools/terraform-floor\.sh$' ;;
