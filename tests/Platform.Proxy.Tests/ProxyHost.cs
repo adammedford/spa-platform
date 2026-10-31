@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Security;
 using Platform.Testing;
@@ -21,14 +20,12 @@ namespace Platform.Proxy.Tests;
 public sealed class ProxyHost : IAsyncDisposable
 {
     private readonly StageHost host;
-    private readonly RecordingLoggerProvider recorded;
 
-    private ProxyHost(StageHost host, InMemoryRegistry registry, FakeAccessTokenSource tokens, RecordingLoggerProvider recorded)
+    private ProxyHost(StageHost host, InMemoryRegistry registry, FakeAccessTokenSource tokens)
     {
         this.host = host;
         Registry = registry;
         Tokens = tokens;
-        this.recorded = recorded;
     }
 
     /// <summary>The token placed on a forwarded call when a test arranges nothing.</summary>
@@ -55,15 +52,8 @@ public sealed class ProxyHost : IAsyncDisposable
     /// </summary>
     public IReadOnlyList<string?> TelemetryRules => host.TelemetryRules;
 
-    /// <summary>Every line the gateway logged, captured at Trace.</summary>
+    /// <summary>Every line the gateway logged, captured at Trace, each with its event id.</summary>
     public CapturedLog Log => host.Log;
-
-    /// <summary>
-    /// Every line the gateway logged with its event id, which <see cref="CapturedLine"/> does not carry.
-    /// Read by the one test that holds the unknown-api line to its <c>LoggerMessage</c> template (#162),
-    /// and goes when <see cref="CapturedLine"/> carries one (change request issue-148-captured-line-event-id).
-    /// </summary>
-    internal IReadOnlyList<LogLine> EventLines => recorded.Lines;
 
     public static Task<ProxyHost> StartAsync(CancellationToken ct, params AppDefinition[] apps) =>
         StartAsync(ct, telemetry: false, apps);
@@ -83,7 +73,6 @@ public sealed class ProxyHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"etag\"", apps));
         FakeAccessTokenSource tokens = new() { Result = new AccessTokenResult.Token(DefaultToken) };
-        RecordingLoggerProvider recorded = new();
 
         StageHost host = await StageHost.StartAsync(
             new StageHostOptions
@@ -91,7 +80,6 @@ public sealed class ProxyHost : IAsyncDisposable
                 TelemetryStandIn = options.Telemetry,
                 Services = builder =>
                 {
-                    builder.Logging.AddProvider(recorded);
                     builder.Services.AddSingleton<IRegistry>(registry);
                     if (options.TokenSource)
                     {
@@ -135,7 +123,7 @@ public sealed class ProxyHost : IAsyncDisposable
             },
             ct);
 
-        return new ProxyHost(host, registry, tokens, recorded);
+        return new ProxyHost(host, registry, tokens);
     }
 
     /// <summary>A request to this gateway, addressed to one app's host.</summary>
