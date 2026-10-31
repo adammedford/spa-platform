@@ -52,7 +52,11 @@
        never ships, and fixtures/TestIdp and tests/e2e need the primitives.
        The lists apply where the analysis does, beside the root .globalconfig; the gateway's image
        copies them with it. No list is guarded by its own Exists: a missing one fails the compile
-       (CS2001) rather than dropping its bans unseen. -->
+       (CS2001) rather than dropping its bans unseen. The file names, the // comments and the
+       T:/N:/M: ids are the analyzer's documented format:
+       https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.BannedApiAnalyzers/BannedApiAnalyzers.Help.md
+       That page does not say a namespace ban reaches child namespaces or that a type ban misses
+       derived types; #608's throwaway calls showed both, which is why each HMAC subclass is listed. -->
   <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true' and Exists('$(MSBuildThisFileDirectory).globalconfig')">
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Shipping.txt" />
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotIdentity.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Identity'" />
