@@ -34,6 +34,7 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
                 self.assertEqual(1, self.classify("terraform", [path]))
+                self.assertEqual(1, self.classify("workflows", [path]))
         for path in ("docs/.editorconfig", ".globalconfig.bak", ".editorconfig.orig"):
             with self.subTest(path=path):
                 self.assertEqual(1, self.classify("build", [path]))
@@ -54,13 +55,6 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(0, self.classify("build", [".dockerignore"]))
         self.assertEqual(1, self.classify("terraform", [".dockerignore"]))
         self.assertEqual(1, self.classify("build", ["docs/.dockerignore"]))
-
-    def test_analyzer_configuration_alone_triggers_the_build(self):
-        for path in (".editorconfig", ".globalconfig"):
-            with self.subTest(path=path):
-                self.assertEqual(0, self.classify("build", [path]))
-                self.assertEqual(1, self.classify("terraform", [path]))
-                self.assertEqual(1, self.classify("workflows", [path]))
 
     def test_documentation_alone_triggers_neither_half(self):
         for half in ("build", "terraform"):
