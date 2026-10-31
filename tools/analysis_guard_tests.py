@@ -95,6 +95,11 @@ class Guard(unittest.TestCase):
         del self.files[".globalconfig"]
         self.assertFails(self.run_guard(), "no root .globalconfig")
 
+    def test_no_root_editorconfig_fails(self) -> None:
+        # Review of #606: without the file there is no relaxed tier, and no section to judge.
+        del self.files[".editorconfig"]
+        self.assertFails(self.run_guard(), "no root .editorconfig")
+
     # --- the relaxed tier's section (#589-Q8, ADR-0035 decision 13) ----------------------------
 
     def test_the_relaxed_section_missing_fails(self) -> None:
@@ -130,6 +135,14 @@ class Guard(unittest.TestCase):
         self.files[".editorconfig"] = EDITORCONFIG + "# A reason for something else.\n\ndotnet_diagnostic.CA2234.severity = none\n"
         self.assertFails(self.run_guard(), "CA2234", "no reason comment")
 
+    def test_two_entries_sharing_one_comment_fail_on_the_second(self) -> None:
+        self.files[".editorconfig"] = EDITORCONFIG + ("# Tests address relative paths as strings.\n"
+                                                      "dotnet_diagnostic.CA2234.severity = none\n"
+                                                      "dotnet_diagnostic.CA1054.severity = none\n")
+        result = self.run_guard()
+        self.assertFails(result, ".editorconfig:15", "CA1054", "no reason comment")
+        self.assertNotIn("CA2234", result.stderr)
+
     def test_an_empty_comment_is_no_reason(self) -> None:
         self.files[".editorconfig"] = EDITORCONFIG + "dotnet_diagnostic.CA2234.severity = none #\n"
         self.assertFails(self.run_guard(), "CA2234", "no reason comment")
@@ -145,6 +158,17 @@ class Guard(unittest.TestCase):
     def test_a_later_section_for_one_relaxed_folder_fails(self) -> None:
         self.files[".editorconfig"] = EDITORCONFIG + "\n[tests/**/*.{cs,csx}]\ndotnet_diagnostic.CA1000.severity = none\n"
         self.assertFails(self.run_guard(), "not the last section", "[tests/**/*.{cs,csx}]")
+
+    def test_a_later_section_for_one_test_project_fails(self) -> None:
+        # Review of #606: a glob narrower than the probes, over a real project's files, still overrides.
+        self.files["tests/App.Tests/AppTests.cs"] = "namespace App.Tests;\npublic sealed class AppTests { }\n"
+        self.files[".editorconfig"] = EDITORCONFIG + "\n[tests/App.Tests/**.cs]\ndotnet_diagnostic.CA5351.severity = none\n"
+        self.assertFails(self.run_guard(), "not the last section", "[tests/App.Tests/**.cs]")
+
+    def test_a_later_section_for_a_strict_project_fails(self) -> None:
+        # ADR-0035 decision 13: the relaxed tier's section is the last section matching *.cs at all.
+        self.files[".editorconfig"] = EDITORCONFIG + "\n[src/App/**.cs]\ncsharp_style_var_elsewhere = true\n"
+        self.assertFails(self.run_guard(), "not the last section", "[src/App/**.cs]")
 
     def test_a_later_section_that_matches_no_cs_file_passes(self) -> None:
         self.files[".editorconfig"] = EDITORCONFIG + "\n[*.{md,json}]\nindent_size = 2\n"
@@ -227,6 +251,15 @@ class Guard(unittest.TestCase):
         self.files["src/App/Notes.cs"] = ('namespace App;\n'
                                          '// A [SuppressMessage] needs a Justification.\n'
                                          'public static class Notes { public const string Text = "SuppressMessage(x)"; }\n')
+        self.assertPasses(self.run_guard())
+
+    def test_a_suppression_in_a_comment_is_not_read(self) -> None:
+        # Review of #606: the masking of comments, not the attribute's shape, is what passes these.
+        self.files["src/App/Notes.cs"] = ('namespace App;\n'
+                                         '// [SuppressMessage("Security", "CA5394")]\n'
+                                         '/* [SuppressMessage("Security", "CA5394", Justification = "x")]\n'
+                                         '#pragma warning disable CA5394 */\n'
+                                         'public static class Notes { }\n')
         self.assertPasses(self.run_guard())
 
     # --- #pragma warning disable (ADR-0035 decision 12) -----------------------------------------

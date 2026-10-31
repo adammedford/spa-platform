@@ -10,9 +10,11 @@ naming each finding on its own line before a count, when:
 - the relaxed tier's section of the root `.editorconfig`, the one headed
   `[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]`, is missing, names a
   security rule, has an entry with no reason comment, or is not the last section that matches a C#
-  file in the relaxed tier (#589-Q8; ADR-0035 decisions 5 and 13). A later section that matches one
+  file (#589-Q8; ADR-0035 decisions 5 and 13). A later section that matches a relaxed-tier file
   would override it, and the build would stay green while a relaxation, or a strict rule, silently
-  changed;
+  changed; one that matches only a strict-tier file is held to the same rule, because the ADR names
+  the last `*.cs` section and a narrower glob is one edit from overriding the tier. A section matches
+  a C# file when it matches a tracked `.cs` file or a probe path in each relaxed folder;
 - any analyzer config, an `.editorconfig`, `.globalconfig` or `*.globalconfig` at any depth, has a
   `dotnet_analyzer_diagnostic.category-*` line (X4; decision 5): under `AnalysisMode=All` it adds
   nothing, and its reach into a package's rules that share the category name is undocumented;
@@ -166,7 +168,7 @@ def sections(text: str) -> list[tuple[str, int, list[tuple[int, str]]]]:
     return found
 
 
-def judge_relaxed_section(path: str, text: str, findings: list[str]) -> None:
+def judge_relaxed_section(path: str, text: str, csharp: list[str], findings: list[str]) -> None:
     every = sections(text)
     at = [n for n, (header, _, _) in enumerate(every) if header == RELAXED_HEADER]
     if not at:
@@ -176,10 +178,10 @@ def judge_relaxed_section(path: str, text: str, findings: list[str]) -> None:
     header, header_line, lines = every[at[-1]]
     for later, line, _ in every[at[-1] + 1:]:
         matcher = glob_to_regex(later[1:-1])
-        if any(matcher.match(probe) for probe in RELAXED_PROBES):
+        if any(matcher.match(probe) for probe in RELAXED_PROBES + csharp):
             findings.append(f"{path}:{header_line}: the relaxed-tier section is not the last section matching "
-                            f"*.cs: {later} at line {line} matches the relaxed tier's files and overrides it "
-                            "(ADR-0035 decision 5).")
+                            f"*.cs: {later} at line {line} matches C# files and comes after it "
+                            "(ADR-0035 decisions 5 and 13).")
     previous = ""
     for number, line in lines:
         entry = SEVERITY.match(line)
@@ -335,7 +337,7 @@ def judge(top: pathlib.Path) -> list[str]:
             text = read(top, path)
             judge_category_lines(path, text, findings)
             if path == ".editorconfig":
-                judge_relaxed_section(path, text, findings)
+                judge_relaxed_section(path, text, [p for p in paths if p.endswith(".cs")], findings)
         elif name.endswith(".cs"):
             judge_csharp(path, read(top, path), findings)
     if ".editorconfig" not in paths:
