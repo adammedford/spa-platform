@@ -1062,6 +1062,22 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
+// 29. A partial's choice for Adam is a numbered question (#632). On 2026-10-29 the report said of #482's remaining box
+//     "You decide between two routes", yet no numbered question carried it, so the Confirm left it outside its range
+//     and #482 stayed ready-for-agent. The report prompt's Partial (Outstanding) item asks for a numbered question in
+//     step 1b for such a partial, and step 1b lists that choice among the ticket's questions.
+{
+  const PARTIAL_RULE = 'Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it'
+  const STEP_RULE = 'and, for a partial whose outstanding work is a choice for Adam, that choice as one question'
+  if (!reportPrompt) fail('#632: no report prompt was rendered, so the partial-choice check read nothing')
+  else {
+    const item = (/^ {3}- Partial \(Outstanding\).*$/m.exec(reportPrompt) || [''])[0]
+    if (!item.includes(PARTIAL_RULE)) fail('#632: the report prompt\'s Partial (Outstanding) item does not give a partial whose outstanding work is a choice for Adam a numbered question')
+    const step = (/^1b\. .*$/m.exec(reportPrompt) || [''])[0]
+    if (!step.includes(STEP_RULE)) fail('#632: the report prompt\'s step 1b does not list a partial\'s choice for Adam among its ticket\'s questions')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
