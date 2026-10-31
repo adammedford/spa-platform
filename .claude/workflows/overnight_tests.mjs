@@ -1062,7 +1062,30 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
-// 29. A partial's choice for Adam is a numbered question (#632). On 2026-10-29 the report said of #482's remaining box
+// 29. The report checks each claimed branch's open pull request against the run branch the night before (#628): on
+//     2026-10-29 PR #492, listed under "Claimed branches to merge", landed first and changed the files the run's lanes
+//     changed, so the landing PR #529 was CONFLICTING with main, ran no CI, and the morning stopped at step 7 until the
+//     back-merge 55d0be0. The report's "Claimed branches to merge" item runs `git merge-tree --write-tree` of the run
+//     branch against each open pull request's head and lists the conflicting files, and the Morning steps take their
+//     landing order from that item rather than always landing the run's pull request first.
+{
+  const MERGE_TREE = `\`git -C ${fixture.args.repo} merge-tree --write-tree overnight/${fixture.args.date} <its head>\``
+  const ORDER = 'merge the claimed branches in their own PRs, in the order "Claimed branches to merge" gives'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('#628: no report prompt was rendered, so the claimed-branches check read nothing')
+  for (const c of reports) {
+    const item = c.prompt.split('\n').find((l) => l.includes('Claimed branches to merge (')) || ''
+    if (!item.includes(MERGE_TREE)) fail(`#628: the report's "Claimed branches to merge" item does not run ${MERGE_TREE} against each open pull request it names`)
+    if (!item.includes('list every file that conflicts') || !item.includes('back-merges main before its review')) fail('#628: the report\'s "Claimed branches to merge" item does not list the conflicting files and say which pull request lands first and which back-merges main')
+    // A merge-tree that could not run (first line not a tree id; a missing head exits 1, as a conflict does) must not
+    // read as a clean merge (CODING_STANDARDS.md, "A check fails closed").
+    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s "Claimed branches to merge" item lets a merge-tree that failed to run read as "none conflict"')
+    const morning = c.prompt.split('\n').find((l) => l.includes('- Morning steps: ')) || ''
+    if (!morning.includes(ORDER)) fail('#628: the report\'s Morning steps do not take the landing order from "Claimed branches to merge"')
+  }
+}
+
+// 30. A partial's choice for Adam is a numbered question (#632). On 2026-10-29 the report said of #482's remaining box
 //     "You decide between two routes", yet no numbered question carried it, so the Confirm left it outside its range
 //     and #482 stayed ready-for-agent. The report prompt's Partial (Outstanding) item asks for a numbered question in
 //     step 1b for such a partial, and step 1b lists that choice among the ticket's questions.
