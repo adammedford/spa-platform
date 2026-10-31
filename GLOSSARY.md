@@ -306,6 +306,12 @@ its own (#136); the lane implements them one at a time, while its last ticket's 
 integrate run behind it. The integrator has a lane and no workstream. _Avoid_: "lane" for a
 workstream.
 
+**Integration conflict** — a ticket whose first merge into its overnight run's branch,
+`overnight/<date>`, stops because the ticket and that branch changed the same lines. It is
+*resolved* when the ticket still integrates that night, after its own branch takes in the run's
+branch, and *unresolved* when it is reported and not merged. Not two tickets that merely changed
+one file and merged cleanly. _Avoid_: "merge failure" for a red check after a clean merge.
+
 **Foreground session** — an agent session the human starts and watches, at the workstation, for
 work only the human can steer or approve as it happens. _Avoid_: "interactive session", and
 "foreground" for where a file lives.
