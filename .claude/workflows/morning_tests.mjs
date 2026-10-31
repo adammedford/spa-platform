@@ -1481,6 +1481,134 @@ try {
     }
   }
 
+  // 22b. A follow-up body from the command line (#643): follow_up_body.mjs, run with node over a pull
+  //      request number, a record URL, the record's body and a row of its Follow-ups table, prints the
+  //      body followUpBody returns for that row, byte for byte. It runs morning.js's own followUpsOf,
+  //      placeOf and followUpBody with OWNERSHIP.md as the follow-ups reader returns it: its output is
+  //      those functions' direct result, one row is held to a body written out here, and a mutation of
+  //      any of the three changes what it prints. A bad argument, or a record with no row there,
+  //      exits nonzero with a message and prints no body.
+  checks++
+  {
+    const CLI = path.join(here, 'follow_up_body.mjs')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'follow-up-body-'))
+    made.push(dir)
+    const recordFile = (body) => {
+      const f = path.join(dir, `record-${Math.random().toString(36).slice(2)}.md`)
+      fs.writeFileSync(f, body)
+      return f
+    }
+    const run = (args, { cliPath = CLI, input } = {}) => spawnSync(process.execPath, [cliPath, ...args.map(String)], { encoding: 'utf8', input })
+    if (!fs.existsSync(CLI)) fail('#643: .claude/workflows/follow_up_body.mjs does not exist')
+    else {
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const sectionOf = (s, name) => (new RegExp(`^// -+ ${name}\\n([\\s\\S]*?)\\n// -+ `, 'm').exec(s) || [])[1]
+      const portOf = (s) => new Function(`${['follow-ups, read here', 'follow-ups, owners and places', 'follow-ups, their bodies'].map((n) => sectionOf(s, n) || '').join('\n')}\nreturn { followUpsOf, ownershipRules, placeOf, followUpBody }`)()
+      const port = portOf(src)
+      const rules = port.ownershipRules(OWNERSHIP_MD)
+      const direct = (pr, url, body, k) => { const f = port.followUpsOf(body, url)[k - 1]; return port.followUpBody(pr, url, f, port.placeOf(rules, f.where)) }
+      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2]]
+
+      // The output is the direct result, byte for byte, for every row of both records.
+      for (const [pr, url, body, k] of CASES) {
+        const r = run([pr, url, recordFile(body), k])
+        const want = direct(pr, url, body, k)
+        if (r.status !== 0 || r.stdout !== want) fail(`#643: row ${k} of #${pr}'s record: exit ${r.status}, ${r.status === 0 ? 'the output is not followUpBody\'s direct result' : r.stderr}:\n${JSON.stringify(r.stdout)}\n${JSON.stringify(want)}`)
+      }
+      // A body from stdin is the same body.
+      const piped = run([443, R443, '-', 2], { input: REC443.body })
+      if (piped.status !== 0 || piped.stdout !== direct(443, R443, REC443.body, 2)) fail(`#643: the record read from stdin did not print row 2's body: exit ${piped.status}: ${piped.stderr}`)
+
+      // One row held to the body written out by hand: two paths of one owner, their code-span ticks
+      // and line suffix taken off, "this record" read as the record's own link.
+      const BODY_443_2 = [
+        `**Raised by:** #443, from its review record ${R443}`,
+        '**Owner:** ws3-identity',
+        '**Touches:** `tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`',
+        '',
+        '## What to build',
+        '',
+        `The review of #443 carried this finding rather than holding on it (Standards axis), first carried by ${R443}: ${FINDING_DEADLINE}, at tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\`. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+        '',
+        '## Acceptance criteria',
+        '',
+        `- [ ] ${FINDING_DEADLINE}: fixed, or declined with the reason in this issue's Answer.`,
+      ].join('\n')
+      const hand = run([443, R443, recordFile(REC443.body), 2])
+      if (hand.stdout !== BODY_443_2) fail(`#643: row 2 of #443's record is not the body written out by hand:\n${hand.stdout}`)
+      if (!/label needs-triage/.test(hand.stderr)) fail(`#643: row 2's stderr does not name its label needs-triage: ${hand.stderr}`)
+      const nopath = run([443, R443, recordFile(REC443.body), 3])
+      if (!/label ready-for-human: the finding names no repository path/.test(nopath.stderr)) fail(`#643: row 3, which names no path, is not named ready-for-human with why: ${nopath.stderr}`)
+
+      // Exits nonzero with a message and no body.
+      const NO_TABLE = `## Review\n\nFindings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge`
+      const bad = [
+        ['no arguments', [], 2],
+        ['three arguments', [443, R443, recordFile(REC443.body)], 2],
+        ['a pull request number that is not one', ['#443', R443, recordFile(REC443.body), 1], 2],
+        ['a record URL on another pull request', [443, R287[2], recordFile(REC443.body), 1], 2],
+        ['a record URL that is not a link', [443, 'this record', recordFile(REC443.body), 1], 2],
+        ['row 0', [443, R443, recordFile(REC443.body), 0], 2],
+        ['a row that is not a number', [443, R443, recordFile(REC443.body), 'first'], 2],
+        ['a missing record file', [443, R443, path.join(dir, 'missing.md'), 1], 2],
+        ['a body with no record line', [443, R443, recordFile(FOLLOW_UPS_443), 1], 2],
+        ['a record with no Follow-ups row', [443, R443, recordFile(NO_TABLE), 1], 1],
+        ['a row past the table\'s end', [443, R443, recordFile(REC443.body), 4], 1],
+      ]
+      for (const [label, args, code] of bad) {
+        const r = run(args)
+        if (r.status !== code || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected ${code}), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
+      }
+      // The inputs beside the command fail closed too (CODING_STANDARDS.md, "A check fails closed"): an
+      // OWNERSHIP.md with no block, none at all, or a morning.js missing a follow-ups section prints no
+      // body. Without the first, every row would print as ready-for-human with "no line owns" and exit 0.
+      const layout = (label, ownership, script) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'follow-up-body-layout-'))
+        made.push(root)
+        const wf = path.join(root, '.claude', 'workflows')
+        fs.mkdirSync(wf, { recursive: true })
+        fs.writeFileSync(path.join(wf, 'morning.js'), script)
+        fs.copyFileSync(CLI, path.join(wf, 'follow_up_body.mjs'))
+        if (ownership !== null) fs.writeFileSync(path.join(root, 'OWNERSHIP.md'), ownership)
+        const r = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(wf, 'follow_up_body.mjs') })
+        if (r.status !== 2 || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected 2), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
+      }
+      layout('an OWNERSHIP.md with no ownership block', '# Ownership\n\nNo block here.\n', src)
+      layout('no OWNERSHIP.md', null, src)
+      layout('a morning.js with no "follow-ups, their bodies" section', OWNERSHIP_MD, src.replace(/^(\/\/ -+ )follow-ups, their bodies$/m, '$1their bodies'))
+
+      // The command is in the repository, and carries no copy of the three functions.
+      const ignored = spawnSync('git', ['-C', top, 'check-ignore', '-q', path.join('.claude', 'workflows', 'follow_up_body.mjs')], { encoding: 'utf8' })
+      if (ignored.status !== 1) fail(`#643: .gitignore ${ignored.status === 0 ? 'ignores' : 'could not be asked about'} .claude/workflows/follow_up_body.mjs, so a clone has no command${ignored.error ? `: ${ignored.error.message}` : ''}`)
+      if (/const (followUpsOf|ownershipRules|pathsOf|placeOf|followUpBody) =/.test(fs.readFileSync(CLI, 'utf8'))) fail('#643: follow_up_body.mjs carries its own copy of the follow-ups code')
+
+      // The command runs the script beside it: a mutation of each function changes what it prints. The
+      // copy sits in a checkout's layout, OWNERSHIP.md two folders up, as the command reads it.
+      const MUTANTS = [
+        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('axis: cells[1]', 'axis: cells[2]')],
+        ['placeOf', /^const placeOf = [\s\S]*?\n}\n/m, (fn) => fn.replace("label: 'needs-triage'", "label: 'ready-for-agent'")],
+        ['followUpBody', /^const followUpBody = [\s\S]*?\n\]\.join\('\\n'\)\n/m, (fn) => fn.replace("'## What to build'", "'## What to do'")],
+      ]
+      for (const [name, re, mutate] of MUTANTS) {
+        const fn = (re.exec(src) || [''])[0]
+        const changed = fn && mutate(fn)
+        if (!fn || changed === fn) { fail(`#643: the ${name} mutation changed nothing in morning.js`); continue }
+        const mroot = fs.mkdtempSync(path.join(os.tmpdir(), `follow-up-body-${name}-`))
+        made.push(mroot)
+        const mwf = path.join(mroot, '.claude', 'workflows')
+        fs.mkdirSync(mwf, { recursive: true })
+        fs.writeFileSync(path.join(mwf, 'morning.js'), src.replace(fn, changed))
+        fs.copyFileSync(CLI, path.join(mwf, 'follow_up_body.mjs'))
+        fs.writeFileSync(path.join(mroot, 'OWNERSHIP.md'), OWNERSHIP_MD)
+        const mutated = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(mwf, 'follow_up_body.mjs') })
+        if (mutated.stdout === direct(443, R443, REC443.body, 2)) fail(`#643: the ${name} mutation of morning.js did not change the command's output, so it does not run the script's ${name}`)
+        const mport = portOf(src.replace(fn, changed))
+        const mf = mport.followUpsOf(REC443.body, R443)[1]
+        if (mutated.stdout !== mport.followUpBody(443, R443, mf, mport.placeOf(mport.ownershipRules(OWNERSHIP_MD), mf.where))) fail(`#643: under the ${name} mutation the command's output is not the mutated functions' direct result`)
+      }
+    }
+  }
+
   // 23. Verify's step-3 stop names its remedy (#321). On 2026-10-22 it stopped with the symptoms only,
   //     and the reader edited the issue body, which step 3 never reads. The stop now names each lane
   //     worktree whose tip is off the branch, with its tip and its tree-equal partner on the branch,
