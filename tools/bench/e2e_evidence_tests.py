@@ -144,9 +144,11 @@ class OnlyTheGateClassesCount(TestCase):
         self.assertEqual(["N-08.md"], run.drafts())
 
     def test_n28_is_not_defined_by_the_register_prose_that_names_it_as_next(self):
-        # contracts/test-ids.md names N-28 as the next number in a sentence. Only a table row
-        # defines an id, so a gate test claiming N-28 is refused today.
-        run = self.run_script([case(NEGATIVE + "CookiePlantingTests", "N28_plant_a_d_cookie")])
+        # Only a table row defines an id. Keep the prose-only register in this case's fixture
+        # so the check still proves that distinction after N-28 is numbered on the trunk (#538).
+        with tempfile.TemporaryDirectory() as d:
+            root = register(pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n")
+            run = self.run_script([case(NEGATIVE + "CookiePlantingTests", "N28_plant_a_d_cookie")], root=root)
         self.assertEqual(2, run.code, run.stdout)
         self.assertIn("N-28", run.stderr)
         self.assertIn("CookiePlantingTests.N28_plant_a_d_cookie", run.stderr)
