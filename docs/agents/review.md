@@ -97,9 +97,11 @@ Merge when nothing found is a defect: the spec is met, no assertion is unfailabl
 claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the
 merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
-review-queue workflow writes; the morning run files each one as an issue of its own (#292). Hold
-when a finding shows the change does not do what it says, or when the test that proves it cannot
-fail.
+review-queue workflow writes. The morning run files each row as an issue of its own while the pull
+request is still open (#292, #514); a row still unfiled when `tools/land.sh` merges is named by its
+`land:` warning (#573), and is filed by hand with the finding as the title and a
+`**Raised by:** #<pr>` line, the shape the morning's `filedAs` reads. Hold when a finding shows the
+change does not do what it says, or when the test that proves it cannot fail.
 
 ### The review record
 
@@ -154,3 +156,23 @@ A merge that cannot wait for a review, a red `main` or no session free, uses
 `tools/land.sh --unreviewed "<reason>"`. Its review stays open: a record naming the merged head is
 posted on the merged pull request when the review runs, its findings land in a follow-up, and
 `docs/agents/landing-work.md` → "Gates" says what waits for it.
+
+## Repairing findings
+
+A session that repairs what a review found works from the record, not from the PR's checkout.
+
+- **Read each finding from `<logDir>/pr-<n>/verdict.json`**, where the review-queue run's return
+  names `logDir`. The return's `prs` is cut short by the completion notice; its `summary` lines
+  are not.
+- **Repair what a commit can settle**: a test that cannot fail, a wrong comment or quotation, a
+  refusal that reports the wrong verdict. Leave to the human what a commit cannot: an approval, a
+  tracker spec source, a live proof, a scope question. Name each left one in the report.
+- **Work in a new worktree off `origin/<branch>`**, one commit per owner (A-05 refuses a commit
+  that crosses owners), message `Review of #<n>: <what>`, and push plain, never forced. A push
+  moves the head, so the record names an old one: the pull request needs a delta review of the
+  commits since it (#85) before `tools/land.sh`.
+- **A description is not a commit.** Correct a false claim in it with `gh pr edit`; it moves no
+  head. An integration branch such as `overnight/<date>` takes no repair commit from here.
+- **A brief for a repair agent states the finished result**: the changed lines, the sha and the
+  `tools/check.sh --full` verdict, quoted, in its final message. Verify a value it reports against
+  the branch or the tracker before relaying it.

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Gateway.TestHarness;
 
 namespace Gateway.E2ETests.Stack;
 
@@ -168,7 +169,7 @@ public sealed partial class CellAws(Cell cell, ICommandRunner runner)
     private static string AfterLast(string arn, char separator) => arn[(arn.LastIndexOf(separator) + 1)..];
 
     /// <summary>A twelve-digit run, which is how an account id appears in an AWS error.</summary>
-    [GeneratedRegex("[0-9]{12}")]
+    [GeneratedRegex("[0-9]{12}", RegexOptions.None, RegexTimeout.Milliseconds)]
     internal static partial Regex AccountId();
 }
 

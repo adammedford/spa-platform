@@ -1,0 +1,148 @@
+# The strict severities for the whole solution (ADR-0035 decision 5). Owner: integrator.
+#
+# Directory.Build.props switches every SDK rule on at warning, which TreatWarningsAsErrors makes an
+# error, so a diagnostic id with no line here is at error. This file holds the exceptions, as
+# per-id `dotnet_diagnostic.<id>.severity` lines only: no `dotnet_analyzer_diagnostic.category-*`
+# line is written here or in any other analyzer config (ADR-0035 decision 5; tools/check.sh fails
+# one). The relaxed tier's relaxations are .editorconfig's last *.cs section, not here.
+#
+# Two kinds of line:
+#   - A pending rule (decision 6): one that fires today, held at suggestion until every project is
+#     clean for it, with a comment naming its batch's promotion ticket. `grep pending .globalconfig`
+#     lists them, and the promotion pull request deletes its batch's lines. The file printing no
+#     pending line is the ramp's finished state.
+#   - A decline (decision 8): a rule at none or silent for good, with its reason. Declining another
+#     takes a new ADR.
+# The admitted packages (decision 9) enter at their own DLL defaults, so a package rule with no
+# line here is at that default: a warning, which is an error, or off. Their lines sit beside the
+# SDK's, by the same two kinds (#607).
+
+is_global = true
+
+# --- the declines (ADR-0035 decision 8) ---------------------------------------------------------
+
+# An ASP.NET Core host and tools/spactl have no SynchronizationContext, so ConfigureAwait changes
+# nothing; Microsoft's page says to suppress the rule entirely for application code.
+dotnet_diagnostic.CA2007.severity = none
+
+# Whitespace formatting, which .editorconfig sets and the map ruled out of enforcement.
+dotnet_diagnostic.IDE0055.severity = none
+
+# The house style (decision 7): expression bodies are mixed, and only churn satisfies IDE0022.
+dotnet_diagnostic.IDE0022.severity = silent
+
+# The house style (decision 7): an unused value need not be discarded; `_ =` hardens nothing.
+dotnet_diagnostic.IDE0058.severity = silent
+
+# The same awaits as CA2007, declined for the same reason: Meziantou's ConfigureAwait rule.
+dotnet_diagnostic.MA0004.severity = none
+
+# The same awaits as CA2007, declined for the same reason: VS Threading's ConfigureAwait rule.
+dotnet_diagnostic.VSTHRD111.severity = none
+
+# VSTHRD200 is the one Async-suffix rule, matching Platform.Abstractions' existing convention.
+dotnet_diagnostic.MA0137.severity = none
+
+# BannedSymbols.*.txt is the one banned-list mechanism (decision 10), not BannedSyntaxes.txt.
+dotnet_diagnostic.MA0240.severity = none
+
+# --- the pending rules (ADR-0035 decision 6) -------------------------------------------------
+
+# Batch 1, security (#611): every Security diagnostic id.
+dotnet_diagnostic.CA5351.severity = suggestion # pending #611
+dotnet_diagnostic.CA5359.severity = suggestion # pending #611
+dotnet_diagnostic.CA5394.severity = suggestion # pending #611
+dotnet_diagnostic.CA5399.severity = suggestion # pending #611
+dotnet_diagnostic.MA0009.severity = suggestion # pending #611
+
+# Batch 2 (#612): Usage, Maintainability, Naming and Interoperability.
+dotnet_diagnostic.CA1507.severity = suggestion # pending #612
+dotnet_diagnostic.CA1508.severity = suggestion # pending #612
+dotnet_diagnostic.CA1710.severity = suggestion # pending #612
+dotnet_diagnostic.CA1711.severity = suggestion # pending #612
+dotnet_diagnostic.CA1716.severity = suggestion # pending #612
+dotnet_diagnostic.CA1724.severity = suggestion # pending #612
+dotnet_diagnostic.CA1725.severity = suggestion # pending #612
+dotnet_diagnostic.CA2213.severity = suggestion # pending #612
+dotnet_diagnostic.CA2254.severity = suggestion # pending #612
+dotnet_diagnostic.MA0002.severity = suggestion # pending #612
+dotnet_diagnostic.MA0006.severity = suggestion # pending #612
+dotnet_diagnostic.MA0011.severity = suggestion # pending #612
+dotnet_diagnostic.MA0015.severity = suggestion # pending #612
+dotnet_diagnostic.MA0074.severity = suggestion # pending #612
+dotnet_diagnostic.MA0099.severity = suggestion # pending #612
+dotnet_diagnostic.VSTHRD002.severity = suggestion # pending #612
+dotnet_diagnostic.VSTHRD003.severity = suggestion # pending #612
+dotnet_diagnostic.VSTHRD101.severity = suggestion # pending #612
+dotnet_diagnostic.VSTHRD103.severity = suggestion # pending #612
+
+# Batch 3 (#613): Globalization, Performance and Design.
+dotnet_diagnostic.CA1001.severity = suggestion # pending #613
+dotnet_diagnostic.CA1002.severity = suggestion # pending #613
+dotnet_diagnostic.CA1010.severity = suggestion # pending #613
+dotnet_diagnostic.CA1031.severity = suggestion # pending #613
+dotnet_diagnostic.CA1032.severity = suggestion # pending #613
+dotnet_diagnostic.CA1034.severity = suggestion # pending #613
+dotnet_diagnostic.CA1044.severity = suggestion # pending #613
+dotnet_diagnostic.CA1062.severity = suggestion # pending #613
+dotnet_diagnostic.CA1064.severity = suggestion # pending #613
+dotnet_diagnostic.CA1068.severity = suggestion # pending #613
+dotnet_diagnostic.CA1305.severity = suggestion # pending #613
+dotnet_diagnostic.CA1307.severity = suggestion # pending #613
+dotnet_diagnostic.CA1308.severity = suggestion # pending #613
+dotnet_diagnostic.CA1812.severity = suggestion # pending #613
+dotnet_diagnostic.CA1819.severity = suggestion # pending #613
+dotnet_diagnostic.CA1822.severity = suggestion # pending #613
+dotnet_diagnostic.CA1848.severity = suggestion # pending #613
+dotnet_diagnostic.CA1849.severity = suggestion # pending #613
+dotnet_diagnostic.CA1859.severity = suggestion # pending #613
+dotnet_diagnostic.CA1861.severity = suggestion # pending #613
+dotnet_diagnostic.CA1873.severity = suggestion # pending #613
+dotnet_diagnostic.MA0008.severity = suggestion # pending #613
+dotnet_diagnostic.MA0016.severity = suggestion # pending #613
+dotnet_diagnostic.MA0022.severity = suggestion # pending #613
+dotnet_diagnostic.MA0023.severity = suggestion # pending #613
+dotnet_diagnostic.MA0048.severity = suggestion # pending #613
+# MA0049 is at error in Meziantou's defaults; its one finding waits on workstream 6's rename of
+# ArchitectureTests, one of batch 3's fix tickets (decision 6).
+dotnet_diagnostic.MA0049.severity = suggestion # pending #613
+dotnet_diagnostic.MA0051.severity = suggestion # pending #613
+dotnet_diagnostic.MA0054.severity = suggestion # pending #613
+dotnet_diagnostic.MA0084.severity = suggestion # pending #613
+dotnet_diagnostic.MA0158.severity = suggestion # pending #613
+
+# Batch 4 (#614): Reliability, and the residual Style findings, which are every IDE id and VSTHRD200.
+dotnet_diagnostic.CA2000.severity = suggestion # pending #614
+dotnet_diagnostic.CA2016.severity = suggestion # pending #614
+dotnet_diagnostic.CA2025.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0004.severity = suggestion # pending #614
+# IDE0005 does not run in a build without GenerateDocumentationFile, and at warning it fails
+# every project with EnableGenerateDocumentationFile instead; turning the documentation file
+# on surfaces 55 CS1573, CS1574, CS0419 and CS1734 findings, so it is the promotion's to do.
+dotnet_diagnostic.IDE0005.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0008.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0010.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0011.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0017.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0019.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0021.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0028.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0032.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0042.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0046.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0048.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0051.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0057.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0060.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0072.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0100.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0200.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0270.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0290.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0300.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0301.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0305.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0330.severity = suggestion # pending #614
+dotnet_diagnostic.IDE0370.severity = suggestion # pending #614
+dotnet_diagnostic.IDE1006.severity = suggestion # pending #614
+dotnet_diagnostic.VSTHRD200.severity = suggestion # pending #614

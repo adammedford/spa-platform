@@ -245,6 +245,15 @@ jobs:
           python3 -I tools/roadmap_tests.py
           python3 -I tools/roadmap.py --check
 
+      - name: The analyzer configs and every suppression keep ADR-0035's rules
+        # The build enforces each analyzer severity but not the shape of the files that set them: a
+        # relaxed security rule, a later .editorconfig section overriding the relaxed tier's, a
+        # category line or a suppression citing nothing all build green (#606). tools/check.sh runs
+        # the guard before every push; here it runs on what reaches main, after its companion.
+        run: |
+          python3 -I tools/analysis_guard_tests.py
+          python3 -I tools/analysis_guard.py
+
       - name: A-05's two rules hold
         # The ownership check is the one guard with no CI job of its own: it runs in the pre-push
         # hook, where a failure costs an amended commit instead of a red pull request. Its rules
@@ -407,6 +416,14 @@ jobs:
         # passing case lines are the one shape let through, and the terminal's --stream mode masks
         # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
+
+      - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
+        # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
+        # retires the unused default labels, the one write it cannot take back. Its companion runs the
+        # real script against a gh double: the derivation, the routes written, a short listing that
+        # must not read a label as unused, a failed write's verdict and the workflow's invocations.
+        # One case reads this checkout's tracked files, so a path the table does not cover fails here.
+        run: python3 -I tools/issue_labels_tests.py
 
       - name: A session's tail prints its last text turns and leaves out tool output and task notifications
         # A review or a morning reads what another session meant from the end of its transcript

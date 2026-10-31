@@ -99,6 +99,7 @@ spikes/g0/real-handler/vendor/ref/
 !.claude/workflows/pins-sweep_tests.mjs
 !.claude/workflows/gate-evidence_tests.mjs
 !.claude/workflows/confirm_draft.mjs
+!.claude/workflows/follow_up_body.mjs
 !.claude/workflows/fixtures/
 !.claude/skills/
 

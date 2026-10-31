@@ -147,8 +147,11 @@ first line is exactly one of `Decision: accept`, `Decision: accept with changes`
 as it stood when the decision was posted: if the draft comment was edited after that (its
 `updated_at` is later than the decision's `created_at`), the decision does not cover it, and the
 integrator asks again. A comment that departs from this form is not a decision comment: the
-integrator lane treats the request as undecided and relabels it `ready-for-human`. No parser reads
-the form; the integrator lane and the reviewer do.
+integrator lane treats the request as undecided and relabels it `ready-for-human`. One parser reads
+the form, for one purpose: `tools/decision_citation.py` reads the first two lines and the author of
+each comment on a change request a merge closes, so that `tools/land.sh` can refuse a merge body
+that cites no decision (#530, "Landing" below). Everything else the form decides, the integrator
+lane and the reviewer read.
 
 A scripted session never posts a comment whose first line begins `Decision:`. Its draft is headed
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
@@ -166,15 +169,21 @@ The commit that makes it cites the decision comment's URL as its `Authority:`
 (`docs/agents/landing-work.md` → "A commit that changes a steering document"), and
 `Authority: #<n>` naming a change request is refused, since anyone may file one. With no decision
 comment, the integrator relabels the request `ready-for-human` and stops. When the decision says
-`ADR: no`, the merge body states the why and cites the decision comment (#413).
+`ADR: no`, the merge body states the why and cites the decision comment (#413); `tools/land.sh`
+refuses a merge whose body lacks that comment's URL, naming the request and the URL, under
+`--unreviewed` too (#530). The why stays the reviewer's to judge.
 
 **Closing.** A request closes when its edit lands. Declined, it is closed as not planned, labelled
 `wontfix`, with a comment saying why; withdrawn, it is closed as not planned. A request decided but
 not yet landed is open.
 
 **The archived requests.** The files under `contracts/changes/` are the requests filed before
-change requests were issues. They are read-only records, cited by their id, and no file is added
-there. Their `**Status:**` lines, `moved to #NNN` included, are history.
+change requests were issues. They are closed records, cited by their id: no file is added there,
+and an edit to one needs an authority like any steering change (ADR-0032 decision 4), for a
+correction or an amendment a ticket's acceptance criteria or a confirmed answer asks for. A note
+that a decided item has landed is provenance, which lives in the merge body ("Where a decision
+lives", `docs/adr/README.md`), not in the file. Their `**Status:**` lines, `moved to #NNN`
+included, are history.
 
 ## The archive: tickets filed before ADR-0020
 

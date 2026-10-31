@@ -293,9 +293,9 @@ public sealed partial class DeployedSubsetTests
     internal static string[] LocalOnly(Dictionary<string, string> sources) =>
         [.. sources.Where(source => source.Value.Contains("LocalStack.StartAsync(", StringComparison.Ordinal)).Select(source => source.Key).Order(StringComparer.Ordinal)];
 
-    [GeneratedRegex(@"^\| (?<id>N-\d\d) \|.*\| (?<tier>[^|]+) \|\s*$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\| (?<id>N-\d\d) \|.*\| (?<tier>[^|]+) \|\s*$", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
     private static partial Regex Row();
 
-    [GeneratedRegex(@"^\| N-\d+ \|")]
+    [GeneratedRegex(@"^\| N-\d+ \|", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex RegisterId();
 }

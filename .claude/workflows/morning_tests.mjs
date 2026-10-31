@@ -284,11 +284,18 @@ function stub(env, scriptArgs, served) {
           ...(served.replay || {}),
         }
       } else if (label === 'comments') {
-        // The Apply phase's reader (#319): the Overnight issue's comments, every one, in order, as gh
-        // serves them. served.commentsIssue: the number it reports reading, as a reader that read the
-        // wrong issue would.
+        // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with the
+        // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
+        // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: issue ? issue.comments : [] }, error: served.commentsError || '' }
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
+        out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
+      } else if (label.startsWith('comments-batch:')) {
+        // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
+        // that returns another comment than the one named.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
+        out = { comments: at.map((i) => issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i]), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
         const head = v.head || HEAD
@@ -627,14 +634,17 @@ try {
   }
 
   // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
-  //    file, dispatches at most ten agents (nine before #319 moved the comments read into Apply), and
-  //    the return counts what ran.
+  //    file, dispatches at most ten agents besides the comments-batch body readers (nine before #319
+  //    moved the comments read into Apply; the readers are one per 24 KB of questions), and the
+  //    return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
     const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
     if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
-    if (labels.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    const core = labels.filter((l) => !l.startsWith('comments-batch:'))
+    if (core.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${core.length} agents besides the body readers (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    if (labels.length - core.length !== 1) fail(`budget: ${labels.length - core.length} body readers for a night whose questions fit one batch`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -1123,6 +1133,77 @@ try {
     if (ok.labels.filter((l) => l === 'comments').length !== 1) fail(`the comments were read ${ok.labels.filter((l) => l === 'comments').length} times`)
     const cp = ok.prompt('comments')
     if (!new RegExp(`gh issue view ${ISSUE} --json number,comments`).test(cp)) fail('the comments reader does not read the run\'s issue by number')
+    // The index returns no body: the jq the prompt hands the agent is run on gh's own shape, and what
+    // it prints is held to the fields and sizes the index promises, whatever the prompt's wording. The
+    // prose around the jq may name a body only to say there is none. (The stub above never runs the jq.)
+    const jqOf = /--jq '([^']*)'/.exec(cp)
+    if (!jqOf) fail('the comments index prompt carries no gh --jq filter to run')
+    else {
+      const canary = 'x'.repeat(300) + 'BODY-CANARY-' + 'z'.repeat(5000)
+      const fromGh = JSON.stringify({ number: ISSUE, comments: [
+        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'c', url: 'u3', body: 'é'.repeat(300) + canary },
+      ] })
+      const r = spawnSync('jq', ['-c', jqOf[1]], { input: fromGh, encoding: 'utf8' })
+      if (r.error || r.status !== 0) fail(`the comments index jq did not run (jq is needed for this check): ${r.error ? r.error.message : r.stderr}`)
+      else {
+        const out = JSON.parse(r.stdout)
+        const fields = ['author', 'bytes', 'createdAt', 'head', 'url']
+        if (out.number !== ISSUE || out.comments.length !== 3) fail(`the comments index jq returned ${r.stdout.slice(0, 200)}`)
+        for (const c of out.comments) {
+          if (Object.keys(c).sort().join() !== fields.join()) fail(`the comments index returns ${Object.keys(c).sort().join()}, not ${fields.join()}`)
+          if (c.head.length > 200 || c.head.includes('BODY-CANARY')) fail('the comments index returns more of a body than its first 200 characters')
+          if (typeof c.bytes !== 'number' || c.bytes < 5000) fail(`the comments index gives a size of ${c.bytes} for a body over 5000 bytes`)
+        }
+        if (out.comments[2].bytes !== Buffer.byteLength('é'.repeat(300) + canary)) fail(`the comments index counts ${out.comments[2].bytes} bytes, not the body's UTF-8 bytes`)
+        if (!out.comments[1].head.startsWith('## Questions: #1, issue-1, T\r')) fail('the comments index trims or rewrites the head the readers judge')
+      }
+    }
+    const prose = cp.replace(/--jq '[^']*'/, '')
+    const bodyWords = [...prose.matchAll(/(.{0,3})\bbod(?:y|ies)\b/g)]
+    if (!bodyWords.length || bodyWords.some((m) => !/no $/.test(m[1]))) fail(`the comments index prompt asks for bodies: ${bodyWords.map((m) => JSON.stringify(m[0])).join(', ')}`)
+    // The index picks the questions and Confirm comments, not the carried list (comment 4), and packs
+    // them in order into batches of at most BATCH_BYTES (a precaution after #659's 75 KB return was stopped
+    // by a safety classifier, twice; that size is the cause is not established).
+    const bp = ok.prompt('comments-batch:1')
+    if (!/\.comments\[0,1,2,4\]/.test(bp)) fail(`the batch reader does not read the questions and Confirm comments alone, in order: ${(/\.comments\[[^\]]*\]/.exec(bp) || [''])[0]}`)
+    const big = (n, kb) => comment(20 + n, `## Questions: ${cite(300 + n)}, issue-${300 + n}, Big ticket ${n}\n\n**Q${n}.** Big?\nRecommended: Yes.\n${PRE}\n${'x'.repeat(kb * 1000)}\n`, `2026-10-21T06:00:0${n}Z`)
+    const wide = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 10), big(2, 10), big(3, 30), CONFIRM]) })
+    const batches = wide.labels.filter((l) => l.startsWith('comments-batch:'))
+    if (batches.length !== 3) fail(`a 50 KB night: ${batches.length} batches, expected 3 of at most 24 KB: ${wide.labels.join(', ')}`)
+    const at = (k) => (/\.comments\[([\d,]+)\]/.exec(wide.prompt(`comments-batch:${k}`)) || ['', ''])[1]
+    if (at(1) !== '0,1' || at(2) !== '2' || at(3) !== '3') fail(`a 50 KB night: batches read ${[1, 2, 3].map(at).join(' | ')}, expected 0,1 | 2 | 3: a 30 KB comment rides alone`)
+    if (!wide.result.apply.answers[3]) fail('a 50 KB night: the questions of a later batch were not read')
+    // The index picks with the readers' own predicates (headingOf, isConfirm), so what they would
+    // read is never left out unread: a heading line ending \r, a heading after leading spaces, a
+    // Confirm after blank lines. A Confirm by anyone but Adam and a note are not read, so not fetched.
+    const crlf = { ...big(1, 0), body: big(1, 0).body.replace(/\n/g, '\r\n') }
+    const padded = { ...big(2, 0), body: ' '.repeat(300) + big(2, 0).body }
+    const lateConfirm = comment(40, '\n\n  Confirm Q1 to Q3 as pre-accepted.\n', '2026-10-21T08:00:00Z')
+    const echoed = { ...comment(41, 'Confirm Q1 to Q3 as pre-accepted.', '2026-10-21T08:30:00Z'), author: 'someone-else' }
+    const shaped = await execute(newRepo(), { date: DATE }, { issue: issueWith([crlf, padded, big(3, 0), lateConfirm, comment(42, 'A review note.', '2026-10-21T09:00:00Z'), echoed]) })
+    const shapedAt = (/\.comments\[([\d,]+)\]/.exec(shaped.prompt('comments-batch:1')) || ['', ''])[1]
+    if (shapedAt !== '0,1,2,3') fail(`shaped heads: the batch reads ${shapedAt}, expected 0,1,2,3 (a \\r heading, a padded heading, a plain one, a late Confirm; not the note nor another author's Confirm)`)
+    for (const q of [1, 2, 3]) if (!shaped.result.apply.answers[q]) fail(`shaped heads: Q${q} was not read: ${JSON.stringify(shaped.result.refusals)}`)
+    if (shaped.result.refusals.length) fail(`shaped heads: refused: ${JSON.stringify(shaped.result.refusals)}`)
+    // A head full of blanks cannot show the pattern the readers look for, so its comment is read whole.
+    const blank = { ...comment(43, ' '.repeat(250) + '\nA note, far down.\n', '2026-10-21T09:30:00Z') }
+    const blanked = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), blank]) })
+    const blankAt = (/\.comments\[([\d,]+)\]/.exec(blanked.prompt('comments-batch:1')) || ['', ''])[1]
+    if (blankAt !== '0,1') fail(`a head of blanks: the batch reads ${blankAt}, expected 0,1: a comment whose head cannot be judged is read whole`)
+    // A heading whose head is cut before its second comma cannot be judged on the head either: HEADING
+    // matches the whole body's first line but not its first 200 characters, and it has 40 or more
+    // visible characters, so only the cut-heading rule keeps it from being dropped without a word.
+    const longHeading = { ...comment(44, ' '.repeat(130) + `## Questions: ${cite(344)}, ` + 'f'.repeat(80) + ', Cut ticket\n\n**Q9.** Cut?\nRecommended: Yes.\n' + PRE + '\n', '2026-10-21T09:45:00Z') }
+    const cutAt = (r) => (/\.comments\[([\d,]+)\]/.exec(r.prompt('comments-batch:1')) || ['', ''])[1]
+    const cut = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longHeading]) })
+    if (cutAt(cut) !== '0,1') fail(`a heading cut before its second comma: the batch reads ${cutAt(cut)}, expected 0,1: a comment the readers would read is never dropped unread`)
+    if (!cut.result.apply.answers[9] && !cut.result.refusals.length) fail('a heading cut before its second comma: its question was neither read nor refused')
+    // A note of the same length, whose head is no heading's start, is still left out.
+    const longNote = comment(45, ' '.repeat(130) + 'A review note of some length, ' + 'n'.repeat(80) + '\nAnd more.\n', '2026-10-21T09:50:00Z')
+    const noted = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longNote]) })
+    if (cutAt(noted) !== '0') fail(`a long note: the batch reads ${cutAt(noted)}, expected 0: only a comment the readers could read is fetched`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
     if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)
@@ -1130,6 +1211,8 @@ try {
       ['a reader that returns nothing', { nothingFrom: ['comments'] }, /the comments reader returned nothing/],
       ['a reader that reports an error', { commentsError: 'HTTP 502' }, /could not read the comments of #226: HTTP 502/],
       ['a reader that read another issue', { commentsIssue: 98 }, /read the comments of #98, not #226/],
+      ['a body reader that returns nothing', { nothingFrom: ['comments-batch:1'] }, /were not all read: batch 1 \(.*\) returned nothing/],
+      ['a body reader that returns another comment', { batchSwap: true }, /were not all read: batch 1 returned .*, not /],
     ]) {
       const r = await execute(newRepo(), { date: DATE }, served)
       if (!r.result.refusals.some((x) => named.test(x)) || !named.test(r.result.handover.text)) fail(`${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.result.refusals)}`)
@@ -1478,6 +1561,134 @@ try {
         'An override opening "no" applies nothing:',
       ]
       for (const r of RULES) if (!guide.includes(r)) fail(`#491: docs/agents/landing-work.md does not say ${JSON.stringify(r)}`)
+    }
+  }
+
+  // 22b. A follow-up body from the command line (#643): follow_up_body.mjs, run with node over a pull
+  //      request number, a record URL, the record's body and a row of its Follow-ups table, prints the
+  //      body followUpBody returns for that row, byte for byte. It runs morning.js's own followUpsOf,
+  //      placeOf and followUpBody with OWNERSHIP.md as the follow-ups reader returns it: its output is
+  //      those functions' direct result, one row is held to a body written out here, and a mutation of
+  //      any of the three changes what it prints. A bad argument, or a record with no row there,
+  //      exits nonzero with a message and prints no body.
+  checks++
+  {
+    const CLI = path.join(here, 'follow_up_body.mjs')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'follow-up-body-'))
+    made.push(dir)
+    const recordFile = (body) => {
+      const f = path.join(dir, `record-${Math.random().toString(36).slice(2)}.md`)
+      fs.writeFileSync(f, body)
+      return f
+    }
+    const run = (args, { cliPath = CLI, input } = {}) => spawnSync(process.execPath, [cliPath, ...args.map(String)], { encoding: 'utf8', input })
+    if (!fs.existsSync(CLI)) fail('#643: .claude/workflows/follow_up_body.mjs does not exist')
+    else {
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const sectionOf = (s, name) => (new RegExp(`^// -+ ${name}\\n([\\s\\S]*?)\\n// -+ `, 'm').exec(s) || [])[1]
+      const portOf = (s) => new Function(`${['follow-ups, read here', 'follow-ups, owners and places', 'follow-ups, their bodies'].map((n) => sectionOf(s, n) || '').join('\n')}\nreturn { followUpsOf, ownershipRules, placeOf, followUpBody }`)()
+      const port = portOf(src)
+      const rules = port.ownershipRules(OWNERSHIP_MD)
+      const direct = (pr, url, body, k) => { const f = port.followUpsOf(body, url)[k - 1]; return port.followUpBody(pr, url, f, port.placeOf(rules, f.where)) }
+      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2]]
+
+      // The output is the direct result, byte for byte, for every row of both records.
+      for (const [pr, url, body, k] of CASES) {
+        const r = run([pr, url, recordFile(body), k])
+        const want = direct(pr, url, body, k)
+        if (r.status !== 0 || r.stdout !== want) fail(`#643: row ${k} of #${pr}'s record: exit ${r.status}, ${r.status === 0 ? 'the output is not followUpBody\'s direct result' : r.stderr}:\n${JSON.stringify(r.stdout)}\n${JSON.stringify(want)}`)
+      }
+      // A body from stdin is the same body.
+      const piped = run([443, R443, '-', 2], { input: REC443.body })
+      if (piped.status !== 0 || piped.stdout !== direct(443, R443, REC443.body, 2)) fail(`#643: the record read from stdin did not print row 2's body: exit ${piped.status}: ${piped.stderr}`)
+
+      // One row held to the body written out by hand: two paths of one owner, their code-span ticks
+      // and line suffix taken off, "this record" read as the record's own link.
+      const BODY_443_2 = [
+        `**Raised by:** #443, from its review record ${R443}`,
+        '**Owner:** ws3-identity',
+        '**Touches:** `tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`',
+        '',
+        '## What to build',
+        '',
+        `The review of #443 carried this finding rather than holding on it (Standards axis), first carried by ${R443}: ${FINDING_DEADLINE}, at tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\`. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+        '',
+        '## Acceptance criteria',
+        '',
+        `- [ ] ${FINDING_DEADLINE}: fixed, or declined with the reason in this issue's Answer.`,
+      ].join('\n')
+      const hand = run([443, R443, recordFile(REC443.body), 2])
+      if (hand.stdout !== BODY_443_2) fail(`#643: row 2 of #443's record is not the body written out by hand:\n${hand.stdout}`)
+      if (!/label needs-triage/.test(hand.stderr)) fail(`#643: row 2's stderr does not name its label needs-triage: ${hand.stderr}`)
+      const nopath = run([443, R443, recordFile(REC443.body), 3])
+      if (!/label ready-for-human: the finding names no repository path/.test(nopath.stderr)) fail(`#643: row 3, which names no path, is not named ready-for-human with why: ${nopath.stderr}`)
+
+      // Exits nonzero with a message and no body.
+      const NO_TABLE = `## Review\n\nFindings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge`
+      const bad = [
+        ['no arguments', [], 2],
+        ['three arguments', [443, R443, recordFile(REC443.body)], 2],
+        ['a pull request number that is not one', ['#443', R443, recordFile(REC443.body), 1], 2],
+        ['a record URL on another pull request', [443, R287[2], recordFile(REC443.body), 1], 2],
+        ['a record URL that is not a link', [443, 'this record', recordFile(REC443.body), 1], 2],
+        ['row 0', [443, R443, recordFile(REC443.body), 0], 2],
+        ['a row that is not a number', [443, R443, recordFile(REC443.body), 'first'], 2],
+        ['a missing record file', [443, R443, path.join(dir, 'missing.md'), 1], 2],
+        ['a body with no record line', [443, R443, recordFile(FOLLOW_UPS_443), 1], 2],
+        ['a record with no Follow-ups row', [443, R443, recordFile(NO_TABLE), 1], 1],
+        ['a row past the table\'s end', [443, R443, recordFile(REC443.body), 4], 1],
+      ]
+      for (const [label, args, code] of bad) {
+        const r = run(args)
+        if (r.status !== code || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected ${code}), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
+      }
+      // The inputs beside the command fail closed too (CODING_STANDARDS.md, "A check fails closed"): an
+      // OWNERSHIP.md with no block, none at all, or a morning.js missing a follow-ups section prints no
+      // body. Without the first, every row would print as ready-for-human with "no line owns" and exit 0.
+      const layout = (label, ownership, script) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'follow-up-body-layout-'))
+        made.push(root)
+        const wf = path.join(root, '.claude', 'workflows')
+        fs.mkdirSync(wf, { recursive: true })
+        fs.writeFileSync(path.join(wf, 'morning.js'), script)
+        fs.copyFileSync(CLI, path.join(wf, 'follow_up_body.mjs'))
+        if (ownership !== null) fs.writeFileSync(path.join(root, 'OWNERSHIP.md'), ownership)
+        const r = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(wf, 'follow_up_body.mjs') })
+        if (r.status !== 2 || r.stdout !== '' || !/^follow-up-body: error: \S/.test(r.stderr)) fail(`#643: ${label}: exit ${r.status} (expected 2), stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`)
+      }
+      layout('an OWNERSHIP.md with no ownership block', '# Ownership\n\nNo block here.\n', src)
+      layout('no OWNERSHIP.md', null, src)
+      layout('a morning.js with no "follow-ups, their bodies" section', OWNERSHIP_MD, src.replace(/^(\/\/ -+ )follow-ups, their bodies$/m, '$1their bodies'))
+
+      // The command is in the repository, and carries no copy of the three functions.
+      const ignored = spawnSync('git', ['-C', top, 'check-ignore', '-q', path.join('.claude', 'workflows', 'follow_up_body.mjs')], { encoding: 'utf8' })
+      if (ignored.status !== 1) fail(`#643: .gitignore ${ignored.status === 0 ? 'ignores' : 'could not be asked about'} .claude/workflows/follow_up_body.mjs, so a clone has no command${ignored.error ? `: ${ignored.error.message}` : ''}`)
+      if (/const (followUpsOf|ownershipRules|pathsOf|placeOf|followUpBody) =/.test(fs.readFileSync(CLI, 'utf8'))) fail('#643: follow_up_body.mjs carries its own copy of the follow-ups code')
+
+      // The command runs the script beside it: a mutation of each function changes what it prints. The
+      // copy sits in a checkout's layout, OWNERSHIP.md two folders up, as the command reads it.
+      const MUTANTS = [
+        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('axis: cells[1]', 'axis: cells[2]')],
+        ['placeOf', /^const placeOf = [\s\S]*?\n}\n/m, (fn) => fn.replace("label: 'needs-triage'", "label: 'ready-for-agent'")],
+        ['followUpBody', /^const followUpBody = [\s\S]*?\n\]\.join\('\\n'\)\n/m, (fn) => fn.replace("'## What to build'", "'## What to do'")],
+      ]
+      for (const [name, re, mutate] of MUTANTS) {
+        const fn = (re.exec(src) || [''])[0]
+        const changed = fn && mutate(fn)
+        if (!fn || changed === fn) { fail(`#643: the ${name} mutation changed nothing in morning.js`); continue }
+        const mroot = fs.mkdtempSync(path.join(os.tmpdir(), `follow-up-body-${name}-`))
+        made.push(mroot)
+        const mwf = path.join(mroot, '.claude', 'workflows')
+        fs.mkdirSync(mwf, { recursive: true })
+        fs.writeFileSync(path.join(mwf, 'morning.js'), src.replace(fn, changed))
+        fs.copyFileSync(CLI, path.join(mwf, 'follow_up_body.mjs'))
+        fs.writeFileSync(path.join(mroot, 'OWNERSHIP.md'), OWNERSHIP_MD)
+        const mutated = run([443, R443, recordFile(REC443.body), 2], { cliPath: path.join(mwf, 'follow_up_body.mjs') })
+        if (mutated.stdout === direct(443, R443, REC443.body, 2)) fail(`#643: the ${name} mutation of morning.js did not change the command's output, so it does not run the script's ${name}`)
+        const mport = portOf(src.replace(fn, changed))
+        const mf = mport.followUpsOf(REC443.body, R443)[1]
+        if (mutated.stdout !== mport.followUpBody(443, R443, mf, mport.placeOf(mport.ownershipRules(OWNERSHIP_MD), mf.where))) fail(`#643: under the ${name} mutation the command's output is not the mutated functions' direct result`)
+      }
     }
   }
 

@@ -3,6 +3,8 @@
 - **Status:** Accepted. **Amended 2026-10-21 by ADR-0027:** decision 1 also un-ignores the
   overnight script's test companion, its fixtures and the project skills under `.claude/skills/`;
   the other decisions are unchanged.
+  See #213 for the ticket that tracks the mock harness, which the body calls "#133's follow-up",
+  and the collect step of `.claude/workflows/overnight.js` for that step's current wording.
 - **Date:** 2026-10-21
 - **Deciders:** integrator
 - **Plan ref:** No decision row. #135, grilled Q1 to Q15 on its "## Grilling record" comment and

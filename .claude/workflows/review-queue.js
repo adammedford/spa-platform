@@ -111,6 +111,8 @@ export const meta = {
 // one line per pull request with its number, head, verdict, record URL, verified finding and mutation
 // counts and the did-not-fail rows named, because the completion notice cuts a return short and on
 // #287's runs the verdict and the mutation rows were past the cut. A halted run's summary is [].
+// Each pull request's findings, verified and suspected, are in <logDir>/pr-<n>/verdict.json, which a
+// repair session reads in place of the cut return (docs/agents/review.md -> "Repairing findings").
 //
 // A date later than the run's (#525). A description and its commits are a dated record of what was
 // verified, and a date later than the review's own cannot be true when the review reads it (#507's
@@ -765,7 +767,7 @@ const earlierLines = (d, v) => (d && d.verdict === 'hold'
   : [])
 const followUpLines = (list) => ['## Follow-ups', '',
   ...(list.length
-    ? ['Carried findings that name no open ticket; the morning run files each one (#292).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
+    ? ['Carried findings that name no open ticket; the morning run files each one while this pull request is still open (#292, #514), and `tools/land.sh` names any still unfiled when it merges, to be filed by hand (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
       ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD].map(cell).join(' | ')} |`)]
     : ['- None: the review carries no finding that names no open ticket.']),
   '']

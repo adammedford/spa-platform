@@ -39,11 +39,11 @@ export const meta = {
 //                          Check phase's candidate for that family, so a named bump is trialled.
 // The documented invocation names a group and rotates (#82 -> "Arguments"): the framework group
 // [aspnetcore, mvc-testing, fake-clock, sdk], the identity-and-proxy group [duende, yarp, playwright],
-// and the rest [aws-sdk, opentelemetry, xunit, schema-validator].
+// and the rest [aws-sdk, opentelemetry, xunit, schema-validator, analyzers]; analyzers joined under #607.
 const A = args || {}
 const KNOWN_ARGS = ['repo', 'wt', 'date', 'families', 'maxParallel', 'maxIssues', 'maxAgents', 'dryRun', 'terraform', 'moves']
 // The families of tools/pins_inventory.py, by id; the companion holds the two lists equal.
-const FAMILIES = ['aspnetcore', 'duende', 'yarp', 'aws-sdk', 'opentelemetry', 'xunit', 'playwright', 'schema-validator', 'fake-clock', 'mvc-testing', 'sdk']
+const FAMILIES = ['aspnetcore', 'duende', 'yarp', 'aws-sdk', 'opentelemetry', 'xunit', 'playwright', 'schema-validator', 'fake-clock', 'mvc-testing', 'analyzers', 'sdk']
 const TERRAFORM = 'terraform'
 const badArguments = (a) => {
   const bad = []
@@ -307,7 +307,8 @@ Return family, base, sdk (the Terraform version line), scope, outcome, logPath $
 const FAMILY_NAMES = {
   aspnetcore: 'ASP.NET Core and IdentityModel', duende: 'Token management (Duende)', yarp: 'YARP', 'aws-sdk': 'AWS SDK',
   opentelemetry: 'OpenTelemetry', xunit: 'The xunit.v3 set', playwright: 'Playwright', 'schema-validator': 'The schema validator',
-  'fake-clock': 'The fake clock', 'mvc-testing': 'The MVC test host', sdk: 'The SDK', terraform: 'Terraform providers',
+  'fake-clock': 'The fake clock', 'mvc-testing': 'The MVC test host', analyzers: 'The analyzer packages', sdk: 'The SDK',
+  terraform: 'Terraform providers',
 }
 const versionsText = (vs) => [...new Set(vs)].sort(vcmp).join(', ')
 const moveLine = (moves) => (moves.length ? [...moves].sort((a, b) => (a.id < b.id ? -1 : 1)).map((m) => `${m.id} ${m.from} -> ${m.to}`).join('; ') : 'no move')

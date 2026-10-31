@@ -48,11 +48,13 @@ public sealed class ArchitectureTests
     [Fact]
     public void A04_is_read_from_package_references_that_were_actually_parsed()
     {
-        // A-04 is vacuous in this tree: Platform.Identity is a stub and references no package at
-        // all until task 3.8 adds the token-management one. So the rule passes today whether the
-        // parser works or not, and it would keep passing if the parser silently returned nothing
-        // after 3.8 lands. This asserts that package references are read, against two projects that
-        // do have one.
+        // A-04 asks that no project but Platform.Identity names the token-management package, so it
+        // passes on an empty parse: a parser that silently returned no package references would
+        // leave the rule green. This asserts that package references are read. The first line is
+        // the case A-04 is about, and it goes through the rule's own constant, so the name the rule
+        // looks for is proven to be the one Platform.Identity's project file spells; the other two
+        // are projects outside the rule that also have one.
+        Assert.Contains(ReferenceRules.TokenManagementPackage, ProjectGraph.Solution[ReferenceRules.Identity].PackageReferences);
         Assert.Contains("Yarp.ReverseProxy", ProjectGraph.Solution["Platform.Proxy"].PackageReferences);
         Assert.Contains("JsonSchema.Net", ProjectGraph.Solution["Contracts.Tests"].PackageReferences);
     }

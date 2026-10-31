@@ -401,6 +401,21 @@ else
   missing python3 "the roadmap"
 fi
 
+# --- the analysis guard -----------------------------------------------------------------------
+#
+# The build enforces every analyzer severity, but not the shape of the files that set them, nor the
+# shape of a suppression: a relaxation of a security rule, a later .editorconfig section that
+# overrides the relaxed tier's, a category line, or a suppression citing nothing would all leave the
+# build green (ADR-0035 decisions 5, 12 and 13; #606). tools/analysis_guard.py says what it fails
+# and why. It reads the tree, not the diff, so it is never skipped; its exit 2, a tree it could not
+# read, fails here as surely as a finding.
+if command -v python3 > /dev/null; then
+  python3 -I tools/analysis_guard.py \
+    || fail "the analyzer configs or a suppression break ADR-0035's rules, or were not judged."
+else
+  missing python3 "the analysis guard"
+fi
+
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
 # iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
@@ -480,7 +495,7 @@ fi
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
