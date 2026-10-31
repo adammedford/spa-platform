@@ -12,8 +12,10 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 ARG TARGETARCH
 WORKDIR /src
 
-# The build files first, so a source change does not re-resolve every package.
-COPY global.json nuget.config Directory.Build.props Directory.Packages.props ./
+# The build files first, so a source change does not re-resolve every package. The two analyzer
+# configs come with them, so the image publishes under the analysis every other build runs
+# (ADR-0035); Directory.Build.props switches analysis on only where .globalconfig is (#606).
+COPY global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig ./
 COPY src/Gateway/Gateway.csproj src/Gateway/
 COPY src/Platform.Abstractions/Platform.Abstractions.csproj src/Platform.Abstractions/
 COPY src/Platform.Hosting/Platform.Hosting.csproj src/Platform.Hosting/

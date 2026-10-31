@@ -18,7 +18,10 @@ naming each finding on its own line before a count, when:
   nothing, and its reach into a package's rules that share the category name is undocumented;
 - a `[SuppressMessage]` has no `Justification`, or one that cites no id (decision 12);
 - a `#pragma warning disable` cites no id on its own line (decision 12);
-- any `GlobalSuppressions.cs` exists (#594-Q7; decision 4).
+- any `GlobalSuppressions.cs` exists (#594-Q7; decision 4);
+- the root `.globalconfig` is not tracked: `Directory.Build.props` switches analysis on only where
+  it is (so that an image build copying the props without it publishes under the SDK's defaults),
+  and a tree without it would build green with no analysis at all.
 
 An id is an evidence id (`S-`, `R-`), a test id (`F-`, `N-`, `P-`, `A-`), an issue (`#N`) or an ADR
 (`ADR-NNNN`). Whether the citation justifies the suppression is review's to judge, not this file's
@@ -337,6 +340,9 @@ def judge(top: pathlib.Path) -> list[str]:
             judge_csharp(path, read(top, path), findings)
     if ".editorconfig" not in paths:
         findings.append(f".editorconfig: no root .editorconfig, so no relaxed-tier section {RELAXED_HEADER}.")
+    if ".globalconfig" not in paths:
+        findings.append(".globalconfig: no root .globalconfig; Directory.Build.props switches analysis on only "
+                        "where it is, so the build would run without analysis (ADR-0035 decision 5).")
     return findings
 
 

@@ -89,6 +89,12 @@ class Guard(unittest.TestCase):
         (self.repo / "src").mkdir()
         self.assertFails(self.run_guard(cwd=self.repo / "src"), "src/App/GlobalSuppressions.cs")
 
+    def test_no_root_globalconfig_fails(self) -> None:
+        # Directory.Build.props switches analysis on only where .globalconfig is, so a tree without it
+        # would build green with no analysis at all.
+        del self.files[".globalconfig"]
+        self.assertFails(self.run_guard(), "no root .globalconfig")
+
     # --- the relaxed tier's section (#589-Q8, ADR-0035 decision 13) ----------------------------
 
     def test_the_relaxed_section_missing_fails(self) -> None:

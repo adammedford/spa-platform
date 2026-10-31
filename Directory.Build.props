@@ -21,8 +21,13 @@
        AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
        rules' config only when the two differ (or the modes do), so equal values turn every IDE rule
        off without a word (#588). 10.0-all is the same level and bucket as 10-all, written so it
-       differs. -->
-  <PropertyGroup>
+       differs.
+       The settings apply only where the root .globalconfig is beside this file. Every checkout has
+       it, and tools/analysis_guard.py fails a tree without it, so no build here runs without them;
+       an image build that copies this file and not the analyzer configs, as fixtures/MockApi's and
+       tools/bench/floor's Dockerfiles do, publishes under the SDK's defaults, as before #606, rather
+       than with every rule at error and none of the exceptions. -->
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory).globalconfig')">
     <AnalysisLevel>10-all</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
     <AnalysisLevelSecurity>10-all</AnalysisLevelSecurity>
