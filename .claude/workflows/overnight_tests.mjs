@@ -1077,6 +1077,9 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
     const item = c.prompt.split('\n').find((l) => l.includes('Claimed branches to merge (')) || ''
     if (!item.includes(MERGE_TREE)) fail(`#628: the report's "Claimed branches to merge" item does not run ${MERGE_TREE} against each open pull request it names`)
     if (!item.includes('list every file that conflicts') || !item.includes('back-merges main before its review')) fail('#628: the report\'s "Claimed branches to merge" item does not list the conflicting files and say which pull request lands first and which back-merges main')
+    // A merge-tree that could not run (first line not a tree id; a missing head exits 1, as a conflict does) must not
+    // read as a clean merge (CODING_STANDARDS.md, "A check fails closed").
+    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s "Claimed branches to merge" item lets a merge-tree that failed to run read as "none conflict"')
     const morning = c.prompt.split('\n').find((l) => l.includes('- Morning steps: ')) || ''
     if (!morning.includes(ORDER)) fail('#628: the report\'s Morning steps do not take the landing order from "Claimed branches to merge"')
   }
