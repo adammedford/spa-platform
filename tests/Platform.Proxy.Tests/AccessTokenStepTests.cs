@@ -22,7 +22,7 @@ public sealed class AccessTokenStepTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, Orders(listener));
         gateway.Tokens.Result = new AccessTokenResult.Unauthenticated();
-        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
 
         using HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
@@ -41,7 +41,7 @@ public sealed class AccessTokenStepTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, Orders(listener));
         gateway.Tokens.Result = new AccessTokenResult.SessionEnded();
-        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
 
         using HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Post, "app1.spa-poc.test", "/api/orders/items"), Ct);
@@ -61,7 +61,7 @@ public sealed class AccessTokenStepTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(Ct, Orders(listener));
         gateway.Tokens.Result = new AccessTokenResult.ProviderUnavailable();
-        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
 
         using HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);
@@ -140,7 +140,7 @@ public sealed class AccessTokenStepTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(
             Ct, new ProxyHostOptions { TokenSource = false, Telemetry = true }, Orders(listener));
-        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
         using HttpRequestMessage request = gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items");
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer from-the-browser");
 
