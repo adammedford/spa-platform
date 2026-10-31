@@ -48,13 +48,6 @@ dotnet_diagnostic.MA0240.severity = none
 
 # --- the pending rules (ADR-0035 decision 6) -------------------------------------------------
 
-# Batch 1, security (#611): every Security diagnostic id.
-dotnet_diagnostic.CA5351.severity = suggestion # pending #611
-dotnet_diagnostic.CA5359.severity = suggestion # pending #611
-dotnet_diagnostic.CA5394.severity = suggestion # pending #611
-dotnet_diagnostic.CA5399.severity = suggestion # pending #611
-dotnet_diagnostic.MA0009.severity = suggestion # pending #611
-
 # Batch 2 (#612): Usage, Maintainability, Naming and Interoperability.
 dotnet_diagnostic.CA1507.severity = suggestion # pending #612
 dotnet_diagnostic.CA1508.severity = suggestion # pending #612
