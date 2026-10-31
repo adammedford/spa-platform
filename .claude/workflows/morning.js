@@ -52,17 +52,22 @@ export const meta = {
 // verify agent and writes nothing. It fails only on a question number no questions comment yields; a
 // leading "no" is a normal override, listed and never a failure.
 //
-// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments reader, 1 classifier and
-// at most maxParallel appliers, Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: ten at
-// the default. The issue lookup is the Replay agent's first step, not an agent of its own; `after` is
+// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, one body reader
+// per batch of the questions and Confirm comments, 1 classifier and at most maxParallel appliers,
+// Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: ten at the default, besides the body
+// readers. The issue lookup is the Replay agent's first step, not an agent of its own; `after` is
 // one agent. A re-run whose open pull request's description names an older head than the branch's
 // adds one, the description writer (#300), so such a run may take eleven.
 //
 // The comments are read by the phase that uses them (#319). Replay once returned the issue's body and
 // every comment verbatim, and on 2026-10-22, with no pending-writes file, it took 7.4 minutes and 108k
 // tokens, most of it carrying sheets of 263 questions through its return. Replay now checks for the
-// pending-writes file before any replay step and returns no comment; Apply's reader returns them,
-// every one, in order, for the questions, the Confirm comments and the hand-over's open lists.
+// pending-writes file before any replay step and returns no comment; Apply's readers return them, for
+// the questions, the Confirm comments and the hand-over's open lists. On 2026-10-31 one reader could
+// not hand back #659's eleven comments, 77 KB verbatim, in one return, twice, while each comment came
+// back whole alone; so an index agent returns each comment's metadata and first line with no body,
+// the script picks the questions and Confirm comments, and one reader per batch of at most
+// BATCH_BYTES returns those bodies.
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
@@ -216,13 +221,19 @@ const REPLAY = {
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
-const COMMENTS_READ = {
+const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, firstLine: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'firstLine'] }
+const COMMENTS_INDEX = {
   type: 'object',
   properties: {
-    issue: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: COMMENT } }, required: ['number', 'comments'] },
+    issue: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: COMMENT_INDEXED } }, required: ['number', 'comments'] },
     error: { type: 'string' },
   },
   required: ['issue', 'error'],
+}
+const COMMENTS_BATCH = {
+  type: 'object',
+  properties: { comments: { type: 'array', items: COMMENT }, error: { type: 'string' } },
+  required: ['comments', 'error'],
 }
 const VERIFY = {
   type: 'object',
@@ -1015,16 +1026,41 @@ Return every field: lanes from the issue's rows (issue, task, outcome, complete,
 
 // Its agent writes nothing anywhere and keeps no phase file, since a rerun must read the comments as
 // they are then, so it carries these rules rather than the house rules (as the draft check's does).
-const commentsPrompt = (issue) => `Comments: read the Overnight issue's comments for Apply and return them verbatim (#319). You read; the script reads the questions and the Confirm comments from them.
-
-Rules (a comments read; you write nothing anywhere):
+const COMMENTS_RULES = `Rules (a comments read; you write nothing anywhere):
 - Write no file, anywhere, and post, edit, file or close nothing on GitHub: use only \`gh issue view\`, with \`cd ${REPO} &&\` in front so it resolves this repository.
-- Never commit, checkout, switch, stash, reset or build in ${REPO}, and make no worktree.
-- Never quote a secret, token, cookie, code or state value in anything you return but the comments, verbatim.
+- Never commit, checkout, switch, stash, reset or build in ${REPO}, and make no worktree.`
+const commentsPrompt = (issue) => `Comments: index the Overnight issue's comments for Apply, with no body (#319). You read; the script picks the comments it needs and has them read in batches.
 
-1. \`cd ${REPO} && gh issue view ${issue} --json number,comments\`. issue carries its number, and comments as {author: the login, createdAt, url, body}, every one, in order, each body verbatim, byte for byte.
+${COMMENTS_RULES}
+- Never quote a secret, token, cookie, code or state value in anything you return.
+
+1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), firstLine: ((.body | split("\\n") | map(select(test("\\\\S"))) | .[0]) // "" | .[0:120])}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, firstLine}. Return no body.
 2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
 Return issue and error.`
+const batchPrompt = (issue, at) => `Comments: return ${at.length === 1 ? 'one comment' : `${at.length} comments`} of the Overnight issue verbatim for Apply (#319). You read; the script reads the questions and the Confirm comments from them.
+
+${COMMENTS_RULES}
+- Never quote a secret, token, cookie, code or state value in anything you return but the comments, verbatim.
+
+1. \`cd ${REPO} && gh issue view ${issue} --json comments --jq '[.comments[${at.join(',')}] | {author: .author.login, createdAt, url, body}]'\`. comments is its output: ${at.length} comment(s), in that order, each as {author, createdAt, url, body}, each body verbatim, byte for byte.
+2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
+Return comments and error.`
+// The bodies a batch reader carries back: a return of all of #659's 77 KB failed twice on 2026-10-31,
+// while its 16 KB Confirm comment came back whole alone. A comment larger than this is a batch alone.
+const BATCH_BYTES = 24000
+// The comments Apply reads (readQuestions, readConfirmations), picked from the index by first line,
+// in order, and packed into batches of at most BATCH_BYTES.
+const batchesOf = (indexed) => {
+  const out = []
+  let cur = null
+  indexed.forEach((c, i) => {
+    const line = String(c.firstLine || '')
+    if (!HEADING.test(line) && !(c.author === ADAM && /^Confirm\b/.test(line))) return
+    if (!cur || cur.bytes + (c.bytes || 0) > BATCH_BYTES) { cur = { at: [], urls: [], bytes: 0 }; out.push(cur) }
+    cur.at.push(i); cur.urls.push(c.url); cur.bytes += c.bytes || 0
+  })
+  return out
+}
 
 const classifyPrompt = (date, issue, questions, dry, phaseKey) => {
   const p = paths(date)
@@ -1346,13 +1382,32 @@ phase('Apply')
 // The comments, read here by the phase that uses them (#319), whatever Verify said: the hand-over's open
 // lists come from them too. A read that failed is named and nothing is sorted or applied, never read
 // as an issue with no questions and no Confirm comment (CODING_STANDARDS.md -> "A check fails closed").
-const cr = await run(commentsPrompt(ISSUE), { label: 'comments', phase: 'Apply', schema: COMMENTS_READ })
-const commentsRefusal = !cr ? `the comments reader returned nothing: no question or Confirm comment of #${ISSUE} was read, so nothing was sorted or applied; relaunch to apply`
+const cr = await run(commentsPrompt(ISSUE), { label: 'comments', phase: 'Apply', schema: COMMENTS_INDEX })
+let commentsRefusal = !cr ? `the comments reader returned nothing: no question or Confirm comment of #${ISSUE} was read, so nothing was sorted or applied; relaunch to apply`
   : cr.error ? `the comments reader could not read the comments of #${ISSUE}: ${cr.error}; nothing was sorted or applied`
     : cr.issue.number !== ISSUE ? `the comments reader read the comments of #${cr.issue.number}, not #${ISSUE}; nothing was sorted or applied`
       : ''
+// Every batch is read whole or the read fails: a body missing, or one from another comment than the
+// index named there, is named, and nothing is sorted from a partial read.
+let comments = []
+if (!commentsRefusal) {
+  const batches = batchesOf(cr.issue.comments || [])
+  const got = await parallel(batches.map((b, k) => () => run(batchPrompt(ISSUE, b.at), { label: `comments-batch:${k + 1}`, phase: 'Apply', schema: COMMENTS_BATCH })))
+  const bad = []
+  batches.forEach((b, k) => {
+    const g = got[k]
+    const urls = g && !g.error ? (g.comments || []).map((c) => c.url) : []
+    if (!g) bad.push(`batch ${k + 1} (${b.urls.join(', ')}) returned nothing`)
+    else if (g.error) bad.push(`batch ${k + 1} (${b.urls.join(', ')}): ${g.error}`)
+    else if (urls.join(' ') !== b.urls.join(' ')) bad.push(`batch ${k + 1} returned ${urls.join(', ') || 'no comment'}, not ${b.urls.join(', ')}`)
+    else comments.push(...g.comments)
+  })
+  if (bad.length) {
+    commentsRefusal = `the comments of #${ISSUE} were not all read: ${bad.join('; ')}; nothing was sorted or applied; relaunch to apply`
+    comments = []
+  }
+}
 if (commentsRefusal) refusals.push(commentsRefusal)
-const comments = commentsRefusal ? [] : (cr.issue.comments || [])
 const read = readQuestions(comments)
 refusals.push(...read.refusals)
 const conf = readConfirmations(comments)

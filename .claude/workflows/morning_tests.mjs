@@ -284,11 +284,18 @@ function stub(env, scriptArgs, served) {
           ...(served.replay || {}),
         }
       } else if (label === 'comments') {
-        // The Apply phase's reader (#319): the Overnight issue's comments, every one, in order, as gh
-        // serves them. served.commentsIssue: the number it reports reading, as a reader that read the
-        // wrong issue would.
+        // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with no
+        // body. served.commentsIssue: the number it reports reading, as a reader that read the wrong
+        // issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: issue ? issue.comments : [] }, error: served.commentsError || '' }
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), firstLine: (c.body.split('\n').find((l) => /\S/.test(l)) || '').slice(0, 120) }))
+        out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
+      } else if (label.startsWith('comments-batch:')) {
+        // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
+        // that returns another comment than the one named.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
+        out = { comments: at.map((i) => issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i]), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
         const head = v.head || HEAD
@@ -634,7 +641,9 @@ try {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
     const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
     if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
-    if (labels.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${labels.length} agents (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    const core = labels.filter((l) => !l.startsWith('comments-batch:'))
+    if (core.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${core.length} agents besides the body readers (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    if (labels.length - core.length !== 1) fail(`budget: ${labels.length - core.length} body readers for a night whose questions fit one batch`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -1123,6 +1132,18 @@ try {
     if (ok.labels.filter((l) => l === 'comments').length !== 1) fail(`the comments were read ${ok.labels.filter((l) => l === 'comments').length} times`)
     const cp = ok.prompt('comments')
     if (!new RegExp(`gh issue view ${ISSUE} --json number,comments`).test(cp)) fail('the comments reader does not read the run\'s issue by number')
+    if (/\{author, createdAt, url, body\}/.test(cp)) fail('the comments index returns bodies, so one return carries every comment again')
+    // The index picks the questions and Confirm comments, not the carried list (comment 4), and packs
+    // them in order into batches of at most BATCH_BYTES (#659's 77 KB failed as one return).
+    const bp = ok.prompt('comments-batch:1')
+    if (!/\.comments\[0,1,2,4\]/.test(bp)) fail(`the batch reader does not read the questions and Confirm comments alone, in order: ${(/\.comments\[[^\]]*\]/.exec(bp) || [''])[0]}`)
+    const big = (n, kb) => comment(20 + n, `## Questions: ${cite(300 + n)}, issue-${300 + n}, Big ticket ${n}\n\n**Q${n}.** Big?\nRecommended: Yes.\n${PRE}\n${'x'.repeat(kb * 1000)}\n`, `2026-10-21T06:00:0${n}Z`)
+    const wide = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 10), big(2, 10), big(3, 30), CONFIRM]) })
+    const batches = wide.labels.filter((l) => l.startsWith('comments-batch:'))
+    if (batches.length !== 3) fail(`a 50 KB night: ${batches.length} batches, expected 3 of at most 24 KB: ${wide.labels.join(', ')}`)
+    const at = (k) => (/\.comments\[([\d,]+)\]/.exec(wide.prompt(`comments-batch:${k}`)) || ['', ''])[1]
+    if (at(1) !== '0,1' || at(2) !== '2' || at(3) !== '3') fail(`a 50 KB night: batches read ${[1, 2, 3].map(at).join(' | ')}, expected 0,1 | 2 | 3: a 30 KB comment rides alone`)
+    if (!wide.result.apply.answers[3]) fail('a 50 KB night: the questions of a later batch were not read')
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
     if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)
@@ -1130,6 +1151,8 @@ try {
       ['a reader that returns nothing', { nothingFrom: ['comments'] }, /the comments reader returned nothing/],
       ['a reader that reports an error', { commentsError: 'HTTP 502' }, /could not read the comments of #226: HTTP 502/],
       ['a reader that read another issue', { commentsIssue: 98 }, /read the comments of #98, not #226/],
+      ['a body reader that returns nothing', { nothingFrom: ['comments-batch:1'] }, /were not all read: batch 1 \(.*\) returned nothing/],
+      ['a body reader that returns another comment', { batchSwap: true }, /were not all read: batch 1 returned .*, not /],
     ]) {
       const r = await execute(newRepo(), { date: DATE }, served)
       if (!r.result.refusals.some((x) => named.test(x)) || !named.test(r.result.handover.text)) fail(`${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.result.refusals)}`)
