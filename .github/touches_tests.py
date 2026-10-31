@@ -27,18 +27,34 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
 
+    def test_the_analyzer_configs_trigger_the_build(self):
+        # The build enforces every analyzer severity, so a change to the files that set them is proved
+        # by building: a ramp batch's promotion deletes pending lines from .globalconfig alone (#606).
+        for path in (".globalconfig", ".editorconfig", "build/strict.globalconfig"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+                self.assertEqual(1, self.classify("workflows", [path]))
+        for path in ("docs/.editorconfig", ".globalconfig.bak", ".editorconfig.orig"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("build", [path]))
+
+    def test_the_banned_symbol_lists_trigger_the_build(self):
+        # A list's entry is an RS0030 error the build enforces, and an id that names no symbol bans
+        # nothing without a word, so only a build proves a change to one (#608).
+        for path in ("BannedSymbols.Shipping.txt", "BannedSymbols.NoToken.txt"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+        for path in ("docs/BannedSymbols.Shipping.txt", "BannedSymbols.Shipping.txt.orig"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("build", [path]))
+
     def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
         # The build half builds the gateway's image too, and .dockerignore decides its context (#210).
         self.assertEqual(0, self.classify("build", [".dockerignore"]))
         self.assertEqual(1, self.classify("terraform", [".dockerignore"]))
         self.assertEqual(1, self.classify("build", ["docs/.dockerignore"]))
-
-    def test_analyzer_configuration_alone_triggers_the_build(self):
-        for path in (".editorconfig", ".globalconfig"):
-            with self.subTest(path=path):
-                self.assertEqual(0, self.classify("build", [path]))
-                self.assertEqual(1, self.classify("terraform", [path]))
-                self.assertEqual(1, self.classify("workflows", [path]))
 
     def test_documentation_alone_triggers_neither_half(self):
         for half in ("build", "terraform"):

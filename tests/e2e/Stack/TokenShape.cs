@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Gateway.TestHarness;
 
 namespace Gateway.E2ETests.Stack;
 
@@ -10,7 +11,7 @@ public static partial class TokenShape
     /// provider's access and ID tokens are JWTs, so one from any source is caught by its shape as well as
     /// by value.
     /// </summary>
-    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")]
+    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", RegexOptions.None, RegexTimeout.Milliseconds)]
     public static partial Regex Jwt();
 
     /// <summary>Every token value the provider issued in this run, access and refresh, which the browser must hold none of.</summary>

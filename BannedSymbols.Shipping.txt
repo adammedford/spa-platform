@@ -1,0 +1,37 @@
+// Banned in every strict-tier project (ADR-0035 decision 10). Owner: integrator.
+// Directory.Build.props attaches this file as an AdditionalFile where SpaRelaxedTier is false;
+// BannedApiAnalyzers reports a use as RS0030, an error under TreatWarningsAsErrors.
+// An id that names no symbol bans nothing and reports nothing, so a new line is proved by a
+// throwaway call that fails the build, as #608 proved these.
+
+// The sinks that go around the logger.
+T:System.Console;write through ILogger, so LogFloors, Redaction and N-16 see it
+T:System.Diagnostics.Debug;write through ILogger, so LogFloors, Redaction and N-16 see it
+T:System.Diagnostics.Trace;write through ILogger, so LogFloors, Redaction and N-16 see it
+
+// The primitives "custom cryptography" means, by type. SHA256.HashData, RandomNumberGenerator,
+// CryptographicOperations and Data Protection stay allowed, so the namespace is not banned: the
+// format cannot allow a type back inside a banned namespace. MD5, SHA1 and DES are CA5350's and
+// CA5351's, and System.Random is CA5394's.
+T:System.Security.Cryptography.Aes;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.AesGcm;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.AesCcm;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.ChaCha20Poly1305;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMAC;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACMD5;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA1;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA256;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA384;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA512;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA3_256;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA3_384;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.HMACSHA3_512;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.RSA;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.ECDsa;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.ECDiffieHellman;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.DSA;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.Rfc2898DeriveBytes;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.ICryptoTransform;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.CryptoStream;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.SymmetricAlgorithm;no custom cryptography: use Data Protection or a supported library
+T:System.Security.Cryptography.AsymmetricAlgorithm;no custom cryptography: use Data Protection or a supported library

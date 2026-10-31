@@ -13,6 +13,83 @@
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
+  <!-- Source analysis in every build, dotnet build, tools/check.sh and CI alike (ADR-0035 decisions 5
+       and 14). Every SDK rule is on, at warning, which TreatWarningsAsErrors makes an error; the root
+       .globalconfig holds the per-id exceptions, a pending rule at suggestion or a decline, and the
+       relaxed tier's relaxations are .editorconfig's last *.cs section.
+       The level is pinned at 10, not latest, so that global.json's rollForward cannot add rules unseen.
+       AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
+       rules' config only when the two differ (or the modes do), so equal values turn every IDE rule
+       off without a word (#588). 10.0-all is the same level and bucket as 10-all, written so it
+       differs.
+       The settings apply only where the root .globalconfig is beside this file. Every checkout has
+       it, and tools/analysis_guard.py fails a tree without it, so no build here runs without them;
+       an image build that copies this file and not the analyzer configs, as fixtures/MockApi's and
+       tools/bench/floor's Dockerfiles do, publishes under the SDK's defaults, as before #606, rather
+       than with every rule at error and none of the exceptions. -->
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <AnalysisLevel>10-all</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <AnalysisLevelSecurity>10-all</AnalysisLevelSecurity>
+    <AnalysisLevelStyle>10.0-all</AnalysisLevelStyle>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!-- The analysis tier a project's files are in, by folder (ADR-0035 decision 3): the relaxed tier is
+       every project under tests/, fixtures/, tools/spactl/, tools/bench/floor/ or src/Platform.Testing/,
+       and everything else is the strict tier. The same five folders are .editorconfig's last *.cs
+       section, which carries the relaxations; this property is for what a section cannot express,
+       such as the strict tier's banned-symbol files (#608). -->
+  <PropertyGroup>
+    <_SpaProjectFolder>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').Replace('\', '/'))/</_SpaProjectFolder>
+    <SpaRelaxedTier>false</SpaRelaxedTier>
+    <SpaRelaxedTier Condition="$(_SpaProjectFolder.StartsWith('tests/')) or $(_SpaProjectFolder.StartsWith('fixtures/')) or $(_SpaProjectFolder.StartsWith('tools/spactl/')) or $(_SpaProjectFolder.StartsWith('tools/bench/floor/')) or $(_SpaProjectFolder.StartsWith('src/Platform.Testing/'))">true</SpaRelaxedTier>
+  </PropertyGroup>
+
+  <!-- The banned-symbol lists, strict tier only (ADR-0035 decision 10; #608). BannedApiAnalyzers reads
+       every AdditionalFile named BannedSymbols.*.txt and reports a use as RS0030, at its default
+       warning, which TreatWarningsAsErrors makes an error. The relaxed tier carries none: its code
+       never ships, and fixtures/TestIdp and tests/e2e need the primitives.
+       The lists apply where the analysis does, beside the root .globalconfig; the gateway's image
+       copies them with it. No list is guarded by its own Exists: a missing one fails the compile
+       (CS2001) rather than dropping its bans unseen. The file names, the // comments and the
+       T:/N:/M: ids are the analyzer's documented format:
+       https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.BannedApiAnalyzers/BannedApiAnalyzers.Help.md
+       That page does not say a namespace ban reaches child namespaces or that a type ban misses
+       derived types; #608's throwaway calls showed both, which is why each HMAC subclass is listed. -->
+  <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true' and Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Shipping.txt" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotIdentity.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Identity'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotProxy.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Proxy'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NoToken.txt" Condition="'$(MSBuildProjectName)' == 'Platform.Registry' or '$(MSBuildProjectName)' == 'Platform.Hosting' or '$(MSBuildProjectName)' == 'Platform.Security' or '$(MSBuildProjectName)' == 'Platform.Telemetry' or '$(MSBuildProjectName)' == 'Gateway'" />
+  </ItemGroup>
+
+  <!-- The admitted analyzer packages, in every project of the solution (ADR-0035 decision 9; #607).
+       Each is an unconditional PackageReference rather than a GlobalPackageReference, which the pins
+       sweep cannot see; PrivateAssets keeps the analyzer out of every consumer's dependencies. The
+       versions are Directory.Packages.props's Analyzers group, and the root .globalconfig holds each
+       package's declines and pending lines.
+       Where the root .globalconfig is not beside this file, as in fixtures/MockApi's and
+       tools/bench/floor's image builds, the target below drops the packages' analyzers from the
+       compile, so those images publish under the SDK's defaults, as the analysis properties above
+       say. Without it the packages' DLL defaults, MA0004 among them, fail those builds under
+       TreatWarningsAsErrors with none of the declines (#607). ExcludeAssets="analyzers" on the
+       references does not do it: the MockApi image build still fails with it (#607). The target
+       runs after the SDK's ResolveLockFileAnalyzers, which adds each package's analyzers as
+       Analyzer items carrying NuGetPackageId, in Microsoft.PackageDependencyResolution.targets:
+       https://github.com/dotnet/sdk/blob/main/src/Tasks/Microsoft.NET.Build.Tasks/targets/Microsoft.PackageDependencyResolution.targets -->
+  <ItemGroup>
+    <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+  </ItemGroup>
+  <Target Name="SpaDropAnalyzerPackagesWithoutConfig" AfterTargets="ResolveLockFileAnalyzers"
+          Condition="!Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.NuGetPackageId)' == 'Meziantou.Analyzer' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.VisualStudio.Threading.Analyzers' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.CodeAnalysis.BannedApiAnalyzers'" />
+    </ItemGroup>
+  </Target>
+
   <!-- A project whose name ends in "Tests" is an xUnit v3 test project, set up as the xUnit template does:
        an executable that references xunit.v3 and runs on Microsoft Testing Platform (see global.json). -->
   <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('Tests'))">

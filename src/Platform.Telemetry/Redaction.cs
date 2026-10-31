@@ -30,8 +30,23 @@ internal static partial class Redaction
     /// The text with the query string cut from every URL or path in it. The callback carries the
     /// authorization code and state in its query (ADR-0007), so no query survives, whatever it holds.
     /// </summary>
-    public static string WithoutQueryStrings(string text) =>
-        text.Contains('?', StringComparison.Ordinal) ? QueryString().Replace(text, "?" + Redacted) : text;
+    public static string WithoutQueryStrings(string text)
+    {
+        if (!text.Contains('?', StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        try
+        {
+            return QueryString().Replace(text, "?" + Redacted);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Fails closed: a text the pattern could not finish is not written at all.
+            return Redacted;
+        }
+    }
 
     /// <summary>
     /// The message rendered again from its template with each sensitive hole redacted, or null when
@@ -73,23 +88,32 @@ internal static partial class Redaction
             return Redacted;
         }
 
-        return Hole().Replace(template, match =>
+        try
         {
-            if (match.Value is "{{" or "}}")
+            return Hole().Replace(template, match =>
             {
-                return match.Value[..1];
-            }
+                if (match.Value is "{{" or "}}")
+                {
+                    return match.Value[..1];
+                }
 
-            string name = match.Groups["name"].Value;
-            if (IsSensitiveName(name))
-            {
-                return Redacted;
-            }
+                string name = match.Groups["name"].Value;
+                if (IsSensitiveName(name))
+                {
+                    return Redacted;
+                }
 
-            return values.TryGetValue(name, out object? value)
-                ? System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "(null)"
-                : match.Value;
-        });
+                return values.TryGetValue(name, out object? value)
+                    ? System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "(null)"
+                    : match.Value;
+            });
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Fails closed, as a missing template does: a sensitive line that could not be rendered
+            // again carries no message rather than the logger's, which holds the value.
+            return Redacted;
+        }
     }
 
     private static string Flatten(string name)
@@ -107,14 +131,19 @@ internal static partial class Redaction
         return new string(buffer[..length]);
     }
 
+    // Every pattern here carries a match timeout (MA0009, a security rule at error in both analysis
+    // tiers: ADR-0035 decision 4). Both are linear, with no nested quantifier, so a log line never
+    // comes near it; it bounds a pattern a later edit makes backtrack, and a timeout fails closed above.
+    private const int MatchTimeoutMilliseconds = 100;
+
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.
-    [GeneratedRegex(@"\{\{|\}\}|\{[@$]?(?<name>[^{}:,]+)(?:[,:][^{}]*)?\}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\{\{|\}\}|\{[@$]?(?<name>[^{}:,]+)(?:[,:][^{}]*)?\}", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Hole();
 
     // A '?' followed by at least one character that could be part of a URL. "/signin-oidc?code=x",
     // "https://h/p?a=b" and a bare "?code=x" (HttpRequest.QueryString renders with its leading '?')
     // match; "is it? yes" does not. Nothing is asked of the character before the '?', so a query
     // string logged on its own, or after a space, is cut too (review of task 6.4).
-    [GeneratedRegex(@"\?[^\s""'<>]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\?[^\s""'<>]+", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex QueryString();
 }

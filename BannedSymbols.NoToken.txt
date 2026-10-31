@@ -1,0 +1,4 @@
+// Banned in Platform.Registry, Platform.Hosting, Platform.Security, Platform.Telemetry and Gateway
+// (ADR-0035 decision 10). Owner: integrator.
+// Platform.Identity makes the token, Platform.Proxy spends it, and no other project has a use for it.
+T:Platform.Abstractions.AccessTokenResult.Token;a token has no use here: only Platform.Identity and Platform.Proxy handle one

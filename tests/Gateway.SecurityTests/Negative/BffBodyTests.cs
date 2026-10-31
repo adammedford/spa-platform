@@ -18,7 +18,7 @@ namespace Gateway.SecurityTests.Negative;
 public sealed partial class BffBodyTests
 {
     /// <summary>A JWT: three base64url segments, the first an encoded <c>{"</c>.</summary>
-    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")]
+    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Jwt();
 
     [Fact]

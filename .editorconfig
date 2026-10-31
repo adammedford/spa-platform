@@ -13,3 +13,42 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+# The house style, which settles the opposing IDE rule pairs (ADR-0035 decision 7). This section
+# holds options only: the strict severities are in .globalconfig, and the test tier's relaxations
+# are this file's last *.cs section (ADR-0035 decision 5).
+[*.cs]
+# File-scoped namespaces. Settles IDE0160 and IDE0161.
+csharp_style_namespace_declarations = file_scoped
+
+# Explicit types rather than var. Settles IDE0007 and IDE0008.
+csharp_style_var_for_built_in_types = false
+csharp_style_var_when_type_is_apparent = false
+csharp_style_var_elsewhere = false
+
+# Expression bodies when on a single line, for methods, constructors and local functions. Settles
+# IDE0022, IDE0021 and IDE0061.
+csharp_style_expression_bodied_methods = when_on_single_line
+csharp_style_expression_bodied_constructors = when_on_single_line
+csharp_style_expression_bodied_local_functions = when_on_single_line
+
+# The relaxed tier's relaxations (ADR-0035 decisions 3, 5 and 13). This section must stay the last
+# one matching *.cs, because a later matching section overrides it; its folders are the relaxed tier,
+# the same five Directory.Build.props reads for SpaRelaxedTier. Each line is a permanent relaxation,
+# true of test and tool code by its nature, at none, with its reason on the line above it. A rule that
+# is merely not yet clean here rides the ramp in .globalconfig instead, and a security rule is never
+# relaxed. tools/check.sh's analysis guard holds the section to those rules.
+[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]
+# Test names use underscores as sentences, and xunit has no suppressor for it.
+dotnet_diagnostic.CA1707.severity = none
+# xUnit supplies public test methods' arguments.
+dotnet_diagnostic.CA1062.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA2234.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA1054.severity = none
+# Tests address relative paths as strings.
+dotnet_diagnostic.CA1056.severity = none
+# Types that xUnit or a harness reaches must be public; xunit's CA1515 suppressor does not run in
+# src/Platform.Testing, Gateway.TestHarness, fixtures/TestIdp or tools/spactl, so the tier lists it.
+dotnet_diagnostic.CA1515.severity = none
