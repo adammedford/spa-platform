@@ -116,11 +116,12 @@ a half red on its own is the expected state, not a defect. Before running `tools
 removes its own task worktrees, because the prune below deletes no branch a worktree has checked
 out: on 2026-10-29 both halves' branches stayed behind for that reason.
 
-**Merge with `tools/land.sh <pr> --subject "..."`.** The merge subject is the input to that
-derivation and `docs/roadmap.md` is its output, so the merge commit is the one commit that moves the
-roadmap — and a merge made through the GitHub API or the web UI is created on the server, where the
-hook cannot reach it. The script merges, derives the roadmap and pushes the refresh as its own
-commit. `gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
+**Merge with `tools/land.sh <pr> --subject "..." --body-file <path>`.** The merge subject is the
+input to that derivation and `docs/roadmap.md` is its output, so the merge commit is the one commit
+that moves the roadmap — and a merge made through the GitHub API or the web UI is created on the
+server, where the hook cannot reach it. The script merges, derives the roadmap and pushes the
+refresh as its own commit; it refuses to start without a body, or with an empty one (#552).
+`gh pr merge` on its own leaves `main` red on the roadmap check until someone notices.
 
 **It runs from a worktree of its own, which is disposable.** The roadmap is derived from the tree
 the merge makes, so the script runs where `HEAD` sits at the base with nothing uncommitted:
