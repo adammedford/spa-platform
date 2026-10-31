@@ -488,10 +488,15 @@ run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
 # key id (#332 D6). The module's validation, which refuses dynamodb with no prefix, is held in its
 # own suite; this run holds that the root accepts the pair it documents in terraform.tfvars.example
 # and that the gateway's task environment carries it, read through the module's
-# continuity_environment output, which the run before this one cannot see.
+# continuity_environment output, which the run before this one cannot see. The output reads the
+# gateway container's environment out of the task definition's container_definitions, not the
+# platform_configuration local that environment is built from, so a cut between the two reaches
+# this run (#642).
 #
 # Mutations that turn this run red: the module call given session_store = "memory" or
-# data_protection_parameter_prefix = "" in place of the variable; either one dropped from the call.
+# data_protection_parameter_prefix = "" in place of the variable; either one dropped from the call;
+# in the module's ecs.tf, the Session__ or DataProtection__ keys filtered out of gateway_environment
+# between platform_configuration and the container's environment.
 run "the_g6_continuity_inputs_plan_at_this_root" {
   command = plan
 
