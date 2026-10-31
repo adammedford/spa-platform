@@ -13,7 +13,7 @@ labels and no session or agent decides them.
   `areas` table by its longest prefix; the issue carries every area its paths reach. An issue with
   no Touches line, or one saying `none`, gets no area, since nothing says what it writes. A path no
   entry matches is a gap in the table, and the issue is skipped rather than given a guess.
-- vendor: the values of a `**Vendor:**` line (`none`, or `aws`, `cognito`, ...), with every vendor
+- vendor: the values of a `**Vendor:**` line (`none` then any prose, or `aws`, `cognito`, ...), with every vendor
   a Touches path implies by the `vendors` table: anything under infra/ is AWS, and so is each named
   adapter file. The line holds the one call a path cannot make ("this assumes Cognito's token
   shape"), written once by whoever files the ticket. A `none` line beside a path that implies a
@@ -184,7 +184,8 @@ def derive(issue: Issue, table: Table, parsed: list[tuple[str, str]] | None = No
     stated: set[str] = set()
     if line:
         values = [value for value in re.split(r"[\s,;`]+", line.group("value").lower()) if value]
-        if values == ["none"]:
+        # `none`, then anything, as the Touches line reads it: "none (the gateway core)".
+        if shape().WRITES_NOTHING.match(line.group("value").strip("` \t")):
             if implied:
                 problems.append(f"the Vendor line says none, and its Touches paths imply "
                                 f"{', '.join(sorted(implied))}")

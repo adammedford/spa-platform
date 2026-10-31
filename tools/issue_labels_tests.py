@@ -134,8 +134,10 @@ class Vendor(unittest.TestCase):
         self.assertIn("aws", found.problems[0])
 
     def test_none_on_a_portable_ticket_is_quiet(self):
-        found = derived(touching("src/Gateway/Program.cs", vendor="none"))
-        self.assertEqual((group(found, "vendor"), found.problems, found.notes), ([], (), ()))
+        for line in ("none", "none (the gateway core)", "`none`"):
+            with self.subTest(line):
+                found = derived(touching("src/Gateway/Program.cs", vendor=line))
+                self.assertEqual((group(found, "vendor"), found.problems, found.notes), ([], (), ()))
 
     def test_an_undefined_vendor_skips_the_issue(self):
         found = derived(touching("src/Gateway/Program.cs", vendor="azure"))
@@ -337,6 +339,7 @@ class Workflow(unittest.TestCase):
     def test_each_invocation_is_a_command_the_script_takes(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         for needed in ('tools/issue_labels.py apply "$NUMBER"', "tools/issue_labels.py check --all",
+                       "schedule) python3 -I tools/issue_labels.py apply --all",
                        "tools/issue_labels.py apply --all", "tools/issue_labels.py labels apply"):
             with self.subTest(needed):
                 self.assertIn(needed, text)

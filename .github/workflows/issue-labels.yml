@@ -10,12 +10,13 @@
 #   ticket-shape.yml makes on the same event, and its own writes, made with this job's token, "will
 #   not create a new workflow run" (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
 # - Adding a sub-issue fires no `issues` event on its parent, so kind:parent, and any drift a
-#   missed event leaves, is caught by the daily run, which checks every open issue and fails, naming
-#   each one, without writing. A change to the tables shows up there too, as drift to approve,
-#   never as a silent relabel.
+#   missed event leaves, is written by the daily run over every open issue. A change to the tables
+#   reaches the issues there too: the pull request that changed them is its review. The run fails,
+#   naming each one, on an issue it skipped (a path the table does not cover, a Vendor line its
+#   paths contradict), which it leaves as it was.
 # - Run by hand (`gh workflow run issue-labels.yml -f command=...`): `labels apply` creates the
-#   labels the table defines and retires the unused defaults; `apply --all` writes every open
-#   issue's labels, the backfill and the fix for what the daily run reports.
+#   labels the table defines and retires the unused defaults; `apply --all` is the backfill;
+#   `check --all` and `labels check` say what either would change and write nothing.
 
 name: Issue labels
 
@@ -62,7 +63,7 @@ jobs:
           set -uo pipefail
           case "$EVENT" in
             issues) python3 -I tools/issue_labels.py apply "$NUMBER" ;;
-            schedule) python3 -I tools/issue_labels.py check --all ;;
+            schedule) python3 -I tools/issue_labels.py apply --all ;;
             workflow_dispatch)
               case "$COMMAND" in
                 "check --all") python3 -I tools/issue_labels.py check --all ;;
