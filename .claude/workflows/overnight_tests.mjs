@@ -1062,6 +1062,28 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
+// 29. The implementer breaks what it adds (#633). On 2026-10-29 reviewers made nine guards across eight tickets able
+//     to fail after each lane's check had passed them, because only the review prompt asked for a mutation. Every
+//     implement prompt asks, in STEP 1 before its gate, for each guard, filter and assertion the lane adds to be broken
+//     one at a time against its own test, restored in the ticket's own worktree, and named with its failure count in
+//     the Task commit's body.
+{
+  const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
+  if (!impls.length) fail('#633: no implement prompt was rendered, so the mutation check read nothing')
+  for (const c of impls) {
+    const wt = (/^Worktree: (\S+?)\.? Branch:/m.exec(c.prompt) || [])[1]
+    if (!wt) { fail(`#633: the ${c.label} prompt names no worktree`); continue }
+    const wants = [
+      '- Every guard, filter and assertion you add must be able to fail (CODING_STANDARDS.md, "An assertion must be able to fail"): break each one on purpose, one at a time, run only its test or companion, see it fail,',
+      `restore it with \`git -C ${wt} checkout -- <path>\` before the next.`,
+      'Name each mutation and its failure count in the Task commit\'s body ("A new invariant test names the mutation that made it fail").',
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`#633: the ${c.label} prompt lacks: ${w.slice(0, 80)}...`)
+    const at = c.prompt.indexOf(wants[0])
+    if (at >= 0 && !(at > c.prompt.indexOf('- Build test-first: ') && at < c.prompt.indexOf('- At the end, run the gate once:'))) fail(`#633: the ${c.label} prompt's mutation bullet is not in STEP 1 before its gate`)
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
