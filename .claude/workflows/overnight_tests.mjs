@@ -1062,6 +1062,26 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
+// 29. The report checks each claimed branch's open pull request against the run branch the night before (#628): on
+//     2026-10-29 PR #492, listed under "Claimed branches to merge", landed first and changed the files the run's lanes
+//     changed, so the landing PR #529 was CONFLICTING with main, ran no CI, and the morning stopped at step 7 until the
+//     back-merge 55d0be0. The report's "Claimed branches to merge" item runs `git merge-tree --write-tree` of the run
+//     branch against each open pull request's head and lists the conflicting files, and the Morning steps take their
+//     landing order from that item rather than always landing the run's pull request first.
+{
+  const MERGE_TREE = `\`git -C ${fixture.args.repo} merge-tree --write-tree overnight/${fixture.args.date} <its head>\``
+  const ORDER = 'merge the claimed branches in their own PRs, in the order "Claimed branches to merge" gives'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('#628: no report prompt was rendered, so the claimed-branches check read nothing')
+  for (const c of reports) {
+    const item = c.prompt.split('\n').find((l) => l.includes('Claimed branches to merge (')) || ''
+    if (!item.includes(MERGE_TREE)) fail(`#628: the report's "Claimed branches to merge" item does not run ${MERGE_TREE} against each open pull request it names`)
+    if (!item.includes('list every file that conflicts') || !item.includes('back-merges main before its review')) fail('#628: the report\'s "Claimed branches to merge" item does not list the conflicting files and say which pull request lands first and which back-merges main')
+    const morning = c.prompt.split('\n').find((l) => l.includes('- Morning steps: ')) || ''
+    if (!morning.includes(ORDER)) fail('#628: the report\'s Morning steps do not take the landing order from "Claimed branches to merge"')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
