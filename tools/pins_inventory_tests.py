@@ -127,13 +127,15 @@ def drop_pin(text: str, pid: str) -> str:
 
 class Parsing(Case):
     def test_the_pins_file_as_the_spec_counted_it_yields_20_pins_in_the_labelled_groups(self):
-        # #82 counted 20 on 17 October 2026; #206 added AWSSDK.Signin and #336 the DynamoDB and
-        # DataProtection.SSM pins after it. The copy without them is
+        # #82 counted 20 on 17 October 2026; #206 added AWSSDK.Signin, #336 the DynamoDB and
+        # DataProtection.SSM pins and #607 the three analyzer packages after it. The copy without them is
         # the file #82 counted; a pin added later joins this drop list, and the live copy is held to
         # the family table below.
         r = self.repo()
         text = r.read(PROPS)
-        for later in ("AWSSDK.Signin", "AWSSDK.DynamoDBv2", "Amazon.AspNetCore.DataProtection.SSM"):
+        for later in ("AWSSDK.Signin", "AWSSDK.DynamoDBv2", "Amazon.AspNetCore.DataProtection.SSM",
+                      "Meziantou.Analyzer", "Microsoft.VisualStudio.Threading.Analyzers",
+                      "Microsoft.CodeAnalysis.BannedApiAnalyzers"):
             text = drop_pin(text, later)
         r.write(PROPS, text)
         data = self.inventory(r)
@@ -147,17 +149,19 @@ class Parsing(Case):
         r = self.repo()
         data = self.inventory(r)
         # Counted from the file itself, so a pin added after this was written is held to the family
-        # table rather than breaking a literal. 21 when #269 landed, 23 when #336 did.
+        # table rather than breaking a literal. 21 when #269 landed, 23 when #336 did, 26 when #607 did.
         self.assertEqual(len(re.findall(r"<PackageVersion\s", r.read(PROPS))), len(data["pins"]))
         self.assertEqual([], [p["id"] for p in data["pins"] if not p["family"]])
         self.assertEqual(["aspnetcore", "duende", "yarp", "aws-sdk", "opentelemetry", "xunit", "playwright",
-                          "schema-validator", "fake-clock", "mvc-testing", "sdk"], [f["id"] for f in data["families"]])
+                          "schema-validator", "fake-clock", "mvc-testing", "analyzers", "sdk"], [f["id"] for f in data["families"]])
 
     def test_deleting_one_pin_drops_the_count_and_its_family(self):
         r = self.repo()
+        # Counted from the live file, as the case above counts it, so a pin added later moves both.
+        before = len(re.findall(r"<PackageVersion\s", r.read(PROPS)))
         r.write(PROPS, drop_pin(r.read(PROPS), "Yarp.ReverseProxy"))
         data = self.inventory(r)
-        self.assertEqual(22, len(data["pins"]))
+        self.assertEqual(before - 1, len(data["pins"]))
         self.assertNotIn("yarp", [f["id"] for f in data["families"]])
         self.assertNotIn("Yarp.ReverseProxy", [p["id"] for p in data["pins"]])
 
@@ -171,6 +175,13 @@ class Parsing(Case):
         tests = [p for p in solution_projects() if pathlib.PurePosixPath(p).stem.endswith("Tests")]
         self.assertEqual(sorted(tests), xunit)
         self.assertNotIn("tests/Gateway.TestHarness/Gateway.TestHarness.csproj", xunit)
+        # Its unconditional analyzer references reach every project of the solution (#607), and the
+        # analyzers family trials the whole solution, because an upgrade can bring a rule that errors.
+        for pid in ("Meziantou.Analyzer", "Microsoft.VisualStudio.Threading.Analyzers", "Microsoft.CodeAnalysis.BannedApiAnalyzers"):
+            self.assertEqual(("analyzers", "Analyzers", sorted(solution_projects())),
+                             (self.pin(data, pid)["family"], self.pin(data, pid)["group"], self.pin(data, pid)["referencedBy"]))
+        analyzers = next(f for f in data["families"] if f["id"] == "analyzers")
+        self.assertEqual((["solution"], True), (analyzers["trialScope"], analyzers["smoke"]))
         # The trial scope is the test projects that reach a member, through the project graph.
         yarp = next(f for f in data["families"] if f["id"] == "yarp")
         self.assertIn("tests/Platform.Proxy.Tests/Platform.Proxy.Tests.csproj", yarp["trialScope"])
@@ -390,7 +401,7 @@ class Inputs(Case):
         code, out, _ = run("families")
         self.assertEqual(0, code)
         ids = [f["id"] for f in json.loads(out)]
-        self.assertEqual(12, len(ids))
+        self.assertEqual(13, len(ids))
         self.assertEqual("terraform", ids[-1])
 
 

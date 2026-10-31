@@ -31,7 +31,7 @@ const REPORT_TITLE = 'Pins sweep: the state of every pin'
 // A fixture's issue number, built so the steering check's citation search (#NNN must name an issue
 // here) does not read the made-up issues of these fixtures as citations.
 const cite = (n) => '#' + n
-const NET = ['aspnetcore', 'duende', 'yarp', 'aws-sdk', 'opentelemetry', 'xunit', 'playwright', 'schema-validator', 'fake-clock', 'mvc-testing', 'sdk']
+const NET = ['aspnetcore', 'duende', 'yarp', 'aws-sdk', 'opentelemetry', 'xunit', 'playwright', 'schema-validator', 'fake-clock', 'mvc-testing', 'analyzers', 'sdk']
 
 // ---------------------------------------------------------------- a minimal JSON Schema check
 const validate = (schema, value, where = '$') => {
@@ -280,13 +280,14 @@ try {
     if (result.halted) fail(`every argument at once was refused: ${result.halted}`)
   }
 
-  // 2. Agent budget: every .NET family in scope halts before any dispatch with 17 against 10; a named
+  // 2. Agent budget: every .NET family in scope halts before any dispatch with 18 against 10 (17 before #607's
+  //    analyzers family); a named
   //    group within budget proceeds.
   checks++
   {
     const env = newEnv()
     const { result, calls } = await execute(env, argsFor(env))
-    if (calls.length || result.agentCount !== 17 || result.maxAgents !== 10 || !/17 agents[\s\S]*maxAgents 10/.test(result.halted || '')) fail(`the full run: ${calls.length} agent(s), returned ${JSON.stringify(result)}`)
+    if (calls.length || result.agentCount !== 18 || result.maxAgents !== 10 || !/18 agents[\s\S]*maxAgents 10/.test(result.halted || '')) fail(`the full run: ${calls.length} agent(s), returned ${JSON.stringify(result)}`)
     const tf = newEnv()
     const t = await execute(tf, argsFor(tf, { families: FRAMEWORK, terraform: true }))
     if (t.calls.length || t.result.agentCount !== 11) fail(`the framework group with terraform counts ${t.result.agentCount}, expected 11, and dispatched ${t.calls.length}`)

@@ -46,6 +46,29 @@
     <SpaRelaxedTier Condition="$(_SpaProjectFolder.StartsWith('tests/')) or $(_SpaProjectFolder.StartsWith('fixtures/')) or $(_SpaProjectFolder.StartsWith('tools/spactl/')) or $(_SpaProjectFolder.StartsWith('tools/bench/floor/')) or $(_SpaProjectFolder.StartsWith('src/Platform.Testing/'))">true</SpaRelaxedTier>
   </PropertyGroup>
 
+  <!-- The admitted analyzer packages, in every project of the solution (ADR-0035 decision 9; #607).
+       Each is an unconditional PackageReference rather than a GlobalPackageReference, which the pins
+       sweep cannot see; PrivateAssets keeps the analyzer out of every consumer's dependencies. The
+       versions are Directory.Packages.props's Analyzers group, and the root .globalconfig holds each
+       package's declines and pending lines.
+       Where the root .globalconfig is not beside this file, as in fixtures/MockApi's and
+       tools/bench/floor's image builds, the target below drops the packages' analyzers from the
+       compile, so those images publish under the SDK's defaults, as the analysis properties above
+       say. Without it the packages' DLL defaults, MA0004 among them, fail those builds under
+       TreatWarningsAsErrors with none of the declines (#607). ExcludeAssets cannot do this: the
+       SDK resolves a package's analyzers from its files whatever the reference excludes. -->
+  <ItemGroup>
+    <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+  </ItemGroup>
+  <Target Name="SpaDropAnalyzerPackagesWithoutConfig" AfterTargets="ResolveLockFileAnalyzers"
+          Condition="!Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.NuGetPackageId)' == 'Meziantou.Analyzer' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.VisualStudio.Threading.Analyzers' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.CodeAnalysis.BannedApiAnalyzers'" />
+    </ItemGroup>
+  </Target>
+
   <!-- A project whose name ends in "Tests" is an xUnit v3 test project, set up as the xUnit template does:
        an executable that references xunit.v3 and runs on Microsoft Testing Platform (see global.json). -->
   <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('Tests'))">

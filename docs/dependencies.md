@@ -68,8 +68,11 @@ All pinned in `Directory.Packages.props`. Each pinned version was confirmed to e
 | Microsoft.Extensions.TimeProvider.Testing | 10.10.0 | MIT | `Platform.Testing`, `Fixtures.Tests` | The fake clock |
 | Microsoft.Playwright | 1.63.0 | MIT | `tests/e2e`, `Fixtures.Tests` |  |
 | JsonSchema.Net | 8.0.5 | MIT | Schema tests, `Fixtures.Tests`, `Platform.Registry` (the gateway and `spactl`) | Decision D-1, decided |
+| Meziantou.Analyzer | 3.0.317 | MIT | Every project in the solution, through `Directory.Build.props`; analyzer only | ADR-0035 decision 9 (#607). 3.0.317 was released on 2026-10-25, the stable release that made it eligible under the 18-month rule; 3.0.318 is newer, and moves through the pins sweep's whole-solution trial. |
+| Microsoft.VisualStudio.Threading.Analyzers | 18.12.1 | MIT | Every project in the solution, through `Directory.Build.props`; analyzer only | ADR-0035 decision 9 (#607). 18.12.1 was released on 2026-10-12, the newest stable release and the one that made it eligible under the 18-month rule. |
+| Microsoft.CodeAnalysis.BannedApiAnalyzers | 5.6.0 | MIT | Every project in the solution, through `Directory.Build.props`; analyzer only | ADR-0035 decisions 9 and 10 (#607). 5.6.0 was released on 2026-07-02, the newest stable release and the one that made it eligible under the 18-month rule. It reports nothing until the banned lists of #608 are attached. |
 
-The skeleton adds only `xunit.v3` to projects. Each owner adds the other references to their own project files as the work needs them.
+The skeleton adds `xunit.v3` to every `*Tests` project and the three analyzer packages to every project. Each owner adds the other references to their own project files as the work needs them.
 
 ## The .NET runtimes
 
