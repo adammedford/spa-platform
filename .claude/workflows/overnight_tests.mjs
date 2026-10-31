@@ -1062,6 +1062,25 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const x of homes) fail(`#501: ${path.basename(scriptPath)}:${x.n} reads a /Users/ path outside the skills argument's default: ${x.line.trim().slice(0, 100)}`)
 }
 
+// 29. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
+//     "Decided by implementer" list, and a "## Decisions taken" comment only for a human-owned one. So every review
+//     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
+//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON.
+{
+  const REVIEW = 'Then read the "## Decisions taken" comment, if any, and the Answer\'s "Decided by implementer" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).'
+  const REPORT = '(a "Human-owned:" one from the issue\'s "## Decisions taken" comment, a gap decision from the "Decided by implementer" list in its "## Answer" comment)'
+  const READS = 'the "## Decisions taken" alternatives, the "Decided by implementer" list in an "## Answer" comment'
+  const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
+  if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
+  for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "Decided by implementer" list`)
+  if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
+  else {
+    const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
+    if (!item.includes(REPORT)) fail('#631: the report\'s "Decisions taken overnight" item does not take a gap decision\'s alternatives from the Answer\'s "Decided by implementer" list')
+    if (!reportPrompt.includes(READS)) fail('#631: the report does not read the Answer\'s "Decided by implementer" list among the comments the results JSON lacks')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
