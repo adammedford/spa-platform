@@ -1,0 +1,75 @@
+# The derived issue labels, kept on every issue. Owner: integrator.
+#
+# tools/issue_labels.py works out each issue's kind:, area: and vendor: labels from what the issue
+# already carries (its title, its sub-issues, its **Touches:** and **Vendor:** lines) against the
+# tables in tools/issue_labels.json. No session or agent picks them: this job runs the script and
+# writes what it derives.
+#
+# - An issue opened, edited, reopened or relabelled gets its labels applied at once. The script
+#   adds and removes labels by name through the REST routes, so it never undoes a relabel
+#   ticket-shape.yml makes on the same event, and its own writes, made with this job's token, "will
+#   not create a new workflow run" (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
+# - Adding a sub-issue fires no `issues` event on its parent, so kind:parent, and any drift a
+#   missed event leaves, is caught by the daily run, which checks every open issue and fails, naming
+#   each one, without writing. A change to the tables shows up there too, as drift to approve,
+#   never as a silent relabel.
+# - Run by hand (`gh workflow run issue-labels.yml -f command=...`): `labels apply` creates the
+#   labels the table defines and retires the unused defaults; `apply --all` writes every open
+#   issue's labels, the backfill and the fix for what the daily run reports.
+
+name: Issue labels
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: What to run
+        type: choice
+        options: [check --all, apply --all, labels check, labels apply]
+        default: check --all
+
+# The label routes need issues: write; a permission left out of this block is set to none
+# (https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token).
+permissions:
+  issues: write
+  pull-requests: read
+  contents: read
+
+# One run per issue at a time, and one run over every issue, queued rather than cancelled.
+concurrency:
+  group: issue-labels-${{ github.event.issue.number || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  labels:
+    name: Issue labels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive and write the labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          NUMBER: ${{ github.event.issue.number }}
+          COMMAND: ${{ inputs.command }}
+        run: |
+          set -uo pipefail
+          case "$EVENT" in
+            issues) python3 -I tools/issue_labels.py apply "$NUMBER" ;;
+            schedule) python3 -I tools/issue_labels.py check --all ;;
+            workflow_dispatch)
+              case "$COMMAND" in
+                "check --all") python3 -I tools/issue_labels.py check --all ;;
+                "apply --all") python3 -I tools/issue_labels.py apply --all ;;
+                "labels check") python3 -I tools/issue_labels.py labels check ;;
+                "labels apply") python3 -I tools/issue_labels.py labels apply ;;
+                *) echo "issue-labels: fail: no command $COMMAND"; exit 2 ;;
+              esac ;;
+            *) echo "issue-labels: fail: no run for event $EVENT"; exit 2 ;;
+          esac
