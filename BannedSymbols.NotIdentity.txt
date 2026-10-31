@@ -1,0 +1,5 @@
+// Banned in every strict-tier project except Platform.Identity (ADR-0035 decision 10). Owner: integrator.
+// A-04's use half: its architecture test checks direct references, and this list closes the
+// transitive reach Gateway has through its reference to Platform.Identity.
+N:Duende.AccessTokenManagement;only Platform.Identity uses the token-management packages (A-04)
+N:Duende.IdentityModel;only Platform.Identity uses the token-management packages (A-04)

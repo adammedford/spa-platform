@@ -38,6 +38,17 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(1, self.classify("build", [path]))
 
+    def test_the_banned_symbol_lists_trigger_the_build(self):
+        # A list's entry is an RS0030 error the build enforces, and an id that names no symbol bans
+        # nothing without a word, so only a build proves a change to one (#608).
+        for path in ("BannedSymbols.Shipping.txt", "BannedSymbols.NoToken.txt"):
+            with self.subTest(path=path):
+                self.assertEqual(0, self.classify("build", [path]))
+                self.assertEqual(1, self.classify("terraform", [path]))
+        for path in ("docs/BannedSymbols.Shipping.txt", "BannedSymbols.Shipping.txt.orig"):
+            with self.subTest(path=path):
+                self.assertEqual(1, self.classify("build", [path]))
+
     def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
         # The build half builds the gateway's image too, and .dockerignore decides its context (#210).
         self.assertEqual(0, self.classify("build", [".dockerignore"]))

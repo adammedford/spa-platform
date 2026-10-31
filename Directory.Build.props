@@ -46,6 +46,24 @@
     <SpaRelaxedTier Condition="$(_SpaProjectFolder.StartsWith('tests/')) or $(_SpaProjectFolder.StartsWith('fixtures/')) or $(_SpaProjectFolder.StartsWith('tools/spactl/')) or $(_SpaProjectFolder.StartsWith('tools/bench/floor/')) or $(_SpaProjectFolder.StartsWith('src/Platform.Testing/'))">true</SpaRelaxedTier>
   </PropertyGroup>
 
+  <!-- The banned-symbol lists, strict tier only (ADR-0035 decision 10; #608). BannedApiAnalyzers reads
+       every AdditionalFile named BannedSymbols.*.txt and reports a use as RS0030, at its default
+       warning, which TreatWarningsAsErrors makes an error. The relaxed tier carries none: its code
+       never ships, and fixtures/TestIdp and tests/e2e need the primitives.
+       The lists apply where the analysis does, beside the root .globalconfig; the gateway's image
+       copies them with it. No list is guarded by its own Exists: a missing one fails the compile
+       (CS2001) rather than dropping its bans unseen. The file names, the // comments and the
+       T:/N:/M: ids are the analyzer's documented format:
+       https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.BannedApiAnalyzers/BannedApiAnalyzers.Help.md
+       That page does not say a namespace ban reaches child namespaces or that a type ban misses
+       derived types; #608's throwaway calls showed both, which is why each HMAC subclass is listed. -->
+  <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true' and Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Shipping.txt" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotIdentity.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Identity'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotProxy.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Proxy'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NoToken.txt" Condition="'$(MSBuildProjectName)' == 'Platform.Registry' or '$(MSBuildProjectName)' == 'Platform.Hosting' or '$(MSBuildProjectName)' == 'Platform.Security' or '$(MSBuildProjectName)' == 'Platform.Telemetry' or '$(MSBuildProjectName)' == 'Gateway'" />
+  </ItemGroup>
+
   <!-- The admitted analyzer packages, in every project of the solution (ADR-0035 decision 9; #607).
        Each is an unconditional PackageReference rather than a GlobalPackageReference, which the pins
        sweep cannot see; PrivateAssets keeps the analyzer out of every consumer's dependencies. The
