@@ -9,7 +9,8 @@ states that this register was reviewed.
 An entry says what is missing, the risk it leaves, where it was found, and what would close it: a
 Phase 2 row in `docs/plan/06-phase-2-and-risks.md`, a ticket, or "accepted for Phase 1, no plan". An
 entry that a section elsewhere already argues in full points at that section rather than copying
-it.
+it. `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps" is a source the register carries in
+full: each of its areas has an entry, or names the entry that carries it, in GAP-17 to GAP-27 below.
 
 ## From decisions
 
@@ -102,3 +103,35 @@ refusal a test proves.
   cache (GAP-5 is why the measurement has no pass mark yet). The cache and the limit themselves sit
   only in the deferred-features table there, which leaves asset caching to hosting and rate limiting
   to the request gate, with no trigger. GAP-6 and GAP-7 are the written-plan half.
+
+## What the plan's enterprise-gap table names (GAP-17 to GAP-27)
+
+One row per area of `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", in that table's order.
+#568's review found that eleven of the table's fourteen areas had no entry here, and this ticket
+(#569) read the table against GAP-1 to GAP-16 to place each. These entries were added after G5's
+review on #63, so the header's sentence about that review does not cover them. They index the
+frozen Phase 1 inventory, some of whose named closure work has already landed: they are not eleven
+newly open gaps. The two middle columns are 06's cells verbatim, as the plan export froze them, and
+the last column, read from the trunk when this section was written, is where an entry's current
+disposition is established, by the evidence it links, under the closure rule above. A carried area
+gets no new id and points at the entry that carries it. A plan row's merge is that row landing
+under the closure rule, not its stage's gate: for P2-1 to P2-5 the gate is G6's deployed run and its
+`g6-continuity` tag (#348), which `docs/roadmap.md` → "S8 Continuous: it survives its own
+deployment" names.
+
+| Entry | Area | Phase 1 state (historical: 06's cell) | Closes with (historical: 06's "Closed by") | Current disposition / evidence |
+| --- | --- | --- | --- | --- |
+| GAP-17 | Availability | One task. A deployment or crash interrupts everyone. | P2-4 | Open. Part of P2-4 merged in [1fbd6c8](https://github.com/adammedford/spa-platform/commit/1fbd6c8a1fb98c4defceebfd79dae57c2aeadf62): F1's shutdown and deployment settings, the poc root's continuity inputs and the two-task doubles. Two tasks across zones remain, in #347, which waits on #583. |
+| GAP-18 | Session durability | In memory. Lost on restart. | P2-1 | Closed under the register's rule: P2-1 merged in [fa96201](https://github.com/adammedford/spa-platform/commit/fa96201287903c78ed639e230605472cfb5ceec1). The G6 gate is #348's deployed run and its `g6-continuity` tag, not this merge. |
+| GAP-19 | Key durability | In memory. Cookies and in-flight logins die with the task. | P2-2 | Closed under the register's rule: P2-2 merged in [98e2317](https://github.com/adammedford/spa-platform/commit/98e231723d99912c4ff22dc1bacfb9f219c99cab). The G6 gate is #348's deployed run and its `g6-continuity` tag, not this merge. |
+| GAP-20 | Revocation | A removed session stops working at once, but only because there is one task | P2-3 | Closed under the register's rule: P2-3 merged in [7bdfa2e](https://github.com/adammedford/spa-platform/commit/7bdfa2e0420f656f14a3abe9eeda09fc21cb8461). The G6 gate is #348's deployed run and its `g6-continuity` tag, not this merge. |
+| GAP-21 | Network | Public address on the task, unrestricted outbound 443 | P2-4, P2-9; GAP-1 carries the shared-subnet half | Open. Part of P2-4 merged in [1fbd6c8](https://github.com/adammedford/spa-platform/commit/1fbd6c8a1fb98c4defceebfd79dae57c2aeadf62), with teardown's egress cases; private subnets, no public address and controlled egress remain, in #347, which waits on #583. P2-9's egress allowlist has not landed. |
+| none | Operator access | ECS Exec enabled, so an operator can reach a shell in the gateway | P2-9; carried by GAP-15 | Carried by GAP-15. P2-9 has not landed. |
+| GAP-22 | Identity provider | Cognito only. Non-standard logout. Authorization code in the URL. | P2-6; GAP-13 carries the code in the URL, GAP-2 the provider's session on logout | Open. P2-6 has not landed. Its contract decisions merged in [9231482](https://github.com/adammedford/spa-platform/commit/9231482b2c67f9bc3885f89092c9b388b3850ad3) (items 1 to 6) and [115e79d](https://github.com/adammedford/spa-platform/commit/115e79d5024f746d9a0450565c1d8f883dc5ec2a) (item 7, ADR-0028); the profile itself remains, and #545, CI's run of the suites under it. |
+| GAP-23 | Secrets | Parameter Store with manual rotation | P2-7 | Open. P2-7 has not landed. |
+| GAP-24 | Publishing | One publisher, the deployer, writes every app's releases | P2-7 | Open. P2-7 has not landed. |
+| GAP-25 | Telemetry and audit | One log stream. No trace or metric export, no ALB access logs. | P2-7 | Open. P2-7 has not landed. |
+| GAP-26 | Registry governance | One writer controlled by IAM. No review step. | P2-7 | Open. P2-7 has not landed. |
+| none | Isolation | One cell for every app | P2-8; carried by GAP-14 | Carried by GAP-14. P2-8 has not landed. |
+| none | Performance | Unmeasured. Every asset request reads S3. | P2-10; carried by GAP-5 and GAP-16 | Carried by GAP-5 and GAP-16. P2-10 has not landed. |
+| GAP-27 | Assurance | No penetration test, no formal threat model review | P2-10 | Open. P2-10 has not landed. |
