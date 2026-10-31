@@ -80,6 +80,8 @@ internal sealed class IdpHarness : IAsyncDisposable
         await idp.StartAsync();
         idp.AddClient(Client1, Secret1, Redirect1, PostLogout1);
         idp.AddClient(Client2, Secret2, Redirect2, PostLogout2);
+        // CA5399 (ADR-0035 batch 1): fixed, not suppressed. The provider listens on plain HTTP on
+        // loopback, so the revocation check never runs and costs nothing (#589-Q5).
         var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
         return new IdpHarness(idp, http);
     }
