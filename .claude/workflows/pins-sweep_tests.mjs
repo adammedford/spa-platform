@@ -280,9 +280,8 @@ try {
     if (result.halted) fail(`every argument at once was refused: ${result.halted}`)
   }
 
-  // 2. Agent budget: every .NET family in scope halts before any dispatch with 18 against 10 (17 before #607's
-  //    analyzers family); a named
-  //    group within budget proceeds.
+  // 2. Agent budget: every .NET family in scope halts before any dispatch with 18 against 10 (17 before
+  //    #607's analyzers family); a named group within budget proceeds.
   checks++
   {
     const env = newEnv()

@@ -55,8 +55,11 @@
        tools/bench/floor's image builds, the target below drops the packages' analyzers from the
        compile, so those images publish under the SDK's defaults, as the analysis properties above
        say. Without it the packages' DLL defaults, MA0004 among them, fail those builds under
-       TreatWarningsAsErrors with none of the declines (#607). ExcludeAssets cannot do this: the
-       SDK resolves a package's analyzers from its files whatever the reference excludes. -->
+       TreatWarningsAsErrors with none of the declines (#607). ExcludeAssets="analyzers" on the
+       references does not do it: the MockApi image build still fails with it (#607). The target
+       runs after the SDK's ResolveLockFileAnalyzers, which adds each package's analyzers as
+       Analyzer items carrying NuGetPackageId, in Microsoft.PackageDependencyResolution.targets:
+       https://github.com/dotnet/sdk/blob/main/src/Tasks/Microsoft.NET.Build.Tasks/targets/Microsoft.PackageDependencyResolution.targets -->
   <ItemGroup>
     <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
