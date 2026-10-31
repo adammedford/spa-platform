@@ -408,6 +408,14 @@ jobs:
         # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
 
+      - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
+        # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
+        # retires the unused default labels, the one write it cannot take back. Its companion runs the
+        # real script against a gh double: the derivation, the routes written, a short listing that
+        # must not read a label as unused, a failed write's verdict and the workflow's invocations.
+        # One case reads this checkout's tracked files, so a path the table does not cover fails here.
+        run: python3 -I tools/issue_labels_tests.py
+
       - name: A session's tail prints its last text turns and leaves out tool output and task notifications
         # A review or a morning reads what another session meant from the end of its transcript
         # (#303), and #286's hand parse of one printed 18,000 characters, most of them task

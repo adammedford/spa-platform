@@ -32,11 +32,12 @@ issue, and returns the remaining labels" (see write()), where PUT would remove "
 
 `-` reads `gh issue view --json` output (FIELDS) on stdin. `labels apply` creates or updates each
 label the table defines, and deletes each `retire` label that no issue or pull request carries; one
-still in use is refused, never stripped, and a listing too long to read in full is exit 2 (in_use()).
+still in use is refused, never stripped, and a listing too long to read in full is exit 2 (carried_by()).
 Each line starts `issue-labels:`, and the last is the verdict: `issue-labels: pass: ...` with exit 0,
 or `issue-labels: fail: ...` with exit 1 when an issue drifted (check) or was skipped, and exit 2
-when nothing could be judged (`fail: nothing judged: ...`) or a write failed part-way
-(`fail: write failed: ...`, which counts what was written before it).
+when nothing could be judged (`fail: nothing judged: ...`), a write failed part-way
+(`fail: write failed: ...`) or an issue needs a label the repository lacks (`fail: label missing:
+...`, made before any write for that issue); the last two count what was written before them.
 .github/workflows/issue-labels.yml runs it.
 """
 from __future__ import annotations
@@ -73,6 +74,10 @@ def shape():
 
 class Unreadable(Exception):
     """The issue, the table or GitHub could not be read, so nothing was judged."""
+
+
+class LabelMissing(Exception):
+    """An issue needs a label the repository does not have, found before any write for that issue."""
 
 
 class WriteFailed(Exception):
@@ -293,11 +298,12 @@ def run_issues(apply: bool, target: str) -> int:
                                            remove and f"remove {', '.join(remove)}") if part)
         print(f"issue-labels: #{issue.number}: {said}")
         if apply:
+            missing = [name for name in add if name not in present]
+            if missing:
+                raise LabelMissing(f"#{issue.number}: the repository has no label "
+                                   f"{', '.join(missing)}; run `labels apply` first; {written} "
+                                   f"issue(s) written before it")
             try:
-                missing = [name for name in add if name not in present]
-                if missing:
-                    raise Unreadable(f"the repository has no label {', '.join(missing)}; run "
-                                     f"`labels apply` first")
                 write(issue.number, add, remove)
             except Unreadable as error:
                 raise WriteFailed(f"#{issue.number}: {error}; {written} issue(s) written before "
@@ -422,6 +428,9 @@ def main(argv: list[str]) -> int:
         return run_labels(target == "apply") if verb == "labels" else run_issues(verb == "apply", target)
     except WriteFailed as error:
         print(f"issue-labels: fail: write failed: {error}")
+        return 2
+    except LabelMissing as error:
+        print(f"issue-labels: fail: label missing: {error}")
         return 2
     except (Exception, SystemExit) as error:
         # A read that failed, path-ownership.py's refusal of OWNERSHIP.md, or the script broken:

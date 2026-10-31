@@ -230,11 +230,14 @@ elif args[:2] == ["issue", "list"]:
     wanted = flag("--label")
     found = [i for i in world["issues"] if wanted is None or wanted in [l["name"] for l in i["labels"]]]
     # GH_SHORT: a listing filtered by label comes back empty with exit 0, as a flaky page does.
-    print(json.dumps([] if wanted and os.environ.get("GH_SHORT") else found))
+    # GH_SHORT_ALL: the listing of every issue does, which the filtered one alone then outvotes.
+    print(json.dumps([] if (wanted and os.environ.get("GH_SHORT")) or
+                     (not wanted and os.environ.get("GH_SHORT_ALL")) else found))
 elif args[:2] == ["pr", "list"]:
     wanted = flag("--label")
     found = [p for p in world.get("prs", []) if wanted is None or wanted in [l["name"] for l in p["labels"]]]
-    print(json.dumps([] if wanted and os.environ.get("GH_SHORT") else found))
+    print(json.dumps([] if (wanted and os.environ.get("GH_SHORT")) or
+                     (not wanted and os.environ.get("GH_SHORT_ALL")) else found))
 elif args[:2] == ["label", "list"]:
     print(json.dumps(world["labels"]))
 elif args[0] == "api":
@@ -321,7 +324,11 @@ class CommandLine(unittest.TestCase):
         self.world({"issues": [issue(touching("tools/land.sh"))], "labels": []})
         done = self.run_script("apply", "7")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("labels apply", self.last_line(done))
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: label missing: #7: "), last)
+        self.assertIn("labels apply", last)
+        self.assertIn("0 issue(s) written before it", last)
+        self.assertNotIn("write failed", last)
         self.assertEqual(self.writes(), [])
 
     def test_labels_apply_creates_updates_and_retires_what_is_unused(self):
@@ -354,6 +361,18 @@ class CommandLine(unittest.TestCase):
                     "labels": [*defined, {"name": "duplicate", "color": "cfd3d7", "description": ""},
                                {"name": "question", "color": "cfd3d7", "description": ""}]})
         done = self.run_script("labels", "apply", GH_SHORT="1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("refuse to delete duplicate", done.stdout)
+        self.assertIn("refuse to delete question", done.stdout)
+        self.assertEqual(self.writes(), [])
+
+    def test_a_short_full_listing_does_not_delete_a_label_the_filtered_one_finds(self):
+        defined = [{"name": name, **wanted} for name, wanted in TABLE.labels.items()]
+        self.world({"issues": [issue(have=("duplicate",))],
+                    "prs": [{"number": 3, "labels": [{"name": "question"}]}],
+                    "labels": [*defined, {"name": "duplicate", "color": "cfd3d7", "description": ""},
+                               {"name": "question", "color": "cfd3d7", "description": ""}]})
+        done = self.run_script("labels", "apply", GH_SHORT_ALL="1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("refuse to delete duplicate", done.stdout)
         self.assertIn("refuse to delete question", done.stdout)
@@ -393,7 +412,10 @@ class CommandLine(unittest.TestCase):
         self.world({"issues": [], "labels": []})
         done = self.run_script("labels", "apply", GH_FAIL_WRITES_AFTER="2")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("2 label change(s) made before it", self.last_line(done))
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: "), last)
+        self.assertIn("2 label change(s) made before it", last)
+        self.assertNotIn("nothing judged", last)
 
     def test_every_line_starts_with_the_prefix(self):
         done = self.run_script()
