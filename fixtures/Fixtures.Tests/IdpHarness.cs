@@ -80,7 +80,7 @@ internal sealed class IdpHarness : IAsyncDisposable
         await idp.StartAsync();
         idp.AddClient(Client1, Secret1, Redirect1, PostLogout1);
         idp.AddClient(Client2, Secret2, Redirect2, PostLogout2);
-        var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+        var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
         return new IdpHarness(idp, http);
     }
 
