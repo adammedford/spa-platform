@@ -159,8 +159,12 @@ rides in the merge commit rather than staying on the pull request. A named pipe 
 substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
 input for the confirmation it asks when no `--subject` is given. If the row landed without
 being finished, add an `Outstanding:` line saying what it still owes, and an
-`Outstanding test ids:` line for any test id the row names that is not yet proven. The claim
-branch is deleted when the **task** is done, not when a pull request merges.
+`Outstanding test ids:` line for any test id the row names that is not yet proven. When a
+`Closes #n` line names a change request whose decision says `ADR: no`, the body states the why and
+cites the decision comment's URL (`docs/agents/tracker-policy.md` → "Landing"); `tools/land.sh`
+refuses a body that lacks the URL, naming the request and the URL to cite (#530), and the why
+stays the reviewer's to judge. The claim branch is deleted when the **task** is done, not when a
+pull request merges.
 
 In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
 box that asks for something in the merge body is met there, and the landing body cites those merges
