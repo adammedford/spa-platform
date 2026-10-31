@@ -67,6 +67,14 @@ tools/check.sh --full --port 5180               # and the tests, the smoke test,
 - **A project named `*Tests` is a test project.** `Directory.Build.props` makes it an executable and adds xUnit v3. Do not add xUnit yourself.
 - **Packages:** add `<PackageReference Include="Name" />` with no version to your own project file. The version comes from `Directory.Packages.props`.
 - **Warnings are errors.** Package advisories are the exception: they warn.
+- **Analyzers run in every build**, `dotnet build`, `tools/check.sh` and CI alike, at
+  `AnalysisLevel` `10-all` (ADR-0035). A diagnostic id names its analyzer by prefix: `CA` is the
+  SDK's code-quality rules, `IDE` its code-style rules, `MA` Meziantou, `VSTHRD` VS Threading,
+  `RS0030` the banned-API list; `dotnet build` prints the id and a link to its page. A rule still
+  being made clean is a pending rule, held at `suggestion` in the root `.globalconfig` with a
+  comment naming its batch's promotion ticket: `grep pending .globalconfig` lists them. A finding
+  is fixed, or suppressed at its site with a citation (`CODING_STANDARDS.md` → "A suppression
+  answers to its citation"); never in a `GlobalSuppressions.cs`.
 - **`spikes/` is outside the solution** and does not inherit the solution's build settings.
 - **Reach the gateway over a raw socket when the `Host` header matters.** In an agent sandbox, HTTP
   through `curl` is proxied and answered on the `Host` header, so a spoofed host never reaches the

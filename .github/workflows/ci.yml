@@ -245,6 +245,15 @@ jobs:
           python3 -I tools/roadmap_tests.py
           python3 -I tools/roadmap.py --check
 
+      - name: The analyzer configs and every suppression keep ADR-0035's rules
+        # The build enforces each analyzer severity but not the shape of the files that set them: a
+        # relaxed security rule, a later .editorconfig section overriding the relaxed tier's, a
+        # category line or a suppression citing nothing all build green (#606). tools/check.sh runs
+        # the guard before every push; here it runs on what reaches main, after its companion.
+        run: |
+          python3 -I tools/analysis_guard_tests.py
+          python3 -I tools/analysis_guard.py
+
       - name: A-05's two rules hold
         # The ownership check is the one guard with no CI job of its own: it runs in the pre-push
         # hook, where a failure costs an amended commit instead of a red pull request. Its rules
