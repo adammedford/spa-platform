@@ -107,8 +107,8 @@ refusal a test proves.
 ## What the plan's enterprise-gap table names (GAP-17 to GAP-27)
 
 One row per area of `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", in that table's order.
-#568's review found that eleven of the table's fourteen areas had no entry here, and this ticket
-(#569) read the table against GAP-1 to GAP-16 to place each. These entries were added after G5's
+#568's review found that eleven of the table's fourteen areas had no entry here, and #569 read
+the table against GAP-1 to GAP-16 to place each. These entries were added after G5's
 review on #63, so the header's sentence about that review does not cover them. They index the
 frozen Phase 1 inventory, some of whose named closure work has already landed: they are not eleven
 newly open gaps. The two middle columns are 06's cells verbatim, as the plan export froze them, and
