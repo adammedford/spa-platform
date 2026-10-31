@@ -151,33 +151,33 @@ internal static partial class ContentSecurityPolicyFit
         return baseline;
     }
 
-    [GeneratedRegex("### The baseline content security policy\\s+```text\\s*\\n(.*?)```", RegexOptions.Singleline)]
+    [GeneratedRegex("### The baseline content security policy\\s+```text\\s*\\n(.*?)```", RegexOptions.Singleline, RegexTimeout.Milliseconds)]
     private static partial Regex BaselineBlock();
 
-    [GeneratedRegex("<[^>]+>")]
+    [GeneratedRegex("<[^>]+>", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Placeholder();
 
-    [GeneratedRegex("<!--.*?-->", RegexOptions.Singleline)]
+    [GeneratedRegex("<!--.*?-->", RegexOptions.Singleline, RegexTimeout.Milliseconds)]
     private static partial Regex Comment();
 
-    [GeneratedRegex("<script\\b(?![^>]*\\bsrc=)[^>]*>", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("<script\\b(?![^>]*\\bsrc=)[^>]*>", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex InlineScript();
 
-    [GeneratedRegex("<[a-z][^>]*\\son[a-z]+\\s*=", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("<[a-z][^>]*\\son[a-z]+\\s*=", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex EventHandler();
 
-    [GeneratedRegex("<style\\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("<style\\b", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex StyleElement();
 
-    [GeneratedRegex("<[a-z][^>]*\\sstyle\\s*=", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("<[a-z][^>]*\\sstyle\\s*=", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex StyleAttribute();
 
-    [GeneratedRegex("<(?<tag>script|img|link|form|iframe|object|embed|source|video|audio)\\b[^>]*\\s(?:src|href|action|data)=\"(?<url>[^\"]*)\"", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("<(?<tag>script|img|link|form|iframe|object|embed|source|video|audio)\\b[^>]*\\s(?:src|href|action|data)=\"(?<url>[^\"]*)\"", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex Reference();
 
-    [GeneratedRegex("\\beval\\s*\\(|\\bnew\\s+Function\\s*\\(|\\bFunction\\s*\\(")]
+    [GeneratedRegex("\\beval\\s*\\(|\\bnew\\s+Function\\s*\\(|\\bFunction\\s*\\(", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Eval();
 
-    [GeneratedRegex("[\"'`]([a-z][a-z0-9+.-]*:(?://)?[^\"'`\\s]*)[\"'`]", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("[\"'`]([a-z][a-z0-9+.-]*:(?://)?[^\"'`\\s]*)[\"'`]", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex AbsoluteUrlLiteral();
 }
