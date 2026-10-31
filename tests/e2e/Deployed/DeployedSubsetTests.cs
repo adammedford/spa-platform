@@ -263,13 +263,17 @@ public sealed partial class DeployedSubsetTests
                 continue;
             }
 
-            Match reference = ContinuityReference().Match(line);
-            if (!reference.Success)
+            string[] named = [.. ContinuityReference().Matches(line).Select(match => match.Groups["method"].Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+            if (named.Length == 0)
             {
                 continue;
             }
 
-            MethodInfo? method = source.GetMethod(reference.Groups["method"].Value,
+            // One row, one Fact: crediting the first of two would leave the other unproved and unread
+            // (the same refusal tools/bench/e2e_evidence.py makes), so fail the run naming the row.
+            Assert.True(named.Length == 1, $"{id} names more than one continuity Fact: {string.Join(" and ", named.Select(name => $"ContinuityTests.{name}"))}.");
+
+            MethodInfo? method = source.GetMethod(named[0],
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
             if (method?.GetCustomAttribute<FactAttribute>() is not null &&
                 method.GetCustomAttribute<TheoryAttribute>() is null &&

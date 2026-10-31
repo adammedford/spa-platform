@@ -153,6 +153,21 @@ public sealed class DeployedRunTests
     }
 
     [Fact]
+    public void A_register_row_naming_two_continuity_facts_fails_the_reader_naming_the_row()
+    {
+        // Resolving the first and dropping the second would leave the second unproved and unread; the Python
+        // reader refuses the same row (tools/bench/e2e_evidence.py), so neither credits one of two.
+        string register = ContinuityRegister.Replace(
+            "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`",
+            "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`, `ContinuityTests.Row8_fifty_calls_on_a_due_token_across_two_tasks_refresh_once`",
+            StringComparison.Ordinal);
+        Assert.NotEqual(ContinuityRegister, register);
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Contains("N-32 names more than one continuity Fact", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_registered_continuity_method_that_is_not_a_plain_task_fact_is_not_the_rows_test()
     {
         // Each method below breaks one clause of the filter and meets the rest, so deleting any one

@@ -107,10 +107,14 @@ def read_register(root: pathlib.Path) -> tuple:
             row = ROW.match(line)
             if row is None or CONTINUITY_FILE not in line:
                 continue
-            reference = CONTINUITY_REFERENCE.search(line)
-            if reference is None:
+            methods = sorted(set(CONTINUITY_REFERENCE.findall(line)))
+            if not methods:
                 continue
-            method, test_id = reference.group(1), row.group(1)
+            test_id = row.group(1)
+            if len(methods) > 1:
+                names = " and ".join(f"ContinuityTests.{name}" for name in methods)
+                raise Refusal(f"{test_id} names more than one continuity Fact: {names}")
+            method = methods[0]
             if continuity.setdefault(method, test_id) != test_id:
                 raise Refusal(f"{continuity[method]} and {test_id} both name ContinuityTests.{method}")
     return defined, continuity

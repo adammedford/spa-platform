@@ -238,6 +238,28 @@ class RegisteredContinuityFactsCount(TestCase):
         self.assertIn("N-32 and N-33 both name ContinuityTests.Row9_replay", run.stderr)
         self.assertEqual([], run.drafts())
 
+    def test_a_row_naming_two_continuity_facts_is_refused(self):
+        # Crediting the first and dropping the second would leave the second unproved, so the row is refused.
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay`, "
+                "`ContinuityTests.Row9_other` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay"), case(CONTINUITY, "Row9_other")], root=root)
+        self.assertEqual(2, run.code, run.stdout)
+        self.assertIn("N-32 names more than one continuity Fact: ContinuityTests.Row9_other and ContinuityTests.Row9_replay", run.stderr)
+        self.assertEqual([], run.drafts())
+
+    def test_a_row_naming_one_continuity_fact_twice_names_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay`, again "
+                "`ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay")], root=root)
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertEqual(["N-32.md"], run.drafts())
+
 
 class Refusals(TestCase):
     def test_a_gate_test_with_no_id_prefix_fails_the_run_naming_it(self):
