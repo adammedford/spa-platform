@@ -377,11 +377,23 @@ is closed and not done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
-Phase 1 accepted. Phase 2 adds G6 to G8.
+Phase 1 accepted. Phase 2 adds G6 to G8, each defined in the gate register once its exit test is
+decided; a gate with no exit test cannot be closed.
+
+**Exit test** — what must pass before a gate closes: for the first gates a build, a run's items or
+a tag, and from G2 on the test ids the gate names, each with the tiers it must pass in, and, where
+the gate says so, the acceptance criteria those ids prove. Written in the frozen gates table for G1a
+to G5, and in the gate register for a gate defined after the export. _Avoid_: "acceptance" for the
+exit test, since a gate's criteria are a part of it.
 
 **Gate tag** — the annotated tag that closes a gate, its message naming the CI run that proved the
 exit test. It is permanent, so what its commit says stays said there. Other tags are not gates.
 _Avoid_: release tag, and "the tag" where another tag could be meant.
+
+**Gate register** — the live list of gates defined after the frozen export, each with what it
+proves, its exit test, what it unblocks and the decision that recorded it. Kept by the integrator;
+a gate is added or changed by deciding a request. It names ids that the export or the test id
+register defines, and defines none. _Avoid_: gates table, which is the export's.
 
 **Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
 ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
@@ -477,6 +489,10 @@ tier and the decision that named it, and the tiers of the export's rows that car
 checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
 the workstream that needs it. Holds no evidence ids and no rule ids. _Avoid_: post-export ids,
 test catalogue.
+
+**Retired test id** — a test id whose check was dropped. It keeps its number, and its row in the
+test id register is marked retired (an export id gains a row there to be marked), so earlier
+records stay true; no exit test may name it. _Avoid_: deleted, removed id.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.

@@ -61,8 +61,9 @@ const range = (p, a, b) => Array.from({ length: b - a + 1 }, (_, i) => `${p}-${S
 const ids = (list, tiers) => list.map((id) => ({ id, tiers }))
 const row = (r, owner = 'ws1-aws', idsNamed = []) => ({ row: r, owner, doneWhen: `the tests of ${r} pass`, ids: idsNamed })
 // The gates the stub's Scope agent reads. G3: deployed F- clauses and P- checks, whose cell gives the
-// P- ids no tier, so their rows do (#328); G4: 26 hermetic N- ids and N-26 deployed; G6 has no exit
-// test (Phase 2). READY is a gate with nothing withheld.
+// P- ids no tier, so their rows do (#328); G4: 26 hermetic N- ids and N-26 deployed; G6 has no row
+// here, since the export's table stops at G5 and contracts/gates.md defines it (#364). READY is a
+// gate with nothing withheld.
 const GATES = {
   G3: { exitTest: 'F-01 to F-06 and F-08, deployed. P-01 to P-06.', ids: [...ids([...range('F', 1, 6), 'F-08'], ['D']), ...ids(range('P', 1, 6), [])], rows: [row('1.5', 'ws1-aws', ['P-04']), row('1.7'), row('6.9', 'ws6-verification')] },
   G4: { exitTest: 'N-01 to N-25 and N-27, hermetic. The deployed subset, which adds N-26.', ids: [...ids([...range('N', 1, 25), 'N-27'], ['H']), ...ids(['N-26'], ['D'])], rows: [row('6.3', 'ws6-verification')] },
@@ -468,8 +469,10 @@ try {
       ['a mutation that failed other tests only', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'other-failed' } }, {}, /N01Composed, citing N-01, did not fail/],
       ['a baseline that is red', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'red' } }, {}, /N-01 is not proved at the hermetic tier: baseline red/],
       ['a red baseline says trunk is not green', { ...base, outcome: { 'Gateway.ComposedTests.N01Composed': 'red' } }, {}, /tests\/Gateway\.ComposedTests failed unmutated at base, so trunk is not green here/],
-      ['an id in neither document, with no tier', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: [] }] } } }, {}, /N-28 is in neither .*so it is unknown: it was not tiered or judged/],
-      ['an id in neither document, though the cell tiers it', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: ['H'] }] } } }, {}, /N-28 is in neither .*so it is unknown: it was not tiered or judged/],
+      // N-99, far past the register's next N id, so no numbering turns this case green by accident:
+      // these named N-28 until #538 numbered it, and went red on main without running (#364).
+      ['an id in neither document, with no tier', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-99', tiers: [] }] } } }, {}, /N-99 is in neither .*so it is unknown: it was not tiered or judged/],
+      ['an id in neither document, though the cell tiers it', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-99', tiers: ['H'] }] } } }, {}, /N-99 is in neither .*so it is unknown: it was not tiered or judged/],
       ['an id no row and no cell tiers', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, without(REGISTER_LINES, 'P-04 to P-06')) }, {}, /the exit test gives P-04 no tier and no row of .* gives it one, so it was not judged/],
       ['an id whose rows disagree', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, after(REGISTER_LINES, 'P-04 to P-06', '| P-04 | H | a second tier row |')) }, {}, /the exit test gives P-04 no tier and its rows disagree/],
       ['an unreadable Tier cell', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-04 to P-06', '| D |', '| deployed |')) }, {}, /P-04's Tier cell "deployed" in contracts\/test-ids\.md is not H, D or both/],
@@ -770,17 +773,44 @@ try {
     const g3doubt = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, gateRegister: { exists: true, lines: [] } })
     if (g3doubt.result.refused || !g3doubt.n('locate') || !g3doubt.result.reasons.some((x) => /the gate register contracts\/gates\.md could not be read \(.*none of its table lines\), so whether it also defines G3 is unknown/.test(x))) fail(`a register with no line read, under G3: refused ${g3doubt.result.refused}, reasons ${JSON.stringify(g3doubt.result.reasons)}`)
     // An unknown or retired id in the export's own exit test stays #328's verdict reason, not a refusal.
-    const exportUnknown = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-28', tiers: ['H'] }] } } })
+    const exportUnknown = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-99', tiers: ['H'] }] } } })
     if (exportUnknown.result.refused || !exportUnknown.n('locate')) fail(`an unknown id in the export's exit test refused the run: ${JSON.stringify(exportUnknown.result.reasons)}`)
-    // The committed register, once there is one, parses: every gate it defines is admitted with no
-    // register problem named (a guard reads the thing it guards). With none committed, the stub's
-    // default is the absent register, which the checks above run on.
-    if (GATE_REGISTER.exists) {
+    // The committed register parses (a guard reads the thing it guards): every gate it defines is
+    // admitted with no register problem named. G6 is defined there since #364, so the file must exist,
+    // G6 must be admitted from it, located and tiered by its Id | Tiers required table, and G7 and G8,
+    // which it does not define, must still be refused as having no exit test.
+    if (!GATE_REGISTER.exists) fail(`${GATES_DOC} is not committed, so G6 has no exit test (#364)`)
+    else {
       const defined = [...new Set(GATE_REGISTER.lines.map((l) => cells(l)[0]).filter((c) => /^G\d+[a-z]?$/.test(c || '')))]
-      if (!defined.length) fail(`${GATES_DOC} is committed but defines no gate this companion can find`)
+      if (!defined.includes('G6')) fail(`the committed ${GATES_DOC} does not define G6: it defines ${defined.join(', ') || 'no gate'}`)
       for (const gname of defined) {
         const r = await execute(newRepo(), { gate: gname }, {})
         if (r.result.reasons.some((x) => /gate register/.test(x))) fail(`the committed ${GATES_DOC} refuses ${gname}: ${JSON.stringify(r.result.reasons)}`)
+      }
+      // G6 from the committed file: admitted, every id of its ids table handed to Locate, each tiered
+      // as its Tiers required cell says, and each of its criteria carried to the report.
+      const g6rows = []
+      let inG6Ids = false
+      let seenG6 = false
+      GATE_REGISTER.lines.forEach((l, i) => {
+        const c = cells(l)
+        const next = GATE_REGISTER.lines[i + 1] || ''
+        if (/^\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(next.trim())) { inG6Ids = seenG6 && c.join('|') === 'Id|Tiers required'; if (c[0] === 'Gate') seenG6 = false; return }
+        if (/^\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(l.trim())) return
+        if (c.length === 5 && c[0] === 'G6') seenG6 = true
+        else if (inG6Ids) g6rows.push(c)
+      })
+      if (!g6rows.length) fail(`the committed ${GATES_DOC} has no Id | Tiers required row beneath G6`)
+      const committed = await execute(newRepo(), { gate: 'G6' }, {})
+      if (committed.result.refused || !committed.n('locate')) fail(`G6 from the committed ${GATES_DOC} was not admitted: ${committed.labels.join(', ')}; ${JSON.stringify(committed.result.reasons)}`)
+      const sent = committed.calls.filter((c) => c.label.startsWith('locate')).flatMap((c) => dataLine(c.prompt, 'IDS') || []).sort()
+      const listed = g6rows.map(([id]) => id).sort()
+      if (sent.join() !== listed.join()) fail(`G6's Locate agents were given ${sent.join(', ')}, where the committed ids table lists ${listed.join(', ')}`)
+      for (const [id, t] of g6rows) if (required(committed, id) !== t) fail(`${id} was tiered ${required(committed, id)}, where the committed ids table requires ${t}`)
+      if (!/Acceptance criteria/.test(committed.result.report.text)) fail('G6\'s criteria from the committed register are not in the report')
+      for (const gname of ['G7', 'G8']) {
+        const r = await execute(newRepo(), { gate: gname }, {})
+        if (!refusedFor(r, new RegExp(`${gname} has no exit test: neither the gates table nor the gate register defines one`))) fail(`${gname} with the committed ${GATES_DOC} was not refused as undefined: dispatched ${r.labels.join(', ')}; reasons ${JSON.stringify(r.result.reasons)}`)
       }
     }
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the register's runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
