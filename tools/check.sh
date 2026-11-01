@@ -306,6 +306,9 @@ fi
 # decided the change (ADR-0023, #102), so it is handed that base. With none, it reads every commit
 # HEAD reaches, so no base is not a skip. Offline it still requires the trailer, and says it could
 # not check what the trailer cites.
+# The ADR rule reads the same range net, from the merge-base of the base and HEAD: an ADR that
+# existed there may change only its Status item, and a body edit, delete or rename fails whatever
+# the trailer says (ADR-0032 decision 7, #634); with no base it says no ADR was judged.
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I .github/steering.py --base "$base" || fail "the steering check failed."

@@ -216,7 +216,9 @@ jobs:
         # and the commits this change adds, each of which, if it changes a steering document, must
         # name what authorised it in an `Authority:` trailer (ADR-0023, #102). Those are judged from
         # the base the decision step resolved, or over every commit HEAD reaches when it resolved
-        # none, so a push GitHub has no `before` for is judged rather than skipped.
+        # none, so a push GitHub has no `before` for is judged rather than skipped. An ADR that
+        # existed at the merge-base of that base and HEAD may change only its Status item, so a
+        # body edit, delete or rename fails whatever the trailer says (ADR-0032 decision 7, #634).
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         env:

@@ -290,6 +290,44 @@ NAMELESS_HEADLINE = ("STEERING FAILED: a commit changes a steering document and 
                      "authority.")
 
 
+# An accepted ADR in the shape every numbered file under docs/adr/ takes: a Status item, then the
+# rest of the header, a Plan ref whose continuation lines are indented as ADR-0014's are, and the
+# sections. One line each from the rejected options and the consequences stand where e2fc266
+# edited ADR-0017's. No line carries a `#` against a digit or a ticket citation, for the reason the
+# citations above are assembled.
+ADR = "docs/adr/0017-a-decision.md"
+ADR_LINES = (
+    "# ADR-0017: A decision\n",
+    "\n",
+    "- **Status:** Accepted.\n",
+    "- **Date:** 2026-10-16\n",
+    "- **Deciders:** integrator\n",
+    "- **Plan ref:** the plan's task row, which runs on\n",
+    "  over a second line the way ADR-0014's does.\n",
+    "\n",
+    "## Context\n",
+    "\n",
+    "What the gate found.\n",
+    "\n",
+    "## Decision\n",
+    "\n",
+    "1. Lock the refresh.\n",
+    "\n",
+    "## Alternatives rejected\n",
+    "\n",
+    "- Raise the grace window instead of locking.\n",
+    "\n",
+    "## Consequences\n",
+    "\n",
+    "- The lock costs one wait per refresh.\n",
+)
+STATUS = ADR_LINES.index("- **Status:** Accepted.\n")
+REJECTED_LINE = "- Raise the grace window instead of locking.\n"
+CONSEQUENCE_LINE = "- The lock costs one wait per refresh.\n"
+ADR_HEADLINE = ("STEERING FAILED: a commit range edits the body of an ADR that existed at the "
+                "base.")
+
+
 # 91e2103's line as AGENTS.md carried it.
 GATE_SCORE = (
     "- **Gate G0 is open, with three of its five items passed.** The shipped handler, token "
@@ -2122,6 +2160,290 @@ class SteeringTests(unittest.TestCase):
                      "docs/agents/aws-rules.md"):
             with self.subTest(path=path):
                 self.assertFalse(steering.is_steering(path))
+
+    # --- an ADR that existed at the base keeps its body -----------------------------------------
+
+    def write_adr(self, path: str = ADR, text: str = "") -> None:
+        """An ADR as docs/adr/ writes one, or with the text a case gives."""
+        self.write(path, text or "".join(ADR_LINES))
+
+    def adr_commit(self, subject: str) -> str:
+        """Commit an ADR change before the authority rule's starting point, so that rule holds
+        nothing and the ADR rule is the only one these cases read."""
+        return self.commit(message(subject), made=BEFORE)
+
+    def test_e2fc266_s_shape_fails_on_exactly_its_two_body_lines(self):
+        """A Status note plus two body lines, as e2fc266 wrote them into ADR-0017: the Status item
+        gains its continuation lines and passes, and each body line is named twice, at the line
+        HEAD holds it on and at the base line it replaced."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR:** decision 1 changes.\n"
+        lines.insert(STATUS + 1, "  See the later ADR for the window.\n")
+        lines.insert(STATUS + 2, "  And its evidence.\n")
+        rejected = lines.index(REJECTED_LINE)
+        lines[rejected] = REJECTED_LINE.rstrip("\n") + " *Amended by a later decision.*\n"
+        consequence = lines.index(CONSEQUENCE_LINE)
+        lines[consequence] = CONSEQUENCE_LINE.rstrip("\n") + " *The grace is 60 seconds now.*\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Amend the ADR in place")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        named = [line.strip() for line in out.splitlines() if line.startswith(f"  {ADR}")]
+        self.assertEqual([
+            f"{ADR}: removed at base line {ADR_LINES.index(REJECTED_LINE) + 1}: "
+            f"{REJECTED_LINE.rstrip()}",
+            f"{ADR}:{rejected + 1}: {lines[rejected].rstrip()}",
+            f"{ADR}: removed at base line {ADR_LINES.index(CONSEQUENCE_LINE) + 1}: "
+            f"{CONSEQUENCE_LINE.rstrip()}",
+            f"{ADR}:{consequence + 1}: {lines[consequence].rstrip()}",
+        ], named)
+        # The Status item moved every later line down two, so the two sides number differently.
+        self.assertEqual(ADR_LINES.index(REJECTED_LINE) + 2, rejected)
+        self.assertIn("docs/adr/README.md", out)
+        self.assertIn("ADR-0032 decision 7", out)
+        self.assertIn("No Authority: trailer", out)
+
+    def test_a_status_only_change_with_a_new_continuation_line_passes_and_is_counted(self):
+        """0617b64's and 8c69209's shape: the Status bullet reworded and a continuation line
+        added under it. The count is what the assertion holds, since a rule deleted outright also
+        exits 0."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR.**\n"
+        lines.insert(STATUS + 1, "  See the later ADR for what changes.\n")
+        self.write_adr(text="".join(lines))
+        self.adr_commit("A Status-line note")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_two_adrs_are_counted_in_the_plural(self):
+        self.write_adr()
+        self.write_adr("docs/adr/0018-another-decision.md")
+        base = self.adr_commit("Two ADRs")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 2 ADRs existing at the base keep their bodies.", out)
+
+    def test_a_new_adr_passes_however_it_is_written(self):
+        """An ADR absent at the base is not judged, and nor is the README row it adds; a new ADR
+        fixed in a later commit of the same range, as 91a4d2e fixed ADR-0032, passes too."""
+        self.write_adr()
+        base = self.adr_commit("One ADR")
+        self.write_adr("docs/adr/0036-a-new-decision.md")
+        self.write("docs/adr/README.md", "# Architecture decisions\n\n| 0036 | A new one |\n")
+        self.adr_commit("A new ADR")
+        self.write_adr("docs/adr/0036-a-new-decision.md", "".join(ADR_LINES) + "A fix.\n")
+        self.adr_commit("The new ADR, fixed")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_a_line_after_the_status_item_is_body_unless_it_is_indented(self):
+        """The item ends at the first line that is blank or not indented, so a line added right
+        after it fails unless it is a continuation line, and an indented line after a blank one
+        is body as well."""
+        for shape, added, fails in (
+            ("an unindented line", "- **Supersedes:** nothing.\n", True),
+            ("an indented line", "  under the bullet.\n", False),
+        ):
+            with self.subTest(shape=shape):
+                self.write_adr()
+                base = self.adr_commit("The ADR as it was accepted")
+                lines = list(ADR_LINES)
+                lines.insert(STATUS + 1, added)
+                self.write_adr(text="".join(lines))
+                self.adr_commit(f"Add {shape} after the Status item")
+                code, out = self.check("--base", base)
+                if fails:
+                    self.assertEqual(1, code, out)
+                    self.assertIn(f"  {ADR}:{STATUS + 2}: {added.rstrip()}\n", out)
+                else:
+                    self.assertEqual(0, code, out)
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS + 1:STATUS + 1] = ["\n", "  after a blank line.\n"]
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Indent a line after a blank one")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(f"  {ADR}:{STATUS + 2}: ''\n", out)
+        self.assertIn(f"  {ADR}:{STATUS + 3}:   after a blank line.\n", out)
+
+    def test_an_indented_plan_ref_line_is_body(self):
+        """ADR-0014's shape: another header item with continuation lines is not the Status item,
+        so editing one of its lines fails."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        continuation = "  over a second line the way ADR-0014's does.\n"
+        lines = list(ADR_LINES)
+        where = lines.index(continuation)
+        lines[where] = "  over a second line, reworded.\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Reword the Plan ref")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(f"  {ADR}:{where + 1}:   over a second line, reworded.\n", out)
+
+    def test_a_deleted_or_renamed_adr_fails_naming_the_file(self):
+        """A renumber breaks every citation of the old number, so a rename fails like a delete,
+        and names where the file went. The two ADRs differ, so git pairs the rename by content."""
+        self.write_adr()
+        self.write_adr("docs/adr/0018-another-decision.md",
+                       "# ADR-0018: Another decision\n\n- **Status:** Accepted.\n\n"
+                       "A body that shares nothing with the other one.\n")
+        base = self.adr_commit("Two ADRs")
+        (self.root / ADR).unlink()
+        renamed = "docs/adr/0019-another-decision.md"
+        (self.root / "docs/adr/0018-another-decision.md").rename(self.root / renamed)
+        self.adr_commit("Delete one ADR and renumber the other")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertIn(f"  {ADR}: existed at the base and is deleted\n", out)
+        self.assertIn("  docs/adr/0018-another-decision.md: existed at the base and is renamed "
+                      f"to {renamed}\n", out)
+
+    def test_a_whitespace_only_change_or_a_rewrap_fails(self):
+        """Every byte outside the Status item counts: a trailing space, a tab for spaces, a lost
+        final newline and a paragraph re-wrapped across two lines are each an edit."""
+        consequence = ADR_LINES.index(CONSEQUENCE_LINE)
+        for shape, text, named in (
+            ("a trailing space",
+             "".join(ADR_LINES).replace(CONSEQUENCE_LINE, CONSEQUENCE_LINE[:-1] + " \n"),
+             f"{ADR}:{consequence + 1}: '- The lock costs one wait per refresh. '"),
+            ("no final newline", "".join(ADR_LINES).rstrip("\n"),
+             f"{ADR}: removed at base line {len(ADR_LINES) + 1}: ''"),
+            ("a re-wrap",
+             "".join(ADR_LINES).replace(CONSEQUENCE_LINE,
+                                        "- The lock costs one wait\n  per refresh.\n"),
+             f"{ADR}:{consequence + 2}:   per refresh."),
+        ):
+            with self.subTest(shape=shape):
+                self.write_adr()
+                base = self.adr_commit("The ADR as it was accepted")
+                self.write_adr(text=text)
+                self.adr_commit(f"Make {shape}")
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(f"  {named}\n", out)
+
+    def test_the_readme_and_a_draft_are_not_judged(self):
+        self.write_adr()
+        self.write("docs/adr/README.md", "# Architecture decisions\n")
+        self.write("docs/adr/draft-a-later-decision.md", "# ADR draft: A later decision\n")
+        base = self.adr_commit("An ADR, the index and a draft")
+        self.write("docs/adr/README.md", "# Architecture decisions\n\nA new paragraph.\n")
+        (self.root / "docs/adr/draft-a-later-decision.md").unlink()
+        self.adr_commit("The index changes and the draft goes")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_an_adr_with_no_status_item_at_the_base_is_frozen_whole(self):
+        """With no Status item at the base nothing may change, so adding one is no escape: the
+        new bullet is body, and so is the edit beside it that it would otherwise cover."""
+        lines = [line for line in ADR_LINES if not line.startswith("- **Status:**")]
+        self.write_adr(text="".join(lines))
+        base = self.adr_commit("An ADR with no Status item")
+        self.write_adr()
+        self.adr_commit("Give it a Status item")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(f"  {ADR}:{STATUS + 1}: - **Status:** Accepted.\n", out)
+
+    def test_a_branch_behind_its_base_passes(self):
+        """The base's own later work is not the branch's: a branch forked before its base added an
+        ADR and noted another's Status is judged from the fork, where neither change was made."""
+        self.write_adr()
+        self.adr_commit("One ADR")
+        trunk = self.git("symbolic-ref", "--short", "HEAD")
+        self.git("branch", "behind")
+        self.write_adr("docs/adr/0036-a-new-decision.md")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by ADR-0036.**\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("The base adds an ADR and notes the older one")
+        self.git("switch", "--quiet", "behind")
+        self.write("src/a-file.txt", "work\n")
+        self.adr_commit("The branch's own work")
+        code, out = self.check("--base", trunk)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_a_body_edit_reverted_later_in_the_range_passes(self):
+        """Net over the range: an edit one commit makes and a later one undoes is no edit."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit.\n")
+        self.adr_commit("Edit the body")
+        self.write_adr()
+        self.adr_commit("Revert the edit")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
+    def test_an_authority_trailer_does_not_excuse_a_body_edit(self):
+        """#659 Q38: the authority rule vouches for the trailer, and the body edit still fails."""
+        self.github(634)
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit the ticket asked for.\n")
+        self.commit(message("Edit the body on a ticket's authority", issue(634)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertNotIn(NAMELESS_HEADLINE, out)
+        self.assertIn(f"  {ADR}:{len(ADR_LINES) + 1}: An edit the ticket asked for.\n", out)
+
+    def test_without_a_base_no_adr_is_judged_and_the_run_says_so(self):
+        """No base, no commit to say which ADRs existed: the line says so, a body edit in the
+        history fails nothing, and the summary claims no count."""
+        self.write_adr()
+        self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit.\n")
+        self.adr_commit("Edit the body")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("steering: no ADR body judged: no --base names the commit they existed "
+                      "at.\n", out)
+        self.assertNotIn("keep", out)
+
+    def test_the_no_base_line_prints_on_a_failing_run_too(self):
+        self.append("AGENTS.md", "- **Done:** everything.")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("steering: no ADR body judged:", out)
+
+    def test_a_base_sharing_no_commit_with_head_judges_no_adr_and_says_so(self):
+        self.write_adr()
+        self.adr_commit("The ADR as it was accepted")
+        trunk = self.git("symbolic-ref", "--short", "HEAD")
+        self.git("switch", "--quiet", "--orphan", "unrelated")
+        self.write_adr(text="Another history.\n")
+        other = self.adr_commit("An unrelated root")
+        self.git("switch", "--quiet", "--force", trunk)
+        code, out = self.check("--base", other)
+        self.assertIn(f"steering: no ADR body judged: {other[:12]} and HEAD share no commit", out)
+        self.assertNotIn(ADR_HEADLINE, out)
+
+    def test_every_adr_in_the_live_tree_is_judged(self):
+        """The green side is the repository's own docs/adr/: with an empty range every numbered
+        ADR is counted, and README and any draft are not."""
+        self.live()
+        code, out = self.check("--base", "HEAD")
+        numbered = [path for path in (ROOT / "docs" / "adr").iterdir()
+                    if re.fullmatch(r"\d{4}-.*\.md", path.name)]
+        self.assertGreaterEqual(len(numbered), 35)
+        self.assertNotIn(ADR_HEADLINE, out)
+        self.assertIn(f" {len(numbered)} ADRs existing at the base keep their bodies.", out)
 
     # --- the GitHub lookups, against a stand-in for gh ----------------------------------------
 
