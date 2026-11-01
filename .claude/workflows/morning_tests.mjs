@@ -354,6 +354,24 @@ function stub(env, scriptArgs, served) {
           rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
         }
+        // The after pass's applier (#635) also reports each question whose work is in place. A commit
+        // answer in served.landed is found on origin/main, so it is skipped, not committed again; any
+        // other commit is on the morning branch alone. served.heldBySource: commit answers whose applier
+        // names their source ticket as holding them, which never settles one (Q30).
+        if (opts.schema.properties && opts.schema.properties.verified) {
+          const landed = served.landed || []
+          const edits = (unit.edits || []).map((e) => ({ q: e.q, effect: `${URL(e.target)}#issuecomment-8`, held: 0, onMain: false }))
+          const edges = (unit.edges || []).map((e) => ({ q: e.q, effect: `${URL(e.target)}`, held: 0, onMain: false }))
+          out.commits = out.commits.filter((c) => !landed.includes(c.questions[0]))
+          out.skipped = qs.filter((q) => q.kind === 'integrator-edit' && landed.includes(q.q)).map((q) => ({ q: q.q, why: `its commit ${sha('a')} is on origin/main` }))
+          out.verified = [
+            ...qs.filter((q) => q.kind === 'integrator-edit').map((q) => ({ q: q.q, effect: landed.includes(q.q) ? sha('a') : sha('f'), held: (served.heldBySource || []).includes(q.q) ? q.issue : 0, onMain: landed.includes(q.q) })),
+            ...qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ q: q.q, effect: URL(500 + i), held: 500 + i, onMain: false })),
+            ...(unit.followUps || []).map((f, i) => ({ q: f.q, effect: URL(600 + i), held: 600 + i, onMain: false })),
+            ...qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ q: q.q, effect: `${URL(q.issue)}#issuecomment-7`, held: 0, onMain: false })),
+            ...edits, ...edges,
+          ]
+        }
       } else if (label === 'pr-refresh') {
         out = served.refresh || { edited: true, reason: '' }
       } else if (label === 'handover') {
@@ -394,15 +412,27 @@ function stub(env, scriptArgs, served) {
           draft: served.draft === undefined ? '' : served.draft, error: served.draftError || '',
         }
       } else if (label === 'after') {
+        // The after pass's first agent (#635): the lookup, the landing and the cleanup. By default the
+        // landing pull request merged at HEAD, the morning's verify.json named HEAD, a fresh origin/main
+        // contains it, the record is read through the real reader, CI is green, and the classify phase
+        // file is served as it lies on disk. served.after: fields of its return over that default.
         const a = served.after || {}
         const contained = a.contained !== false
         out = {
           listing: served.listing || LISTING_ONE,
           issue: { number: ISSUE, title: `Overnight ${DATE}`, url: URL(ISSUE) },
-          tip: HEAD, originMain: sha('9'), contained,
+          pr: { number: 400, state: 'MERGED', headRefOid: HEAD, mergeCommit: sha('9') },
+          tip: HEAD, verifiedHead: HEAD, originMain: sha('9'), contained,
+          record: readRecord(HEAD, served.recordComments || RECORD_MERGE), ci: 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/2',
           closed: contained ? [300] : [], unassigned: contained ? [301] : [], removed: contained ? [`${WT}/ws1-infra`, `${WT}/overnight`] : [],
           kept: [], pruned: contained, reason: contained ? '' : `origin/main does not contain ${HEAD}`,
+          phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)).filter((f) => f.name === 'classify'),
+          ...a,
         }
+      } else if (label === 'after-handover') {
+        // Posts the After comment and closes the issue only when its prompt says CLOSE: true.
+        // served.afterHanded: fields of its return, as a hand-over agent that closed anyway would.
+        out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: true, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
       const bad = validate(opts.schema, out)
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
@@ -653,17 +683,186 @@ try {
   }
 
   // 10. after: true refuses, with one agent and nothing done, until origin/main contains the
-  //     integration tip; once it does, one agent does the work.
+  //     integration tip; once it does, its first agent cleans up and the pass goes on (#635).
   checks++
   {
     const no = await execute(newRepo(), { date: DATE, after: true }, { after: { contained: false } })
     if (no.labels.join() !== 'after' || !/does not contain the integration tip c{40}/.test(no.result.refused || '') || no.result.closed.length || no.result.removed.length || no.result.unassigned.length) fail(`after, not contained: ${no.labels.join(', ')} -> ${JSON.stringify(no.result)}`)
     const yes = await execute(newRepo(), { date: DATE, after: true }, { after: { contained: true } })
-    if (yes.labels.join() !== 'after' || yes.result.refused !== '' || yes.result.closed.join() !== '300') fail(`after, contained: ${yes.labels.join(', ')} -> ${JSON.stringify(yes.result)}`)
+    if (yes.labels[0] !== 'after' || yes.result.refused !== '' || yes.result.closed.join() !== '300') fail(`after, contained: ${yes.labels.join(', ')} -> ${JSON.stringify(yes.result)}`)
     const p = yes.prompt('after')
     if (!(p.indexOf('merge-base --is-ancestor <tip> origin/main') > 0 && p.indexOf('merge-base --is-ancestor <tip> origin/main') < p.indexOf('gh issue close'))) fail('the after prompt does not check origin/main before it closes anything')
     const none = await execute(newRepo(), { date: DATE, after: true }, { listing: [] })
     if (!none.result.halted) fail('after with no Overnight issue was not refused')
+  }
+
+  // 10a. A closed Overnight issue is refused by the after pass (#635 Q31): the lookup reads its state,
+  //      and nothing after it runs: no comment is read, nothing is replayed, applied or cleaned up, by
+  //      issue number or by date. An agent that cleaned up anyway is named.
+  checks++
+  {
+    const SHUT = [{ number: ISSUE, title: `Overnight ${DATE}`, state: 'CLOSED' }]
+    const quiet = { closed: [], unassigned: [], removed: [], kept: [], pruned: false }
+    for (const [label, a] of [['by issue', { issue: ISSUE, after: true }], ['by date', { date: DATE, after: true }]]) {
+      const r = await execute(newRepo(), a, { listing: SHUT, after: quiet })
+      if (r.labels.join() !== 'after' || !/is closed/.test(r.result.halted || '') || /forbids/.test(r.result.halted || '')) fail(`#635 Q31, ${label}: a closed Overnight issue dispatched ${r.labels.join(', ')} -> ${JSON.stringify(r.result)}`)
+      const p = r.prompt('after')
+      const stop = p.search(/its state is OPEN, stop here/)
+      if (!(stop > 0 && stop < p.indexOf('--json body,comments') && stop < p.indexOf('gh issue close') && stop < p.indexOf('worktree remove'))) fail(`#635 Q31, ${label}: the after prompt does not stop on a closed issue before it reads a comment or cleans up`)
+    }
+    if (!/--state all --search "Overnight/.test((await execute(newRepo(), { date: DATE, after: true }, { listing: SHUT, after: quiet })).prompt('after'))) fail('#635 Q31: by date, the after lookup lists open issues alone, so a closed one reads as not found')
+    const breach = await execute(newRepo(), { issue: ISSUE, after: true }, { listing: SHUT })
+    if (!/is closed/.test(breach.result.halted || '') || !/forbids/.test(breach.result.halted || '')) fail(`#635 Q31: an after agent that cleaned up a closed issue is not named: ${JSON.stringify(breach.result.halted)}`)
+    // The morning pass by issue number is unchanged by it.
+    const morning = await execute(newRepo(), { issue: ISSUE }, { listing: [{ number: ISSUE, title: `Overnight ${DATE}`, state: 'OPEN' }] })
+    if (morning.result.halted) fail(`#635 Q31: the morning pass by issue number halted: ${morning.result.halted}`)
+  }
+
+  // A night for the after pass (#635): one question of each kind, confirmed at 08:00 and never
+  // applied, because the morning at 09:00 stopped at Verify; then the landing deleted the branch.
+  const Q = (n, text) => `**Q${n}.** ${text}\nRecommended: Yes.\n${PRE}\n`
+  const AFTER_BOX = '- [ ] The old acceptance box'
+  const AFTER_NIGHT = issueWith([
+    comment(60, `## Questions: ${cite(300)}, issue-300, First ticket\n\n${Q(1, 'Add the guide sentence?')}\n${Q(2, 'File the proxy ticket?')}`, '2026-10-21T06:00:00Z'),
+    comment(61, `## Questions: ${cite(301)}, issue-301, Second ticket\n\n${Q(3, 'Record the decision?')}\n${Q(4, 'File the follow-up?')}`, '2026-10-21T06:00:01Z'),
+    comment(62, `## Questions: ${cite(302)}, issue-302, Third ticket\n\n${Q(5, 'Remove the old box?')}\n${Q(6, 'Keep it text-only?')}\n${Q(7, 'Change the port?')}`, '2026-10-21T06:00:02Z'),
+    comment(95, 'Confirm Q1 to Q7 as pre-accepted, with the override below.\n\nQ7: no, keep the port\n', '2026-10-21T08:00:00Z'),
+    comment(96, `## Morning ${DATE}\n\nOvernight #${ISSUE}. Apply: not run.\n\n### Refusals\n\n- CI is red`, '2026-10-21T09:00:00Z'),
+  ])
+  const AFTER_CLASSES = {
+    1: { kind: 'integrator-edit', summary: 'commit the guide sentence' },
+    2: { kind: 'workstream-ticket', summary: 'file the proxy ticket' },
+    3: { kind: 'decision-to-record', summary: 'draft the ADR candidate' },
+    4: { kind: 'follow-up', summary: 'file the follow-up', followUp: { title: 'The proxy names its timeout', touches: ['src/Platform.Proxy/ProxyOptions.cs'], blockedBy: [], what: 'Name the timeout.' } },
+    5: { kind: 'ticket-edit', summary: 'remove the old box from #303', target: 303, removeBoxes: [AFTER_BOX] },
+    6: { kind: 'no-repo-change', summary: 'the grilling record holds it; the ticket implements it' },
+  }
+  const afterRun = (served = {}, env = newRepo()) => execute(env, { date: DATE, after: true }, { issue: AFTER_NIGHT, kinds: {}, classes: AFTER_CLASSES, ...served })
+  const afterText = (r) => (/BEGIN HAND-OVER\n([\s\S]*)\nEND HAND-OVER/.exec(r.prompt('after-handover')) || [])[1] || ''
+  const section = (text, title) => (new RegExp(`^### ${title}[^\\n]*\\n\\n([\\s\\S]*?)(?=\\n\\n###|(?![\\s\\S]))`, 'm').exec(text) || [])[1] || ''
+
+  // 10b. The landing head (#635 Q23, Q33): the tip is the merged landing pull request's head, matched
+  //      to the head the morning verified when verify.json recorded one. A mismatch, or no merged pull
+  //      request, refuses the pass with one agent and nothing done. Containment proves the landing, not
+  //      the review: with no merge record naming the landed head, or CI not green on it, the cleanup
+  //      runs but Apply does not, and the issue stays open. No prompt needs the deleted integration
+  //      branch, and no Verify runs.
+  checks++
+  {
+    const quiet = { closed: [], unassigned: [], removed: [], kept: [], pruned: false }
+    const mism = await afterRun({ after: { verifiedHead: OLDER, ...quiet } })
+    if (mism.labels.join() !== 'after' || !/d{40}/.test(mism.result.refused || '') || !/c{40}/.test(mism.result.refused || '')) fail(`#635 Q23: a landed head the morning did not verify was not refused: ${mism.labels.join(', ')} -> ${JSON.stringify(mism.result.refused)}`)
+    const unmerged = await afterRun({ after: { pr: { number: 400, state: 'OPEN', headRefOid: HEAD, mergeCommit: '' }, ...quiet } })
+    if (unmerged.labels.join() !== 'after' || !/merged/.test(unmerged.result.refused || '')) fail(`#635 Q23: an unmerged landing pull request was not refused: ${unmerged.labels.join(', ')} -> ${JSON.stringify(unmerged.result.refused)}`)
+    const otherHead = await afterRun({ after: { pr: { number: 400, state: 'MERGED', headRefOid: OLDER, mergeCommit: sha('9') }, ...quiet } })
+    if (otherHead.labels.join() !== 'after' || !otherHead.result.refused) fail(`#635 Q23: a tip that is not the merged pull request's head was not refused: ${otherHead.labels.join(', ')}`)
+    const acted = await afterRun({ after: { verifiedHead: OLDER } })
+    if (!/forbids/.test(acted.result.refused || '')) fail(`#635 Q23: an after agent that cleaned up over a refused landing is not named: ${JSON.stringify(acted.result.refused)}`)
+    const noVerify = await afterRun({ after: { verifiedHead: '' } })
+    if (noVerify.result.refused || !noVerify.labels.includes('classify')) fail(`#635 Q23: with no verify.json the pass did not go on from the merged pull request's head: ${noVerify.labels.join(', ')} -> ${JSON.stringify(noVerify.result.refused)}`)
+    for (const c of noVerify.calls) if (/rev-parse overnight\/|--is-ancestor <base> overnight\/|worktree add[^`\n]*overnight\/|push -u origin overnight\//.test(c.prompt)) fail(`#635 Q23: the ${c.label} prompt needs the deleted integration branch`)
+    if (noVerify.labels.includes('verify')) fail('#635 Q23: the after pass ran Verify')
+    for (const [label, served, why] of [['no record', { recordComments: [] }, /no review record names c{40}/], ['a hold', { recordComments: [prComment(15, `Reviewed ${HEAD} against ${BASE}: hold`, '2026-10-21T07:00:00Z')] }, /says hold/], ['red CI', { after: { ci: 'red' } }, /CI is red on c{40}/]]) {
+      const r = await afterRun(served)
+      if (r.labels[0] !== 'after' || r.result.closed.join() !== '300') fail(`#635 Q23, ${label}: the cleanup did not run: ${JSON.stringify(r.result)}`)
+      if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`#635 Q23, ${label}: Apply ran over a landed head no record or CI clears: ${r.labels.join(', ')}`)
+      if (!r.result.refusals.some((x) => why.test(x)) || r.result.issueClosed) fail(`#635 Q23, ${label}: refusals ${JSON.stringify(r.result.refusals)}, closed ${r.result.issueClosed}`)
+      if (!r.labels.includes('after-handover') || !why.test(afterText(r))) fail(`#635 Q23, ${label}: the After comment does not name why Apply did not run`)
+    }
+  }
+
+  // 10c. With after: true and the integration branch gone, every confirmed applier runs (#635 Q22,
+  //      Q24): a question confirmed before a morning that never applied it is applied now, the commit
+  //      answer on integrator/morning-<date> forked from a fresh origin/main. Cleanup, Apply, the After
+  //      comment and the close run in that order (Q27), within seven agents at the default besides the
+  //      body readers. Once every question is settled the issue is closed: answered no, applied, or
+  //      held by a ticket the After comment names (Q28, Q29); the commit answer only once it is on
+  //      origin/main (Q30).
+  checks++
+  {
+    const env = newRepo()
+    const r = await afterRun({ landed: [1] }, env)
+    const L = r.labels
+    const at = (l) => L.findIndex((x) => x === l || x.startsWith(l))
+    if (!(at('after') === 0 && at('after') < at('comments') && at('comments') < at('classify') && at('classify') < at('apply:') && at('apply:') < at('after-handover') && L[L.length - 1] === 'after-handover')) fail(`#635 Q27: the after pass ran ${L.join(', ')}, not cleanup, Apply, then the After comment`)
+    const core = L.filter((l) => !l.startsWith('comments-batch:'))
+    if (core.length > 7) fail(`#635 Q27: the after pass dispatched ${core.length} agents besides the body readers: ${L.join(', ')}`)
+    if (r.result.agents !== L.length) fail(`#635 Q27: the return counts ${r.result.agents} agents, ${L.length} ran`)
+    const units = env.units || []
+    const sent = new Set(units.flatMap((u) => u.tickets.flatMap((t) => t.questions.map((q) => q.kind))))
+    for (const k of ['integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']) if (!sent.has(k)) fail(`#635 Q22: no applier was sent the ${k} answer: ${[...sent].join(', ')}`)
+    if (!units.some((u) => (u.edits || []).some((e) => e.q === 5)) || !units.some((u) => (u.followUps || []).some((f) => f.q === 4))) fail('#635 Q22: the ticket edit or the follow-up was not sent to an applier')
+    const commitPrompt = (r.calls.find((c) => c.label.startsWith('apply:commit')) || {}).prompt || ''
+    if (!commitPrompt.includes(`on integrator/morning-${DATE}`) || !/forked from origin\/main/.test(commitPrompt)) fail('#635 Q22: the commit applier does not commit on the morning branch forked from origin/main')
+    for (const c of r.calls.filter((x) => x.label.startsWith('apply:'))) {
+      if (!c.prompt.includes(`\`git -C ${env.repo} fetch origin\``)) fail(`#635 Q30: the ${c.label} prompt does not fetch origin/main fresh`)
+      if (!c.prompt.includes(`\`git -C ${env.repo} log origin/main --format=%B\``)) fail(`#635 Q24: the ${c.label} prompt does not find a commit already landed on origin/main`)
+      if (!/still in place/.test(c.prompt)) fail(`#635 Q24: the ${c.label} prompt does not verify an effect before it skips it`)
+    }
+    const text = afterText(r)
+    if (!text.startsWith(`## After ${DATE}`) || text !== r.result.handover.text) fail(`#635 Q25: the After comment does not open with its heading:\n${text}`)
+    if (!text.includes(HEAD) || !text.includes('#400') || !text.includes(sha('9'))) fail(`#635 Q23: the After comment does not name the landed head, its pull request and origin/main:\n${text}`)
+    const settled = section(text, 'Settled')
+    for (const [q, how] of [[1, `applied: commit ${sha('a')} on origin/main`], [2, 'held by #500'], [3, 'applied'], [4, 'held by #60'], [5, 'applied'], [6, `held by ${cite(302)}`], [7, 'answered no']]) {
+      if (!new RegExp(`^- Q${q}\\b[^\\n]*${how.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm').test(settled)) fail(`#635 Q29: Q${q} is not settled as "${how}":\n${settled}`)
+    }
+    if (section(text, 'Unsettled') !== 'none' || r.result.refusals.length) fail(`#635 Q29: an all-settled night left ${JSON.stringify(section(text, 'Unsettled'))}, refusals ${JSON.stringify(r.result.refusals)}`)
+    if (jsonAfter(r.prompt('after-handover'), 'CLOSE') !== true || r.result.issueClosed !== true) fail(`#635 Q26: an all-settled night was not closed: CLOSE ${jsonAfter(r.prompt('after-handover'), 'CLOSE')}, closed ${r.result.issueClosed}`)
+    const hp = r.prompt('after-handover')
+    if (!(hp.indexOf('gh issue comment') > 0 && hp.indexOf('gh issue comment') < hp.indexOf('gh issue close'))) fail('#635 Q27: the After comment is not posted before the close')
+    if (!/"## After 2026-10-21"/.test(hp) || /"## Morning /.test(hp)) fail('#635 Q25: the After agent does not dedupe on the After heading alone')
+    if (!/last "## Morning <date>" comment/.test(r.prompt('after'))) fail('#635 Q25: the cleanup no longer reads its rows from the last Morning comment')
+    // A pass with nothing to apply and every question settled closes too; one with no Confirm, dry,
+    // classifies nothing and stays open.
+    const dry = await afterRun({ issue: issueWith(AFTER_NIGHT.comments.filter((c) => !c.body.startsWith('Confirm'))) })
+    if (dry.labels.includes('classify') || APPLIERS(dry.labels).length || dry.result.issueClosed) fail(`#635: a night with no Confirm comment dispatched ${dry.labels.join(', ')} and closed ${dry.result.issueClosed}`)
+  }
+
+  // 10d. An unlanded commit answer keeps the Overnight issue open (#635 Q30): its commit is on the
+  //      morning branch, which the After comment names, and it is never settled by its source ticket,
+  //      even when the applier says that ticket holds it.
+  checks++
+  {
+    for (const [label, served] of [['committed', {}], ['held by its source ticket', { heldBySource: [1] }]]) {
+      const r = await afterRun(served)
+      const text = afterText(r)
+      const open = section(text, 'Unsettled')
+      const q1 = (/^- Q1\b.*$/m.exec(open) || [''])[0]
+      if (!q1 || !q1.includes(`integrator/morning-${DATE}`) || /held by/.test(q1)) fail(`#635 Q30, ${label}: Q1 is not unsettled on the morning branch: ${JSON.stringify(q1)}\n${text}`)
+      if (/^- Q1\b/m.test(section(text, 'Settled'))) fail(`#635 Q30, ${label}: the unlanded commit answer is listed as settled`)
+      if (jsonAfter(r.prompt('after-handover'), 'CLOSE') !== false || r.result.issueClosed) fail(`#635 Q30, ${label}: the issue was closed over an unlanded commit answer`)
+    }
+  }
+
+  // 10e. Refusals and unsettled questions keep an open issue open (#635 Q26, Q29): a question left
+  //      open, a classifier that returned nothing, a cleanup that failed, an applier that refused; and
+  //      a hand-over agent that closes when told not to is named.
+  checks++
+  {
+    const cases = [
+      ['a question left open', { issue: issueWith([...QUESTIONS, CONFIRM]), classes: {} }, (r) => /^- Q4\b/m.test(section(afterText(r), 'Unsettled'))],
+      ['a null classifier', { landed: [1], nothingFrom: ['classify'] }, (r) => r.result.refusals.some((x) => /Classify agent returned nothing/.test(x))],
+      ['a cleanup that failed', { landed: [1], after: { reason: 'gh issue close 300 failed: HTTP 502' } }, (r) => r.result.refusals.some((x) => /HTTP 502/.test(x))],
+      ['a confirmed question no comment yields', { issue: issueWith([...AFTER_NIGHT.comments, comment(97, 'Confirm Q8.', '2026-10-21T10:00:00Z')]), landed: [1] }, (r) => /^- Q8\b/m.test(section(afterText(r), 'Unsettled'))],
+    ]
+    for (const [label, served, seen] of cases) {
+      const r = await afterRun(served)
+      if (!seen(r)) fail(`#635 Q26, ${label}: not named: refusals ${JSON.stringify(r.result.refusals)}\n${afterText(r)}`)
+      if (jsonAfter(r.prompt('after-handover'), 'CLOSE') !== false || r.result.issueClosed) fail(`#635 Q26, ${label}: the issue was closed`)
+    }
+    const rogue = await afterRun({ afterHanded: { closed: true } })
+    if (!rogue.result.refusals.some((x) => /closed .* told not to|which its prompt forbids/.test(x))) fail(`#635 Q26: a hand-over agent that closed the issue when told not to is not named: ${JSON.stringify(rogue.result.refusals)}`)
+  }
+
+  // 10f. A relaunched after pass reuses the classification and sends the appliers again, which verify
+  //      each effect before they skip it, rather than reusing their phase files (#635 Q24).
+  checks++
+  {
+    const env = newRepo()
+    await afterRun({}, env)
+    const second = await afterRun({}, env)
+    if (!second.result.reused.includes('classify') || second.labels.includes('classify')) fail(`#635 Q24: the relaunch did not reuse the classification: ${second.labels.join(', ')}; reused ${second.result.reused}`)
+    if (!APPLIERS(second.labels).length || second.result.reused.some((x) => x.includes('apply'))) fail(`#635 Q24: the relaunch reused an applier's phase file: ${second.labels.join(', ')}; reused ${second.result.reused}`)
   }
 
   // 11. Resumption: a rerun whose phase files show the classifier and the appliers done dispatches
@@ -1931,6 +2130,16 @@ try {
     const doc = fs.readFileSync(LANDING, 'utf8')
     const src = fs.readFileSync(scriptPath, 'utf8')
     for (const p of launchProblems(doc, src, loadMeta())) fail(`#489: ${p}`)
+    // #635 Q32: the two paragraphs the Confirm approved, verbatim apart from wrapping, the second
+    // straight after the first and both before the after pass's launch line.
+    const Q32 = [
+      'The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main` contains the integration tip identified from the merged landing pull request, then closes the landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration worktree last, and prunes.',
+      'The after pass also applies every confirmed answer the morning pass could not. It closes the Overnight issue once every question on it is settled: answered no, applied, or held by a ticket its `## After <date>` comment names. A commit answer counts as applied only once its commit is on `origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that comment lists what is left. Relaunch the after pass after a later Confirm or landing.',
+    ]
+    const paras = doc.split(/\n\s*\n/).map((x) => x.replace(/\s+/g, ' ').trim())
+    const p1 = paras.indexOf(Q32[0])
+    const launch = paras.findIndex((x) => x.includes('"after": true }'))
+    if (p1 < 0 || paras[p1 + 1] !== Q32[1] || launch !== p1 + 2) fail(`#635 Q32: docs/agents/landing-work.md does not carry the two approved paragraphs, in order, before the after launch (found the first at ${p1}, the launch at ${launch})`)
     // Each drift the ticket names is caught: a required argument dropped from a line, an argument the
     // checker does not take added to one, a new argument the checker starts requiring, and a
     // whenToUse that lists arguments again.
