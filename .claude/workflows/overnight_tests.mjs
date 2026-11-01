@@ -1127,6 +1127,9 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
     if (c.prompt.includes(`--base ${RUN_BASE}`)) fail(`#629: the ${c.label} prompt still judges a check against the run base`)
     if (!c.prompt.includes('Record old=') || !c.prompt.includes('otherwise old is that merge\'s first parent')) fail(`#629: the ${c.label} prompt does not define <old> on both the first and the resumed path`)
     if (!c.prompt.includes('STEP 2 — the integrate step\'s local check, judged against the merge\'s first parent <old>')) fail(`#629: the ${c.label} prompt's STEP 2 does not name the check in the glossary's words (Q13, Q17)`)
+    // The check's command is run exactly as written, and a bare `<old>` in it is a bash redirect from a file named old,
+    // so the step says to write the sha in its place (#629's review).
+    if (!c.prompt.includes('write <old>\'s 40-character sha where it says <old>')) fail(`#629: the ${c.label} prompt does not say to put <old>'s sha in the check's command, which bash would read as a redirect`)
   }
 }
 

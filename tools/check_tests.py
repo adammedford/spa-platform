@@ -1979,12 +1979,24 @@ class ElapsedTests(CheckTestCase):
         self.assertLess(seconds["the gateway image"], 2)
 
     def test_the_parsers_that_read_a_log_do_not_read_an_elapsed_line(self):
-        # tools/retro_record.py reads the test runner's indented summary lines, and the overnight
-        # script and tools/test_reach.py read the verdict: an elapsed line is neither (#629 Q16).
-        summary = re.compile(r"^\s*(total|failed|succeeded|skipped|duration):\s*(.*?)\s*$")
-        for line in ("check: elapsed: total: 12s", "pre-push: elapsed: the tests: 120s"):
-            self.assertIsNone(summary.match(line))
-            self.assertFalse(line.startswith(("check: pass:", "check: fail:")))
+        # tools/retro_record.py reads the test runner's indented summary lines and the verdict, and
+        # tools/test_reach.py the tests' fail line: an elapsed line is none of them (#629 Q16). The
+        # patterns are read from the two parsers and the lines from a run, so a change to either
+        # side is judged here (CODING_STANDARDS.md, "A guard reads the thing it guards").
+        def load(name: str):
+            spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        retro, reach = load("retro_record"), load("test_reach")
+        lines = [line for line in Case(self, change="src/App/App.cs").run("--full", "--port", PORT).raw_stdout.splitlines()
+                 if ELAPSED.match(line)]
+        self.assertIn("the tests", [ELAPSED.match(line).group(2) for line in lines])
+        for line in lines:
+            self.assertIsNone(retro.SUMMARY.match(line), line)
+            self.assertFalse(any(pattern.match(line) for pattern, _ in retro.VERDICTS), line)
+            self.assertNotEqual(reach.TESTS_FAILED, line)
 
 
 class InterpreterTests(CheckTestCase):
