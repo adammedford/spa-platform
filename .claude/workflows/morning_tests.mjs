@@ -426,7 +426,9 @@ function stub(env, scriptArgs, served) {
           record: readRecord(HEAD, served.recordComments || RECORD_MERGE), ci: 'green', ciUrl: 'https://github.com/adammedford/spa-platform/actions/runs/2',
           closed: contained ? [300] : [], unassigned: contained ? [301] : [], removed: contained ? [`${WT}/ws1-infra`, `${WT}/overnight`] : [],
           kept: [], pruned: contained, reason: contained ? '' : `origin/main does not contain ${HEAD}`,
-          phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)).filter((f) => f.name === 'classify'),
+          // Every phase file on disk, the applier ones under apply/ and after/ too, so the script's own
+          // refusal to reuse an applier's result is what 10f judges, not the fixture hiding the file.
+          phaseFiles: phaseFilesOn(path.join(env.repo, MORNING_REL)),
           ...a,
         }
       } else if (label === 'after-handover') {
@@ -862,7 +864,7 @@ try {
     await afterRun({}, env)
     const second = await afterRun({}, env)
     if (!second.result.reused.includes('classify') || second.labels.includes('classify')) fail(`#635 Q24: the relaunch did not reuse the classification: ${second.labels.join(', ')}; reused ${second.result.reused}`)
-    if (!APPLIERS(second.labels).length || second.result.reused.some((x) => x.includes('apply'))) fail(`#635 Q24: the relaunch reused an applier's phase file: ${second.labels.join(', ')}; reused ${second.result.reused}`)
+    if (!APPLIERS(second.labels).length || second.result.reused.join() !== 'classify') fail(`#635 Q24: the relaunch reused an applier's phase file: ${second.labels.join(', ')}; reused ${second.result.reused}`)
   }
 
   // 11. Resumption: a rerun whose phase files show the classifier and the appliers done dispatches
