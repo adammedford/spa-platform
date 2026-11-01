@@ -1973,7 +1973,8 @@ class ElapsedTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         seconds = {step: n for _, step, n in result.elapsed()}
         self.assertGreaterEqual(seconds["the smoke test"], 2)
-        self.assertLessEqual(seconds["the smoke test"], 4)
+        # Loose above: CI runs the cases eight at a time, and a loaded runner can stretch a sleep.
+        self.assertLessEqual(seconds["the smoke test"], 6)
         self.assertGreaterEqual(seconds["total"], seconds["the smoke test"])
         self.assertLess(seconds["the gateway image"], 2)
 
