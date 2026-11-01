@@ -2359,6 +2359,25 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(1, code, out)
         self.assertIn(f"  {ADR}:{STATUS + 1}: - **Status:** Accepted.\n", out)
 
+    def test_a_status_item_moved_into_the_body_is_body(self):
+        """The Status item is a slot in the header, not a block that travels: e2fc266's note
+        written as a Status bullet moved down beside the rejected option, with the note as its
+        continuation line, would leave identical bytes once each side's item is removed. So HEAD's
+        item counts as the Status item only where the base's stood."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = [line for line in ADR_LINES if not line.startswith("- **Status:**")]
+        rejected = lines.index(REJECTED_LINE)
+        note = "  *Amended by a later decision: the window rose with locking.*\n"
+        lines[rejected + 1:rejected + 1] = ["- **Status:** Accepted.\n", note]
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Move the Status item beside the rejected option")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertIn(f"  {ADR}:{rejected + 2}: - **Status:** Accepted.\n", out)
+        self.assertIn(f"  {ADR}:{rejected + 3}: {note.rstrip()}\n", out)
+
     def test_a_branch_behind_its_base_passes(self):
         """The base's own later work is not the branch's: a branch forked before its base added an
         ADR and noted another's Status is judged from the fork, where neither change was made."""

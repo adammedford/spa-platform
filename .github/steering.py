@@ -1316,13 +1316,20 @@ def body_edits(path: str, before: bytes, after: bytes) -> list[str]:
 
     The Status item is removed from both before they are compared, and from HEAD only when the
     base had one: a base with no Status item has nothing the range may change, so a Status item
-    HEAD adds is body like any other line (#659 Q41). The lines are split on the newline alone,
+    HEAD adds is body like any other line (#659 Q41). For the same reason HEAD's item is removed
+    only where it follows the lines the base's followed, so a Status item moved down the file is
+    body too. The lines are split on the newline alone,
     so a missing final newline and a carriage return are each a difference too.
     """
     old_lines = before.split(b"\n")
     new_lines = after.split(b"\n")
     old_item = status_item(old_lines)
     new_item = status_item(new_lines) if old_item else range(0)
+    # HEAD's item is the Status item only where the base's stood, after the same lines: a bullet
+    # moved into the body would otherwise carry any note written as its continuation past the
+    # comparison, e2fc266's edit in another shape.
+    if new_item and new_lines[:new_item.start] != old_lines[:old_item.start]:
+        new_item = range(0)
     old = numbered_lines(old_lines, old_item)
     new = numbered_lines(new_lines, new_item)
     matcher = difflib.SequenceMatcher(
