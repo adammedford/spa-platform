@@ -279,7 +279,7 @@ A review covers exactly the head its record names, and `tools/land.sh` refuses a
 clears ("Land it" above). The check sits in the merge script rather than in branch protection
 because this repository has one GitHub account, which can neither approve its own pull request nor
 be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
-#67 records that choice and when it reopens.
+ADR-0022 records that choice and when it reopens.
 
 Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives

@@ -48,6 +48,8 @@ claims you verified and how. When it closes a change request whose decision comm
 `ADR: no`, it states that request's why for the merge body to carry and cites the decision comment
 (`docs/agents/tracker-policy.md` → "Landing"); a body without them is a finding.
 
+A commit that changes a steering document carries an `Authority:` trailer, which `.github/steering.py` has already held to an issue or a comment that exists. Whether what it cites decides the change is the Spec axis's question (ADR-0023 decision 3): read the cited ticket's acceptance criteria, or the cited comment, and report a steering change that neither decides.
+
 ## CI has already run
 
 Every open pull request here carries a green `Documents`, and a green `Build and test` and
@@ -146,7 +148,8 @@ EOF
 
 Merge with `tools/land.sh`, never `gh pr merge` alone. It reads the records with
 `tools/review_record.py`, refuses a head no record clears, pins the merge to the head the record
-names, and writes `Reviewed: <head> <record URL>` at the end of the merge body. #67 decided this.
+names, and writes `Reviewed: <head> <record URL>` at the end of the merge body. ADR-0022 records the
+decision.
 Every record the check reads is posted through the one GitHub account that owns this repository,
 which every agent session and the human share, so a record cannot show which of them wrote it: the
 check stops a merge made before its review, or after commits the review never saw, and cannot stop a
