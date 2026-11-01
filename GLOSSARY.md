@@ -107,6 +107,9 @@ _Avoid_: "immutable prefix". The prefix can grow; only its keys are fixed.
 write-once, and the unit P-04 tests.
 _Avoid_: "release" on its own when one object is meant.
 
+**Platform bucket** — a cell's one private bucket, holding the registry and every release. It is not the state bucket, which holds Terraform state and no platform data.
+_Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
+
 ## The request path
 
 **Request gate** — the stage that accepts same-origin browser requests only on `/api` and `/bff`,
@@ -505,6 +508,8 @@ records stay true; no exit test may name it. _Avoid_: deleted, removed id.
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
 
 **Read-back** — what AWS's own API reports about an applied root's resources, recorded on a ticket as a row's evidence. It is the account-side counterpart of a plan assertion against the mock provider, which proves configuration and not the account (ADR-0016). _Avoid_: "check", which is a pre-push or CI guard, and "verification" unqualified.
+
+**Applied** — of a Terraform root in a project: a plan of the root against that project's state reports no changes. An apply's exit code shows that an apply ran, and a state object that something was written; neither alone means applied. _Avoid_: "applied" where only an apply ran.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.
