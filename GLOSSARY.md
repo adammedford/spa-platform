@@ -503,6 +503,15 @@ records stay true; no exit test may name it. _Avoid_: deleted, removed id.
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
 
+**Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
+adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
+where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
+adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
+enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
+statement of such gaps at export time and does not change; the register is where they are kept
+current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
+"enterprise gaps table" for the register, which is the plan's.
+
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.
 
