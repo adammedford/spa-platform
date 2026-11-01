@@ -11,12 +11,15 @@ namespace Gateway.SecurityTests.Continuity;
 /// (the session cookie, the login state and the antiforgery token) issued by host A are accepted by host
 /// B, and by a fresh third host started afterwards, which reads the same ring and sessions. The control
 /// is the same exchange over one Parameter Store stub per host: the real ring then makes two rings, and
-/// B refuses all three.
+/// B refuses all three. The rows are F-13, F-14, F-15 and the control N-28 (contracts/test-ids.md).
 /// </summary>
 public sealed class AcrossHostsTests
 {
     private const string EchoPath = "/api/echo/orders";
 
+    /// <summary>
+    /// F-13: a session cookie issued by A is accepted by B and by a third host started afterwards.
+    /// </summary>
     [Fact]
     public async Task P2_2_F2_a_session_cookie_issued_by_A_is_accepted_by_B_and_by_a_fresh_third_host()
     {
@@ -39,6 +42,10 @@ public sealed class AcrossHostsTests
         Assert.True(SignedIn.HoldsSessionCookie(browser, app));
     }
 
+    /// <summary>
+    /// F-14: a login started on A finishes on B, and on a third host started afterwards, on the app's
+    /// shell.
+    /// </summary>
     [Fact]
     public async Task P2_2_F2_a_login_started_on_A_finishes_on_B_and_on_a_fresh_third_host()
     {
@@ -64,6 +71,10 @@ public sealed class AcrossHostsTests
         AssertLandedOnShell(app, landedOnC);
     }
 
+    /// <summary>
+    /// F-15: an antiforgery token issued by A is accepted by B and by a third host started afterwards, and
+    /// the call reaches the upstream.
+    /// </summary>
     [Fact]
     public async Task P2_2_F2_an_antiforgery_token_issued_by_A_is_accepted_by_B_and_by_a_fresh_third_host()
     {
@@ -86,7 +97,7 @@ public sealed class AcrossHostsTests
     }
 
     /// <summary>
-    /// The control that makes the three rows above able to fail (CODING_STANDARDS.md): the same harness
+    /// N-28, the control that makes the three rows above able to fail (CODING_STANDARDS.md): the same harness
     /// with one Parameter Store stub per host. The real ring then mints a key in each, and B refuses the
     /// session cookie, the login state and the antiforgery token A issued.
     /// </summary>
