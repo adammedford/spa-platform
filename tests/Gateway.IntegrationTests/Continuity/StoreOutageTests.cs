@@ -8,7 +8,7 @@ namespace Gateway.IntegrationTests.Continuity;
 /// #332, F17 composed (#345): with the cell's one session store failing every call, a request that needs
 /// the session ends on the gateway's generic 500, no cookie is cleared, and <c>/healthz</c> and
 /// <c>/readyz</c>, which read no store, still answer on every host. T4 pins the 500 in the identity
-/// suite; this is the same outcome through the composed pipeline.
+/// suite; this is the same outcome through the composed pipeline. The row is F-18 (contracts/test-ids.md).
 /// </summary>
 public sealed class StoreOutageTests
 {
