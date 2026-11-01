@@ -1,6 +1,7 @@
 # The weekly CodeQL rescan of main's C#. Owner: integrator, written for #609 (ADR-0035 decision 11).
 #
-# ci.yml's `CodeQL` job scans a pull request, and a push to main, that changes a .NET input. This
+# ci.yml's `CodeQL` job scans a pull request, and a push to main, whenever its Build job runs, which
+# a change with no .NET input skips. This
 # rescans main once a week whatever changed, so a query CodeQL adds or improves reaches code nobody
 # has touched since. It is the same scan: the suite, the build mode, the build and the category are
 # ci.yml's, and the shared category `/language:csharp` makes the two one analysis in code scanning

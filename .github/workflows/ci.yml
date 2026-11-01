@@ -41,8 +41,9 @@
 # solution again under CodeQL's tracer, with the `security-extended` suite and the category
 # `/language:csharp`. Its alerts are advisory, read in the Security tab: the job fails only when the
 # analysis does not run. A weekly rescan under the same category lives in codeql-weekly.yml, a
-# schedule-only file of its own, because a schedule here would run every job. Requiring the job on
-# main by its name, and never the generated `Code scanning results / CodeQL` check, is #623's.
+# schedule-only file of its own, because a schedule here would run every job. Main's protection
+# names this job, `CodeQL`, when it requires the scan, never the generated `Code scanning results /
+# CodeQL` check, which stays pending on a pull request with no upload (ADR-0035 decision 11).
 #
 # Plan policy (P-01 to P-03 and P-07) is mock-provider assertions that the Terraform job's test step
 # runs (ADR-0016); CI holds no AWS credential, and plan generation stays disabled.
