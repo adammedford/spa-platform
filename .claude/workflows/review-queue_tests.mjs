@@ -840,9 +840,10 @@ try {
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
       const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
       if (!cellLine.includes(CATCHER)) fail(`PR 287's shape with the held ${LIB2} caught: no table row reads "${LIB2} (caught by ...)"`)
-      // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated again.
+      // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated
+      // again. Its row is the cell the script wrote above, so the round trip reads what a record carries.
       const LATER = { author_association: 'OWNER', created_at: '2026-10-22T10:00:00Z', html_url: 'https://github.com/o/r/pull/287#issuecomment-3',
-        body: `## Review\n\nHead ${H3}.\n\n${table([[LIB1, LIB_BREAK, '3 of 71', 'did-not-fail: it stayed green'], [`${LIB2} (caught by ${CATCHER})`, LIB_BREAK, '1 of 71', 'reproduced: the catcher went red']])}\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H3} against ${FORK}: hold` }
+        body: `## Review\n\nHead ${H3}.\n\n${table([[LIB1, LIB_BREAK, '3 of 71', 'did-not-fail: it stayed green']])}\n${cellLine}\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H3} against ${FORK}: hold` }
       const NEXT = { 287: { ...SHAPE[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD, LATER] } }
       env = run({ prs: [287] }, NEXT, { range: { 287: { ...range[287], from: H3 } } })
       result = await execute(env)
@@ -856,6 +857,20 @@ try {
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (c.verdict !== 'hold' || held.result !== 'did-not-fail') fail(`PR 287's shape with the held ${LIB2} caught and not accepted: verdict ${c.verdict}, row ${held.result}, expected hold and did-not-fail`)
       if (commentOf(env, 287).includes('(caught by ')) fail('a caught row the verdict did not accept still reads "caught by" in the table')
+    }
+    // A held test that went red itself is an ordinary reproduction, whatever else failed beside it: it
+    // is no catch, needs no acceptance and merges. A same-named method of another class is a catch,
+    // which, unaccepted, reads did-not-fail and holds.
+    for (const [names, want, verdict] of [
+      [[`tools.check_tests.${LIB2}`, `tools.check_tests.${CATCHER}`], 'reproduced', 'merge'],
+      [[`tools.check_tests.${LIB2}(case 1)`], 'reproduced', 'merge'],
+      [[`tools.check_tests.OtherTests.${LIB2.split('.').pop()}`], 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('reproduced', names.length, 71), failingNames: names } } })
+      result = await execute(env)
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
     }
     // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
     // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.

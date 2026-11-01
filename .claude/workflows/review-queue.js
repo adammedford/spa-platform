@@ -709,10 +709,12 @@ const mutationRow = (n, m, i, got) => {
   // -1 is a count the body does not give (STATED): compare only the counts the author stated.
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   // A held break the project caught through other tests, the held one not among them (#684): the
-  // tests that went red, which the verdict must accept before the row answers the held test.
-  const tail = m.test.split('.').pop()
+  // tests that went red, which the verdict must accept before the row answers the held test. A
+  // failing name is the held test when it ends in the held test's whole dotted name, so a same-named
+  // method of another class is a catch, which fails closed to the verdict's check.
+  const isHeld = (f) => `.${f.split('(')[0].trim()}`.endsWith(`.${m.test}`)
   row.caughtBy = m.kind === 'held' && row.result === 'reproduced' && row.failingNames.length
-    && !row.failingNames.some((f) => f.split(/[.(\s]/).includes(tail)) ? row.failingNames : []
+    && !row.failingNames.some(isHeld) ? row.failingNames : []
   return row
 }
 // What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
