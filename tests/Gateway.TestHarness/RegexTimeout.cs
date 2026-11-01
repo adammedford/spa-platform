@@ -2,9 +2,10 @@ namespace Gateway.TestHarness;
 
 /// <summary>
 /// The match timeout every regular expression in the composed suites carries (MA0009, a security
-/// rule at error in both analysis tiers: ADR-0035 decision 4). The suites match repository files and
-/// responses they made themselves, so no match comes near it; it bounds a pattern a later edit makes
-/// backtrack, which then fails its test with a timeout instead of hanging the run.
+/// rule, which ADR-0035 decision 4 requires at error in both analysis tiers). The suites match
+/// repository files and responses they made themselves, so no match comes near it; it bounds a
+/// pattern a later edit makes backtrack, which then fails its test with a timeout instead of
+/// hanging the run.
 /// </summary>
 public static class RegexTimeout
 {

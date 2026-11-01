@@ -142,10 +142,11 @@ internal static partial class Redaction
         return new string(buffer[..length]);
     }
 
-    // Every pattern here carries a match timeout (MA0009, a security rule at error in both analysis
-    // tiers: ADR-0035 decision 4). Both are linear, with no nested quantifier, so no text on its own
-    // comes near it; it bounds a pattern a later edit makes backtrack, and a timeout fails closed above.
-    // Render's budget also covers the values its evaluator renders, so a slow value can spend it (#677).
+    // Every pattern here carries a match timeout (MA0009, a security rule, which ADR-0035
+    // decision 4 requires at error in both analysis tiers). Both are linear, with no nested
+    // quantifier, so no text on its own comes near it; it bounds a pattern a later edit makes
+    // backtrack, and a timeout fails closed above. Render's budget also covers the values its
+    // evaluator renders, so a slow value can spend it (#677).
     private const int MatchTimeoutMilliseconds = 100;
 
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.

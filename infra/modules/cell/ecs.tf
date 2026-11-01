@@ -160,11 +160,16 @@ locals {
     # order: the target group's deregistration delay (alb.tf, 30 s) drains it first, then ECS sends
     # SIGTERM, then after stopTimeout SIGKILL. The gateway's own ShutdownTimeout, the time the process
     # gives its in-flight work after SIGTERM, is 25 s, a Platform.Hosting constant (#363) this module
-    # names and does not read. The relations F1 rests on: the drain (30) covers the 21 s a refresh is
-    # bounded by (G1 on #332), ShutdownTimeout (25) covers it too, and stopTimeout (30) is at least
-    # ShutdownTimeout, so the process ends its shutdown on its own terms and is never killed through
-    # it. On the gateway alone: the mock API holds no session and no lease. 30 is also Fargate's
-    # default, written down because F1 depends on it.
+    # names and does not read. The relations F1 rests on: ShutdownTimeout (25) exceeds the refresh
+    # holder's 20 s durable-write deadline, timed from its acquire's send (the 21 s lease less 1 s of
+    # skew), so a successful refresh admitted before the host is told to stop writes its rotated
+    # token before the host stops; and stopTimeout (30) is at least ShutdownTimeout, so the process
+    # ends its shutdown on its own terms and is never killed through it. The durable write is the
+    # promise, not every request's completion: F3b's failed or unknown write and F4's check-to-send
+    # pause are its exceptions, and a loser's wait is F2's and F3's, which no number here bounds
+    # (#332 F1; P2-3's second amendment, decision 2). The drain (alb.tf) promises no refresh's
+    # completion. On the gateway alone: the mock API holds no session and no lease. 30 is also
+    # Fargate's default, written down because F1 depends on it.
     # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
     stopTimeout = 30
 

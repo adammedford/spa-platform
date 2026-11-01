@@ -174,7 +174,8 @@ public sealed class DeployedRunTests
     public void Two_register_rows_naming_one_continuity_fact_fail_the_reader_naming_both()
     {
         // One run of the Fact would prove two ids; the Python reader refuses the same register
-        // (test_two_rows_naming_one_continuity_fact_are_refused), and StandInExclusions is never reached.
+        // (test_two_rows_naming_one_continuity_fact_are_refused). StandInExclusions refuses it through
+        // ContinuityRowTests, so its exclusions.Add, which would throw adding the Fact's name twice, is never reached.
         string row = ContinuityRegister.Split('\n').Single(line => line.TrimStart().StartsWith("| N-32 |", StringComparison.Ordinal));
         string register = ContinuityRegister + "\n" + row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal);
         Assert.NotEqual(row, row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal));
