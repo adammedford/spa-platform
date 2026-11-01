@@ -134,9 +134,9 @@ Two more things the schemas deliberately do not decide:
   runtime upgrade that changes this ceiling must update the contract schema, validator and the
   test proving the proxy applies the contracted value through the applicable freeze/gate process.
 
-  **Task 2.1b remains pending.** The shared schema already rejects values above the ceiling,
-  including through the app-definition schema's reference. The validator still carries its older
-  `TimeSpan` model bound; ticket 49 removes it and reports the schema maximum under the existing
-  `integer-out-of-range` issue id. Until then oversized timeouts are schema errors. The proxy's
-  ceiling test must also assert that it applies the contracted maximum (ADR-0015 decision 3).
-  Change request `changes/2.1-registry-schemas-and-jsonschema-net.md` retains the original measurement.
+  **Task 2.1b.** The shared schema rejects values above the ceiling, including through the
+  app-definition schema's reference, and the validator reports them under the existing
+  `integer-out-of-range` issue id with the ceiling read from the schema's `maximum`. The proxy's
+  ceiling test reads the same `maximum` and asserts that the proxy applies it as written
+  (ADR-0015 decision 3). Change request `changes/2.1-registry-schemas-and-jsonschema-net.md`
+  retains the original measurement.

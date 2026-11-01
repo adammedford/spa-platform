@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spa-platform.internal/contracts/infra-outputs.schema.json",
   "title": "Infrastructure outputs",
-  "description": "infra/envs/poc/outputs.json, written by workstream 1 after every apply. The scripts and the deployed tests read it, and none of them reads Terraform state. Workstream 1 proposes this contract; the integrator writes it. Source: docs/plan/02-contracts.md -> Infrastructure outputs. Freezes at G1a.",
+  "description": "infra/envs/poc/outputs.json, written by workstream 1 after every apply. The deployed tests and the scripts read it. Two scripts read the platform root's outputs from Terraform state instead: `teardown.sh` (change request 1.5a, decision 2), whose destroy needs that state anyway, and `tools/scripts/verify-release-immutability.sh` (#122), which first runs after a storage-only apply that writes no outputs.json. Workstream 1 proposes this contract; the integrator writes it. Source: docs/plan/02-contracts.md -> Infrastructure outputs. Freezes at G1a.",
   "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
