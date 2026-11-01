@@ -613,6 +613,17 @@ class SubjectForOpenBoxTests(unittest.TestCase):
         self.assertEqual(0, done.returncode, done.stdout)
         self.assertEqual("landing-subjects: pass: no full-landing merge from base to HEAD.", last_line(done))
 
+    def test_the_full_subject_over_that_ticket_is_the_one_the_range_check_holds(self):
+        # The fixture above bites: the subject --subject-for gave before #660, over the same ticket,
+        # is held, so the pass above is the part subject's and not a range check that read nothing.
+        case = Case(self)
+        case.issue(611, "## Acceptance criteria\n\n- [x] The first thing.\n- [ ] The second thing.\n")
+        case.commit("Merge task issue-611: the first thing", "Ticket: #611")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertTrue(any("lands #611 whole, but #611 has 1 open box" in line
+                            for line in done.stdout.splitlines()), done.stdout)
+
     def test_a_carrier_with_an_open_box_lands_in_part(self):
         case = Case(self)
         case.issue(346, "**Plan row:** P2-3\n\n- [ ] Composed.\n- [ ] Measured.\n")
@@ -656,6 +667,15 @@ class SubjectForOpenBoxTests(unittest.TestCase):
                       "not counted: GraphQL: Could not resolve to an issue or pull request with the number of "
                       f"{NO_SUCH_ISSUE}. (repository.issue)", done.stdout.splitlines())
         self.assertEqual("landing-subjects: subject: Merge task P2-3", last_line(done))
+
+    def test_an_unreadable_part_ticket_is_unchecked_and_answers_as_before(self):
+        case = Case(self)
+        done = self.ask(case, f"issue-{NO_SUCH_ISSUE}", NO_SUCH_ISSUE)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f"landing-subjects: unchecked: #{NO_SUCH_ISSUE} could not be read, so its open boxes are "
+                      "not counted, and no row it is part of is named: GraphQL: Could not resolve to an issue or "
+                      f"pull request with the number of {NO_SUCH_ISSUE}. (repository.issue)", done.stdout.splitlines())
+        self.assertEqual(f"landing-subjects: subject: Merge task issue-{NO_SUCH_ISSUE}", last_line(done))
 
 
 class BrokenTests(unittest.TestCase):
