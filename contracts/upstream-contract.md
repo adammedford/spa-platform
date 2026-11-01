@@ -35,3 +35,13 @@ the errors.
 | The upstream could not be reached | 502 `upstream_unavailable` |
 | The upstream exceeded the entry's `timeoutSeconds` | 504 `upstream_timeout` |
 | The app lists no upstream under that name | 404 `unknown_api`, and no upstream sees the request |
+
+`timeoutSeconds` is an idle limit. The proxy restarts it on the response headers and on every body
+read or write, so it bounds how long an upstream may stay silent, not how long a call may take;
+connecting counts as silence. The gateway holds at most a fixed number of connections to each
+upstream origin per task, a constant in `Platform.Proxy` on the precedent of the Kestrel limits; a
+request that waits for a connection past the entry's timeout is `504` `upstream_timeout`, like any
+other silence. Nothing bounds a call whose upstream keeps sending, and nothing limits requests per
+client: the first is accepted, and the second stays deferred until a load test (P2-10) shows one
+app's traffic exhausting that connection bound or the task's, which is the trigger
+`docs/plan/06-phase-2-and-risks.md` leaves open.
