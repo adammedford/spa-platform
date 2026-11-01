@@ -553,8 +553,10 @@ class SubjectForTests(unittest.TestCase):
         self.assertEqual("landing-subjects: subject: Merge task issue-341", last_line(done))
 
     def test_the_last_part_of_two_rows_names_both(self):
+        # Its boxes ticked: with #338's open box the subject asserted here was one the range check
+        # held (#660), so a part that names its rows is a finished one.
         case = Case(self)
-        case.issue(338, PART_338)
+        case.issue(338, PART_338.replace("- [ ]", "- [x]"))
         case.commit("Merge part of task P2-1: the store", "Ticket: #344", "Outstanding: #338.",
                     "Outstanding test ids: none.")
         case.commit("Merge part of task P2-2: the ring", "Ticket: #340", "Outstanding: #338.",
@@ -581,6 +583,79 @@ class SubjectForTests(unittest.TestCase):
         case.commit(f"{head}: the last part", "Ticket: #341")
         done = case.run()
         self.assertEqual(0, done.returncode, done.stdout)
+
+
+class SubjectForOpenBoxTests(unittest.TestCase):
+    """#660: on 2026-10-31 --subject-for printed "Merge task issue-611" over a ticket with an open
+    box, and the range check then held that very subject. The ticket's own open boxes make the
+    subject a part, each named on an `open box:` line."""
+
+    def ask(self, case: Case, id_: str, number: int, **env: str) -> subprocess.CompletedProcess:
+        return case.run("--subject-for", id_, "--ticket", str(number), **env)
+
+    def test_a_ticket_with_an_open_box_lands_in_part_and_names_the_box(self):
+        case = Case(self)
+        case.issue(611, "## Acceptance criteria\n\n- [x] The first thing.\n- [ ] The second thing.\n")
+        done = self.ask(case, "issue-611", 611)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(["landing-subjects: open box: 2 The second thing.",
+                          "landing-subjects: subject: Merge part of task issue-611"], done.stdout.splitlines())
+
+    def test_the_part_subject_it_gives_passes_the_range_check(self):
+        # One fixture, both halves: the subject --subject-for prints is one the range check accepts.
+        case = Case(self)
+        case.issue(611, "## Acceptance criteria\n\n- [x] The first thing.\n- [ ] The second thing.\n")
+        head = last_line(self.ask(case, "issue-611", 611)).removeprefix("landing-subjects: subject: ")
+        self.assertEqual("Merge part of task issue-611", head)
+        case.commit(f"{head}: the first thing", "Ticket: #611", "Outstanding: box 2, the second thing.",
+                    "Outstanding test ids: none.")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout)
+        self.assertEqual("landing-subjects: pass: no full-landing merge from base to HEAD.", last_line(done))
+
+    def test_a_carrier_with_an_open_box_lands_in_part(self):
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n\n- [ ] Composed.\n- [ ] Measured.\n")
+        done = self.ask(case, "P2-3", 346)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(["landing-subjects: open box: 1 Composed.", "landing-subjects: open box: 2 Measured.",
+                          "landing-subjects: subject: Merge part of task P2-3"], done.stdout.splitlines())
+
+    def test_an_open_box_and_an_open_part_are_both_named(self):
+        case = Case(self)
+        case.issue(346, "**Plan row:** P2-3\n\n- [ ] Composed.\n")
+        case.issue(341, PART_341)
+        done = self.ask(case, "P2-3", 346)
+        lines = done.stdout.splitlines()
+        self.assertIn("landing-subjects: open part: #341 declares itself part of P2-3", lines)
+        self.assertIn("landing-subjects: open box: 1 Composed.", lines)
+        self.assertEqual("landing-subjects: subject: Merge part of task P2-3", last_line(done))
+
+    def test_the_last_open_part_with_an_open_box_names_no_row(self):
+        # A row is named only by the merge of its last part to land whole; one with an open box
+        # lands in part, so the row stays owed.
+        case = Case(self)
+        case.issue(341, PART_341 + "\n- [ ] The tests.\n")
+        case.commit("Merge part of task P2-3: composed", "Ticket: #346", "Outstanding: #341.",
+                    "Outstanding test ids: none.")
+        done = self.ask(case, "issue-341", 341)
+        self.assertIn("landing-subjects: open box: 1 The tests.", done.stdout.splitlines())
+        self.assertEqual("landing-subjects: subject: Merge part of task issue-341", last_line(done))
+
+    def test_a_ticket_with_every_box_ticked_lands_whole(self):
+        case = Case(self)
+        case.issue(611, FINISHED)
+        done = self.ask(case, "issue-611", 611)
+        self.assertEqual(["landing-subjects: subject: Merge task issue-611"], done.stdout.splitlines())
+
+    def test_an_unreadable_carrier_is_unchecked_and_answers_as_before(self):
+        case = Case(self)
+        done = self.ask(case, "P2-3", NO_SUCH_ISSUE)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f"landing-subjects: unchecked: #{NO_SUCH_ISSUE} could not be read, so its open boxes are "
+                      "not counted: GraphQL: Could not resolve to an issue or pull request with the number of "
+                      f"{NO_SUCH_ISSUE}. (repository.issue)", done.stdout.splitlines())
+        self.assertEqual("landing-subjects: subject: Merge task P2-3", last_line(done))
 
 
 class BrokenTests(unittest.TestCase):
