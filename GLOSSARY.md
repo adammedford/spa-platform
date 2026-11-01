@@ -220,6 +220,12 @@ time and given back when its refresh is written. The **holder** is the task that
 **loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
 
+**StoreDeadline** — the time one session-store operation may take, 5 s, its re-read and its one
+retry included. An outcome still unknown when it runs out is not relied on, although the write may
+have happened: a login issues no cookie, and a removal is not confirmed. The refresh lease's budget
+is reckoned in it. See #332 D4 and change request P2-3, "The budget, once".
+_Avoid_: "timeout" for it, which names the SDK's or the HTTP client's own.
+
 **Back-channel logout** — the provider telling the gateway, server to server and with no browser
 present, that a user's sign-in at an app has ended, so the gateway ends that user's sessions for the
 app. Distinct from **logout**, the browser's `POST /bff/logout`, and from the provider's own
