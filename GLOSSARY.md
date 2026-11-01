@@ -35,6 +35,8 @@ this work".
 Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
 default project".
 
+**Sample image** — the public stand-in image a cell's service runs until its first gateway deployment, so that the service, its target and the tunnel can be proven before a gateway image exists. It runs in the platform project and has nothing to do with the sample project. _Avoid_: placeholder image, hello-world, and "the sample" alone.
+
 **Sitting** — a human's hands-on session in the platform project: the applies, imports and AWS
 reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
 the glossary keeps for agent sessions and the gateway's session records.
@@ -43,6 +45,10 @@ the glossary keeps for agent sessions and the gateway's session records.
 that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
 with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
 read-back by hand showed the result right.
+
+**Platform tag** — `Platform = spa-platform`, matched exactly. Every taggable resource the three roots create carries it, and so does the imported certificate; teardown's proof looks for it. Bootstrap's resources carry `spa-platform-bootstrap` instead, so they never match it. _Avoid_: a key-only or prefix match, and "the tag" where `Cell` or `ManagedBy` could be meant.
+
+**Teardown** — removing a cell from the platform project: its three roots, its imported certificate and what its deployments left behind, ending with proof that nothing carrying the platform tag remains. The bootstrap root's resources survive it and are removed by hand. _Avoid_: "emptying the account", "the account is empty".
 
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
@@ -370,10 +376,11 @@ that closes it. It is **part-landed** when a merge into `main` advances it witho
 Landed is not done (see **Done**). _Avoid_: "merged" for landed, "landed" for done, and
 "half-landed" for part-landed.
 
-**Done** — the state of a plan row or a ticket that has landed, whose tests pass in CI, that
-touched only its owner's paths, and that no open change request waits on. Landed is not done, and
-merged is not done. _Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn
-is closed and not done.
+**Done** — the state of a plan row or a ticket that has landed, whose own done-when holds, shown by
+its tests in CI or, where it needs AWS, by a read-back on its ticket; that touched only its owner's
+paths; and that no open change request waits on. Landed is not done, and merged is not done.
+_Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn is closed and not
+done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
@@ -496,6 +503,8 @@ records stay true; no exit test may name it. _Avoid_: deleted, removed id.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
+
+**Read-back** — what AWS's own API reports about an applied root's resources, recorded on a ticket as a row's evidence. It is the account-side counterpart of a plan assertion against the mock provider, which proves configuration and not the account (ADR-0016). _Avoid_: "check", which is a pre-push or CI guard, and "verification" unqualified.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.
