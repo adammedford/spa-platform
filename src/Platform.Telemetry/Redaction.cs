@@ -30,7 +30,11 @@ internal static partial class Redaction
     /// The text with the query string cut from every URL or path in it. The callback carries the
     /// authorization code and state in its query (ADR-0007), so no query survives, whatever it holds.
     /// </summary>
-    public static string WithoutQueryStrings(string text)
+    public static string WithoutQueryStrings(string text) => WithoutQueryStrings(text, QueryString());
+
+    // The pattern is a parameter so that a test can hand in one that runs out of its match timeout:
+    // the shipped one is linear, so no loggable text reaches the catch below (#677).
+    internal static string WithoutQueryStrings(string text, Regex queryString)
     {
         if (!text.Contains('?', StringComparison.Ordinal))
         {
@@ -39,7 +43,7 @@ internal static partial class Redaction
 
         try
         {
-            return QueryString().Replace(text, "?" + Redacted);
+            return queryString.Replace(text, "?" + Redacted);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -54,7 +58,14 @@ internal static partial class Redaction
     /// substitutes every value, so a credential in a plainly named property would be in the message
     /// even after its field was redacted.
     /// </summary>
-    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties)
+    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties) =>
+        Render(properties, Hole());
+
+    // The hole pattern is a parameter for the same reason as WithoutQueryStrings's (#677). Here the
+    // shipped pattern can run out: the budget covers the whole Replace, values rendered in the
+    // evaluator included, so a value slow to turn into text reaches the catch below. How slow it
+    // must be depends on where the engine checks its clock, which no test can pin.
+    internal static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties, Regex hole)
     {
         if (properties is null)
         {
@@ -90,7 +101,7 @@ internal static partial class Redaction
 
         try
         {
-            return Hole().Replace(template, match =>
+            return hole.Replace(template, match =>
             {
                 if (match.Value is "{{" or "}}")
                 {
@@ -133,8 +144,9 @@ internal static partial class Redaction
 
     // Every pattern here carries a match timeout (MA0009, a security rule, which ADR-0035
     // decision 4 requires at error in both analysis tiers). Both are linear, with no nested
-    // quantifier, so a log line never comes near it; it bounds a pattern a later edit makes
-    // backtrack, and a timeout fails closed above.
+    // quantifier, so no text on its own comes near it; it bounds a pattern a later edit makes
+    // backtrack, and a timeout fails closed above. Render's budget also covers the values its
+    // evaluator renders, so a slow value can spend it (#677).
     private const int MatchTimeoutMilliseconds = 100;
 
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.
