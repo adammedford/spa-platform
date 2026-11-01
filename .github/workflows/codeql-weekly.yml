@@ -1,0 +1,58 @@
+# The weekly CodeQL rescan of main's C#. Owner: integrator, written for #609 (ADR-0035 decision 11).
+#
+# ci.yml's `CodeQL` job scans a pull request, and a push to main, that changes a .NET input. This
+# rescans main once a week whatever changed, so a query CodeQL adds or improves reaches code nobody
+# has touched since. It is the same scan: the suite, the build mode, the build and the category are
+# ci.yml's, and the shared category `/language:csharp` makes the two one analysis in code scanning
+# rather than two (#587, section 5). Alerts stay advisory here as there: the job fails only when the
+# analysis does not run.
+#
+# A file of its own, schedule-only, because a `schedule` in ci.yml would run every job there: the
+# decision step diffs against the push's `before`, a schedule has none, and with no base every job
+# runs (#587, section 5). No check here is required, so nothing waits on it.
+#
+# When it runs: Mondays at 04:41 UTC, off the hour as GitHub asks for cron. A `schedule` fires on
+# the default branch's latest commit and on no other, and GitHub pauses it after 60 days with no
+# activity in the repository
+# (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule).
+# It has no `workflow_dispatch`, as #609 asks: between Mondays, main is scanned only by ci.yml's job,
+# on a push that changes a .NET input.
+
+name: CodeQL weekly rescan
+
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL weekly rescan
+    runs-on: ubuntu-latest
+    # The analysis is uploaded to code scanning, which needs `security-events: write`.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: github/codeql-action/init@v4
+        with:
+          # ci.yml's `CodeQL` job says why each of these; keep the two the same.
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        run: dotnet build SpaPlatform.slnx -c Release
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # ci.yml's category, so this updates the analysis its job uploads.
+          category: /language:csharp

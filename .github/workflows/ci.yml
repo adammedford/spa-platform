@@ -1,6 +1,6 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Four jobs. The documents job runs on every pull request and costs a few minutes: the documents a
+# Five jobs. The documents job runs on every pull request and costs a few minutes: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
 # the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
@@ -35,6 +35,14 @@
 # parse check again on macOS, under the bash 3.2 the scripts target, and the main-checkout guard's
 # companion on macOS, where the sessions here run the hook, on every push and pull request; the
 # steps that run them say why.
+#
+# The fifth job, `CodeQL`, is the advanced-setup CodeQL scan of the solution's C# (ADR-0035
+# decision 11, #609). It runs under the Build job's `if`, so it skips with it, and builds the
+# solution again under CodeQL's tracer, with the `security-extended` suite and the category
+# `/language:csharp`. Its alerts are advisory, read in the Security tab: the job fails only when the
+# analysis does not run. A weekly rescan under the same category lives in codeql-weekly.yml, a
+# schedule-only file of its own, because a schedule here would run every job. Requiring the job on
+# main by its name, and never the generated `Code scanning results / CodeQL` check, is #623's.
 #
 # Plan policy (P-01 to P-03 and P-07) is mock-provider assertions that the Terraform job's test step
 # runs (ADR-0016); CI holds no AWS credential, and plan generation stays disabled.
@@ -747,3 +755,45 @@ jobs:
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" test
           done <<< "$dirs"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    needs: documents
+    # The Build job's own `if`, so a change with no .NET input skips this job, which GitHub reports
+    # as a success, and the job can be required by its name without sticking (ADR-0035 decision 11;
+    # the header says why it is an `if` and why it says `!cancelled()`).
+    if: ${{ !cancelled() && needs.documents.outputs.build != 'false' }}
+    # The analysis is uploaded to code scanning, which needs `security-events: write`; the workflow's
+    # own `contents: read` is all the checkout needs.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: github/codeql-action/init@v4
+        with:
+          # C# only (ADR-0035 decision 11). `manual`: CodeQL extracts what the build step below
+          # compiles, so the scan covers what the solution builds, sees the source generators'
+          # output and leaves `spikes/` out, which is outside the solution. The test projects stay
+          # in, under code scanning's `Test` label (#587, sections 3 and 6).
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        # CI's own build of the solution, on the SDK setup-dotnet resolved from global.json. CodeQL's
+        # tracer adds its own properties to it (#587, section 3).
+        run: dotnet build SpaPlatform.slnx -c Release
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # The category the weekly rescan in codeql-weekly.yml names too, so the two runs update one
+          # analysis rather than two. Alerts are advisory: the step fails only when the analysis or
+          # its upload does not happen, never on what it finds (ADR-0035 decision 11).
+          category: /language:csharp
