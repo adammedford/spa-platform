@@ -807,6 +807,23 @@ try {
       const listed = g6rows.map(([id]) => id).sort()
       if (sent.join() !== listed.join()) fail(`G6's Locate agents were given ${sent.join(', ')}, where the committed ids table lists ${listed.join(', ')}`)
       for (const [id, t] of g6rows) if (required(committed, id) !== t) fail(`${id} was tiered ${required(committed, id)}, where the committed ids table requires ${t}`)
+      // G6's ids are what #364 Q2 decided: every register row #538 or #539 numbered, at the tier its
+      // Tier cell gives, plus F-07 D, P-01 H and P-05 D. Read from contracts/test-ids.md, so an id
+      // dropped from or added to G6's table, or tiered off its register row, turns this red; the
+      // parse checks above stay green on any such table (review of #364: F-12 dropped held them).
+      const decided = new Map([['F-07', 'D'], ['P-01', 'H'], ['P-05', 'D']])
+      let tierAt = -1
+      let recordedAt = -1
+      REGISTER_LINES.forEach((l, i) => {
+        const c = cells(l)
+        if (/^\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(String(REGISTER_LINES[i + 1] || '').trim())) { tierAt = c.indexOf('Tier'); recordedAt = c.indexOf('Recorded by'); return }
+        if (tierAt < 0 || recordedAt < 0 || !/^[FNPA]-\d+$/.test(c[0] || '')) return
+        if (/#53[89]\b/.test(c[recordedAt] || '')) decided.set(c[0], c[tierAt])
+      })
+      if (decided.size === 3) fail(`no row of contracts/test-ids.md is recorded by #538 or #539, so G6's decided ids cannot be read`)
+      const want = [...decided].map(([id, t]) => `${id} ${t}`).sort().join(', ')
+      const have = g6rows.map(([id, t]) => `${id} ${t}`).sort().join(', ')
+      if (want !== have) fail(`G6's committed ids table lists ${have}, where #364 Q2 and the register's #538 and #539 rows give ${want}`)
       if (!/Acceptance criteria/.test(committed.result.report.text)) fail('G6\'s criteria from the committed register are not in the report')
       for (const gname of ['G7', 'G8']) {
         const r = await execute(newRepo(), { gate: gname }, {})
