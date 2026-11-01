@@ -2349,15 +2349,43 @@ class SteeringTests(unittest.TestCase):
 
     def test_an_adr_with_no_status_item_at_the_base_is_frozen_whole(self):
         """With no Status item at the base nothing may change, so adding one is no escape: the
-        new bullet is body, and so is the edit beside it that it would otherwise cover."""
+        new bullet is body, and so is the note written as its continuation line, which it would
+        otherwise cover. The first line of the file is tried too, where the lines before the item
+        are the same on both sides."""
         lines = [line for line in ADR_LINES if not line.startswith("- **Status:**")]
-        self.write_adr(text="".join(lines))
-        base = self.adr_commit("An ADR with no Status item")
+        note = "  *Amended: the window rose with locking.*\n"
+        for shape, where in (("in the header", STATUS), ("on the first line", 0)):
+            with self.subTest(shape=shape):
+                self.write_adr(text="".join(lines))
+                base = self.adr_commit("An ADR with no Status item")
+                added = list(lines)
+                added[where:where] = ["- **Status:** Accepted.\n", note]
+                self.write_adr(text="".join(added))
+                self.adr_commit("Give it a Status item with a note")
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(f"  {ADR}:{where + 1}: - **Status:** Accepted.\n", out)
+                self.assertIn(f"  {ADR}:{where + 2}: {note.rstrip()}\n", out)
+
+    def test_an_edit_above_the_status_item_names_that_edit_and_not_the_item(self):
+        """#659 Q42 lists every changed line, so a retitled ADR whose Status gains a note names the
+        title alone: the Status item still stands after the same body lines, and what it says may
+        change."""
         self.write_adr()
-        self.adr_commit("Give it a Status item")
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[0] = "# ADR-0017: A decision, retitled\n"
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR.**\n"
+        lines.insert(STATUS + 1, "  See the later ADR.\n")
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Retitle the ADR and note its Status")
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn(f"  {ADR}:{STATUS + 1}: - **Status:** Accepted.\n", out)
+        named = [line.strip() for line in out.splitlines() if line.startswith(f"  {ADR}")]
+        self.assertEqual([
+            f"{ADR}: removed at base line 1: {ADR_LINES[0].rstrip()}",
+            f"{ADR}:1: {lines[0].rstrip()}",
+        ], named)
 
     def test_a_status_item_moved_into_the_body_is_body(self):
         """The Status item is a slot in the header, not a block that travels: e2fc266's note
@@ -2377,6 +2405,20 @@ class SteeringTests(unittest.TestCase):
         self.assertIn(ADR_HEADLINE, out)
         self.assertIn(f"  {ADR}:{rejected + 2}: - **Status:** Accepted.\n", out)
         self.assertIn(f"  {ADR}:{rejected + 3}: {note.rstrip()}\n", out)
+        self.assertIn(f"  {ADR}: removed at base line {STATUS + 1}: - **Status:** Accepted.\n",
+                      out)
+
+    def test_a_status_item_removed_entirely_passes(self):
+        """#659 Q36 read as written: removing the item from both copies leaves identical bytes,
+        and no body text gets in that way (the implementer's decision 4 on #634)."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(line for line in ADR_LINES
+                                    if not line.startswith("- **Status:**")))
+        self.adr_commit("Remove the Status item")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
 
     def test_a_branch_behind_its_base_passes(self):
         """The base's own later work is not the branch's: a branch forked before its base added an

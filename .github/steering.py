@@ -118,7 +118,8 @@ item -- the `- **Status:**` bullet and the indented, non-blank lines straight af
 removed from both; README.md and a `draft-*.md` are not read (#659 Q34 to Q46). The range is net
 and read from the merge-base, as tools/check.sh and CI read the changed files, so a branch behind
 its base is not charged with the base's newer ADRs, and a body edit a later commit reverts is no
-edit. Every byte counts, whitespace and a re-wrap included; a file with no Status item at the base
+edit. Every byte counts, whitespace and a re-wrap included; the item may change what it says but
+not where it stands, so one moved down the file is body; a file with no Status item at the base
 is frozen whole, so adding one opens nothing; a deleted or renamed ADR fails on its path, since
 its number and path are cited. No allowlist, trailer or confirmed answer exempts a body edit: a
 stale fact gets a Status-line pointer and a changed decision a new ADR. Each changed line is
@@ -1296,9 +1297,29 @@ def status_item(lines: list[bytes]) -> range:
     return range(0)
 
 
-def numbered_lines(lines: list[bytes], item: range) -> list[tuple[int, bytes]]:
-    """The lines outside the Status item, each with the line number its own file gives it."""
-    return [(number, line) for number, line in enumerate(lines, start=1) if number - 1 not in item]
+# The one entry an ADR's Status item is compared as, whatever its lines say: equal only to itself,
+# so it can stand beside the lines without ever matching one.
+STATUS_SLOT = object()
+
+# One entry of the comparison: what it is compared as, and the numbered lines it reports.
+Entry = tuple[object, list[tuple[int, bytes]]]
+
+
+def entries(lines: list[bytes], item: range, slot: bool) -> list[Entry]:
+    """An ADR's lines as the comparison reads them, each with the lines it reports and their
+    numbers in its own file: a line outside the Status item as itself, and the item as one
+    STATUS_SLOT entry where it stands, or as nothing when `slot` is false."""
+    found: list[Entry] = []
+    for number, line in enumerate(lines, start=1):
+        if number - 1 not in item:
+            found.append((line, [(number, line)]))
+        elif not slot:
+            continue
+        elif number - 1 == item.start:
+            found.append((STATUS_SLOT, [(number, line)]))
+        else:
+            found[-1][1].append((number, line))
+    return found
 
 
 def printable(line: bytes) -> str:
@@ -1314,35 +1335,35 @@ def body_edits(path: str, before: bytes, after: bytes) -> list[str]:
     """The body lines that differ between the base's copy of an ADR and HEAD's, one line each:
     a line HEAD holds, numbered on HEAD, and a line the base held, numbered on the base.
 
-    The Status item is removed from both before they are compared, and from HEAD only when the
-    base had one: a base with no Status item has nothing the range may change, so a Status item
-    HEAD adds is body like any other line (#659 Q41). For the same reason HEAD's item is removed
-    only where it follows the lines the base's followed, so a Status item moved down the file is
-    body too. The lines are split on the newline alone,
-    so a missing final newline and a carriage return are each a difference too.
+    Each side's Status item is compared as one STATUS_SLOT entry, so what it says may change and
+    where it stands may not: a bullet moved down beside a body row would otherwise carry any note
+    written as its continuation past the comparison, e2fc266's edit in another shape, and an edit
+    above the item names that edit alone, not the item (#659 Q36, Q42). A base with no Status item
+    has no slot, so a Status item HEAD adds is a slot the base lacks and fails, its lines named
+    (#659 Q41). The base's slot is dropped only when HEAD has no item at all, since removing the
+    item from both must then leave identical bytes (Q36). The lines are split on the newline
+    alone, so a missing final newline and a carriage return are each a difference too.
     """
     old_lines = before.split(b"\n")
     new_lines = after.split(b"\n")
     old_item = status_item(old_lines)
-    new_item = status_item(new_lines) if old_item else range(0)
-    # HEAD's item is the Status item only where the base's stood, after the same lines: a bullet
-    # moved into the body would otherwise carry any note written as its continuation past the
-    # comparison, e2fc266's edit in another shape.
-    if new_item and new_lines[:new_item.start] != old_lines[:old_item.start]:
-        new_item = range(0)
-    old = numbered_lines(old_lines, old_item)
-    new = numbered_lines(new_lines, new_item)
+    new_item = status_item(new_lines)
+    old = entries(old_lines, old_item, slot=bool(new_item))
+    # HEAD's item is always a slot: dropping it when the base had none would let a Status item
+    # added to a Status-less file cover whatever its continuation lines say (Q41).
+    new = entries(new_lines, new_item, slot=True)
     matcher = difflib.SequenceMatcher(
-        None, [line for _, line in old], [line for _, line in new], autojunk=False
+        None, [key for key, _ in old], [key for key, _ in new], autojunk=False
     )
     found = []
     for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
         if tag == "equal":
             continue
-        for number, line in old[old_start:old_end]:
-            found.append(f"{path}: removed at base line {number}: {printable(line)}")
-        for number, line in new[new_start:new_end]:
-            found.append(f"{path}:{number}: {printable(line)}")
+        for _, lines in old[old_start:old_end]:
+            found.extend(f"{path}: removed at base line {number}: {printable(line)}"
+                         for number, line in lines)
+        for _, lines in new[new_start:new_end]:
+            found.extend(f"{path}:{number}: {printable(line)}" for number, line in lines)
     return found
 
 
@@ -1363,10 +1384,20 @@ def adr_body_edits(root: pathlib.Path, base: str) -> tuple[list[str], int | None
     if head is None:
         return [], 0
     merged = git(root, "merge-base", base, head)
-    if merged.returncode != 0:
+    # git merge-base exits 1 when the two share no commit and higher on an error of its own; only
+    # the first is "nothing says which ADRs existed", and an error fails closed.
+    if merged.returncode == 1:
         return [], None
+    if merged.returncode != 0:
+        raise SystemExit(f"steering: git merge-base could not compare {base[:12]} with HEAD: "
+                         f"{merged.stderr.strip()}")
     fork = merged.stdout.strip()
     listed = git(root, "ls-tree", "-z", "--name-only", fork, "--", ADR_DIRECTORY)
+    # A listing that failed is not an empty docs/adr/: read as one, it would judge nothing and
+    # print neither a count nor the not-judged line.
+    if listed.returncode != 0:
+        raise SystemExit(f"steering: git could not list {ADR_DIRECTORY} at {fork[:12]}: "
+                         f"{listed.stderr.strip()}")
     existing = {
         name for name in listed.stdout.split("\0") if NUMBERED_ADR.match(name)
     }
