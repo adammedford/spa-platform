@@ -42,6 +42,7 @@ internal static class ContractFiles
         "telemetry.md",
         "resource-tags.md",
         "test-ids.md",
+        "gates.md",
     ];
 
     /// <summary>

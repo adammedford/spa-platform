@@ -213,6 +213,10 @@ UNCOMPARED = {
         "Test id register",
         "Never; a row is added by a decided change request (#322)",
     ): "the register never freezes, so there is no gate to compare its header against (#322)",
+    (
+        "Gate register",
+        "Never; a gate's row is added by a decided change request (#364)",
+    ): "the gate register never freezes, so there is no gate to compare its header against (#364)",
 }
 
 # The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON

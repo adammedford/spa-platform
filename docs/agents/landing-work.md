@@ -353,10 +353,10 @@ The rules it holds, which the morning applies:
 
 ## Gates
 
-A gate closes when its exit test in `docs/plan/01-plan.md` passes and no review of a change it
-covers is open. A gate tag covers every merge since the previous gate tag, and it is permanent:
-what its commit says stays said there however soon `main` corrects it. So it waits while any merge
-in its range has an open review:
+A gate closes when its exit test in `docs/plan/01-plan.md`, or for a gate defined after the export
+in `contracts/gates.md`, passes and no review of a change it covers is open. A gate tag covers every
+merge since the previous gate tag, and it is permanent: what its commit says stays said there
+however soon `main` corrects it. So it waits while any merge in its range has an open review:
 
 - a review still running, or one whose latest record says `hold`;
 - commits pushed after the last reviewed head;

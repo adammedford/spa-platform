@@ -21,8 +21,9 @@ waits for a gate (one needing a new rule id, say) lands in that gate's integrato
 
 **Numbering.** A new id continues its prefix's sequence: F-24, N-33, P-08 and A-06 are next. A number
 is given only when the row's change request is decided, is never reused and never takes a letter
-suffix. A dropped check keeps its row, marked retired, so old merge bodies, tags and review records
-stay true.
+suffix. A dropped check keeps its row, its Tier cell reading `retired` and its Recorded by cell
+gaining the decision that retired it, so old merge bodies, tags and review records stay true. An
+export id whose check is dropped gains a row here, marked the same way.
 
 **Row shape.** The export's columns for the prefix, plus Tier (`H` hermetic, `D` deployed) on every
 table and a Recorded by column naming the ADR, change request or confirmed answer that named the id.
