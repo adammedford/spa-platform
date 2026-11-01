@@ -494,6 +494,8 @@ the composed suites, except `B-`, which the startup benchmark's verdict proves o
 test project. The ids in the frozen export are listed there; an id named after it continues its
 prefix's sequence and is listed in the test id register.
 
+**Plan policy** — the assertions on what a Terraform root's plan may contain: P-01 (the platform plan allowlist), P-02 (the apps plan allowlist), P-03 (the task role policy) and P-07 (the identity root's allowlist). Mock-provider `terraform test` runs that read the configuration (ADR-0016), so they prove the configuration and never the account; P-04 to P-06 are the deployed checks. _Avoid_: plan check, for a credentialed plan nothing runs.
+
 **Test id register** — the live list of test ids named after the frozen export, each with its
 tier and the decision that named it, and the tiers of the export's rows that carry none, and the
 checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
