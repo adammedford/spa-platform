@@ -251,8 +251,16 @@ Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflo
 ```
 
 The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
-contains the integration tip, then closes the landed tickets, unassigns, removes the worktrees whose
-tips are on `origin/main`, the integration worktree last, and prunes.
+contains the integration tip identified from the merged landing pull request, then closes the
+landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration
+worktree last, and prunes.
+
+The after pass also applies every confirmed answer the morning pass could not. It closes the
+Overnight issue once every question on it is settled: answered no, applied, or held by a ticket
+its `## After <date>` comment names. A commit answer counts as applied only once its commit is on
+`origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming
+its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that
+comment lists what is left. Relaunch the after pass after a later Confirm or landing.
 
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
