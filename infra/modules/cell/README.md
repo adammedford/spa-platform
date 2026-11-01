@@ -137,10 +137,17 @@ needs credentials, a state bucket and the first-deployment order in
 - **The shutdown** (#332 F1, #347). A roll stops a task in this order: the target
   group's `deregistration_delay`, 30 s, drains it, then ECS sends SIGTERM, then after
   the gateway container's `stopTimeout`, 30 s, SIGKILL. The gateway's own
-  `ShutdownTimeout` is 25 s (`Platform.Hosting`, #363). The drain covers the 21 s a
-  session refresh is bounded by, and `stopTimeout` covers `ShutdownTimeout`, so the
-  process ends its shutdown on its own terms; an `/api` call longer than the window can
-  be cut by a roll. `stopTimeout` is on the gateway container only.
+  `ShutdownTimeout` is 25 s (`Platform.Hosting`, #363). Requests drain from the task
+  during the 30 s, and the drain promises no refresh's completion. `ShutdownTimeout`
+  exceeds the refresh holder's 20 s durable-write deadline, timed from its acquire's
+  send (the 21 s lease less 1 s of skew), so a successful refresh admitted before the
+  host is told to stop writes its rotated token before the host stops. The durable
+  write is the promise, not every request's completion: F3b's failed or unknown write
+  and F4's check-to-send pause are its exceptions, and a loser's wait is F2's and
+  F3's, which no number here bounds (#332 F1; P2-3's second amendment, decision 2).
+  `stopTimeout` covers `ShutdownTimeout`, so the process ends its shutdown on its own
+  terms; an `/api` call longer than the window can be cut by a roll. `stopTimeout` is
+  on the gateway container only.
 - **The task environment** is generated from `contracts/platform-config.schema.json`
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come
