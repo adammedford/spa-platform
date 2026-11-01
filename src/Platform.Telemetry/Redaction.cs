@@ -30,7 +30,11 @@ internal static partial class Redaction
     /// The text with the query string cut from every URL or path in it. The callback carries the
     /// authorization code and state in its query (ADR-0007), so no query survives, whatever it holds.
     /// </summary>
-    public static string WithoutQueryStrings(string text)
+    public static string WithoutQueryStrings(string text) => WithoutQueryStrings(text, QueryString());
+
+    // The pattern is a parameter so that a test can hand in one that runs out of its match timeout:
+    // the shipped one is linear, so no loggable text reaches the catch below (#677).
+    internal static string WithoutQueryStrings(string text, Regex queryString)
     {
         if (!text.Contains('?', StringComparison.Ordinal))
         {
@@ -39,7 +43,7 @@ internal static partial class Redaction
 
         try
         {
-            return QueryString().Replace(text, "?" + Redacted);
+            return queryString.Replace(text, "?" + Redacted);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -54,7 +58,14 @@ internal static partial class Redaction
     /// substitutes every value, so a credential in a plainly named property would be in the message
     /// even after its field was redacted.
     /// </summary>
-    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties)
+    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties) =>
+        Render(properties, Hole());
+
+    // The hole pattern is a parameter for the same reason as WithoutQueryStrings's (#677). Here the
+    // shipped pattern can run out: the budget covers the whole Replace, values rendered in the
+    // evaluator included, so a value slow to turn into text reaches the catch below. How slow it
+    // must be depends on where the engine checks its clock, which no test can pin.
+    internal static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties, Regex hole)
     {
         if (properties is null)
         {
@@ -90,7 +101,7 @@ internal static partial class Redaction
 
         try
         {
-            return Hole().Replace(template, match =>
+            return hole.Replace(template, match =>
             {
                 if (match.Value is "{{" or "}}")
                 {
