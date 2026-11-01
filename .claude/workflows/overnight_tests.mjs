@@ -24,7 +24,10 @@
 // no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). Three
 // change requests (#436), two ready-for-human and one ready-for-agent, prove that a request is grilled into a draft
 // decision and built only on Adam's decision comment, and the mocked lanes' changeRequests fill the report's
-// Change requests lists. No agent, gh or git call is made.
+// Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
+// which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
+// main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
+// (#629). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -147,6 +150,10 @@ const CARRIED_LOOSE_SUMMARY = 'Carried from an earlier night.'
 const grillQuestions = (n) => Array.from({ length: n }, (_, i) => ({ q: `Q${i + 1}?`, recommendation: 'yes' }))
 const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
+// The closing check's answer in the main run (#629 Q15, Q18): red on a companion that no single merge's check earned.
+const CLOSING_TIP = 'd'.repeat(40)
+const CLOSING_FAIL_LINE = 'check: fail: the test companion tools/landing_subjects_tests.py failed.'
+const CLOSING_RED = { ok: false, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE, notes: 'companion' }
 const SHARED_FILE = '.gitignore'
 const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
@@ -207,6 +214,8 @@ globalThis.agent = async (prompt, opts) => {
     return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
   }
   if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
+  // The closing check (#629) answers red, the case the report has to carry without resetting any merge.
+  if (kind === 'closing') return CLOSING_RED
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
@@ -642,7 +651,9 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
       }
       if (/dotnet test --solution/.test(p)) fail(`the re-run of ${id} runs the whole suite, not the failed projects alone`)
       if (/dotnet test --project tests\/(?!Spactl\.Tests |e2e |<X>\.Tests`)/.test(p)) fail(`the re-run of ${id} runs a project that did not fail`)
-      if (!p.includes(`tools/check.sh --full --base a${'a'.repeat(39)} --port `) || !p.includes(' --skip-tests; }')) fail(`the re-run of ${id} does not run the rest of the check with --skip-tests, against the run's base`)
+      // #629 Q19: the re-run judges the same merge against the same old commit the red check was judged against.
+      if (!p.includes(`tools/check.sh --full --base ${OLD} --port `) || !p.includes(' --skip-tests; }')) fail(`the re-run of ${id} does not run the rest of the check with --skip-tests, against the merge's first parent ${OLD}`)
+      if (p.includes(`--base a${'a'.repeat(39)}`)) fail(`the re-run of ${id} still judges against the run base, not the merge's first parent (#629)`)
       if (!p.includes(`reset --hard ${RED}`) || !p.includes(`reset --hard ${OLD}`)) fail(`the re-run of ${id} does not move the run branch to the gate's head and back to the old head on red`)
       if (!p.includes('"## Flake at integrate"')) fail(`the re-run of ${id} records no "## Flake at integrate" comment on its ticket`)
     }
@@ -1098,6 +1109,106 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
     if (!item.includes(PARTIAL_RULE)) fail('#632: the report prompt\'s Partial (Outstanding) item does not give a partial whose outstanding work is a choice for Adam a numbered question')
     const step = (/^1b\. .*$/m.exec(reportPrompt) || [''])[0]
     if (!step.includes(STEP_RULE)) fail('#632: the report prompt\'s step 1b does not list a partial\'s choice for Adam among its ticket\'s questions')
+  }
+}
+
+// 31. Each integrate step's local check is judged against the merge's first parent (#629 Q14). On 2026-10-29 every
+//     integrate ran `--base <run base>`, so the n-th merge's check judged all n merges: the span from merge message to
+//     integrate log grew from 2m31s (#506, the first) to 10m27s (#513, the last) while the suite stayed near 2 minutes,
+//     as the companions earlier merges had earned ran again on each later one. <old> is the run branch's tip before
+//     this merge, which STEP 1 records and STEP 0 recovers on a resumed run, so the diff judged is this merge and its
+//     roadmap refresh.
+{
+  const RUN_BASE = 'a'.repeat(40)
+  const integrates = allPrompts.filter((c) => c.label.startsWith('integrate:'))
+  if (!integrates.length) fail('#629: no integrate prompt was rendered, so the base check read nothing')
+  for (const c of integrates) {
+    if (!c.prompt.includes('tools/check.sh --full --base <old> --port ')) fail(`#629: the ${c.label} prompt's local check is not judged against <old>, the merge's first parent`)
+    if (c.prompt.includes(`--base ${RUN_BASE}`)) fail(`#629: the ${c.label} prompt still judges a check against the run base`)
+    if (!c.prompt.includes('Record old=') || !c.prompt.includes('otherwise old is that merge\'s first parent')) fail(`#629: the ${c.label} prompt does not define <old> on both the first and the resumed path`)
+    if (!c.prompt.includes('STEP 2 — the integrate step\'s local check, judged against the merge\'s first parent <old>')) fail(`#629: the ${c.label} prompt's STEP 2 does not name the check in the glossary's words (Q13, Q17)`)
+    // The check's command is run exactly as written, and a bare `<old>` in it is a bash redirect from a file named old,
+    // so the step says to write the sha in its place (#629's review).
+    if (!c.prompt.includes('write <old>\'s 40-character sha where it says <old>')) fail(`#629: the ${c.label} prompt does not say to put <old>'s sha in the check's command, which bash would read as a redirect`)
+  }
+}
+
+// 32. One closing check judges the whole run against the run base (#629 Q15, Q18): what 31 gives up is the proof that
+//     a later merge did not break a companion an earlier merge earned, and no one knows in advance which merge is the
+//     last, since the lanes run in parallel. So once every lane has settled, and before the report, one agent runs
+//     `tools/check.sh --full --base <run base>` on the run branch's tip, on a port no lane has, and changes nothing.
+//     A red one is reported under its own heading with its log and last line; every merge stays, and the morning adds
+//     no hold. The main run's closing check answers red; three short runs below cover a run that integrated nothing,
+//     a closing agent that died, and an answer of ok whose last line is a failure.
+{
+  const RUN_BASE = 'a'.repeat(40)
+  const INT_WT = `${fixture.args.wt}/overnight`
+  const CLOSING_LOG = `${LOG}/closing-check.txt`
+  const closings = allPrompts.filter((c) => c.label === 'closing')
+  if (closings.length !== 1) fail(`#629: the run rendered ${closings.length} closing-check prompts, not 1`)
+  const p = (closings[0] || {}).prompt || ''
+  const cmd = (/^ {2}cd (\S+) && \{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1; tail -25 \S+$/m.exec(p) || [])
+  if (!cmd.length) fail('#629: the closing-check prompt does not run tools/check.sh --full as the one check command')
+  else {
+    if (cmd[1] !== INT_WT) fail(`#629: the closing check runs in ${cmd[1]}, not the integration worktree ${INT_WT}`)
+    if (cmd[2] !== RUN_BASE) fail(`#629: the closing check is judged against ${cmd[2]}, not the run base ${RUN_BASE}`)
+    if (cmd[4] !== CLOSING_LOG) fail(`#629: the closing check logs to ${cmd[4]}, not ${CLOSING_LOG}`)
+    // No ticket's port, whether or not its lane ran tonight: a lane's port is 5100 + 10n, with n from 1.
+    const lanePorts = new Set([...allPrompts.filter((c) => c.label.startsWith('implement:')).map((c) => (/Your port: (\d+)\./.exec(c.prompt) || [])[1]),
+      ...tickets.map((t) => String(5100 + 10 * t.n))])
+    if (lanePorts.has(cmd[3])) fail(`#629: the closing check's port ${cmd[3]} is a lane's port`)
+  }
+  for (const rule of ['Change nothing in it', 'every merge stays', 'STEP 0 — durable state']) if (!p.includes(rule)) fail(`#629: the closing-check prompt lacks "${rule}"`)
+  if (/reset --hard|git -C \S+ (merge|commit)\b/.test(p)) fail('#629: the closing-check prompt moves the run branch')
+  // After every lane has settled: no integrate ends after the closing check starts; and before the report.
+  const closingStart = (events.find((e) => e.kind === 'closing' && e.edge === 'start') || {}).at
+  const lastIntegrate = Math.max(...events.filter((e) => e.kind === 'integrate' && e.edge === 'end').map((e) => e.at))
+  if (closingStart === undefined) fail('#629: the closing check never started')
+  else if (closingStart < lastIntegrate) fail(`#629: the closing check started at ${closingStart}, before the last integrate ended at ${lastIntegrate}`)
+  const at = (label) => allPrompts.findIndex((c) => c.label === label)
+  if (at('closing') < 0 || at('report') < at('closing')) fail('#629: the closing check does not run before the report')
+  // A red closing check is reported, and nothing moves: the integrated set is check 1's, and no reset agent ran for it.
+  const want629 = { status: 'fail', log: CLOSING_LOG, base: RUN_BASE, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE }
+  for (const [where, got629] of [['the run\'s result', result.closingCheck], ['the report\'s results', reportSummary && reportSummary.closingCheck]]) {
+    for (const [k, v] of Object.entries(want629)) if (!got629 || got629[k] !== v) fail(`#629: ${where} closingCheck.${k} is ${got629 ? JSON.stringify(got629[k]) : 'missing'}, not ${JSON.stringify(v)}`)
+  }
+  if (allPrompts.some((c) => c.label === 'reset:closing' || c.label === 'reset:undefined')) fail('#629: a red closing check reset the run branch')
+  const item = reportPrompt.split('\n').find((l) => l.includes('- Closing check (#629)')) || ''
+  for (const rule of ['`### Closing check`', 'its log', 'its last line', 'every merge was kept', 'no morning hold']) if (!item.includes(rule)) fail(`#629: the report prompt's Closing check item lacks "${rule}"`)
+
+  // The short runs: one ticket, or none, and every agent answering at once.
+  const SOLO = [...want].find((id) => byId[id].status === 'ready-for-agent' && !byId[id].blockedBy.length && !byId[id].changeRequest)
+  const shortRun = async (only, closingAnswer) => {
+    const prompts = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      prompts.push({ label: opts.label, prompt })
+      const [kind, id] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: RUN_BASE, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'closing') return closingAnswer
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in a closing-check run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    return { result: await new Function('return (async () => {' + src + '\n})()')(), prompts }
+  }
+  if (!SOLO) fail('#629: the fixture has no unblocked ticket to integrate alone, so the short closing-check runs read nothing')
+  else {
+    const none = await shortRun([], null)
+    if (none.prompts.some((c) => c.label === 'closing')) fail('#629: a run that integrated nothing still ran a closing check')
+    if (!none.result.closingCheck || none.result.closingCheck.status !== 'not-run' || !/nothing integrated/.test(none.result.closingCheck.why || '')) fail(`#629: a run that integrated nothing does not say its closing check did not run because nothing integrated: ${JSON.stringify(none.result.closingCheck)}`)
+    const died = await shortRun([SOLO], null)
+    if (JSON.stringify(died.result.integrated) !== JSON.stringify([SOLO])) fail(`#629: the short run integrated ${JSON.stringify(died.result.integrated)}, not [${SOLO}]`)
+    if (!died.result.closingCheck || died.result.closingCheck.status !== 'not-run' || !/died/.test(died.result.closingCheck.why || '') || died.result.closingCheck.log !== CLOSING_LOG) fail(`#629: a closing agent that died does not read as not run, naming its log: ${JSON.stringify(died.result.closingCheck)}`)
+    // The script reads the verdict from the last line, not from the agent's ok, as the keep rule reads a re-run (#397).
+    const claimed = await shortRun([SOLO], { ok: true, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE, notes: '' })
+    if (!claimed.result.closingCheck || claimed.result.closingCheck.status !== 'fail') fail(`#629: an ok whose last line is a failure reads as ${JSON.stringify(claimed.result.closingCheck)}, not fail`)
+    const green = await shortRun([SOLO], { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: A-05, the roadmap.', notes: '' })
+    if (!green.result.closingCheck || green.result.closingCheck.status !== 'pass') fail(`#629: a green closing check reads as ${JSON.stringify(green.result.closingCheck)}, not pass`)
   }
 }
 
