@@ -169,7 +169,7 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
@@ -823,6 +823,39 @@ try {
       const verdictPrompt = env.prompts['verdict:287'] || ''
       if (!/A removed row is a held break whose target the range deleted/.test(verdictPrompt) || !/otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold/.test(verdictPrompt)) fail('the verdict prompt does not tell the agent to hold on a removed row whose deletion is not shown sound')
       if (!new RegExp(`${LIB2}[^\\n]*removed`).test(commentOf(env, 287))) fail('the comment\'s table does not show the removed row')
+    }
+    // caught (#684): the held break turns the project red on another test while the held one stays
+    // green. Accepted by the verdict, the row is reproduced and its cell names both tests, so a later
+    // review's held list drops it; not accepted, it holds and reads did-not-fail.
+    const CATCHER = 'LibraryTests.test_a_name_inside_a_longer_name_is_still_read'
+    const caught = { [LIB2]: { ...row('reproduced', 1, 71), failingNames: [`tools.check_tests.${CATCHER}`], why: 'the break is caught by the catcher, not by LIB2' } }
+    env = run({ prs: [287] }, SHAPE, { range, mutate: caught, caught: { 287: [LIB2] } })
+    result = await execute(env)
+    {
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (held.result !== 'reproduced' || JSON.stringify(held.caughtBy) !== JSON.stringify([`tools.check_tests.${CATCHER}`])) fail(`PR 287's shape with the held ${LIB2} caught and accepted: its row is ${JSON.stringify(held)}`)
+      if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} caught and accepted: verdict ${c.verdict}, expected merge`)
+      if (!/A caught row is a held break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
+      if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
+      const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
+      if (!cellLine.includes(CATCHER)) fail(`PR 287's shape with the held ${LIB2} caught: no table row reads "${LIB2} (caught by ...)"`)
+      // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated again.
+      const LATER = { author_association: 'OWNER', created_at: '2026-10-22T10:00:00Z', html_url: 'https://github.com/o/r/pull/287#issuecomment-3',
+        body: `## Review\n\nHead ${H3}.\n\n${table([[LIB1, LIB_BREAK, '3 of 71', 'did-not-fail: it stayed green'], [`${LIB2} (caught by ${CATCHER})`, LIB_BREAK, '1 of 71', 'reproduced: the catcher went red']])}\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H3} against ${FORK}: hold` }
+      const NEXT = { 287: { ...SHAPE[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD, LATER] } }
+      env = run({ prs: [287] }, NEXT, { range: { 287: { ...range[287], from: H3 } } })
+      result = await execute(env)
+      const ranNext = env.mutations.filter((m) => m.prompt.includes('held because')).map((m) => m.test)
+      if (ranNext.includes(LIB2) || !ranNext.includes(LIB1)) fail(`PR 287 after a caught record: held mutations ${JSON.stringify(ranNext)}, expected ${LIB1} and not ${LIB2}`)
+    }
+    env = run({ prs: [287] }, SHAPE, { range, mutate: caught })
+    result = await execute(env)
+    {
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (c.verdict !== 'hold' || held.result !== 'did-not-fail') fail(`PR 287's shape with the held ${LIB2} caught and not accepted: verdict ${c.verdict}, row ${held.result}, expected hold and did-not-fail`)
+      if (commentOf(env, 287).includes('(caught by ')) fail('a caught row the verdict did not accept still reads "caught by" in the table')
     }
     // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
     // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.
