@@ -610,7 +610,13 @@ def search(since: str) -> list[dict]:
     """Every issue, open or closed, created at or after since, from gh's listing of the repository
     it resolves. Unreadable when gh fails, when its answer is not a list of issues each with a
     number, a title, a creation time and a state, or when the listing reaches SEARCH_LIMIT: gh can
-    return a short page with exit 0, and a listing at its limit may have been cut short."""
+    return a short page with exit 0, and a listing at its limit may have been cut short.
+
+    GitHub's search does the filtering, and no createdAt is compared here: `created:>=` with a
+    time is inclusive (https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax#query-for-dates),
+    and `gh issue list` lists issues, never pull requests
+    (https://cli.github.com/manual/gh_issue_list). A probe on 2026-11-01 listed #558 for
+    `created:>=2026-10-29T21:03:09Z`, its own creation second, and no pull request (#636)."""
     try:
         done = subprocess.run(["gh", "issue", "list", "--state", "all", "--search",
                                f"created:>={since}", "--limit", str(SEARCH_LIMIT),

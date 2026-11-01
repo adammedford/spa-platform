@@ -1484,6 +1484,22 @@ class PossibleDuplicates(unittest.TestCase):
         self.assertEqual(shape.content_words(title), [])
         self.assertEqual(self.matches(title, listed(704, title)), {})
 
+    def test_the_stopword_list_is_pinned(self):
+        # #636 Q3/#659 Q49: the stopwords are a constant the tests pin, so a word added or dropped
+        # moves the threshold's noise only by a change that edits this list too.
+        self.assertEqual(shape.STOPWORDS, frozenset((
+            "the",
+            "about", "above", "across", "after", "against", "along", "among", "around", "before",
+            "behind", "below", "beneath", "beside", "besides", "between", "beyond", "despite",
+            "down", "during", "except", "for", "from", "inside", "into", "like", "near", "off",
+            "onto", "out", "outside", "over", "past", "per", "since", "through", "throughout",
+            "till", "toward", "towards", "under", "underneath", "unlike", "until", "upon", "via",
+            "with", "within", "without",
+            "and", "but", "nor", "yet", "because", "although", "though", "unless", "while",
+            "whether", "than", "then", "when", "where", "once",
+            "says", "names", "gives",
+        )))
+
     def test_each_word_counts_once(self):
         self.assertEqual(self.matches("ticket ticket ticket shape",
                                       listed(705, "ticket ticket ticket")), {})
