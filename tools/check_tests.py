@@ -219,11 +219,23 @@ def setUpModule():
     print(f"check_tests: tools/check.sh runs under {BASH} {bash_full_version()}", file=sys.stderr)
 
 
+# The elapsed lines (#629): one per executed step and per companion, and the total just before the
+# verdict, all on standard output. ElapsedTests asserts them; every other case reads standard
+# output without them, so the lines the hook printed before #68, typed into HookTests, stay as typed.
+ELAPSED = re.compile(r"^(check|pre-push): elapsed: (.+): (\d+)s$")
+
+
 class Result:
     def __init__(self, completed: subprocess.CompletedProcess):
         self.status = completed.returncode
-        self.stdout = completed.stdout.decode("utf-8", "surrogateescape")
-        self.stderr = completed.stderr.decode("utf-8", "surrogateescape")
+        self.raw_stdout = completed.stdout.decode("utf-8", "surrogateescape")
+        self.stdout = "".join(line for line in self.raw_stdout.splitlines(keepends=True)
+                              if not ELAPSED.match(line.rstrip("\n")))
+        self.stderr = (completed.stderr or b"").decode("utf-8", "surrogateescape")
+
+    def elapsed(self) -> list[tuple[str, str, int]]:
+        """Each elapsed line of standard output, in order, as (prefix, step, seconds)."""
+        return [(m.group(1), m.group(2), int(m.group(3))) for m in map(ELAPSED.match, self.raw_stdout.splitlines()) if m]
 
     def last_line(self, stream: str) -> str:
         lines = stream.splitlines()
@@ -337,14 +349,17 @@ class Case:
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
 
     def run(self, *args: str, hook: bool = False, through_shebang: bool = False,
-            cwd: pathlib.Path | None = None, umask: int = 0o022) -> Result:
+            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False) -> Result:
         # The file-mode mask is the child's own, set between fork and exec, so the cases running
         # at the same time on other threads keep theirs; os.umask would change the whole process's.
         # 022 by default, what a checkout and CI have, whatever mask runs this companion.
+        # merged sends standard error to standard output, as a lane's `> log 2>&1` does, so a case
+        # reads the two streams in the order a log holds them.
         target = HOOK if hook else SCRIPT
         command = [str(target), *args] if through_shebang else [BASH, str(target), *args]
         completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(), umask=umask,
-                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT if merged else subprocess.PIPE, timeout=60)
         return Result(completed)
 
     def calls(self) -> list[list[str]]:
@@ -1841,6 +1856,134 @@ class CiWorkflowCompanionTests(CheckTestCase):
     def test_the_overnight_step_is_folded_into_it(self):
         # #213's own step ran the overnight companion alone; this step runs it with the rest.
         self.assertNotIn("run: node .claude/workflows/overnight_tests.mjs", WORKFLOW.read_text())
+
+
+# The steps that every run with a base executes, in order, as the elapsed lines name them (#629).
+ELAPSED_STEPS = ["A-05", "the steering check", "the part-row merges", "the full-landing merges", "the roadmap",
+                 "the analysis guard", "the artifacts", "the file modes"]
+# Under --full, finding which test companions the change earns is a step of its own: on 2026-10-29
+# the companions were where the integrate step's span went (#629).
+REACH = "the test companions' reach"
+
+
+class ElapsedTests(CheckTestCase):
+    """#629: each step the check executes, and each test companion, writes its elapsed time in whole
+    seconds on a line of its own, `<me>: elapsed: <step>: <N>s`, and the total comes just before the
+    verdict, in both modes; a skipped step writes none. The verdict, the fail lines and the test
+    runner's own lines are unchanged, which every other class asserts."""
+
+    def steps(self, result: Result) -> list[str]:
+        return [step for _, step, _ in result.elapsed()]
+
+    def assertTotalBeforeVerdict(self, result: Result, me: str, verdict: str):
+        """In the log, as `> log 2>&1` writes it, the total is the line before the verdict, and the
+        verdict is the last line."""
+        lines = result.raw_stdout.splitlines()
+        self.assertEqual(verdict, lines[-1])
+        total = ELAPSED.match(lines[-2])
+        self.assertIsNotNone(total, f"the line before the verdict is {lines[-2]!r}, not the total")
+        self.assertEqual((me, "total"), (total.group(1), total.group(2)))
+
+    def test_a_docs_only_full_check_times_each_step_it_runs_and_no_other(self):
+        case = Case(self, change="docs/notes.md")
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "total"], self.steps(result))
+        self.assertEqual({"check"}, {me for me, _, _ in result.elapsed()})
+        self.assertTotalBeforeVerdict(result, "check", f"check: pass: {FULL_RAN}.")
+
+    def test_a_dotnet_change_times_the_build_the_tests_the_smoke_test_and_the_image(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the tests", "the smoke test", "the gateway image", REACH, "total"],
+                         self.steps(result))
+        # Each line comes after its step's own output.
+        lines = result.raw_stdout.splitlines()
+        self.assertLess(lines.index("smoke double ran: Debug " + PORT), lines.index(next(
+            line for line in lines if line.startswith("check: elapsed: the smoke test: "))))
+
+    def test_skip_tests_writes_no_line_for_the_suite(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run("--full", "--port", PORT, "--skip-tests")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the smoke test", "the gateway image", REACH, "total"],
+                         self.steps(result))
+
+    def test_a_change_under_infra_times_terraform_and_its_tests(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + ["Terraform", "the Terraform tests", REACH, "total"], self.steps(result))
+
+    def test_each_test_companion_is_timed_on_its_own(self):
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", ".github/gizmo.py"))
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
+                                          "the test companion tools/thing_tests.py", "total"], self.steps(result))
+
+    def test_each_workflow_companion_is_timed_on_its_own(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + [REACH] + [f"the workflow test companion {path}" for path in WORKFLOW_COMPANIONS]
+                         + ["total"], self.steps(result))
+
+    def test_the_hook_times_its_steps_with_its_own_prefix(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run(hook=True, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        # The hook's lines say "pre-push:", as the header says of the default mode; it finds no companions.
+        self.assertEqual(ELAPSED_STEPS + ["the build", "total"], self.steps(result))
+        self.assertEqual({"pre-push"}, {me for me, _, _ in result.elapsed()})
+        self.assertTotalBeforeVerdict(result, "pre-push", f"pre-push: {HOOK_RAN}, the build pass.")
+
+    def test_a_failed_check_ends_on_the_total_and_then_its_verdict(self):
+        # The step that failed writes no line of its own; the total still comes before the verdict.
+        case = Case(self, change="src/App/App.cs", fails_on={"smoke": "Debug"})
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the tests", "total"], self.steps(result))
+        self.assertTotalBeforeVerdict(result, "check", "check: fail: the smoke test failed.")
+
+    def test_a_failure_in_the_hook_puts_the_total_before_its_two_lines(self):
+        case = Case(self, change="src/App/App.cs", fails_on={"dotnet": "build"})
+        result = case.run(hook=True, merged=True)
+        self.assertEqual(1, result.status)
+        lines = result.raw_stdout.splitlines()
+        self.assertEqual(["pre-push: the solution does not build.", HOOK_FIX], lines[-2:])
+        self.assertRegex(lines[-3], r"^pre-push: elapsed: total: \d+s$")
+
+    def test_an_unexpected_failure_ends_on_the_total_and_then_its_verdict(self):
+        case = Case(self)
+        outside = case.dir / "outside"
+        outside.mkdir()
+        result = case.run("--full", "--port", PORT, cwd=outside, merged=True)
+        self.assertEqual(1, result.status)
+        lines = result.raw_stdout.splitlines()
+        self.assertRegex(lines[-1], r"^check: fail: stopped with status \d+\.$")
+        self.assertRegex(lines[-2], r"^check: elapsed: total: \d+s$")
+
+    def test_the_seconds_are_the_steps_own(self):
+        # A smoke test that takes two seconds is timed as such, and the total holds it.
+        case = Case(self, change="src/App/App.cs")
+        case.write_executable(case.work / "tools" / "smoke.sh", "#!/bin/bash\n/bin/sleep 2\n")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        seconds = {step: n for _, step, n in result.elapsed()}
+        self.assertGreaterEqual(seconds["the smoke test"], 2)
+        self.assertLessEqual(seconds["the smoke test"], 4)
+        self.assertGreaterEqual(seconds["total"], seconds["the smoke test"])
+        self.assertLess(seconds["the gateway image"], 2)
+
+    def test_the_parsers_that_read_a_log_do_not_read_an_elapsed_line(self):
+        # tools/retro_record.py reads the test runner's indented summary lines, and the overnight
+        # script and tools/test_reach.py read the verdict: an elapsed line is neither (#629 Q16).
+        summary = re.compile(r"^\s*(total|failed|succeeded|skipped|duration):\s*(.*?)\s*$")
+        for line in ("check: elapsed: total: 12s", "pre-push: elapsed: the tests: 120s"):
+            self.assertIsNone(summary.match(line))
+            self.assertFalse(line.startswith(("check: pass:", "check: fail:")))
 
 
 class InterpreterTests(CheckTestCase):
