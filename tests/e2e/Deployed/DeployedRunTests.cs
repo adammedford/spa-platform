@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,10 +23,10 @@ public sealed class DeployedRunTests
 {
     /// <summary>
     /// The D rows' tests that cannot run over the stand-in, each with the reason: what they need is
-    /// Cognito's own, which a sitting alone shows. The stand-in's provider is the test provider, which
-    /// approves at once and serves its endpoints at its own paths.
+    /// Cognito's own or the real two-task continuity driver, which a sitting alone shows (#657).
+    /// The stand-in has one host and a test provider that approves at once at its own paths.
     /// </summary>
-    private static readonly Dictionary<string, string> CognitoOnly = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, string> OutsideStandIn = new(StringComparer.Ordinal)
     {
         ["SessionTests.N01_app1s_session_cookie_presented_to_app2_gets_401_on_the_api_and_a_fresh_challenge_on_navigation"] =
             "finds the challenge by Cognito's /oauth2/authorize endpoint (Cell.AuthorizeEndpoint), which the test provider does not serve",
@@ -80,14 +81,20 @@ public sealed class DeployedRunTests
         Assert.Empty(run.Harness.Idp.Authorizations);
     }
 
-    /// <summary>Every negative test of a D row, by class and method, but those <see cref="CognitoOnly"/> names.</summary>
-    public static TheoryData<string> DeployedRowTests => [.. RowTests().Keys.Where(test => !CognitoOnly.ContainsKey(test)).Order(StringComparer.Ordinal)];
+    /// <summary>Every negative test of a D row, by class and method, but those <see cref="OutsideStandIn"/> names.</summary>
+    public static TheoryData<string> DeployedRowTests => [.. StandInRowTests(TestsPage(), RegisterPage())];
+
+    private static string[] StandInRowTests(string page, string register) =>
+        [.. RowTests(page, register).Keys.Where(test => !StandInExclusions(register).ContainsKey(test)).Order(StringComparer.Ordinal)];
 
     [Theory]
     [MemberData(nameof(DeployedRowTests))]
     public async Task A_d_row_runs_on_the_deployed_stack_over_the_tunnels_local_port(string test)
     {
         MethodInfo method = RowTests()[test];
+        // A continuity Fact skips itself off the two-task cell, so a case of one here would pass by
+        // skipping: fail it, since only StandInExclusions keeps it out of this theory (#657).
+        Assert.False(method.DeclaringType == typeof(ContinuityTests), $"{test} needs the two-task continuity driver; the single-host stand-in cannot run it.");
         object?[][] cases = CasesOf(method);
         foreach (object?[] arguments in cases)
         {
@@ -108,7 +115,134 @@ public sealed class DeployedRunTests
 
         Assert.Contains("CookiePlantingTests.N26_login_csrf_a_siblings_login_state_cookies_are_never_set_so_the_planted_callback_is_rejected", DeployedRowTests.Select(row => row.Data));
         AssertEveryDRowHasATest(TestsPage(), RegisterPage(), tests.Keys);
-        Assert.All(CognitoOnly, left => Assert.True(tests.ContainsKey(left.Key) && left.Value.Length > 0, $"{left.Key} is not a D row's test."));
+        Assert.All(StandInExclusions(RegisterPage()), left => Assert.True(tests.ContainsKey(left.Key) && left.Value.Length > 0, $"{left.Key} is not a D row's test."));
+    }
+
+    private const string ContinuityRegister = """
+        ## Negative security (N)
+
+        | ID | Attempt | Expect | Tier | Recorded by |
+        | --- | --- | --- | --- | --- |
+        | N-32 | Replay; `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other` | 401 | D | #539 |
+        """;
+
+    [Fact]
+    public void A_registered_continuity_fact_satisfies_both_readers_and_is_excluded_from_the_single_host_stand_in()
+    {
+        const string name = "ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other";
+        Dictionary<string, MethodInfo> tests = RowTests(ExportPageWithNoDRow, ContinuityRegister);
+        Assert.Equal(name, Assert.Single(tests).Key);
+        AssertEveryDRowHasATest(ExportPageWithNoDRow, ContinuityRegister, tests.Keys);
+        DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, ContinuityRegister, []);
+        Assert.Contains("two-task", StandInExclusions(ContinuityRegister)[name], StringComparison.Ordinal);
+        Assert.DoesNotContain(name, StandInRowTests(ExportPageWithNoDRow, ContinuityRegister));
+        const string emptyRegister = "## Negative security (N)\n| ID | Attempt | Expect | Tier | Recorded by |\n";
+        Assert.Equal(StandInRowTests(TestsPage(), emptyRegister), StandInRowTests(TestsPage(), ContinuityRegister));
+        Assert.All(StandInExclusions(ContinuityRegister).Except(OutsideStandIn), left => Assert.True(tests.ContainsKey(left.Key) && left.Value.Length > 0, $"{left.Key} is not a D row's test."));
+    }
+
+    [Theory]
+    [InlineData("Row9_a_session_ended_on_one_task_is_refused_by_the_other", "Row9_missing")]
+    [InlineData("ContinuityTests.cs", "MissingTests.cs")]
+    public void A_missing_registered_continuity_fact_fails_both_readers_naming_the_id(string before, string after)
+    {
+        string register = ContinuityRegister.Replace(before, after, StringComparison.Ordinal);
+        Dictionary<string, MethodInfo> tests = RowTests(ExportPageWithNoDRow, register);
+        Assert.Empty(tests);
+        Xunit.Sdk.XunitException run = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertEveryDRowHasATest(ExportPageWithNoDRow, register, tests.Keys));
+        Xunit.Sdk.XunitException subset = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, register, []));
+        Assert.Contains("N-32", run.Message, StringComparison.Ordinal);
+        Assert.Contains("N-32", subset.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_register_row_naming_two_continuity_facts_fails_the_reader_naming_the_row()
+    {
+        // Resolving the first and dropping the second would leave the second unproved and unread; the Python
+        // reader refuses the same row (tools/bench/e2e_evidence.py), so neither credits one of two.
+        string register = ContinuityRegister.Replace(
+            "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`",
+            "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`, `ContinuityTests.Row8_fifty_calls_on_a_due_token_across_two_tasks_refresh_once`",
+            StringComparison.Ordinal);
+        Assert.NotEqual(ContinuityRegister, register);
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Contains("N-32 names more than one continuity Fact", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Two_register_rows_naming_one_continuity_fact_fail_the_reader_naming_both()
+    {
+        // One run of the Fact would prove two ids; the Python reader refuses the same register
+        // (test_two_rows_naming_one_continuity_fact_are_refused), and StandInExclusions is never reached.
+        string row = ContinuityRegister.Split('\n').Single(line => line.TrimStart().StartsWith("| N-32 |", StringComparison.Ordinal));
+        string register = ContinuityRegister + "\n" + row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal);
+        Assert.NotEqual(row, row.Replace("| N-32 |", "| N-33 |", StringComparison.Ordinal));
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Contains("N-32 and N-33 both name ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other", failure.Message, StringComparison.Ordinal);
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StandInExclusions(register));
+    }
+
+    [Fact]
+    public void A_register_row_naming_one_continuity_fact_twice_names_one()
+    {
+        // A method named twice in one row is still one method, so the row resolves rather than being refused
+        // as naming two; the Python reader's twin is test_a_row_naming_one_continuity_fact_twice_names_one.
+        const string fact = "`ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`";
+        string register = ContinuityRegister.Replace(fact, $"{fact}, {fact}", StringComparison.Ordinal);
+        Assert.NotEqual(ContinuityRegister, register);
+
+        KeyValuePair<string, MethodInfo> row = Assert.Single(DeployedSubsetTests.ContinuityRowTests(register));
+        Assert.Equal("N-32", row.Key);
+        Assert.Equal("Row9_a_session_ended_on_one_task_is_refused_by_the_other", row.Value.Name);
+    }
+
+    [Fact]
+    public void A_registered_continuity_method_that_is_not_a_plain_task_fact_is_not_the_rows_test()
+    {
+        // Each method below breaks one clause of the filter and meets the rest, so deleting any one
+        // clause lets its method through and fails the first assertion (CODING_STANDARDS.md, a check that
+        // is vacuous today). They are emitted, since a public Theory without data, or a Fact with a
+        // parameter, would be a test of this suite that xUnit's analyzers refuse and its runner would run.
+        (string Method, Type Returns, Type[] Parameters, Type? Attribute)[] methods =
+        [
+            ("Row_fact_task_no_parameters", typeof(Task), [], typeof(FactAttribute)),
+            ("Row_theory", typeof(Task), [], typeof(TheoryAttribute)),
+            ("Row_no_attribute", typeof(Task), [], null),
+            ("Row_value_task", typeof(ValueTask), [], typeof(FactAttribute)),
+            ("Row_void", typeof(void), [], typeof(FactAttribute)),
+            ("Row_with_a_parameter", typeof(Task), [typeof(int)], typeof(FactAttribute)),
+        ];
+        TypeBuilder builder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("ContinuityFilterFixtures"), AssemblyBuilderAccess.Run)
+            .DefineDynamicModule("ContinuityFilterFixtures").DefineType("ContinuityTests", TypeAttributes.Public | TypeAttributes.Sealed);
+        builder.DefineDefaultConstructor(MethodAttributes.Public);
+        foreach ((string method, Type returns, Type[] parameters, Type? attribute) in methods)
+        {
+            MethodBuilder defined = builder.DefineMethod(method, MethodAttributes.Public | MethodAttributes.HideBySig, returns, parameters);
+            ILGenerator body = defined.GetILGenerator();
+            if (returns != typeof(void))
+            {
+                body.Emit(OpCodes.Ldnull);
+            }
+
+            body.Emit(OpCodes.Ret);
+            if (attribute is not null)
+            {
+                ConstructorInfo constructor = attribute.GetConstructors().Single();
+                object?[] defaults = [.. constructor.GetParameters().Select(parameter => parameter.DefaultValue is DBNull ? null : parameter.DefaultValue)];
+                defined.SetCustomAttribute(new CustomAttributeBuilder(constructor, defaults));
+            }
+        }
+
+        string register = "## Negative security (N)\n\n| ID | Attempt | Expect | Tier | Recorded by |\n| --- | --- | --- | --- | --- |\n" +
+            string.Concat(methods.Select((row, index) =>
+                $"| N-{40 + index} | x; `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.{row.Method}` | 401 | D | #539 |\n"));
+
+        Dictionary<string, MethodInfo> accepted = DeployedSubsetTests.ContinuityRowTests(register, builder.CreateType());
+
+        Assert.Equal("Row_fact_task_no_parameters", Assert.Single(accepted).Value.Name);
+        Assert.Equal("N-40", Assert.Single(accepted).Key);
     }
 
     /// <summary>An export page with no D row, so any row the run takes below comes from the register.</summary>
@@ -184,8 +318,11 @@ public sealed class DeployedRunTests
     /// </summary>
     internal static void AssertEveryDRowHasATest(string page, string register, IEnumerable<string> tests)
     {
+        HashSet<string> names = new(tests, StringComparer.Ordinal);
+        Dictionary<string, MethodInfo> continuity = DeployedSubsetTests.ContinuityRowTests(register);
         string[] untested = [.. DeployedSubsetTests.DeployedRowIds(page, register)
-            .Where(row => !tests.Any(test => test.Contains($".N{row[2..]}_", StringComparison.Ordinal)))];
+            .Where(row => !(continuity.TryGetValue(row, out MethodInfo? method) && names.Contains($"{method.DeclaringType!.Name}.{method.Name}")) &&
+                !names.Any(test => test.Contains($".N{row[2..]}_", StringComparison.Ordinal)))];
         Assert.Empty(untested);
     }
 
@@ -200,11 +337,29 @@ public sealed class DeployedRunTests
     internal static Dictionary<string, MethodInfo> RowTests(string page, string register)
     {
         string[] rows = DeployedSubsetTests.DeployedRowIds(page, register);
-        return typeof(CookiePlantingTests).Assembly.GetTypes()
+        Dictionary<string, MethodInfo> tests = typeof(CookiePlantingTests).Assembly.GetTypes()
             .Where(type => type.Namespace == typeof(CookiePlantingTests).Namespace && type.IsPublic)
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(method => method.GetCustomAttribute<FactAttribute>() is not null && rows.Any(row => method.Name.StartsWith($"N{row[2..]}_", StringComparison.Ordinal)))
             .ToDictionary(method => $"{method.DeclaringType!.Name}.{method.Name}", StringComparer.Ordinal);
+        foreach (MethodInfo method in DeployedSubsetTests.ContinuityRowTests(register).Values)
+        {
+            tests.TryAdd($"{method.DeclaringType!.Name}.{method.Name}", method);
+        }
+
+        return tests;
+    }
+
+    internal static Dictionary<string, string> StandInExclusions(string register)
+    {
+        Dictionary<string, string> exclusions = new(OutsideStandIn, StringComparer.Ordinal);
+        foreach (MethodInfo method in DeployedSubsetTests.ContinuityRowTests(register).Values)
+        {
+            exclusions.Add($"{method.DeclaringType!.Name}.{method.Name}",
+                "requires the real two-task continuity driver and task-correlated evidence; the stand-in has one host (#657)");
+        }
+
+        return exclusions;
     }
 
     private static string TestsPage() => File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "docs", "plan", "04-tests.md"));
