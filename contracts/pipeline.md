@@ -77,3 +77,41 @@ The ALB health check and `spactl wait` both read `/readyz`. `spactl wait` can be
 cell runs, and then returns only when each has answered at the revision asked for or later
 (change request P2-5, decided 2026-10-20). The health-check path is a Terraform
 variable: `/` for the sample image, `/readyz` for the gateway (task 1.3).
+
+## Start-up and shut-down
+
+A task is sent traffic once `/readyz` answers `200`, which is at most one poll interval after it
+starts, and the service gives it 60 seconds of grace before a failed check counts.
+
+A task is stopped in three steps, each bounded. First the balancer stops sending it new requests
+and waits for the ones in flight: the target group's deregistration delay. Then the process is told
+to stop: it closes its listener and waits `HostOptions.ShutdownTimeout`, a constant in
+`Platform.Hosting`, for anything still in flight, then aborts it. Last the task is killed: the
+container's `stopTimeout`, which workstream 1 sets longer than the process's own timeout, so the
+process always finishes on its own terms. The three numbers are a deregistration delay of 30
+seconds, a shutdown timeout of 25 seconds and a stop timeout of 30 seconds, and they act in that
+order. The drain promises no request's completion, a token refresh's included: requests drain from
+the task during it. The shutdown timeout exceeds the refresh holder's 20-second write deadline,
+timed from the send of its lease acquire (the 21-second lease less 1 second of clock skew between
+tasks), so a successful refresh admitted before the process is told to stop writes its rotated
+token before the process stops, and no provider refresh starts once the process is stopping: it is
+refused with the session kept. The durable write is the promise, not the request's completion: a
+failed or unknown write and the pause between the lease check and the provider call are its
+exceptions, and a loser's wait for the lease is bounded by none of the three numbers. The stop
+timeout is at least the shutdown timeout. A code exchange on the identity backchannel is bounded by
+`ProviderDeadline`, 10 seconds, which the backchannel's timeout equals, so one in flight when the
+process is told to stop ends inside the shutdown timeout. A request the proxy is forwarding is
+bounded by the entry's `timeoutSeconds` (`contracts/upstream-contract.md`), which can exceed the
+window; such a request can be cut by a deployment, and the browser sees its connection close.
+
+A login is in flight from the redirect to the provider until the callback. Until P2-2 gives a cell
+one key ring, a callback that lands on a task other than the one that began the login is refused
+with the failure page, so a deployment fails every login in flight. From P2-2 on, the callback
+succeeds on any task of the cell.
+
+Until P2-1, a stopped task takes every session it holds with it. From P2-1 on, it takes none.
+
+The numbers are #332's row F1, and the promise the shutdown timeout makes is the one #445 settled
+(change request P2-3, second amendment, decisions 2 and 3); the section is change request #541,
+decided 2026-10-30. Workstream 1 sets the deregistration delay and `stopTimeout` in
+`infra/modules/cell`, and workstream 2 sets `ShutdownTimeout` in `Platform.Hosting`.
