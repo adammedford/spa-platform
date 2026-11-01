@@ -27,7 +27,9 @@
 // Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
 // which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
 // main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
-// (#629). No agent, gh or git call is made.
+// (#629). Four more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
+// tonight's tickets downstream, counted transitively, across lanes and once per ticket, ties by n (#662). No agent,
+// gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1212,9 +1214,78 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   }
 }
 
+// 33. A lane runs first the ready ticket with the most of tonight's tickets downstream (#662). On 2026-10-31 the
+//     static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work among
+//     them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream. Four short runs on synthetic
+//     tickets, every agent answering at once; implement starts are counted by ordinal, since the tick does not move.
+const DOWNSTREAM_CASES = 4
+{
+  const orderRun = async (set) => {
+    const starts = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      const [kind, id] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'implement') { starts.push(id); return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] } }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in a downstream-order run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const res = await new Function('return (async () => {' + src + '\n})()')()
+    return { res, starts }
+  }
+  const lane = (n, owner, blockedBy) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', blockedBy, 1), owner })
+  const before = (starts, a, b, why) => {
+    const i = starts.indexOf(a), j = starts.indexOf(b)
+    if (i < 0 || j < 0) fail(`#662: ${why}: ${i < 0 ? a : b} never started (${JSON.stringify(starts)})`)
+    else if (i > j) fail(`#662: ${why}: ${b} started before ${a} (${JSON.stringify(starts)})`)
+  }
+  // Case 1: FREE (n=961) has nothing downstream; HEAD (n=962) has three in other lanes, one of them only through
+  // another (HEAD <- ws1's 971 <- ws2's 972, and HEAD <- ws3's 973), so the count is transitive and crosses lanes.
+  {
+    const set = [lane(961, 'integrator', []), lane(962, 'integrator', []),
+      lane(971, 'ws1-infra', ['issue-962']), lane(972, 'ws2-hosting', ['issue-971']), lane(973, 'ws3-identity', ['issue-962'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the first downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-962', 'issue-961', 'a ready ticket with three tickets downstream does not run before a lower n with none')
+  }
+  // Case 2: two ready tickets with one downstream each (a tie above zero) run in n order, as before #662.
+  {
+    const set = [lane(964, 'integrator', []), lane(963, 'integrator', []),
+      lane(974, 'ws1-infra', ['issue-963']), lane(975, 'ws2-hosting', ['issue-964'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the second downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-963', 'issue-964', 'two ready tickets with equal downstream counts do not run in n order')
+  }
+  // Case 3: the count is transitive. WIDE (n=965) has two directly downstream; DEEP (n=966) has a chain of three
+  // (DEEP <- 978 <- 979 <- 980), one of them directly, so only a transitive count puts DEEP first.
+  {
+    const set = [lane(965, 'integrator', []), lane(966, 'integrator', []),
+      lane(976, 'ws1-infra', ['issue-965']), lane(977, 'ws2-hosting', ['issue-965']),
+      lane(978, 'ws3-identity', ['issue-966']), lane(979, 'ws4-proxy', ['issue-978']), lane(980, 'ws5-fixtures', ['issue-979'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the third downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-966', 'issue-965', 'a chain of three downstream does not outrank two direct ones, so the count is not transitive')
+  }
+  // Case 4: a ticket downstream by two paths counts once. FLAT (n=967) has three direct; DIAMOND (n=968) has 984 and
+  // 985 directly and 986 behind both, three tickets by four paths, so the tie goes to FLAT's lower n.
+  {
+    const set = [lane(967, 'integrator', []), lane(968, 'integrator', []),
+      lane(981, 'ws1-infra', ['issue-967']), lane(982, 'ws2-hosting', ['issue-967']), lane(983, 'ws3-identity', ['issue-967']),
+      lane(984, 'ws4-proxy', ['issue-968']), lane(985, 'ws5-fixtures', ['issue-968']), lane(986, 'ws6-verification', ['issue-984', 'issue-985'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the fourth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-967', 'issue-968', 'a ticket reached by two paths counts twice downstream')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
   process.exit(1)
 }
-console.log(`overnight_tests: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, on ${path.basename(scriptPath)}`)
+console.log(`overnight_tests: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, ${DOWNSTREAM_CASES} downstream-order runs, on ${path.basename(scriptPath)}`)
