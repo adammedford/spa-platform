@@ -67,11 +67,14 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   because no check reads one.
 - **An issue is held open by its own scope.** It closes when what its body asks for has landed,
   been answered or been declined, and its `## Answer` comment says where each part went, naming
-  anything declined. A spec's required work is its sub-issues, and the spec closes when they are
-  closed. A follow-up, raised by another issue's work, review or out-of-scope list, names where it
-  came from on a `**Raised by:** #NNN` line at the top of its body and is filed as neither a
-  sub-issue nor a blocker of that issue, so it holds its origin open neither way. A sub-issue means
-  "part of" and a blocked-by relationship means "wait for"; no other relation holds an issue open.
+  anything declined. A ticket whose work lands is closed by the `Closes #n` line in the landing
+  pull request's description when that pull request merges (`docs/agents/landing-work.md`, "Land
+  it"), never by hand before its work is on `main`. A spec's required work is its sub-issues, and
+  the spec closes when they are closed. A follow-up, raised by another issue's work, review or
+  out-of-scope list, names where it came from on a `**Raised by:** #NNN` line at the top of its
+  body and is filed as neither a sub-issue nor a blocker of that issue, so it holds its origin open
+  neither way. A sub-issue means "part of" and a blocked-by relationship means "wait for"; no other
+  relation holds an issue open.
 - **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
   cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
   `#NNN` that names neither.

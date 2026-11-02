@@ -152,8 +152,18 @@ line for each of them and one `Ticket: #n` line for each ticket it only advances
 `tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
 names; `Ticket:` is not a closing keyword, so its ticket stays open
 (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+`gh pr view <pr> --json closingIssuesReferences --jq '.closingIssuesReferences[].number'` prints
+the tickets the description will close; read it before landing.
 A complete ticket stays open and assigned until then. The lines go in the description, not in the
-merge body passed with `--body-file`.
+merge body passed with `--body-file`, and that body puts no closing keyword (close, fix or resolve,
+in any form) before a `#n`, because GitHub reads it there too: a keyword in a commit message closes
+its issue once the commit is on the default branch, and the merge body becomes the merge commit's
+message (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+A keyword in a commit on the branch does the same once that commit reaches `main`, a part-landing
+included, so a task commit names its ticket on a `Ticket: #n` line too. A keyword in the merge
+body closes its ticket at the merge, whatever the description says: 83f53f0, the merge of #120,
+closed #105, which #120's description named on a `Ticket: #105` line and never after a closing
+keyword, through a sentence in its body saying a later session would close it.
 
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
@@ -279,7 +289,7 @@ A review covers exactly the head its record names, and `tools/land.sh` refuses a
 clears ("Land it" above). The check sits in the merge script rather than in branch protection
 because this repository has one GitHub account, which can neither approve its own pull request nor
 be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
-#67 records that choice and when it reopens.
+ADR-0022 records that choice and when it reopens.
 
 Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives
