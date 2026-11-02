@@ -1245,12 +1245,35 @@ class SharedCommit(unittest.TestCase):
 
 # The fake gh: logs its arguments to GH_LOG, fails as gh does when GH_FAIL is set, and answers
 # `issue view` with GH_ANSWER's file, `api graphql` with GH_GRAPHQL's and `issue list` with GH_LIST's,
-# when set. Anything else it is asked exits 97.
+# when set. Anything else it is asked exits 97. Its `issue list` filters as GitHub's search does: a
+# `created:>=<time>` query keeps the issues created at or after the time, `created:><time>` only those
+# after it, so a test of the search's bound fails when the query's operator changes (#707's review).
+# A listing that is not a list of issues is answered as written, for the tests of an unreadable one.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "gh: could not reach GitHub" >&2; exit 1; fi
 if [ "$1 $2" = "api graphql" ] && [ -n "$GH_GRAPHQL" ]; then cat "$GH_GRAPHQL"; exit 0; fi
-if [ "$1 $2" = "issue list" ] && [ -n "$GH_LIST" ]; then cat "$GH_LIST"; exit 0; fi
+if [ "$1 $2" = "issue list" ] && [ -n "$GH_LIST" ]; then
+exec "$GH_PYTHON" -I - "$GH_LIST" "$@" <<'PY'
+import json, re, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+query = sys.argv[sys.argv.index("--search") + 1] if "--search" in sys.argv else ""
+bound = re.fullmatch(r"created:(>=?)([^ ]+)", query)
+try:
+    listing = json.loads(raw)
+except ValueError:
+    listing = None
+if bound is None or not isinstance(listing, list):
+    sys.stdout.write(raw)
+else:
+    since = bound.group(2)
+    def kept(issue):
+        created = issue.get("createdAt") if isinstance(issue, dict) else None
+        return (not isinstance(created, str) or created > since
+                or (bound.group(1) == ">=" and created == since))
+    json.dump([issue for issue in listing if kept(issue)], sys.stdout)
+PY
+fi
 [ "$1 $2" = "issue view" ] || exit 97
 cat "$GH_ANSWER"
 """
@@ -1270,7 +1293,7 @@ class CommandLine(unittest.TestCase):
         self.log = self.directory / "gh.log"
         self.answer = self.directory / "answer.json"
         self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "GH_LOG": str(self.log),
-                    "GH_ANSWER": str(self.answer)}
+                    "GH_ANSWER": str(self.answer), "GH_PYTHON": sys.executable}
 
     def run_script(self, *args: str, stdin: str = "", **env: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], input=stdin,
