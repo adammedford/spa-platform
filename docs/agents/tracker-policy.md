@@ -215,6 +215,49 @@ that a decided item has landed is provenance, which lives in the merge body ("Wh
 lives", `docs/adr/README.md`), not in the file. Their `**Status:**` lines, `moved to #NNN`
 included, are history.
 
+## Drafting tracker writes
+
+**What it is for.** A foreground session whose audit or cleanup fans out to sub-agents has them
+draft its tracker writes as write files and posts them itself, reading only what it must. On
+2026-10-29 drafts holding several writes each, with mixed fences and placeholders, were read whole
+into batch files of up to 135 KB, and the posting script failed on them twice (#637). A workflow
+script keeps its own shapes, and the pending-writes file stays the queue for a write GitHub refused.
+
+**One write per file.** A write file holds one tracker write. It lives under
+`.scratch/<slug>/log/writes/`, which git ignores, named `<NNN>-<issue or new>-<action>.md`, and
+files post in name order: a create before the writes that cite it, a comment before the close it
+explains.
+
+**The frontmatter.** The file opens with a `---` line, flat `key: value` lines, and a closing
+`---` line; no key nests or repeats. `issue:` is the target's number, `new` on a create. `action:`
+is a pending-writes verb: `comment`, `create`, `edit` or `close`. A create carries `title:`,
+`labels:` (comma-separated) and, when it blocks one, `blocking:`; an edit carries `flags:`, its
+`gh issue edit` flags, such as `--add-blocked-by 533`; a close carries `reason:`, `completed` or
+`not planned`. `decide: yes` marks a write that waits on Adam.
+
+**The body.** Everything after the closing `---` line is posted byte for byte: the poster
+substitutes, strips and parses nothing in it, and a `---` there is body. It holds no placeholder.
+A write that cites an issue a create in the same set files names it by its title, or is drafted
+once that create has posted. An edit's non-empty body replaces the issue's body; a close's body is
+empty, and the comment file before it says why.
+
+**What waits on Adam.** A decision comment, a body rewrite, a `ready-for-agent` label, a close as
+not planned and an answer given for him carry `decide: yes`. A body rewrite is two files: the dated
+comment preserving the previous body verbatim, then the edit, posted only while the issue's body
+still matches that copy. A `Confirm` is never included among these delegated tracker writes:
+confirmation remains Adam's act. A draft prepared for him follows
+`docs/agents/landing-work.md` -> "Drafting a Confirm comment", including its parser check.
+
+**The index.** A sub-agent returns one row per file: its path, `issue`, `action`, `decide` and, on
+a create, `title`. It returns no body. The posting session reads the index and the marked files,
+puts each marked write to Adam, and posts it only on his words in that session.
+
+**Posting.** First search each create's title and list the issues and pull requests opened since
+the drafts were made, dropping any write another session has made. Then post each unmarked file
+with one `gh` call, in name order, appending its name to `writes/posted` as it posts, so a second
+pass skips it. A loop of many writes is a bulk tracker write, which auto mode refuses: run it in
+manual mode.
+
 ## The archive: tickets filed before ADR-0020
 
 `.scratch/<feature-slug>/issues/<NN>-<slug>.md` holds every ticket filed before the switch, and is
