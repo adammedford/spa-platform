@@ -277,8 +277,13 @@ resource "aws_ecs_service" "gateway" {
   task_definition = aws_ecs_task_definition.gateway.arn
   desired_count   = var.multi_task ? 2 : 1
 
-  # Two tasks over two private subnets in two zones (#347 Q14): Fargate takes no placement
-  # strategy, so rebalancing is what keeps one in each zone after a roll; #348 shows it on the cell.
+  # Two tasks over two private subnets in two zones (#347 Q14). Fargate takes no placement strategy
+  # and spreads tasks across zones on a best effort; rebalancing starts a task in the zone with
+  # fewest and stops one in the zone with most when the spread goes uneven. Set explicitly because
+  # an update leaves a service that never had a value DISABLED. #348 shows one task per zone on
+  # the deployed cell.
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement.html#fargate-launch-type
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-rebalancing.html
   availability_zone_rebalancing = var.multi_task ? "ENABLED" : null
 
   # Fargate by launch type rather than by capacity provider: the cell has no EC2 capacity to fall

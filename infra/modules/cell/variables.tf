@@ -22,7 +22,8 @@ variable "cell" {
 
 variable "vpc_cidr" {
   description = <<-EOT
-    The cell's address range. Two /24 subnets are carved out of it, one per zone.
+    The cell's address range. Two /24 subnets are carved out of it, one per zone, and
+    two more under multi_task, which then needs /22 or larger.
     Platform configuration's ForwardedHeaders:TrustedNetworks names this range, so
     the gateway trusts X-Forwarded-For from the load balancer and from nowhere else.
 
@@ -449,9 +450,10 @@ variable "multi_task" {
   }
 
   # Four /24 subnets under the switch, so the range is /22 or larger; vpc_cidr's own rule holds /23
-  # for Phase 1's two.
+  # for Phase 1's two. Inside try() for the reason vpc_cidr's rule is inside can(): a value with no
+  # "/" would raise an evaluation error instead of showing error_message.
   validation {
-    condition     = !var.multi_task || tonumber(split("/", var.vpc_cidr)[1]) <= 22
+    condition     = !var.multi_task || try(tonumber(split("/", var.vpc_cidr)[1]) <= 22, false)
     error_message = "multi_task = true carves four /24 subnets out of vpc_cidr, two public and two private, so the range is /22 or larger."
   }
 }

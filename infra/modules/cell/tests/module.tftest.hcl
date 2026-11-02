@@ -162,6 +162,12 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_eip.nat[0]
+  override_during = plan
+  values          = { id = "eipalloc-0" }
+}
+
+override_resource {
   target          = aws_nat_gateway.egress[0]
   override_during = plan
   values          = { id = "nat-0" }
@@ -2355,7 +2361,7 @@ run "on_the_default_inputs_the_cell_is_one_public_task_with_no_private_half" {
 # Mutations that turn this run red: the private subnets at indices 0 and 1, or in one zone, or with
 # map_public_ip_on_launch true; a NAT gateway per zone, or in a private subnet; a route to the
 # internet gateway; an association left off; an endpoint on one table, or of the Interface type, or a
-# third endpoint; desired_count 1; the service left in the public subnets, or with a public address;
+# third endpoint; the NAT gateway given no allocation_id; desired_count 1; the service left in the public subnets, or with a public address;
 # rebalancing off; the task's egress opened beyond 443.
 run "under_multi_task_two_tasks_sit_in_two_private_subnets_in_two_zones_behind_one_nat_gateway_and_two_gateway_endpoints" {
   command = plan
@@ -2380,6 +2386,7 @@ run "under_multi_task_two_tasks_sit_in_two_private_subnets_in_two_zones_behind_o
       length(aws_eip.nat) == 1 && aws_eip.nat[0].domain == "vpc"
       && length(aws_nat_gateway.egress) == 1
       && aws_nat_gateway.egress[0].subnet_id == "subnet-0a"
+      && aws_nat_gateway.egress[0].allocation_id == "eipalloc-0"
     )
     error_message = "Under multi_task the cell has one NAT gateway, with its own Elastic IP, in the first zone's public subnet (#347 Q2): zone failure is out of G6's scope (#332 F15)."
   }
@@ -2457,13 +2464,30 @@ run "under_multi_task_no_private_subnet_is_a_trusted_network" {
 }
 
 # Two tasks on the memory store hold two session sets, so the switch needs the durable store (#347
-# Q12). Mutations that turn this run red: the validation removed, or made to test session_store !=
-# "memory" on the wrong variable.
+# Q12). Both of multi_task's validations sit on the one variable, so this run keeps vpc_cidr at /16,
+# which the other passes. Mutations that turn this run red: the store validation removed, or its
+# condition made !var.multi_task || var.session_store != "nope".
 run "multi_task_without_dynamodb_is_refused_at_plan" {
   command = plan
 
   variables {
     multi_task = true
+  }
+
+  expect_failures = [var.multi_task]
+}
+
+# Four /24 subnets under the switch need /22 (#583): a /23 holds Phase 1's two and is refused with the
+# switch on, the durable store set so that only the range can be what fails. Mutations that turn this
+# run red: the range validation removed, or its floor made <= 23.
+run "multi_task_with_a_23_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    vpc_cidr                         = "10.20.0.0/23"
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
   }
 
   expect_failures = [var.multi_task]

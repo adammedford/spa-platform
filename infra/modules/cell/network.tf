@@ -196,7 +196,7 @@ resource "aws_default_security_group" "cell" {
 # table past the NAT at no charge. The NAT carries what has no gateway endpoint: Parameter Store, ECR,
 # CloudWatch Logs, ssmmessages for the tunnel and the provider's OAuth endpoints. The task security
 # group's egress stays 443 alone (task_https_out above). Every declaration here plans no instance on
-# the default inputs, which is what P-01 reads (change request on #347).
+# the default inputs, which is what P-01 reads (change request #583).
 
 resource "aws_subnet" "private" {
   for_each = var.multi_task ? { for index, zone in local.zones : zone => index } : {}
@@ -228,7 +228,9 @@ resource "aws_nat_gateway" "egress" {
 
   tags = { Name = local.name_prefix }
 
-  # The provider's own note: the internet gateway first, or the NAT gateway cannot be created.
+  # The provider's own note: "To ensure proper ordering, it is recommended to add an explicit
+  # dependency on the Internet Gateway for the VPC."
+  # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/nat_gateway.html.markdown
   depends_on = [aws_internet_gateway.cell]
 }
 

@@ -458,10 +458,10 @@ run "the_policy_bounds_this_root_defaults_are_the_contract_s_own_example" {
 }
 
 # Continuity (#347 Q7). The three inputs #338 gave the cell, and #347's multi_task switch, reach it
-# through root variables that default to Phase 1's values, so a tfvars with none of them plans the cell G3 ran, and the G6
-# sitting (#348) sets them in its untracked terraform.tfvars. Read from main.tf's source, because a
-# root test cannot address the module's resources: what this root holds is that each variable is
-# passed, under its own name, to the one module call.
+# through root variables that default to Phase 1's values, so a tfvars with none of them plans the
+# cell G3 ran, and the G6 sitting (#348) sets them in its untracked terraform.tfvars. Read from
+# main.tf's source, because a root test cannot address the module's resources: what this root holds
+# is that each variable is passed, under its own name, to the one module call.
 #
 # Mutations that turn this run red: a root default of "dynamodb", or multi_task true; a variable
 # declared but not passed; the prefix passed as a literal rather than the variable.
@@ -486,9 +486,10 @@ run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
 
 # The G6 values plan at this root, and reach the cell: the two-task switch, the store, the cell's own
 # ring prefix and no key id (#332 D6). The switch's shape is held in the module's suite and P-01's
-# run under it; here it is that the root's vpc_cidr leaves room for four subnets. The module's validation, which refuses dynamodb with no prefix, is held in its
-# own suite; this run holds that the root accepts the pair it documents in terraform.tfvars.example
-# and that the gateway's task environment carries it, read through the module's
+# run under it; here it is that the root's vpc_cidr leaves room for four subnets. The module's
+# validation, which refuses dynamodb with no prefix, is held in its own suite; this run holds that
+# the root accepts the pair it documents in terraform.tfvars.example and that the gateway's task
+# environment carries it, read through the module's
 # continuity_environment output, which the run before this one cannot see. The output reads the
 # gateway container's environment out of the task definition's container_definitions, not the
 # platform_configuration local that environment is built from, so a cut between the two reaches
