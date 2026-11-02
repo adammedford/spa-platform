@@ -486,7 +486,8 @@ run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
 
 # The G6 values plan at this root, and reach the cell: the two-task switch, the store, the cell's own
 # ring prefix and no key id (#332 D6). The switch's shape is held in the module's suite and P-01's
-# run under it; here it is that the root's vpc_cidr leaves room for four subnets. The module's
+# run under it; here it is that the switch with the G6 pair plans at this root, on the example's /16
+# (the file's variables block). The module's
 # validation, which refuses dynamodb with no prefix, is held in its own suite; this run holds that
 # the root accepts the pair it documents in terraform.tfvars.example and that the gateway's task
 # environment carries it, read through the module's
