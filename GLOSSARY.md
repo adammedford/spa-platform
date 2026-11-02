@@ -229,6 +229,12 @@ time and given back when its refresh is written. The **holder** is the task that
 **loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
 
+**StoreDeadline** — the time one session-store operation may take, 5 s, its re-read and its one
+retry included. An outcome still unknown when it runs out is not relied on, although the write may
+have happened: a login issues no cookie, and a removal is not confirmed. The refresh lease's budget
+is reckoned in it. See #332 D4 and change request P2-3, "The budget, once".
+_Avoid_: "timeout" for it, which names the SDK's or the HTTP client's own.
+
 **Back-channel logout** — the provider telling the gateway, server to server and with no browser
 present, that a user's sign-in at an app has ended, so the gateway ends that user's sessions for the
 app. Distinct from **logout**, the browser's `POST /bff/logout`, and from the provider's own
@@ -512,6 +518,15 @@ harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` 
 **Read-back** — what AWS's own API reports about an applied root's resources, recorded on a ticket as a row's evidence. It is the account-side counterpart of a plan assertion against the mock provider, which proves configuration and not the account (ADR-0016). _Avoid_: "check", which is a pre-push or CI guard, and "verification" unqualified.
 
 **Applied** — of a Terraform root in a project: a plan of the root against that project's state reports no changes. An apply's exit code shows that an apply ran, and a state object that something was written; neither alone means applied. _Avoid_: "applied" where only an apply ran.
+
+**Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
+adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
+where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
+adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
+enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
+statement of such gaps at export time and does not change; the register is where they are kept
+current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
+"enterprise gaps table" for the register, which is the plan's.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.

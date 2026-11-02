@@ -35,6 +35,9 @@
 # which runs this file and so stays CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
 # exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
 # bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
+# In both modes each step it executes, and each test companion, writes its elapsed seconds on a line
+# of its own, `check: elapsed: <step>: <N>s` (`pre-push:` in the default mode), and the total comes
+# on the line just before the verdict (#629), so a log shows which steps a slow check spent its time on.
 #
 # tools/image-check.sh builds the gateway's image the way a workstation does, from a copy of the
 # tree it has first given a host obj/ and an owner-only appsettings.json, and starts it as the
@@ -74,9 +77,10 @@
 #
 # --skip-tests, with --full only, runs everything the full check runs except `dotnet test --solution`:
 # the build, the smoke test, the gateway image, Terraform and its tests and the companions still
-# run. The overnight integrate step passes it once, after a gate that failed on test projects the
-# ticket's change cannot reach has had those projects re-run alone and pass (#375): the check stops
-# at its first failure, so a gate red on the tests never ran what comes after them, and counting it
+# run. The overnight integrate step passes it once, after a local check that failed on test projects
+# the ticket's change cannot reach has had those projects re-run alone and pass (#375), judged against
+# the same merge's first parent (#629): the check stops at its first failure, so a check red on the
+# tests never ran what comes after them, and counting it
 # passed on the re-run alone would be a green verdict that skipped a check. The suite's verdict is
 # then the first log's, every other project passed, plus each re-run's. The verdict line names the
 # skip, "the build, not the tests (--skip-tests), ...", so the log never reads as a whole pass.
@@ -84,7 +88,11 @@
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
 # branch adds to main. An overnight lane names its fork point instead, so its own commits are
-# judged rather than the night's merges.
+# judged rather than the night's merges. The overnight integrate step's local check names the
+# merge's first parent, so each merge is judged alone, with its roadmap refresh, and earns only its
+# own companions; once every lane has settled, one closing check names the run base and judges the
+# whole run (#629). On 2026-10-29 each integrate named the run base, and the last merge's check
+# re-ran every companion the night's earlier merges had earned.
 #
 # Both modes hold a part-row merge without its Outstanding lines (#291): every commit from that base
 # to HEAD whose subject starts "Merge part of task" must carry a line starting `Outstanding:` and
@@ -164,14 +172,32 @@ verdict=""
 on_exit() {
   status=$?
   if $full && [ "$status" -ne 0 ] && [ -z "$verdict" ]; then
+    elapsed_total
     echo "check: fail: stopped with status $status." >&2
     exit 1
   fi
 }
 trap on_exit EXIT
 
+# The elapsed lines (#629): after each step it executes, and after each test companion, the check
+# writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just
+# before the verdict, pass or fail, in whole seconds from bash's $SECONDS. A skipped step writes
+# none. On 2026-10-29 the integrate step's span grew from 2m31s to 10m27s while the suite took
+# about 2 minutes, and no log could say which steps took the rest. The lines go to standard output
+# and change no other line: the verdict, the fail lines and the test runner's summary read as
+# before, which is what tools/test_reach.py and tools/retro_record.py parse.
+step_at=$SECONDS
+elapsed() {
+  echo "$me: elapsed: $1: $((SECONDS - step_at))s"
+  step_at=$SECONDS
+}
+elapsed_total() {
+  echo "$me: elapsed: total: ${SECONDS}s"
+}
+
 fail() {
   verdict="fail"
+  elapsed_total
   if $full; then
     echo "check: fail: $1" >&2
   else
@@ -273,9 +299,11 @@ touches() {
   $both || [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
 }
 
+step_at=$SECONDS
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I .github/path-ownership.py "$base" HEAD || fail "check A-05 failed."
+    elapsed "A-05"
   elif $full; then
     fail "no origin/main or main to judge against; name one with --base."
   else
@@ -306,12 +334,16 @@ fi
 # decided the change (ADR-0023, #102), so it is handed that base. With none, it reads every commit
 # HEAD reaches, so no base is not a skip. Offline it still requires the trailer, and says it could
 # not check what the trailer cites.
+# The ADR rule reads the same range net, from the merge-base of the base and HEAD: an ADR that
+# existed there may change only its Status item, and a body edit, delete or rename fails whatever
+# the trailer says (ADR-0032 decision 7, #634); with no base it says no ADR was judged.
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I .github/steering.py --base "$base" || fail "the steering check failed."
   else
     python3 -I .github/steering.py || fail "the steering check failed."
   fi
+  elapsed "the steering check"
 else
   missing python3 steering
 fi
@@ -362,6 +394,7 @@ $part_rows
 EOF
   [ "$part_rows_missing" -eq 0 ] \
     || fail "a part-row merge lacks a line docs/agents/landing-work.md requires of a row that stays unfinished."
+  elapsed "the part-row merges"
 else
   echo "pre-push: part-row merges not checked: no main to diff against." >&2
 fi
@@ -380,6 +413,7 @@ if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I tools/landing_subjects.py --base "$base" \
       || fail "a full-landing merge names a ticket with an open box or a plan row with an open part ticket, or the full-landing merges were not judged."
+    elapsed "the full-landing merges"
   else
     echo "pre-push: full-landing merges not checked: no main to diff against." >&2
   fi
@@ -397,6 +431,7 @@ fi
 if command -v python3 > /dev/null; then
   python3 -I tools/roadmap.py --check \
     || fail "the roadmap is out of date. Run tools/roadmap.py and commit what it writes."
+  elapsed "the roadmap"
 else
   missing python3 "the roadmap"
 fi
@@ -412,6 +447,7 @@ fi
 if command -v python3 > /dev/null; then
   python3 -I tools/analysis_guard.py \
     || fail "the analyzer configs or a suppression break ADR-0035's rules, or were not judged."
+  elapsed "the analysis guard"
 else
   missing python3 "the analysis guard"
 fi
@@ -439,6 +475,7 @@ if [ -n "$duplicates" ]; then
   echo "  find src tests fixtures tools -type d \\( -name bin -o -name obj \\) -prune -exec rm -rf {} +" >&2
   fail "duplicated build artifacts make the build report errors that are not in the source."
 fi
+elapsed "the artifacts"
 
 # --- tracked files their owner alone can read ------------------------------------------------
 #
@@ -484,6 +521,7 @@ EOF
   echo "  git ls-files -z | xargs -0 chmod go+r" >&2
   fail "a tracked file only its owner can read is a file the gateway's container cannot read; run chmod go+r on it."
 fi
+elapsed "the file modes"
 
 # --- the build, and in full the tests and the smoke test ----------------------------------------
 #
@@ -500,6 +538,7 @@ ran="A-05, the steering documents, every ticket citation, the ticket numbers, th
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
   quietly dotnet build --nologo --verbosity quiet || fail "the solution does not build."
+  elapsed "the build"
   ran="$ran, the build"
   if $full; then
     if $skip_tests; then
@@ -507,10 +546,13 @@ if touches build; then
       tests_ran="not the tests (--skip-tests)"
     else
       dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+      elapsed "the tests"
       tests_ran="the tests"
     fi
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
+    elapsed "the smoke test"
     tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
+    elapsed "the gateway image"
     ran="$ran, $tests_ran, the smoke test, the gateway image"
   fi
 elif $full; then
@@ -576,6 +618,7 @@ elif [ -n "$terraform_bin" ]; then
     fi
     quietly "$terraform_bin" -chdir="$dir" validate || fail "terraform validate failed in $dir."
   done
+  elapsed "Terraform"
   ran="$ran, $terraform_named"
 
   if $full; then
@@ -593,6 +636,7 @@ elif [ -n "$terraform_bin" ]; then
     for dir in $(printf '%s\n' $tested | sort -u); do
       "$terraform_bin" -chdir="$dir" test || fail "terraform test failed in $dir."
     done
+    elapsed "the Terraform tests"
     ran="$ran, the Terraform tests"
   fi
 else
@@ -786,6 +830,7 @@ if $full; then
       companions="$companions $found"
     fi
   done
+  elapsed "the test companions' reach"
 
   if [ -z "$companions" ] && $both; then
     echo "check: no test companion is tracked in tools/ or .github/."
@@ -797,6 +842,7 @@ if $full; then
     for found in $companions; do
       echo "check: the test companion $found:"
       python3 -I "$found" || fail "the test companion $found failed."
+      elapsed "the test companion $found"
       listed="${listed:+$listed, }$found"
       count=$((count + 1))
     done
@@ -851,6 +897,7 @@ if $full; then
       for found in $workflow_companions; do
         echo "check: the workflow test companion $found:"
         node "$found" || fail "the workflow test companion $found failed."
+        elapsed "the workflow test companion $found"
         listed="${listed:+$listed, }$found"
         count=$((count + 1))
       done
@@ -866,6 +913,7 @@ if $full; then
 fi
 
 verdict="pass"
+elapsed_total
 if $full; then
   echo "check: pass: $ran$unrun."
 else
