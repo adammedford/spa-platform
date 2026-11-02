@@ -61,8 +61,15 @@ public static class RuleIds
     public const string ApiUnknown = "api.unknown";
 
     /// <summary>
+    /// A session store operation failed or ran out <c>StoreDeadline</c>: the <c>continuity</c> spec's
+    /// F17 (#332), landed with G3's tag (#343). Under <c>auth.</c> because workstream 3's session code
+    /// is the one caller of the store, as it is of <see cref="AuthSession"/>.
+    /// </summary>
+    public const string AuthStore = "auth.store";
+
+    /// <summary>
     /// Every id above, for a test or a suite that has to cover the whole set rather than name one.
-    /// Workstream 6's negative suite can read this instead of keeping a thirteenth copy.
+    /// Workstream 6's negative suite can read this instead of keeping a copy of its own.
     /// </summary>
     public static readonly ImmutableArray<string> All =
     [
@@ -78,5 +85,6 @@ public static class RuleIds
         AuthCallback,
         AuthSession,
         ApiUnknown,
+        AuthStore,
     ];
 }
