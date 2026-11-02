@@ -152,8 +152,18 @@ line for each of them and one `Ticket: #n` line for each ticket it only advances
 `tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
 names; `Ticket:` is not a closing keyword, so its ticket stays open
 (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+`gh pr view <pr> --json closingIssuesReferences --jq '.closingIssuesReferences[].number'` prints
+the tickets the description will close; read it before landing.
 A complete ticket stays open and assigned until then. The lines go in the description, not in the
-merge body passed with `--body-file`.
+merge body passed with `--body-file`, and that body puts no closing keyword (close, fix or resolve,
+in any form) before a `#n`, because GitHub reads it there too: a keyword in a commit message closes
+its issue once the commit is on the default branch, and the merge body becomes the merge commit's
+message (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+A keyword in a commit on the branch does the same once that commit reaches `main`, a part-landing
+included, so a task commit names its ticket on a `Ticket: #n` line too. A keyword in the merge
+body closes its ticket at the merge, whatever the description says: 83f53f0, the merge of #120,
+closed #105, which #120's description named on a `Ticket: #105` line and never after a closing
+keyword, through a sentence in its body saying a later session would close it.
 
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
@@ -251,8 +261,16 @@ Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflo
 ```
 
 The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
-contains the integration tip, then closes the landed tickets, unassigns, removes the worktrees whose
-tips are on `origin/main`, the integration worktree last, and prunes.
+contains the integration tip identified from the merged landing pull request, then closes the
+landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration
+worktree last, and prunes.
+
+The after pass also applies every confirmed answer the morning pass could not. It closes the
+Overnight issue once every question on it is settled: answered no, applied, or held by a ticket
+its `## After <date>` comment names. A commit answer counts as applied only once its commit is on
+`origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming
+its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that
+comment lists what is left. Relaunch the after pass after a later Confirm or landing.
 
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
@@ -279,7 +297,7 @@ A review covers exactly the head its record names, and `tools/land.sh` refuses a
 clears ("Land it" above). The check sits in the merge script rather than in branch protection
 because this repository has one GitHub account, which can neither approve its own pull request nor
 be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
-#67 records that choice and when it reopens.
+ADR-0022 records that choice and when it reopens.
 
 Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives
@@ -353,10 +371,10 @@ The rules it holds, which the morning applies:
 
 ## Gates
 
-A gate closes when its exit test in `docs/plan/01-plan.md` passes and no review of a change it
-covers is open. A gate tag covers every merge since the previous gate tag, and it is permanent:
-what its commit says stays said there however soon `main` corrects it. So it waits while any merge
-in its range has an open review:
+A gate closes when its exit test in `docs/plan/01-plan.md`, or for a gate defined after the export
+in `contracts/gates.md`, passes and no review of a change it covers is open. A gate tag covers every
+merge since the previous gate tag, and it is permanent: what its commit says stays said there
+however soon `main` corrects it. So it waits while any merge in its range has an open review:
 
 - a review still running, or one whose latest record says `hold`;
 - commits pushed after the last reviewed head;

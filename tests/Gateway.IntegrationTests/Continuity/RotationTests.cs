@@ -7,12 +7,12 @@ namespace Gateway.IntegrationTests.Continuity;
 
 /// <summary>
 /// Rotation across two hosts (#332, F7 and F9; #345): an app rotated onto a new client while host A is
-/// polled and host B is not.
+/// polled and host B is not. The rows are N-29, N-30 and N-31 (contracts/test-ids.md).
 /// </summary>
 public sealed class RotationTests
 {
     /// <summary>
-    /// The rotation as the composed cell runs it: A's swap purges the app's sessions from the one store
+    /// N-29, the rotation as the composed cell runs it: A's swap purges the app's sessions from the one store
     /// every host reads (<c>OptionsInvalidator</c>, plan row 3.6), so B, still at the old revision, refuses
     /// the old session on its next request too. That is earlier than F7's bound ("after its next
     /// successful poll"), never later.
@@ -45,7 +45,7 @@ public sealed class RotationTests
     }
 
     /// <summary>
-    /// The skew F7 bounds, made visible by a purge that fails: A refuses the old session on its next
+    /// N-30, the skew F7 bounds, made visible by a purge that fails: A refuses the old session on its next
     /// request through the ticket store's client binding (N-22), and B, which has not polled and still
     /// names the old client, serves it until it is polled, then refuses it.
     /// </summary>
@@ -76,6 +76,10 @@ public sealed class RotationTests
         Assert.Equal((HttpStatusCode)Contract.Error("unauthenticated").Status, onBAfterPoll.StatusCode);
     }
 
+    /// <summary>
+    /// N-31: a login started under the old client and called back after convergence ends on the callback's
+    /// failure page with no session cookie, and a fresh login succeeds under the new client.
+    /// </summary>
     [Fact]
     public async Task P2_5_F9_a_login_started_under_the_old_client_and_called_back_after_convergence_is_refused_and_a_fresh_login_succeeds()
     {

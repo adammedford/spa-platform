@@ -78,7 +78,9 @@ export const meta = {
 // head and a full review would otherwise put them back in inventory order. A held break the project
 // now catches through another test is reproduced, its Test cell reading `<held test> (caught by
 // <test>)` once the verdict verifies that test guards it, so a row pinned to a test that could never
-// guard its break is answered by the test that does (#684). A held test the cap cuts
+// guard its break is answered by the test that does (#684). A later review reads that cell as the
+// held test alone, so a catcher, whose own break nobody mutated, is neither answered nor cleared by
+// it (#693). A held test the cap cuts
 // is still unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a `Review: ...` commit touches come
 // next among the candidates. A candidate an earlier record reproduced is not mutated again while
 // neither its test file nor the source it breaks has changed since that record's head; the comment
@@ -96,7 +98,8 @@ export const meta = {
 // three records each carried three with no ticket. The verdict agent names, for every carried finding,
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
 // the ones with none are returned as followUps and end the comment's findings as the table under
-// "## Follow-ups", which morning.js reads from the latest record and files. The review still writes
+// "## Follow-ups", which morning.js reads from the latest record of each open pull request and files
+// (#514); a row still unfiled at the merge is named by tools/land.sh (#573). The review still writes
 // nothing outside its log and its one comment, but for the change requests below.
 //
 // Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
@@ -114,8 +117,16 @@ export const meta = {
 // one line per pull request with its number, head, verdict, record URL, verified finding and mutation
 // counts and the did-not-fail rows named, because the completion notice cuts a return short and on
 // #287's runs the verdict and the mutation rows were past the cut. A halted run's summary is [].
-// Each pull request's findings, verified and suspected, are in <logDir>/pr-<n>/verdict.json, which a
-// repair session reads in place of the cut return (docs/agents/review.md -> "Repairing findings").
+// A repair session reads a pull request's findings from its log in place of the cut return
+// (docs/agents/review.md -> "Repairing findings"), and they are in two places (#692). The verdict
+// agent's, verified and suspected, are in <logDir>/pr-<n>/verdict.json. The script's own, the head
+// comparison's and the later dates' (#525 below), are never there, since the verdict agent is told not
+// to repeat them: they lead the comment's Spec findings, in <logDir>/pr-<n>/comment.md and the posted
+// record. A pull request reaches verdict.json only by reaching its verdict stage: one skipped for a
+// record already on its head has none from the run, and its findings are in the record its summary
+// line names; one failed before its verdict, at the stage its summary line names, has none, and no
+// findings to repair, only a run to repeat. One failed at posting has its
+// verdict.json, and comment.md when the post agent wrote it.
 //
 // A date later than the run's (#525). A description and its commits are a dated record of what was
 // verified, and a date later than the review's own cannot be true when the review reads it (#507's
@@ -207,8 +218,16 @@ const recordsIn = (inv) => {
 }
 // The rows of a review comment's Mutations table, as mutationLines below writes it (#289): one
 // { test, broken, result } per row, each cell unescaped as cell() escaped it, result the leading word
-// of the Result cell. A comment with no such table, a human's or an older shape's, yields none.
+// of the Result cell. A comment with no such table, a human's or an older shape's, yields none. A
+// caught row's cell, `<held test> (caught by <tests>)`, yields the held test alone (#693): the row
+// reproduced the held test's break, not the catchers', so a catcher the runner printed by the name
+// the inventory gives it is neither answered as held nor cleared as a candidate by that row.
 const MUTATION_HEAD = '| Test | What was broken | Failed of total | Result | Log file |'
+const CAUGHT_BY = ' (caught by '
+const heldTestOf = (cellText) => {
+  const at = cellText.indexOf(CAUGHT_BY)
+  return at > 0 && cellText.endsWith(')') ? cellText.slice(0, at) : cellText
+}
 const mutationTableOf = (body) => {
   const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
   const at = lines.indexOf(MUTATION_HEAD)
@@ -218,7 +237,7 @@ const mutationTableOf = (body) => {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
     const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run|removed)\b/.exec(cells[3])
-    if (result && cells[0]) rows.push({ test: cells[0], broken: cells[1], result: result[1] })
+    if (result && cells[0]) rows.push({ test: heldTestOf(cells[0]), broken: cells[1], result: result[1] })
   }
   return rows
 }
@@ -227,7 +246,9 @@ const mutationTableOf = (body) => {
 const names = (cellText, test) => !!test && new RegExp(`(?<![\\w.])${test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`).test(cellText)
 
 // The follow-ups table (#292): the carried findings that name no open ticket, which the comment ends
-// its findings with and the morning run files. One row per finding, its First carried by cell the
+// its findings with and the morning run files while the pull request is still open (#514); a row
+// still unfiled when tools/land.sh merges is named by its land: warning and filed by hand (#573;
+// docs/agents/review.md -> "Landing or holding"). One row per finding, its First carried by cell the
 // earliest record on the pull request that carried it, or THIS_RECORD for the record the comment
 // ends in. morning.js reads the same table with its own copy of FOLLOW_UP_HEAD, THIS_RECORD and this
 // parser, since a workflow script imports nothing; morning_tests.mjs holds the two copies equal, so
@@ -568,7 +589,7 @@ ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, $
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held break the project caught through other tests while the held test stayed green (#684): it answers the held test only when you verify, as a verified finding, that a test it names guards the break the held record named, and then you put the held test in caughtAccepted; otherwise leave it out, the held test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
-followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files.
+followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
 
@@ -594,7 +615,7 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
 3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
-4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run. When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ''} broken: what you broke, in one line.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run. When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ''} broken: what you broke, in one line.
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
@@ -710,9 +731,18 @@ const mutationRow = (n, m, i, got) => {
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   // A held break the project caught through other tests, the held one not among them (#684): the
   // tests that went red, which the verdict must accept before the row answers the held test. A
-  // failing name is the held test when it ends in the held test's whole dotted name, so a same-named
-  // method of another class is a catch, which fails closed to the verdict's check.
-  const isHeld = (f) => `.${f.split('(')[0].trim()}`.endsWith(`.${m.test}`)
+  // failing name is the held test when it ends in the held test's whole dotted name at a dot. A name
+  // shorter than that, a bare method or a class-qualified name under a namespace-qualified cell, could
+  // be a same-named method of another class, so it is a catch, which fails closed to the verdict's
+  // check (#695). A name is read up to its '(': an xUnit case's arguments follow it. Python unittest
+  // prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a dotted name in the
+  // parenthesis after a bare method is the whole name.
+  const dotted = (f) => {
+    const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+    if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
+    return inner.endsWith(`.${head}`) ? inner : `${inner}.${head}`
+  }
+  const isHeld = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
   row.caughtBy = m.kind === 'held' && row.result === 'reproduced' && row.failingNames.length
     && !row.failingNames.some(isHeld) ? row.failingNames : []
   return row
@@ -754,7 +784,7 @@ const cell = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
 const mutationLines = (mut) => [
   ...(mut.rows.length
     ? [MUTATION_HEAD, '| --- | --- | --- | --- | --- |',
-      ...mut.rows.map((r) => `| ${[r.caughtBy.length ? `${r.test} (caught by ${r.caughtBy.join(', ')})` : r.test, r.broken || '-', `${r.failed} of ${r.total}`,
+      ...mut.rows.map((r) => `| ${[r.caughtBy.length ? `${r.test}${CAUGHT_BY}${r.caughtBy.join(', ')})` : r.test, r.broken || '-', `${r.failed} of ${r.total}`,
         r.result + (r.countsMatched === true ? ', counts match the stated claim' : r.countsMatched === false ? ', counts differ from the stated claim' : '') + (r.why ? `: ${r.why}` : ''),
         r.logFile].map(cell).join(' | ')} |`)]
     : [mut.outside.length ? 'No mutations run: the range touches no candidate invariant test and no stated mutation.'

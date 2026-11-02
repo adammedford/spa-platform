@@ -599,10 +599,11 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
 # Continuity (#347, #332 F1). A roll replaces a task in three steps, in this order: ECS deregisters
 # the target and waits out the target group's deregistration delay, then sends SIGTERM, then after
 # the container's stopTimeout sends SIGKILL. The two numbers are F1's, 30 and 30, pinned exactly:
-# the drain covers the 21 s a refresh is bounded by (ProviderDeadline 10 + LeaseMargin 11, G1 on
-# #332), and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363). Mutations that turn this
-# run red: deregistration_delay left to the provider's default, or 300; stopTimeout 25 or absent;
-# stopTimeout on the mock API too; minimum healthy 50.
+# requests drain from the target for 30 s before SIGTERM, a drain that promises no refresh's
+# completion, and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363), which F1 sets above
+# the refresh holder's 20 s durable-write deadline (#332 F1; P2-3's second amendment, decision 2).
+# Mutations that turn this run red: deregistration_delay left to the provider's default, or 300;
+# stopTimeout 25 or absent; stopTimeout on the mock API too; minimum healthy 50.
 run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_task_always_serving" {
   command = plan
 
@@ -616,7 +617,7 @@ run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_
   # comparison is to "30": an integer here would error rather than fail.
   assert {
     condition     = aws_lb_target_group.gateway.deregistration_delay == "30"
-    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, which covers the 21 s a refresh is bounded by. The provider's default is 300 s, which only slows a roll."
+    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, during which requests in flight drain from the task; it promises no refresh's completion. The provider's default is 300 s, which only slows a roll."
   }
 
   assert {

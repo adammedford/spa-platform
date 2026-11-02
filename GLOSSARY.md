@@ -35,6 +35,8 @@ this work".
 Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
 default project".
 
+**Sample image** — the public stand-in image a cell's service runs until its first gateway deployment, so that the service, its target and the tunnel can be proven before a gateway image exists. It runs in the platform project and has nothing to do with the sample project. _Avoid_: placeholder image, hello-world, and "the sample" alone.
+
 **Sitting** — a human's hands-on session in the platform project: the applies, imports and AWS
 reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
 the glossary keeps for agent sessions and the gateway's session records.
@@ -43,6 +45,10 @@ the glossary keeps for agent sessions and the gateway's session records.
 that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
 with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
 read-back by hand showed the result right.
+
+**Platform tag** — `Platform = spa-platform`, matched exactly. Every taggable resource the three roots create carries it, and so does the imported certificate; teardown's proof looks for it. Bootstrap's resources carry `spa-platform-bootstrap` instead, so they never match it. _Avoid_: a key-only or prefix match, and "the tag" where `Cell` or `ManagedBy` could be meant.
+
+**Teardown** — removing a cell from the platform project: its three roots, its imported certificate and what its deployments left behind, ending with proof that nothing carrying the platform tag remains. The bootstrap root's resources survive it and are removed by hand. _Avoid_: "emptying the account", "the account is empty".
 
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
@@ -100,6 +106,9 @@ _Avoid_: "immutable prefix". The prefix can grow; only its keys are fixed.
 **Release key** — the key of one object under a release. It is the unit the platform bucket keeps
 write-once, and the unit P-04 tests.
 _Avoid_: "release" on its own when one object is meant.
+
+**Platform bucket** — a cell's one private bucket, holding the registry and every release. It is not the state bucket, which holds Terraform state and no platform data.
+_Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
 
 ## The request path
 
@@ -219,6 +228,12 @@ _Avoid_: "lock", and "lease" for this.
 time and given back when its refresh is written. The **holder** is the task that took it; a
 **loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
+
+**StoreDeadline** — the time one session-store operation may take, 5 s, its re-read and its one
+retry included. An outcome still unknown when it runs out is not relied on, although the write may
+have happened: a login issues no cookie, and a removal is not confirmed. The refresh lease's budget
+is reckoned in it. See #332 D4 and change request P2-3, "The budget, once".
+_Avoid_: "timeout" for it, which names the SDK's or the HTTP client's own.
 
 **Back-channel logout** — the provider telling the gateway, server to server and with no browser
 present, that a user's sign-in at an app has ended, so the gateway ends that user's sessions for the
@@ -370,18 +385,31 @@ that closes it. It is **part-landed** when a merge into `main` advances it witho
 Landed is not done (see **Done**). _Avoid_: "merged" for landed, "landed" for done, and
 "half-landed" for part-landed.
 
-**Done** — the state of a plan row or a ticket that has landed, whose tests pass in CI, that
-touched only its owner's paths, and that no open change request waits on. Landed is not done, and
-merged is not done. _Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn
-is closed and not done.
+**Done** — the state of a plan row or a ticket that has landed, whose own done-when holds, shown by
+its tests in CI or, where it needs AWS, by a read-back on its ticket; that touched only its owner's
+paths; and that no open change request waits on. Landed is not done, and merged is not done.
+_Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn is closed and not
+done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
-Phase 1 accepted. Phase 2 adds G6 to G8.
+Phase 1 accepted. Phase 2 adds G6 to G8, each defined in the gate register once its exit test is
+decided; a gate with no exit test cannot be closed.
+
+**Exit test** — what must pass before a gate closes: for the first gates a build, a run's items or
+a tag, and from G2 on the test ids the gate names, each with the tiers it must pass in, and, where
+the gate says so, the acceptance criteria those ids prove. Written in the frozen gates table for G1a
+to G5, and in the gate register for a gate defined after the export. _Avoid_: "acceptance" for the
+exit test, since a gate's criteria are a part of it.
 
 **Gate tag** — the annotated tag that closes a gate, its message naming the CI run that proved the
 exit test. It is permanent, so what its commit says stays said there. Other tags are not gates.
 _Avoid_: release tag, and "the tag" where another tag could be meant.
+
+**Gate register** — the live list of gates defined after the frozen export, each with what it
+proves, its exit test, what it unblocks and the decision that recorded it. Kept by the integrator;
+a gate is added or changed by deciding a request. It names ids that the export or the test id
+register defines, and defines none. _Avoid_: gates table, which is the export's.
 
 **Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
 ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
@@ -472,14 +500,33 @@ the composed suites, except `B-`, which the startup benchmark's verdict proves o
 test project. The ids in the frozen export are listed there; an id named after it continues its
 prefix's sequence and is listed in the test id register.
 
+**Plan policy** — the assertions on what a Terraform root's plan may contain: P-01 (the platform plan allowlist), P-02 (the apps plan allowlist), P-03 (the task role policy) and P-07 (the identity root's allowlist). Mock-provider `terraform test` runs that read the configuration (ADR-0016), so they prove the configuration and never the account; P-04 to P-06 are the deployed checks. _Avoid_: plan check, for a credentialed plan nothing runs.
+
 **Test id register** — the live list of test ids named after the frozen export, each with its
 tier and the decision that named it, and the tiers of the export's rows that carry none, and the
 checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
 the workstream that needs it. Holds no evidence ids and no rule ids. _Avoid_: post-export ids,
 test catalogue.
 
+**Retired test id** — a test id whose check was dropped. It keeps its number, and its row in the
+test id register is marked retired (an export id gains a row there to be marked), so earlier
+records stay true; no exit test may name it. _Avoid_: deleted, removed id.
+
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
+
+**Read-back** — what AWS's own API reports about an applied root's resources, recorded on a ticket as a row's evidence. It is the account-side counterpart of a plan assertion against the mock provider, which proves configuration and not the account (ADR-0016). _Avoid_: "check", which is a pre-push or CI guard, and "verification" unqualified.
+
+**Applied** — of a Terraform root in a project: a plan of the root against that project's state reports no changes. An apply's exit code shows that an apply ran, and a state object that something was written; neither alone means applied. _Avoid_: "applied" where only an apply ran.
+
+**Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
+adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
+where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
+adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
+enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
+statement of such gaps at export time and does not change; the register is where they are kept
+current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
+"enterprise gaps table" for the register, which is the plan's.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the
 sandbox could not reach NuGet. 34 of 34 checks passed.

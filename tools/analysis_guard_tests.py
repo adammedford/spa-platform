@@ -122,6 +122,80 @@ class Guard(unittest.TestCase):
         self.files[".editorconfig"] = EDITORCONFIG + "# A reason.\ndotnet_diagnostic.ca5394.severity = none\n"
         self.assertFails(self.run_guard(), "CA5394", "security rule")
 
+    # --- a security rule anywhere else (#671, ADR-0035 decision 4) -----------------------------
+
+    def test_a_security_id_in_an_earlier_tests_section_fails(self) -> None:
+        # #671: a section before the relaxed tier's is never the last, but it still sets the rule
+        # for every file the relaxed section leaves alone.
+        self.files[".editorconfig"] = EDITORCONFIG.replace(
+            "[*.cs]\n", "[tests/**.cs]\ndotnet_diagnostic.CA5351.severity = none\n\n[*.cs]\n")
+        self.assertFails(self.run_guard(), ".editorconfig:7", "CA5351", "security rule")
+
+    def test_a_security_id_in_an_earlier_duplicate_of_the_relaxed_header_fails(self) -> None:
+        self.files[".editorconfig"] = EDITORCONFIG.replace(
+            "[*.cs]\n", f"{RELAXED_HEADER}\n# A reason.\ndotnet_diagnostic.CA5394.severity = none\n\n[*.cs]\n")
+        self.assertFails(self.run_guard(), ".editorconfig:8", "CA5394", "security rule")
+
+    def test_a_security_id_in_a_nested_editorconfig_fails(self) -> None:
+        self.files["src/App/.editorconfig"] = "[*.cs]\ndotnet_diagnostic.CA5394.severity = none\n"
+        self.assertFails(self.run_guard(), "src/App/.editorconfig:2", "CA5394", "security rule")
+
+    def test_a_security_id_in_a_section_for_no_cs_file_still_fails(self) -> None:
+        # The pass is not gated on a glob: no section has a reason to name a security rule's severity.
+        self.files[".editorconfig"] = EDITORCONFIG.replace(
+            "[*]\n", "[*]\ndotnet_diagnostic.CA2100.severity = silent\n")
+        self.assertFails(self.run_guard(), ".editorconfig:4", "CA2100", "security rule")
+
+    def test_a_security_id_at_default_fails(self) -> None:
+        # `default` hands the rule back to the analyzer, which ships most security rules off.
+        self.files["src/App/.editorconfig"] = "[*.cs]\ndotnet_diagnostic.CA3075.severity = default\n"
+        self.assertFails(self.run_guard(), "src/App/.editorconfig:2", "CA3075", "security rule")
+
+    def test_a_security_id_at_error_or_warning_in_a_nested_editorconfig_passes(self) -> None:
+        for value in ("error", "warning", "Error"):
+            with self.subTest(value=value):
+                self.files["src/App/.editorconfig"] = f"[*.cs]\ndotnet_diagnostic.CA5394.severity = {value}\n"
+                self.assertPasses(self.run_guard())
+
+    def test_a_security_id_declined_in_the_globalconfig_fails(self) -> None:
+        self.files[".globalconfig"] = GLOBALCONFIG + "# Never fires here.\ndotnet_diagnostic.CA5351.severity = none\n"
+        self.assertFails(self.run_guard(), ".globalconfig:5", "CA5351", "security rule")
+
+    def test_a_security_id_at_suggestion_without_its_pending_comment_fails(self) -> None:
+        self.files[".globalconfig"] = GLOBALCONFIG + "dotnet_diagnostic.CA5359.severity = suggestion # later\n"
+        self.assertFails(self.run_guard(), ".globalconfig:4", "CA5359", "security rule")
+
+    def test_a_pending_security_id_in_a_named_globalconfig_fails(self) -> None:
+        # ADR-0035 decision 6: the pending lines live in the root .globalconfig and nowhere else.
+        self.files["build/ramp.globalconfig"] = "is_global = true\ndotnet_diagnostic.CA5394.severity = suggestion # pending #611\n"
+        self.assertFails(self.run_guard(), "build/ramp.globalconfig:2", "CA5394", "security rule")
+
+    def test_a_pending_security_id_in_an_editorconfig_fails(self) -> None:
+        self.files["src/App/.editorconfig"] = "[*.cs]\ndotnet_diagnostic.CA5394.severity = suggestion # pending #611\n"
+        self.assertFails(self.run_guard(), "src/App/.editorconfig:2", "CA5394", "security rule")
+
+    def test_a_pending_security_id_in_the_root_globalconfig_passes(self) -> None:
+        self.files[".globalconfig"] = GLOBALCONFIG + "dotnet_diagnostic.MA0009.severity = suggestion  #  pending #611\n"
+        self.assertPasses(self.run_guard())
+
+    def test_a_pending_comment_on_a_declined_security_id_in_the_root_globalconfig_fails(self) -> None:
+        # Decision 6: a pending line is at suggestion; the comment never excuses `none`.
+        self.files[".globalconfig"] = GLOBALCONFIG + "dotnet_diagnostic.CA5351.severity = none # pending #611\n"
+        self.assertFails(self.run_guard(), ".globalconfig:4", "CA5351", "security rule")
+
+    def test_a_security_id_at_error_in_the_relaxed_section_still_fails(self) -> None:
+        # Decision 13: the local check fails the section if it names a security rule, at any value.
+        self.files[".editorconfig"] = EDITORCONFIG + "# A reason.\ndotnet_diagnostic.CA5351.severity = error\n"
+        result = self.run_guard()
+        self.assertFails(result, ".editorconfig:14", "CA5351", "security rule")
+        self.assertIn("1 finding.", result.stderr.splitlines()[-1])
+
+    def test_a_security_id_in_the_relaxed_section_is_reported_once(self) -> None:
+        self.files[".editorconfig"] = EDITORCONFIG + "# A reason.\ndotnet_diagnostic.CA5351.severity = none\n"
+        result = self.run_guard()
+        self.assertFails(result, "CA5351")
+        self.assertIn("1 finding.", result.stderr.splitlines()[-1])
+
     def test_a_usage_id_with_the_security_prefix_shape_passes(self) -> None:
         # Decision 4: a security rule is one in the Security category, not a CA5xxx-looking prefix.
         self.files[".editorconfig"] = EDITORCONFIG + "# Tests address relative paths as strings.\ndotnet_diagnostic.CA2234.severity = none\n"

@@ -10,10 +10,15 @@ namespace Gateway.IntegrationTests.Continuity;
 /// 3 and poll host A only. A's <c>/readyz</c> says 2 and B's says 1; <c>spactl wait</c> with both
 /// instance ids returns only once B has been polled, and one with an earlier deadline times out naming
 /// B. A login to app 3 started on A finishes on B after convergence, and before it (D3's control) the
-/// callback on B ends 404 <c>not_found</c>, because B does not know the host yet.
+/// callback on B ends 404 <c>not_found</c>, because B does not know the host yet. The rows are F-16 and
+/// F-17 (contracts/test-ids.md).
 /// </summary>
 public sealed class ConvergenceTests
 {
+    /// <summary>
+    /// F-16: <c>/readyz</c> shows the skew, <c>spactl wait</c> returns only after B is polled, and a
+    /// shorter wait times out naming B.
+    /// </summary>
     [Fact]
     public async Task P2_5_F8_readyz_shows_the_skew_and_spactl_wait_returns_only_after_B_is_polled_and_a_shorter_wait_times_out_naming_B()
     {
@@ -58,6 +63,10 @@ public sealed class ConvergenceTests
         Assert.Contains("instance host-a at revision 2, instance host-b at revision 2", output.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// F-17: a login to app 3 started on A ends 404 on a lagging B (D3's control) and finishes on B after
+    /// convergence.
+    /// </summary>
     [Fact]
     public async Task P2_5_F8_a_login_to_the_onboarded_app_started_on_A_ends_404_on_a_lagging_B_and_finishes_on_B_after_convergence()
     {

@@ -838,6 +838,7 @@ try {
       if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} caught and accepted: verdict ${c.verdict}, expected merge`)
       if (!/A caught row is a held break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
+      if (!/failingNames: the tests it named as failing, each whole as the runner printed it/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the mutation prompt does not ask for each failing name whole as the runner printed it (#695)')
       const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
       if (!cellLine.includes(CATCHER)) fail(`PR 287's shape with the held ${LIB2} caught: no table row reads "${LIB2} (caught by ...)"`)
       // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated
@@ -849,6 +850,27 @@ try {
       result = await execute(env)
       const ranNext = env.mutations.filter((m) => m.prompt.includes('held because')).map((m) => m.test)
       if (ranNext.includes(LIB2) || !ranNext.includes(LIB1)) fail(`PR 287 after a caught record: held mutations ${JSON.stringify(ranNext)}, expected ${LIB1} and not ${LIB2}`)
+      // A bare-named catcher (#693): the runner printed the catcher as the inventory names it, so the
+      // caught cell names a test that is itself a candidate, or itself held. The record reproduced the
+      // held test's break, never the catcher's, so a later review neither clears the catcher as a
+      // candidate nor answers it as a held test. The cell is again the one the script wrote.
+      const BARE = { [LIB2]: { ...caught[LIB2], failingNames: [CATCHER] } }
+      const WITH_CATCHER = { 287: { ...SHAPE[287], candidates: [...SHAPE[287].candidates, lib(CATCHER)] } }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, WITH_CATCHER, { range, mutate: BARE, caught: { 287: [LIB2] } })
+      await execute(env)
+      const bareLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by ${CATCHER}) |`)) || ''
+      if (!bareLine) fail(`PR 287's shape with the held ${LIB2} caught by the bare-named ${CATCHER}: no table row reads "${LIB2} (caught by ${CATCHER})"`)
+      const LATER_BARE = { ...LATER, body: LATER.body.replace(cellLine, bareLine) }
+      const unchanged = { 287: { ...range[287], from: H3, changedFiles: ['tests/Platform.Registry.Tests/ReviewFixed.cs'], since: [] } }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, { 287: { ...WITH_CATCHER[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD, LATER_BARE] } }, { range: unchanged })
+      result = await execute(env)
+      if ((resultOf(287, result).clearedByEarlier || []).some((x) => x.test === CATCHER) || !env.mutations.some((m) => m.test === CATCHER)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}: the catcher was cleared by that record (cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}), though its own break was never mutated`)
+      if (!(resultOf(287, result).clearedByEarlier || []).some((x) => x.test === LIB2)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}: the held ${LIB2} it reproduced is no longer cleared by it (cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)})`)
+      const HELD_CATCHER = { ...HELD, body: HELD.body.replace(`| ${DOCKER} |`, `| ${CATCHER} | broke what the catcher guards | 0 of 71 | did-not-fail: it stayed green | /log/mutation.txt |\n| ${DOCKER} |`) }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, { 287: { ...WITH_CATCHER[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD_CATCHER, LATER_BARE] } }, { range: unchanged })
+      await execute(env)
+      const heldBare = env.mutations.filter((m) => m.prompt.includes('held because')).map((m) => m.test)
+      if (!heldBare.includes(CATCHER) || heldBare.includes(LIB2)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}, itself held earlier: held mutations ${JSON.stringify(heldBare)}, expected ${CATCHER} and not ${LIB2}`)
     }
     env = run({ prs: [287] }, SHAPE, { range, mutate: caught })
     result = await execute(env)
@@ -860,17 +882,58 @@ try {
     }
     // A held test that went red itself is an ordinary reproduction, whatever else failed beside it: it
     // is no catch, needs no acceptance and merges. A same-named method of another class is a catch,
-    // which, unaccepted, reads did-not-fail and holds.
+    // which, unaccepted, reads did-not-fail and holds, and so is one of a class whose name ends in the
+    // held class's name (#694): MyLibraryTests is not LibraryTests, so the match starts at a dot.
     for (const [names, want, verdict] of [
       [[`tools.check_tests.${LIB2}`, `tools.check_tests.${CATCHER}`], 'reproduced', 'merge'],
       [[`tools.check_tests.${LIB2}(case 1)`], 'reproduced', 'merge'],
       [[`tools.check_tests.OtherTests.${LIB2.split('.').pop()}`], 'did-not-fail', 'hold'],
+      [[`tools.check_tests.My${LIB2}`], 'did-not-fail', 'hold'],
     ]) {
       env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('reproduced', names.length, 71), failingNames: names } } })
       result = await execute(env)
       const c = resultOf(287, result)
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // Python unittest's printed forms, 'test_x (pkg.Class.test_x)' and the older 'test_x (pkg.Class)',
+    // name the held test whole (#695): each is an ordinary reproduction, no catch, and merges. A
+    // printed form whose parenthesis names another class is still a catch, and holds. A bare method
+    // is shorter than the held cell's dotted name and could be another class's: it stays a catch.
+    const M2 = LIB2.split('.').pop()
+    for (const [names, want, verdict] of [
+      [[M2], 'did-not-fail', 'hold'],
+      [[`${M2} (tools.check_tests.${LIB2})`], 'reproduced', 'merge'],
+      [[`${M2} (tools.check_tests.LibraryTests)`], 'reproduced', 'merge'],
+      [[`${M2} (tools.check_tests.OtherTests.${M2})`], 'did-not-fail', 'hold'],
+      [[`${M2} (tools.check_tests.OtherTests)`], 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('reproduced', names.length, 71), failingNames: names } } })
+      result = await execute(env)
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // Under a namespace-qualified held cell, the whole name and its unittest printed form are the held
+    // test, while a class-qualified name is shorter than the cell and stays a catch (#695).
+    {
+      const NS = `tools.check_tests.${LIB2}`
+      const NS_HELD = record('https://github.com/o/r/pull/287#issuecomment-2', '2026-10-22T09:00:00Z', H2, 'hold', [
+        [NS, LIB_BREAK, '1 of 71', 'did-not-fail: the named test stayed green'],
+      ])
+      const NS_SHAPE = { 287: { ...SHAPE[287], comments: [NS_HELD], candidates: [lib(NS)] } }
+      for (const [names, want, verdict] of [
+        [[NS], 'reproduced', 'merge'],
+        [[`${M2} (${NS})`], 'reproduced', 'merge'],
+        [[LIB2], 'did-not-fail', 'hold'],
+        [[`OtherTests.${M2}`], 'did-not-fail', 'hold'],
+      ]) {
+        env = run({ prs: [287] }, NS_SHAPE, { range, mutate: { [NS]: { ...row('reproduced', 1, 71), failingNames: names } } })
+        result = await execute(env)
+        const c = resultOf(287, result)
+        const held = (c.mutations || []).find((m) => m.test === NS) || {}
+        if (held.kind !== 'held' || held.result !== want || c.verdict !== verdict) fail(`the held ${NS} failing as ${JSON.stringify(names)}: row ${held.kind} ${held.result}, verdict ${c.verdict}, expected held, ${want} and ${verdict}`)
+      }
     }
     // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
     // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.

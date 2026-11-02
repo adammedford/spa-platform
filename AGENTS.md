@@ -18,7 +18,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |
-| Tickets and specs on the tracker: their shape, body and comments, closing, citing, the human's account, a decision Adam gives in a session, lifecycle | `docs/agents/tracker-policy.md` |
+| Tickets and specs on the tracker: their shape, body and comments, closing, citing, the human's account, a decision Adam gives in a foreground session, lifecycle | `docs/agents/tracker-policy.md` |
 | Launching the review-queue workflow, repairing what a review found | `docs/agents/landing-work.md` -> "Launching the review", `docs/agents/review.md` -> "Repairing findings" |
 | AWS work: the Region, IAM and spend-limit rules of the new AWS experience, before any apply or credential step | `docs/agents/aws-rules.md` |
 
@@ -27,6 +27,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 - **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
 - **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
+- **A commit that changes a steering document names its authority** in an `Authority:` trailer: `#<n>` for the ticket that asks for the change, or the URL of the comment holding a confirmed answer. `.githooks/pre-push` and CI hold a commit that names none; `docs/agents/landing-work.md` has the forms.
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
 - **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.

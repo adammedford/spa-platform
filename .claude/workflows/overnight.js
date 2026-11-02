@@ -9,6 +9,7 @@ export const meta = {
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
+    { title: 'Closing check', detail: 'once every lane has settled, one tools/check.sh --full on the run branch\'s tip judged against the run base, since each integrate judged its merge alone against its first parent (#629); red is reported, and every merge stays' },
     { title: 'Report', detail: 'one issue, Overnight <date>: the report, then the questions Q1..Qn' },
   ],
 }
@@ -97,6 +98,9 @@ const INT_WT = `${WTROOT}/overnight`
 // integrator lane ran its 12 tickets strictly serial: 341 minutes implementing, 179 in review, 96 integrating.
 const WT = (t) => `${WTROOT}/${t.owner}-${t.id}`
 const PORT = (n) => 5100 + 10 * n
+// The closing check's port (#629): PORT(0), which no lane has, since tools/overnight_collect.py numbers tickets from 1.
+const CLOSING_PORT = PORT(0)
+const CLOSING_LOG = `${LOG}/closing-check.txt`
 const TRAILER = 'Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>'
 const SKILLS = (A.skills || SKILLS_DEFAULT).replace(/\/+$/, '')   // no trailing slash, so ${SKILLS}/<name> is one path
 const skill = (name) => `call the Skill tool with "${name}" (if the Skill tool is unavailable or refuses, read ${SKILLS}/${name}/SKILL.md and follow it)`
@@ -119,8 +123,9 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 - Commit messages end with the attribution line "${TRAILER}" (or the one this session's own attribution reminder names, if it differs). Never push.`
 
 // The check is tools/check.sh, run as written (#68): the same file the pre-push hook runs, so a lane
-// never repairs a pasted command again. --base is the fork point a lane is judged against; --port is
-// the lane's own, for the smoke test. Its last line is its verdict. skipTests is the re-run's after a gate red on
+// never repairs a pasted command again. --base is what the check is judged against: a lane's fork point; at
+// integrate, the merge's first parent <old>, so each merge's check judges that merge alone (#629); and the run base
+// once, for the closing check after every lane has settled. --port is the lane's own, for the smoke test. Its last line is its verdict. skipTests is the re-run's after a local check red on
 // test projects the ticket cannot reach (#375): those projects have just passed alone, and the rest of the check,
 // which stopped at the suite, still has to run.
 const GATE = ({ dir, log, kind, fork, port, skipTests }) => `THE CHECK (${kind}). Run it as ONE Bash call with a 600000 ms timeout, output to ${log}:
@@ -142,11 +147,14 @@ const FOREGROUND_WHY = '**Touches:** none, a tracker edit no lane can make; work
 // The change-request route (#409, #421, #436): an integrator need, or a steering change, is filed as an issue
 // labelled change-request, never written as a file. The lane searches first, so two lanes needing one change add
 // edges to one request; it files blocking its ticket only when the ticket needs the change; and when GitHub is
-// unreachable it queues a pending create line in the shape morning.js replays (#433; #421 Q2). Filing one does not
-// depend on the standing answer (#436 Q4): a request asks for a change and decides nothing.
+// unreachable it queues a pending create line in the shape morning.js replays (#433; #421 Q2). Just before it files,
+// tools/ticket_shape.py --since lists what was filed since its search began, so a request another lane filed in
+// between is folded, not filed twice; on exit 2 nothing was searched and the lane queues the line instead, which
+// carries the search's time for the morning's own --since check (#678). Filing one does not depend on the standing
+// answer (#436 Q4): a request asks for a change and decides nothing.
 const REQUEST_LABEL = 'change-request,ready-for-human'
 const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change request is an issue labelled change-request, filed ready-for-human, that asks for a change on an integrator path (OWNERSHIP.md) or to a steering document; it decides nothing, so you file one whether or not a standing answer was granted. Never write it as a file.
-1. Search first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
+1. Search first. Run \`date -u +%FT%TZ\` just before it and keep what it prints as <searched>, the time this search began: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
 2. Only when none asks for it, file one. Write its body to ${LOG}/${t.id}-cr.md (${LOG}/${t.id}-cr2.md for a second, and so on), in this shape:
    **Owner:** integrator
    **Touches:** <each integrator path it changes>
@@ -156,8 +164,8 @@ const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change re
    <what is missing, and where ticket #${t.issue} meets it>
    ## The change
    <the change as it would land, each changed paragraph whole as it will read, with its neighbours when one is inserted or removed>
-   Its title is plain prose with no id prefix. File it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing.
-3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, body: $b}' >> ${PENDING}\`. The morning searches for its title, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
+   Its title is plain prose with no id prefix. Just before filing, search for what was filed since your search (docs/agents/tracker-policy.md; #678), since another lane can file the same request in between: \`cd ${REPO} && python3 -I tools/ticket_shape.py --since <searched> --title "<title>"\`, adding \`--not-duplicate-of <n>[,<n>...]\` for each request you filed earlier tonight. On exit 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing. On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names (\`cd ${REPO} && gh issue view <n> --json title,body,labels,state\`, since the search lists closed issues too): one that asks for the same change is the request, filed since your search, so treat it as step 1 treats an open one and file nothing; name each that does not with \`--not-duplicate-of\` and run the check again, filing only on its exit 0. On any other exit nothing was searched, so file nothing: queue it as step 3 does, and the morning searches again before it files.
+3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --arg s "<searched>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, searched: $s, body: $b}' >> ${PENDING}\`. The morning searches for its title and for what was filed since <searched>, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
 A request blocks ticket #${t.issue} only when the ticket cannot be finished without it; a steering change the ticket does not need blocks nothing. Each request you filed, queued or added an edge to is one entry of "changeRequests": {number (0 when queued), title, blocking (#${t.issue}'s number when it blocks it, else 0), queued (its pending line's number, else 0), filed (true only when you filed it tonight; false when you added an edge to an open one, or queued it)}.`
 
 // ---------------------------------------------------------------- schemas
@@ -265,6 +273,13 @@ const RESET = {
   type: 'object',
   properties: { ok: { type: 'boolean' }, head: { type: 'string' }, notes: { type: 'string' } },
   required: ['ok', 'head', 'notes'],
+}
+// The closing check (#629): ok as the agent read it, the head it ran on, and its log's last line unchanged; the
+// script reads the verdict from that line.
+const CLOSING = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, headSha: { type: 'string' }, lastLine: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'headSha', 'lastLine', 'notes'],
 }
 const RESOLVE = {
   type: 'object',
@@ -481,8 +496,8 @@ Write the message to ${LOG}/${t.id}-merge-message.txt first, with a quoted hered
 A conflict: list the conflicted files with \`git -C ${INT_WT} diff --name-only --diff-filter=U\`, then \`git -C ${INT_WT} merge --abort\`, and return ok=false, mergeSha "", and those paths in conflictFiles. Resolve nothing here: ${retry ? 'this was the one retry, so the ticket is reported with its files' : 'the script sends the ticket back to its lane, which resolves it in the ticket\'s own worktree, and retries once'} (#136, #279). Every other return has conflictFiles [].
 Then run \`python3 -I tools/roadmap.py\` in ${INT_WT}; if it changed README.md or docs/roadmap.md, commit those two alone there, subject "Refresh the generated roadmap blocks after merging ${t.id}". The check below runs the roadmap check, and a lane forked from this tip cannot fix docs/roadmap.md from another owner's paths.
 
-STEP 2 — the integration gate:
-${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: BASE, port: PORT(t.n) })}
+STEP 2 — the integrate step's local check, judged against the merge's first parent <old>, so the diff it judges is this merge and its roadmap refresh, not every merge since the run base (#629). The whole run is judged once, by the closing check after every lane has settled. In the command below, write <old>'s 40-character sha where it says <old>, and nothing else changes: in bash, \`<old>\` itself is a redirect from a file named old, and the check would never run.
+${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: '<old>', port: PORT(t.n) })}
 Red: first record what the script's re-run rule reads (#375), before anything moves: redHead is the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, and <merge> is STEP 1's merge commit (\`git -C ${INT_WT} rev-list --merges --first-parent -n 1 <redHead>\`). Run \`cd ${INT_WT} && python3 -I tools/test_reach.py --log ${LOG}/${t.id}-integrate.txt --base <old> --head <merge>\` and return the one line it prints on standard output, unchanged, as reach; when it exits non-zero, reach is "" and notes quote its last line of standard error. It judges which failed test projects the ticket's merge could reach; you judge nothing from it. Then \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines, old and redHead. Do not fix code here, and re-run nothing: whether the failed projects are re-run is the script's decision, made after you return.
 
 Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise), old (<old> of STEP 1; "" when the merge was not made), redHead and reach (as the red path says; "" when the gate was green or never ran).`
@@ -505,7 +520,8 @@ STEP 2 — each project alone, once: one Bash call per line, each with a 600000 
   ${projects.map((p) => `cd ${INT_WT} && dotnet test --project ${p} --ignore-exit-code 8 > ${rerunLog(t, p)} 2>&1; echo "exit=$?"`).join('\n  ')}
 A project passed when its exit is 0. Run no other project, and never run a project a second time: a project that fails again is the answer.
 STEP 3 — only when every project passed, the rest of the check:
-${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-rerun.txt`, kind: 'integration, the suite skipped', fork: BASE, port: PORT(t.n), skipTests: true })}
+The rest of the check is judged against ${red.old}, the merge's first parent, as the red check was (#629): the same merge's diff, so it earns no companion the first check did not run.
+${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-rerun.txt`, kind: 'integration, the suite skipped', fork: red.old, port: PORT(t.n), skipTests: true })}
 STEP 4 — the verdict. Green, every project passed and the check's last line starts "check: pass:": the merge stays; mergeSha is \`git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD\`. Red, any project failed again or the check is red: \`git -C ${INT_WT} reset --hard ${red.old}\`, and notes begin "re-run failed: " and name each project that failed again with its log, or quote the check's last line. Do not fix code here.
 STEP 5 — record it on the issue: one comment headed "## Flake at integrate" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): each project, its re-run log and whether it passed alone; the first gate's log ${LOG}/${t.id}-integrate.txt; the skip-tests log ${LOG}/${t.id}-rerun.txt and its last line, or that it did not run; and whether the merge stayed or the re-run failed and ${INT_BRANCH} was reset to ${red.old}.
 
@@ -524,6 +540,25 @@ STEP 1 — if \`git -C ${INT_WT} merge-base --is-ancestor ${red.old} HEAD\` succ
 STEP 2 — record it on the issue: one comment headed "## Flake at integrate: merge not kept" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): why the script kept no merge (the reason above), that it overrides any "## Flake at integrate" comment the re-run posted, and whether ${INT_BRANCH} was put back to ${red.old}, found there, or left where it was.
 
 Return ok (true when ${INT_BRANCH} is at ${red.old} on return), head (\`git -C ${INT_WT} rev-parse HEAD\` on return) and notes.`
+
+// The closing check (#629 Q15, Q18). Each integrate step's local check judges its merge alone, against the merge's
+// first parent, which gives up one proof: that a later merge did not break a companion an earlier merge earned without
+// earning it itself. The lanes run in parallel, so which merge is last is unknown until every lane has settled; this
+// check, run once then, restores that proof against the run base. It cannot name the merge that broke it, every merge
+// passed its own check, and CI's run on the landing pull request is the binding proof, so a red one is reported and
+// nothing is reset or held.
+const closingPrompt = () => `Run the closing check of the ${DATE} run on ${INT_BRANCH}: every lane has settled, and each merge's own check judged that merge alone against its first parent (#629), so this one check judges the whole run against the run base ${BASE}, once. No other agent is working in the integration worktree.
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). Change nothing in it: commit, merge, reset, fix and re-run nothing. A red verdict is reported, not acted on, and every merge stays: each passed its own check, this one cannot name the merge that broke it, and CI's run on the landing pull request is the binding proof (#629 Q18).
+
+STEP 0 — durable state: if the first line of ${CLOSING_LOG} is "HEAD=" followed by \`git -C ${INT_WT} rev-parse HEAD\`, and its last line starts "check: pass:" or "check: fail:", the check already ran on this head: go to STEP 2.
+STEP 1 — the closing check, judged against the run base:
+${GATE({ dir: INT_WT, log: CLOSING_LOG, kind: 'closing, judged against the run base', fork: BASE, port: CLOSING_PORT })}
+Run it once: red or green, it is not repaired or re-run.
+STEP 2 — read the log: headSha is the sha after "HEAD=" on its first line, and lastLine its last line, unchanged.
+
+Return ok (true only when lastLine starts "check: pass:"), headSha, lastLine and notes (when the check failed to run, what stopped it).`
 
 // A conflict at integrate (#136): the ticket goes back to its lane (#279), where its branch back-merges the run
 // branch in its own worktree and resolves it there, so the integration worktree never holds a half-resolved merge.
@@ -604,6 +639,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
    - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept", "re-run failed, reset", or, when the entry's "reset" is not "", "not kept: <its why>" and its reset (#397); "none" under the section's own heading when the list is empty;
+   - Closing check (#629): the run results' "closingCheck", under its own heading \`### Closing check\`, the same text every night: its status, its log and its last line quoted unchanged, the head it ran on and the run base it was judged against. "pass" says the whole run was judged once against the run base and passed. "fail" says so plainly, and that every merge was kept, since each passed its own check against its first parent and this one cannot name the merge that broke it, and that there is no morning hold: the landing pull request's CI and required checks hold the landing as the existing rules say. "not-run" gives its why. Never call it a gate;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Foreground (#480): every entry of the run results' "foreground", the tickets collect gave the status foreground, whose "why" is "${FOREGROUND_WHY}": no lane, Route or grill ran, because a tracker edit is worked in a foreground session the next day. List them under a "## Foreground" heading, each as #<issue>, its title and the issue it edits (the #<m> its title or body names as the edit's target, as in "Apply Q4 of Overnight <date> to #248"; "target not named" when neither names one), so Adam opens one session for them; "none" under the heading when the list is empty;
    - Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it, as #482's did not on 2026-10-29), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge (for each open pull request it names, \`git -C ${REPO} merge-tree --write-tree ${INT_BRANCH} <its head>\`, its head being the headRefOid \`cd ${REPO} && gh pr view <n> --json headRefOid\` gives: list every file that conflicts, or "none conflict"; git prints the merged tree's id on its first line, then, on a conflict, the conflicting files (https://git-scm.com/docs/git-merge-tree), and a head not among ${REPO}'s objects exits 1 as a conflict does, so a run whose first line is not a tree id, such as "not something we can merge", reads "not checked: <that line>", never "none conflict" and never a conflict; and when a file conflicts, the Morning steps say which pull request lands first and that the other back-merges main before its review, since GitHub runs no CI on a pull request CONFLICTING with main, as #529 met on 2026-10-29); every ticket cited as #<issue>;
@@ -714,7 +750,8 @@ humanT.forEach((t) => grill(t, ''))
 // order, a ticket blocked on another lane at the head of its lane idled the lane's unblocked work behind it
 // (ws3's free #164 chain behind #151, which waited on the integrator's #145). A ticket is ready when every
 // blocker that is itself one of tonight's agent tickets has settled, integrated or not; a lane with nothing
-// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: by n.
+// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: the most of
+// tonight's lane tickets downstream first, ties by n (#662; see the sort after the close-in-morning tickets leave).
 const done = {}      // id -> Promise<boolean integrated>, one per agent ticket, created before any lane starts
 const settled = {}   // id -> boolean, once its promise settled
 const resolveDone = {}
@@ -738,6 +775,30 @@ closeT.forEach((t) => {
   else resolveDone[t.id](true)
   settled[t.id] = true
 })
+
+// Among a lane's ready tickets, the one with the most of tonight's lane tickets downstream runs first, ties by n
+// (#662). Collect's n orders by plan row and then issue number, which says nothing of what waits: on 2026-10-31 the
+// static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work (#615 to
+// #619) among them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream, so the prep held ten
+// of those back for a night to bring it forward. Downstream is counted once, here, after Route and after the
+// close-in-morning tickets left their lanes: through blockedBy edges, transitively and across lanes, but only through
+// tickets a lane will implement, since a ticket waiting on one that no lane runs is skipped and gains nothing. Each
+// ticket downstream counts once, however many paths reach it.
+{
+  const laneT = Object.values(lanes).flat()
+  const inLane = new Set(laneT.map((t) => t.id))
+  const waiters = {}   // id -> the lane tickets whose blockedBy names it
+  laneT.forEach((d) => d.blockedBy.filter((b) => inLane.has(b)).forEach((b) => { (waiters[b] = waiters[b] || []).push(d.id) }))
+  const downstream = {}
+  laneT.forEach((t) => {
+    const seen = new Set(), stack = [...(waiters[t.id] || [])]
+    while (stack.length) { const d = stack.pop(); if (d === t.id || seen.has(d)) continue; seen.add(d); stack.push(...(waiters[d] || [])) }
+    downstream[t.id] = seen.size
+  })
+  Object.values(lanes).forEach((q) => q.sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n))
+  const ahead = laneT.filter((t) => downstream[t.id]).sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n)
+  if (ahead.length) log(`downstream first: ${ahead.map((t) => `${t.id} (${downstream[t.id]})`).join(', ')}`)
+}
 
 // The forecast (#228), before any lane starts: a lane ticket whose shape collect says will end partial (another owner
 // on its Owner line, or an open box only a sitting, a push or a landing can tick). A ticket with no list (a collect
@@ -935,7 +996,23 @@ const runLane = async (owner, queue) => {
 
 phase('Implement')
 await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, queue)))
-await Promise.all(grillQueue)
+
+// The closing check (#629), once every lane has settled, so no merge lands after it; it runs beside the grills still
+// going, which write no file in the integration worktree. The verdict is read from the log's last line, not from the
+// agent's ok, as the keep rule reads a re-run (#397). A run that integrated nothing has a run branch at its base, so
+// there is nothing to judge.
+const closeRun = async () => {
+  const base = { log: CLOSING_LOG, base: BASE, headSha: '', lastLine: '' }
+  if (!Object.values(results).some((r) => r.stage === 'integrated')) return { ...base, log: '', status: 'not-run', why: 'nothing integrated tonight, so the run branch is its base' }
+  phase('Closing check')
+  const c = await withSlot(() => agent(closingPrompt(), { label: 'closing', phase: 'Closing check', schema: CLOSING }))
+  if (!c) return { ...base, status: 'not-run', why: `the closing-check agent died; its log, if it wrote one, is ${CLOSING_LOG}` }
+  const lastLine = String(c.lastLine || '')
+  const status = /^check: pass:/.test(lastLine) ? 'pass' : 'fail'
+  return { ...base, headSha: c.headSha || '', lastLine, status, why: status === 'pass' ? '' : (c.notes || '') }
+}
+const [closingCheck] = await Promise.all([closeRun(), Promise.all(grillQueue)])
+log(`closing check: ${closingCheck.status}${closingCheck.lastLine ? `: ${closingCheck.lastLine}` : closingCheck.why ? `: ${closingCheck.why}` : ''}`)
 
 phase('Report')
 const foregroundT = tickets.filter((t) => t.status === 'foreground')
@@ -973,6 +1050,7 @@ const summary = {
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
   conflicts, flakes, changeRequests,
+  closingCheck,
   results,
 }
 const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
@@ -1022,6 +1100,7 @@ return {
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   conflicts,
   flakes,
+  closingCheck,
   reasons,
   reportIssue: rep ? rep.issue : null,
   reportUrl: rep ? rep.url : null,
