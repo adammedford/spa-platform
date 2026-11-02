@@ -1996,7 +1996,9 @@ try {
   }
 
   // 25a. The Replay prompt replays a create line idempotently (#433; #421 Q3): it names the verb, then
-  //      searches the open change-request issues for the title before it files, files with the line's
+  //      searches the open change-request issues for the title before it files, then runs
+  //      tools/ticket_shape.py --since from the lane's search time, or its own, and files only on its pass,
+  //      folding a duplicate filed since and filing nothing when nothing was searched (#678), files with the line's
   //      label, checks each blocked ticket's edges before adding one, and checks each ticket's comments
   //      before commenting the number; and the line goes to the progress file only after its last
   //      step, so a morning that crashed midway runs it again and the search finds what it filed.
@@ -2007,7 +2009,13 @@ try {
     if (!/"action": "comment"\|"edit"\|"close"\|"create"/.test(p)) fail('#433: the Replay prompt does not name create among the pending verbs')
     const steps = [
       ['the pending-file check', /`test -e [^`]*\/pending-<date>\.jsonl[^`]*`/],
+      ['the time noted before the title search', /Run `date -u \+%FT%TZ` just before this search and keep what it prints as <now>/],
       ['the title search', /`cd [^`]*gh issue list --state open --label change-request [^`]*--search "<title> in:title"[^`]*`/],
+      ['the line\'s searched time', /the line's "searched" when it is a UTC time as `date -u \+%FT%TZ` writes it[^\n]*else <now>/],
+      ['the --since search', /`cd [^`]*python3 -I tools\/ticket_shape\.py --since <time> --title "<title>"`/],
+      ['the duplicate read', /On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names/],
+      ['the nothing-searched rule', /On any exit but 0 and 1 nothing was searched: file nothing, and the line is a failed line/],
+      ['the pass the create waits on', /On exit 0, its last line starting "ticket-shape: pass:", file it/],
       ['the create', /`cd [^`]*gh issue create --title "<title>" --label change-request,ready-for-human [^`]*`/],
       ['the edge read', /`cd [^`]*gh issue view <ticket> --json blockedBy`/],
       ['the edge add', /`cd [^`]*gh issue edit <ticket> --add-blocked-by <number>`/],
@@ -2022,6 +2030,7 @@ try {
       else last = w
     }
     if (!/found[^\n]*files nothing/.test(p)) fail('#433: the Replay prompt does not say a title already found files nothing')
+    if (!/one that asks for the same change is the request, found already filed[^\n]*files nothing/.test(p)) fail('#678: the Replay prompt does not fold a possible duplicate that asks the same change into the request found')
     if (!/progress file only once its last step/.test(p)) fail('#433: the Replay prompt does not hold a create line out of the progress file until its last step')
     if (!/If neither exists(?:(?!If only)[^\n])*skip to step 3/.test(p)) fail('#433: the create steps broke the no-pending-file sentence')
   }
