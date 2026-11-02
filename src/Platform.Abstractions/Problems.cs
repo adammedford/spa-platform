@@ -74,6 +74,14 @@ public static class Problems
     /// <summary>503. The identity provider could not be reached to refresh the token; the session is kept.</summary>
     public const string IdpUnavailable = "idp_unavailable";
 
+    /// <summary>
+    /// 503. A session store operation failed or ran out <c>StoreDeadline</c>; no cookie is cleared and
+    /// the session, if it exists, is kept. The <c>continuity</c> spec's F17 row (#332), landed with
+    /// G3's tag (#343). Distinct from <see cref="IdpUnavailable"/>, so that a store outage and a
+    /// provider outage stay distinguishable causes.
+    /// </summary>
+    public const string SessionStoreUnavailable = "session_store_unavailable";
+
     /// <summary>504. The upstream exceeded the entry's timeout.</summary>
     public const string UpstreamTimeout = "upstream_timeout";
 
@@ -95,6 +103,7 @@ public static class Problems
         (StatusCodes.Status500InternalServerError, ShellUnavailable),
         (StatusCodes.Status502BadGateway, UpstreamUnavailable),
         (StatusCodes.Status503ServiceUnavailable, IdpUnavailable),
+        (StatusCodes.Status503ServiceUnavailable, SessionStoreUnavailable),
         (StatusCodes.Status504GatewayTimeout, UpstreamTimeout),
     ];
 

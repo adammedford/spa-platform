@@ -47,6 +47,7 @@ public static class Rejection
         (RuleIds.CsrfToken, Problems.CsrfFailed),
         (RuleIds.AuthSession, Problems.Unauthenticated),
         (RuleIds.ApiUnknown, Problems.UnknownApi),
+        (RuleIds.AuthStore, Problems.SessionStoreUnavailable),
     ];
 
     /// <summary>

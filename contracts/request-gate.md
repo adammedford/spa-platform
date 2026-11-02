@@ -61,6 +61,7 @@ table below and fails if the two drift. ADR-0015 decided it.
 | `auth.callback` | Any refused login callback | — |
 | `auth.session` | A cookie that resolves to no session for this app | `unauthenticated` |
 | `api.unknown` | The app lists no upstream under that name | `unknown_api` |
+| `auth.store` | A session store operation failed or ran out `StoreDeadline` (the `continuity` spec's F17) | `session_store_unavailable` |
 
 `auth.callback` ends on no problem body: the OpenID Connect handler's remote-failure event writes
 the static failure page `contracts/http-contract.md` → Errors describes, under that id.
