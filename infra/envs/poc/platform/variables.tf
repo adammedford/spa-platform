@@ -148,11 +148,22 @@ variable "allowed_upstreams" {
   default     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
 }
 
-# --- Continuity (#347 Q7): the inputs #338 gave the cell, passed through ---------------------------
+# --- Continuity (#347 Q7): the inputs #338 and #347 gave the cell, passed through ----------------
 #
 # Each defaults to Phase 1's value, so a terraform.tfvars that names none of them plans the one-task
 # cell G3 ran. The G6 sitting (#348) sets them in its untracked terraform.tfvars; the values are in
-# terraform.tfvars.example. The module holds each value's rule and refuses dynamodb with no prefix.
+# terraform.tfvars.example. The module holds each value's rule, refuses dynamodb with no prefix and
+# refuses multi_task without dynamodb.
+
+variable "multi_task" {
+  description = <<-EOT
+    The two-task cell of #332 D6 (true) or Phase 1's one public task (false): two tasks in two
+    private subnets behind one NAT gateway and the S3 and DynamoDB gateway endpoints. The module's
+    rule: true needs session_store = "dynamodb".
+  EOT
+  type        = bool
+  default     = false
+}
 
 variable "session_store" {
   description = <<-EOT

@@ -7,7 +7,9 @@
 # address. The resource-type allowlist in tests/module.tftest.hcl fails on any of
 # the three, P-01 in the platform root's tests fails on them whatever that
 # allowlist says, and tests/network.tftest.hcl fails on any ingress rule beyond
-# the two below.
+# the two below. The one exception is the two-task cell's private half at the end
+# of this file, planned only under multi_task (#347), whose NAT gateway P-01
+# admits in that one gated form (#583).
 
 data "aws_availability_zones" "available" {
   state = "available"
@@ -48,7 +50,8 @@ resource "aws_vpc" "cell" {
 
 # The public address the task sends 443 out from. This is what stands in for a NAT
 # gateway, and it is the saving: a NAT gateway is about $33 a month, more than
-# everything else in this cell together.
+# everything else in this cell together. Under multi_task (#347) it is the NAT
+# gateway's route out instead.
 resource "aws_internet_gateway" "cell" {
   vpc_id = aws_vpc.cell.id
 
@@ -181,4 +184,85 @@ resource "aws_default_security_group" "cell" {
   egress  = []
 
   tags = { Name = "${local.name_prefix}-default" }
+}
+
+# --- Continuity (#347, #332 D6): the private half, behind multi_task -----------------------------------
+#
+# Two private subnets at cidrsubnet indices 2 and 3, one per zone, each with its own route table so
+# that a second NAT gateway, or a regional one, is a route change and nothing else (#347 Q11); one
+# NAT gateway in the first zone's public subnet, which is the saving over one per zone (about $33 a
+# month each) and the reason zone failure stays out of G6's scope (#332 F15); and the S3 and DynamoDB
+# gateway endpoints on both private tables, which carry the registry, the releases and the session
+# table past the NAT at no charge. The NAT carries what has no gateway endpoint: Parameter Store, ECR,
+# CloudWatch Logs, ssmmessages for the tunnel and the provider's OAuth endpoints. The task security
+# group's egress stays 443 alone (task_https_out above). Every declaration here plans no instance on
+# the default inputs, which is what P-01 reads (change request on #347).
+
+resource "aws_subnet" "private" {
+  for_each = var.multi_task ? { for index, zone in local.zones : zone => index } : {}
+
+  vpc_id            = aws_vpc.cell.id
+  availability_zone = each.key
+  cidr_block        = cidrsubnet(var.vpc_cidr, local.subnet_newbits, each.value + 2)
+
+  # No public address: the task has none, which is P-06's second sentence under this shape.
+  map_public_ip_on_launch = false
+
+  tags = { Name = "${local.name_prefix}-private-${each.key}" }
+}
+
+# The NAT gateway's address: a new allowlisted type (#347 Q2), released with the gateway.
+resource "aws_eip" "nat" {
+  count = var.multi_task ? 1 : 0
+
+  domain = "vpc"
+
+  tags = { Name = "${local.name_prefix}-nat" }
+}
+
+resource "aws_nat_gateway" "egress" {
+  count = var.multi_task ? 1 : 0
+
+  subnet_id     = aws_subnet.public[local.zones[0]].id
+  allocation_id = aws_eip.nat[0].id
+
+  tags = { Name = local.name_prefix }
+
+  # The provider's own note: the internet gateway first, or the NAT gateway cannot be created.
+  depends_on = [aws_internet_gateway.cell]
+}
+
+resource "aws_route_table" "private" {
+  for_each = aws_subnet.private
+
+  vpc_id = aws_vpc.cell.id
+
+  tags = { Name = "${local.name_prefix}-private-${each.key}" }
+}
+
+resource "aws_route" "private_egress" {
+  for_each = aws_route_table.private
+
+  route_table_id         = each.value.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.egress[0].id
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = aws_subnet.private
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private[each.key].id
+}
+
+# AWS's default policy on both (#347 Q15): a destination allowlist is P2-9's, not this row's.
+resource "aws_vpc_endpoint" "gateway" {
+  for_each = var.multi_task ? toset(["s3", "dynamodb"]) : toset([])
+
+  vpc_id            = aws_vpc.cell.id
+  service_name      = "com.amazonaws.${data.aws_region.current.region}.${each.key}"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [for table in aws_route_table.private : table.id]
+
+  tags = { Name = "${local.name_prefix}-${each.key}" }
 }

@@ -427,3 +427,31 @@ variable "log_retention_days" {
     error_message = "log_retention_days must be one of the retention periods CloudWatch Logs accepts, and not 0, which means never expire."
   }
 }
+
+# --- Continuity (#347): the two-task shape ----------------------------------------------------------
+
+variable "multi_task" {
+  description = <<-EOT
+    The two-task shape of #332 D6, or Phase 1's one public task (false). True sets the whole shape
+    at once (#347 Q4): desired_count 2 over two private subnets in two zones with no public
+    address, availability-zone rebalancing on, one NAT gateway with its Elastic IP in the first
+    zone's public subnet, a private route table per zone routing out through it, and the S3 and
+    DynamoDB gateway endpoints on both. The load balancer stays in the public subnets.
+  EOT
+  type        = bool
+  default     = false
+
+  # Two tasks on in-memory sessions and per-task key rings would sign users out at random (#347
+  # Q12), so the switch needs the durable store, which needs the shared ring (session_store's rule).
+  validation {
+    condition     = !var.multi_task || var.session_store == "dynamodb"
+    error_message = "multi_task = true needs session_store = \"dynamodb\": two tasks on the memory store hold two session sets, and a request that lands on the other task is signed out (#347 Q12)."
+  }
+
+  # Four /24 subnets under the switch, so the range is /22 or larger; vpc_cidr's own rule holds /23
+  # for Phase 1's two.
+  validation {
+    condition     = !var.multi_task || tonumber(split("/", var.vpc_cidr)[1]) <= 22
+    error_message = "multi_task = true carves four /24 subnets out of vpc_cidr, two public and two private, so the range is /22 or larger."
+  }
+}
