@@ -950,7 +950,7 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
     if (since < 0 || since > create) fail(`#678: the ${c.label} prompt does not run ${SINCE_CHECK} after its search and before its create`)
     else {
       const step = c.prompt.slice(since, create)
-      for (const rule of ['On exit 0, its last line starting "ticket-shape: pass:", file it', 'On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names', 'name each that does not with `--not-duplicate-of', 'On any other exit nothing was searched, so file nothing'])
+      for (const rule of ['On exit 0, its last line starting "ticket-shape: pass:", file it', 'On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names', 'gh issue view <n> --json title,body,labels,state`', 'name each that does not with `--not-duplicate-of', 'On any other exit nothing was searched, so file nothing'])
         if (!c.prompt.slice(since).includes(rule)) fail(`#678: the ${c.label} prompt's --since step lacks "${rule}"`)
       if (!step.includes('On exit 0')) fail(`#678: the ${c.label} prompt files before it says the --since check must pass`)
       if (!sinceRecipe) sinceRecipe = (/`cd \S+ && (python3 -I tools\/ticket_shape\.py --since <searched> --title "<title>")`/.exec(c.prompt.slice(since - 1)) || [])[1]
