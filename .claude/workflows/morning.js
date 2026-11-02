@@ -55,7 +55,8 @@ export const meta = {
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, one body reader
 // per batch of the questions and Confirm comments, 1 classifier and at most maxParallel appliers,
 // Follow-ups 1 reader and at most 1 filer (#292), Hand-over 1: ten at the default, besides the body
-// readers. The issue lookup is the Replay agent's first step, not an agent of its own. A re-run
+// readers and their re-reads, at most READ_RETRIES for each comment a reader returned changed (#724).
+// The issue lookup is the Replay agent's first step, not an agent of its own. A re-run
 // whose open pull request's description names an older head than the branch's adds one, the
 // description writer (#300), so such a run may take eleven. The after pass (#635 Q27): 1 cleanup
 // agent, whose first step is the lookup, then Apply's 1 comments index, the body readers, 1
@@ -1114,6 +1115,20 @@ const MIN_VISIBLE = 40
 const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*)?$/
 const undecidableHead = (head) => head.length >= HEAD_CHARS &&
   (head.trim().length < MIN_VISIBLE || (!head.includes('\n') && HEADING_CUT.test(head.trim())))
+// A body the reader returned must be the one the index describes: the same length in bytes and the same
+// first HEAD_CHARS characters (jq slices by character). A reader that drops or rewrites any of it is
+// caught here, whatever the markup, and the comment is read again alone, READ_RETRIES times.
+const READ_RETRIES = 2
+const RETRY_NOTE = `\n3. A previous read of this comment came back changed. Return its body exactly as gh printed it: every character, every \`**\` and \`Q<n>.\` marker, nothing summarised, reworded or cleaned up.`
+const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = ch.codePointAt(0); n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4 } return n }
+const bodyFault = (c, ix) => {
+  if (!c || !ix) return 'the index has no such comment'
+  const body = String(c.body || '')
+  const bytes = utf8Bytes(body)
+  if (bytes !== ix.bytes) return `${bytes} bytes returned, ${ix.bytes} in the index`
+  if (Array.from(body).slice(0, HEAD_CHARS).join('') !== String(ix.head || '')) return 'its first characters differ from the index'
+  return ''
+}
 const batchesOf = (indexed) => {
   const out = []
   let cur = null
@@ -1470,14 +1485,30 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
     const batches = batchesOf(cr.issue.comments || [])
     const got = await parallel(batches.map((b, k) => () => run(batchPrompt(issue, b.at), { label: `comments-batch:${k + 1}`, phase: 'Apply', schema: COMMENTS_BATCH })))
     const bad = []
-    batches.forEach((b, k) => {
+    const index = cr.issue.comments || []
+    for (let k = 0; k < batches.length; k++) {
+      const b = batches[k]
       const g = got[k]
       const urls = g && !g.error ? (g.comments || []).map((c) => c.url) : []
-      if (!g) bad.push(`batch ${k + 1} (${b.urls.join(', ')}) returned nothing`)
-      else if (g.error) bad.push(`batch ${k + 1} (${b.urls.join(', ')}): ${g.error}`)
-      else if (urls.join(' ') !== b.urls.join(' ')) bad.push(`batch ${k + 1} returned ${urls.join(', ') || 'no comment'}, not ${b.urls.join(', ')}`)
-      else comments.push(...g.comments)
-    })
+      if (!g) { bad.push(`batch ${k + 1} (${b.urls.join(', ')}) returned nothing`); continue }
+      if (g.error) { bad.push(`batch ${k + 1} (${b.urls.join(', ')}): ${g.error}`); continue }
+      if (urls.join(' ') !== b.urls.join(' ')) { bad.push(`batch ${k + 1} returned ${urls.join(', ') || 'no comment'}, not ${b.urls.join(', ')}`); continue }
+      // A reader is a model, and it has returned a comment with a character or a line changed (2026-11-02:
+      // "**Q46.** Source:" came back as "Source:", then as "From", on two runs; #724). Each body is checked
+      // against the index, which the jq printed; a comment that differs is read again alone, and one that
+      // still differs is named, never sorted.
+      for (let j = 0; j < b.at.length; j++) {
+        let c = g.comments[j]
+        let why = bodyFault(c, index[b.at[j]])
+        for (let tries = 1; why && tries <= READ_RETRIES; tries++) {
+          const r = await run(batchPrompt(issue, [b.at[j]]) + RETRY_NOTE, { label: `comments-batch:${k + 1}-retry${tries}`, phase: 'Apply', schema: COMMENTS_BATCH })
+          const rc = r && !r.error && (r.comments || []).length === 1 && r.comments[0].url === b.urls[j] ? r.comments[0] : null
+          if (rc) { c = rc; why = bodyFault(rc, index[b.at[j]]) }
+        }
+        if (why) bad.push(`${b.urls[j]} was not returned as the index shows it after ${READ_RETRIES} re-reads: ${why}`)
+        else comments.push(c)
+      }
+    }
     if (bad.length) {
       commentsRefusal = `the comments of #${issue} were not all read: ${bad.join('; ')}; nothing was sorted or applied; relaunch to apply`
       comments = []

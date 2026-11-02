@@ -295,7 +295,10 @@ function stub(env, scriptArgs, served) {
         // that returns another comment than the one named.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
-        out = { comments: at.map((i) => issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i]), error: '' }
+        // served.mangle: 'first' drops the **Q<n>.** marker from every question body the batch reader
+        // returns but not from a re-read (label ends -retry<n>); 'always' drops it from both.
+        const mangled = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
+        out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
         const head = v.head || HEAD
@@ -1405,6 +1408,14 @@ try {
     const longNote = comment(45, ' '.repeat(130) + 'A review note of some length, ' + 'n'.repeat(80) + '\nAnd more.\n', '2026-10-21T09:50:00Z')
     const noted = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longNote]) })
     if (cutAt(noted) !== '0') fail(`a long note: the batch reads ${cutAt(noted)}, expected 0: only a comment the readers could read is fetched`)
+    // A reader that changes a body (2026-11-02: a dropped **Q46.** marker, twice) is caught against the
+    // index: re-read alone it is accepted, and a body still changed after the re-reads is refused by name.
+    const first = await execute(newRepo(), { date: DATE }, { mangle: 'first' })
+    if (!first.labels.some((l) => /^comments-batch:\d+-retry1$/.test(l))) fail(`a changed body: no re-read: ${first.labels.join(', ')}`)
+    if (first.result.refusals.length || !first.result.apply.answers[4]) fail(`a changed body, faithful on re-read: not read: ${JSON.stringify(first.result.refusals)}`)
+    const always = await execute(newRepo(), { date: DATE }, { mangle: 'always' })
+    if (!always.result.refusals.some((x) => /was not returned as the index shows it after 2 re-reads/.test(x))) fail(`a body changed on every read: not refused: ${JSON.stringify(always.result.refusals)}`)
+    if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
     if (!stopped.labels.includes('comments') || !/### Open questions\n\n- Q4\n/.test(stopped.result.handover.text)) fail(`a Verify stop: the comments were not read for the hand-over's open questions: ${stopped.labels.join(', ')}`)
