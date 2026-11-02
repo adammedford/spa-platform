@@ -117,6 +117,16 @@ a label or a line in the body (ADR-0020):
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
+**The derived labels say what an issue is, never where it stands.** Beside the triage labels an
+issue carries three groups, `kind:`, `area:` and `vendor:`, and no session chooses them or adds or
+removes one by hand. A workflow derives them: `tools/issue_labels.py` works them out from the issue
+alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
+`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them on every issue event
+and in a daily run over every open issue. A ticket's `**Vendor:**` line is where its filer records
+what its paths cannot show: `none`, or the vendors it ties the work to, by the names
+`tools/issue_labels.json` defines. A wrong label is fixed in the title, the Touches or Vendor line or
+the table, never on the label.
+
 The archive's `**Status:**` lines (`claimed`, `blocked`, `resolved`, `closed`, `partial`, `moved to #NNN`)
 are dated records of the tickets filed before ADR-0020. Read them as history; never write one, and
 never take one for the current state of a moved ticket, whose issue holds it.
