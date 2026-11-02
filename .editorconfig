@@ -37,7 +37,8 @@ csharp_style_expression_bodied_local_functions = when_on_single_line
 # the same five Directory.Build.props reads for SpaRelaxedTier. Each line is a permanent relaxation,
 # true of test and tool code by its nature, at none, with its reason on the line above it. A rule that
 # is merely not yet clean here rides the ramp in .globalconfig instead, and a security rule is never
-# relaxed. tools/check.sh's analysis guard holds the section to those rules.
+# relaxed, here or in any other section or analyzer config. tools/check.sh's analysis guard holds
+# the section, and every analyzer config's security lines, to those rules.
 [{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]
 # Test names use underscores as sentences, and xunit has no suppressor for it.
 dotnet_diagnostic.CA1707.severity = none
