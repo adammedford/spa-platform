@@ -27,7 +27,11 @@
 // Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
 // which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
 // main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
-// (#629). No agent, gh or git call is made.
+// (#629). Every implement must fork from the last verified tip, or the run base before any gate passed, never from a
+// merge still under its gate; and a run of its own, on tickets whose Touches paths overlap, proves the path waits:
+// equal paths and directory containment wait, a textual prefix does not, waits point backwards by n, a failed
+// predecessor releases its waiter, no readable path waits on its lane, a cycle with a blocked-by edge is dropped, and
+// each wait is reported with its paths and clocked minutes (#665). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -125,6 +129,10 @@ const reviewCalls = {}     // id -> review calls so far, so a ticket's first and
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
 const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
+// Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
+// above keep their meaning: a ticket with no readable path would wait on every earlier ticket of its lane. Check 33
+// runs a ticket set of its own whose paths overlap.
+for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
 const TESTS_FAILED = 'check: fail: the tests failed.'
@@ -1209,6 +1217,191 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
     if (!claimed.result.closingCheck || claimed.result.closingCheck.status !== 'fail') fail(`#629: an ok whose last line is a failure reads as ${JSON.stringify(claimed.result.closingCheck)}, not fail`)
     const green = await shortRun([SOLO], { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: A-05, the roadmap.', notes: '' })
     if (!green.result.closingCheck || green.result.closingCheck.status !== 'pass') fail(`#629: a green closing check reads as ${JSON.stringify(green.result.closingCheck)}, not pass`)
+  }
+}
+
+// 33. Every implement forks from the run branch's last verified tip, or the run base before any gate has passed (#665;
+//     #659 Q2): never the branch's tip as read, which may be a merge still under its gate, which a red gate resets
+//     away. The main run's mocked integrates are in progress between their start and end, and only an integrate that
+//     answered green has a verified head, so each implement prompt's fork is the last green head before it started.
+const RUN_BASE_665 = 'a'.repeat(40)
+const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take that sha, never/.exec(prompt) || [])[1]
+{
+  const implStarts = events.filter((e) => e.kind === 'implement' && e.edge === 'start')
+  let duringMerge = 0, beforeGreen = 0
+  for (const s of implStarts) {
+    const c = allPrompts.find((x) => x.label === `implement:${s.id}`)
+    const fork = c && forkOf(c.prompt)
+    if (!fork) { fail(`#665: the implement prompt of ${s.id} names no fork sha`); continue }
+    if (c.prompt.includes(`forkSha = \`git -C ${fixture.args.repo} rev-parse overnight/`)) fail(`#665: the implement prompt of ${s.id} still forks from the branch's tip as read`)
+    const before = greens.filter((g) => g.at < s.at), same = greens.filter((g) => g.at === s.at).map((g) => g.head)
+    const want = before.length ? before[before.length - 1].head : RUN_BASE_665
+    if (fork !== want && !same.includes(fork)) fail(`#665: ${s.id} forks from ${fork}, not ${want}, the last verified tip when it started`)
+    if (!before.length) beforeGreen++
+    // An integrate running when this implement started: its head is not yet verified, so it is never the fork.
+    const running = events.filter((e) => e.kind === 'integrate' && e.edge === 'start' && e.at < s.at
+      && !events.some((x) => x.kind === 'integrate' && x.edge === 'end' && x.n === e.n && x.at <= s.at))
+    if (running.length) duringMerge++
+    for (const r of running) if (fork === `verified-${r.id}`) fail(`#665: ${s.id} forks from ${fork}, the head of a merge still under its gate`)
+  }
+  if (!duringMerge) fail('#665: no implement started while a merge was under its gate, so the in-progress check read nothing')
+  if (!beforeGreen) fail('#665: no implement started before any gate passed, so the run-base fallback check read nothing')
+}
+
+// 34. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
+//     to start its implement until every earlier ticket by n, in any lane, whose paths are equal to or a directory
+//     holding its own has settled with any outcome; a textual prefix alone is no overlap; a ticket with no readable
+//     path waits on every earlier ticket of its lane, saying why; a wait that would close a cycle with a blocked-by edge
+//     is dropped; each wait is logged in the confirmed form and reported with its paths and elapsed minutes; and a
+//     conflict before any gate has passed back-merges the run base.
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${1000 + n}`, slug: `p${n}`, issue: 1000 + n, url: `https://example.invalid/${1000 + n}`,
+    title: `Path ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${1000 + n}`
+  const set = [
+    T(1, 'integrator', ['tools/shared.py']),                    // A: fails at implement
+    T(2, 'ws6-verification', ['tools/shared.py']),              // B: equal path, another lane
+    T(3, 'ws2-hosting', ['tools/']),                            // C: a directory holding A's and B's path
+    T(5, 'ws5-fixtures', ['fixtures/Mock']),                    // E
+    T(6, 'ws3-identity', ['fixtures/MockApi/Program.cs']),      // D: a textual prefix of E's, no overlap
+    T(7, 'ws4-proxy', ['fixtures/Mock*']),                      // G: a glob segment holding E's and D's
+    T(8, 'integrator', ['docs/x.md'], [id(10)]),                // H: starts late, behind its blocker J
+    T(9, 'ws6-verification', ['docs']),                         // I: later by n, so it waits on H, though H starts after it could
+    T(10, 'ws1-infra', ['infra/a.tf']),                         // J: slow
+    T(11, 'integrator', []),                                    // M: no readable path
+    T(12, 'integrator', ['other/n.txt']),                       // N: readable, behind M in its lane
+    T(13, 'ws2-hosting', ['cyc/a'], [id(14)]),                  // K1: needs K2
+    T(14, 'ws6-verification', ['cyc/a']),                       // K2: a path wait on K1 would close a cycle
+    T(15, 'ws6-verification', ['zz/z'], [id(1)]),               // Z: a real blocker on A, which fails
+  ]
+  const pById = Object.fromEntries(set.map((t) => [t.id, t]))
+  const ev = [], logged = [], prompts = [], clocks = {}
+  const pGreens = []
+  let k = 0
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'clock') { clocks[`${tid}:${edge}`] = tick; return { epoch: tick * 6 } }   // one tick reads as a tenth of a minute
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    const n = ++k
+    ev.push({ at: tick, kind, id: tid, edge: 'start', n })
+    await sleep(kind === 'implement' ? (tid === id(10) ? 150 : 25) : 15)
+    ev.push({ at: tick, kind, id: tid, edge: 'end', n })
+    if (kind === 'implement' && tid === id(1)) return { outcome: 'failed', branch: 'b', forkSha: 'f', headSha: 'f', complete: false, outstanding: '', summary: 'failed on purpose', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') { pGreens.push({ at: tick, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' } }
+    throw new Error(`unexpected agent label ${opts.label} in the path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  // The main run's tick stopped with it; this run keeps time of its own.
+  const pathTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(pathTick)
+  if (r === STALLED) fail('#665: the path-wait run did not finish: a wait never released, or two waits formed a cycle')
+  else {
+    const startOf = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).at
+    const settledAt = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.at))
+    const waitLine = (w, b, paths) => `${id(w)}: waiting to start behind ${id(b)} (${paths})`
+    const hasLine = (s) => logged.some((l) => l.text === s)
+    const waitsBehind = (w, b) => logged.some((l) => l.text.startsWith(`${id(w)}: waiting to start behind ${id(b)} (`))
+    const after = (w, b, why) => { const s = startOf(id(w)); if (s === undefined || s < settledAt(id(b))) fail(`#665: ${id(w)} started at ${s}, before ${id(b)} settled at ${settledAt(id(b))} (${why})`) }
+    // Equal paths, across lanes, behind a predecessor that fails: the waiter is released and integrates.
+    if (!hasLine(waitLine(2, 1, 'tools/shared.py'))) fail(`#665: no "${waitLine(2, 1, 'tools/shared.py')}" line: equal paths did not wait`)
+    after(2, 1, 'equal paths')
+    // Directory containment on whole segments.
+    if (!hasLine(waitLine(3, 1, 'tools, tools/shared.py')) || !hasLine(waitLine(3, 2, 'tools, tools/shared.py'))) fail('#665: a directory holding an earlier ticket\'s path did not wait on it: ' + JSON.stringify(logged.filter((l) => l.text.startsWith(id(3))).map((l) => l.text)))
+    after(3, 2, 'directory containment')
+    // A textual prefix alone is no overlap.
+    if (waitsBehind(6, 5)) fail(`#665: ${id(6)} (fixtures/MockApi/Program.cs) waited behind ${id(5)} (fixtures/Mock), a textual prefix only`)
+    if ((r.pathWaits || []).some((w) => w.id === id(6))) fail(`#665: the run reports a path wait for ${id(6)}, whose paths overlap no earlier ticket's`)
+    // A glob segment holds what it matches.
+    if (!waitsBehind(7, 5) || !waitsBehind(7, 6)) fail(`#665: ${id(7)}'s fixtures/Mock* did not wait on the paths it matches`)
+    // Strictly backwards by n: I waits on H, which has the lower n though it starts later; H never waits on I.
+    if (!hasLine(waitLine(9, 8, 'docs, docs/x.md'))) fail(`#665: ${id(9)} did not wait on ${id(8)}, the earlier ticket by n`)
+    if (waitsBehind(8, 9)) fail(`#665: ${id(8)} waited on ${id(9)}, a later ticket by n`)
+    after(9, 8, 'backwards by n'); after(8, 10, 'its blocker')
+    // No readable path: every earlier ticket of its lane, and none of another lane's, with the reason.
+    const reason = `every path: ${id(11)} has no readable Touches path (no Touches line, or one naming no path)`
+    if (!hasLine(waitLine(11, 1, reason)) || !hasLine(waitLine(11, 8, reason))) fail(`#665: ${id(11)}, with no readable path, did not wait on every earlier ticket of its lane naming why: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(11))).map((l) => l.text)))
+    if (waitsBehind(11, 2) || waitsBehind(11, 3)) fail(`#665: ${id(11)}, with no readable path, waited on a ticket of another lane`)
+    if (!hasLine(waitLine(12, 11, reason))) fail(`#665: ${id(12)} did not wait on ${id(11)}, the earlier ticket of its lane with no readable path`)
+    after(11, 8, 'no readable path'); after(12, 11, 'behind no readable path')
+    // A path wait that would close a cycle with a blocked-by edge is dropped and said so.
+    if (waitsBehind(14, 13)) fail(`#665: ${id(14)} waits on ${id(13)}, which needs it by a blocked-by edge`)
+    if (!logged.some((l) => l.text.startsWith(`${id(14)}: no path wait behind ${id(13)} (cyc/a): `))) fail(`#665: the dropped wait of ${id(14)} behind ${id(13)} is not logged`)
+    // The wait orders two tickets, the edge means one needs the other: a failed predecessor releases its waiters,
+    // and a real blocker on it still skips.
+    const want = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].map(id)
+    for (const x of want) if (!(r.integrated || []).includes(x)) fail(`#665: ${x} did not integrate: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    if (!(r.failed || []).includes(id(1))) fail(`#665: ${id(1)} is not reported failed`)
+    const z = (r.reasons || []).find((y) => y.id === id(15))
+    if (!(r.skipped || []).includes(id(15)) || !z || !z.reason.includes(`blocker not integrated: ${id(1)}`)) fail(`#665: ${id(15)}, blocked by the failed ${id(1)}, is not skipped for it: ${JSON.stringify(z)}`)
+    if (startOf(id(15)) !== undefined) fail(`#665: ${id(15)} started although its blocker failed`)
+    // Each wait is reported with its paths and its elapsed minutes, read from the clock agents at its start and end.
+    const waits = Object.fromEntries((r.pathWaits || []).map((w) => [w.id, w]))
+    for (const x of [2, 3, 7, 9, 11, 12].map(id)) {
+      const w = waits[x]
+      if (!w) { fail(`#665: the run's pathWaits hold no entry for ${x}`); continue }
+      const s = clocks[`${x}:start`], e = clocks[`${x}:end`]
+      if (s === undefined || e === undefined) { fail(`#665: ${x}'s wait was not clocked at its start and end`); continue }
+      if (w.minutes !== (e - s) / 10) fail(`#665: ${x}'s wait reads ${w.minutes} minutes, not ${(e - s) / 10}, the clocks' difference`)
+      if (!(e > s)) fail(`#665: ${x}'s wait was clocked to end at ${e}, not after its start at ${s}`)
+      if (e < Math.max(...w.behind.map((b) => settledAt(b.id)))) fail(`#665: ${x}'s wait was clocked to end at ${e}, before its last predecessor settled`)
+      if (startOf(x) !== undefined && startOf(x) < e) fail(`#665: ${x} started at ${startOf(x)}, before its wait ended at ${e}`)
+      if (w.behind.some((b) => !Array.isArray(b.paths) || !b.paths.length || !b.issue)) fail(`#665: ${x}'s wait does not give each predecessor's issue and paths: ${JSON.stringify(w.behind)}`)
+    }
+    const rep = prompts.find((x) => x.label === 'report')
+    const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+    if (!sum || JSON.stringify(sum.pathWaits) !== JSON.stringify(r.pathWaits)) fail('#665: the report\'s results do not carry the run\'s pathWaits')
+    const item = rep ? (rep.prompt.split('\n').find((l) => l.includes('- Path waits (#665)')) || '') : ''
+    for (const rule of ['`### Path waits`', 'the paths the entry gives', 'elapsed minutes', '"not measured"', 'It claims no conflict saved']) if (!item.includes(rule)) fail(`#665: the report prompt's Path waits item lacks "${rule}"`)
+    // Forks in this run too: the last green head before each implement started, or the run base.
+    for (const s of ev.filter((e) => e.kind === 'implement' && e.edge === 'start')) {
+      const fork = forkOf((prompts.find((x) => x.label === `implement:${s.id}`) || {}).prompt || '')
+      const before = pGreens.filter((g) => g.at < s.at), same = pGreens.filter((g) => g.at === s.at).map((g) => g.head)
+      const want2 = before.length ? before[before.length - 1].head : RUN_BASE_665
+      if (fork !== want2 && !same.includes(fork)) fail(`#665: in the path-wait run ${s.id} forks from ${fork}, not ${want2}`)
+    }
+  }
+  // Collect copies the tool's paths and reads no Touches line itself.
+  for (const c of allPrompts.filter((x) => x.label === 'collect')) {
+    if (!c.prompt.includes('Give each ticket in "tickets" the "touches" list of the tool\'s ticket with the same issue number, copied as printed (#665)')) fail('#665: the collect prompt does not copy each ticket\'s touches from tools/overnight_collect.py')
+    if (!c.prompt.includes('never read a Touches line yourself')) fail('#665: the collect prompt lets the agent read a Touches line')
+  }
+  // A conflict before any integration gate has passed back-merges the run base, never the branch's tip as read.
+  {
+    const solo = T(1, 'integrator', ['solo/a'])
+    const seen = []
+    let merged = 0
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [] }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      seen.push({ label: opts.label, prompt })
+      const [kind] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: [{ ...solo }], landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: RUN_BASE_665, headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['solo/a'] }
+      if (kind === 'integrate') return ++merged === 1 ? { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: ['solo/a'], headSha: '', old: '', redHead: '', reach: '' }
+        : { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: 'v'.repeat(40), old: '', redHead: '', reach: '' }
+      if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RUN_BASE_665, notes: 'companion' }
+      if (kind === 'closing') return { ok: true, headSha: 'v'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the resolve-fallback run`)
+    }
+    await new Function('return (async () => {' + src + '\n})()')()
+    const res = (seen.find((x) => x.label === `resolve:${solo.id}`) || {}).prompt || ''
+    if (!res) fail('#665: the resolve-fallback run sent no ticket back to its lane, so the fallback check read nothing')
+    else {
+      if (!res.includes(`tip=${RUN_BASE_665}, the run base`) || !res.includes(`merge --no-ff ${RUN_BASE_665}\``)) fail('#665: a conflict before any gate passed does not back-merge the run base')
+      if (res.includes(`tip=\`git -C ${fixture.args.repo} rev-parse`)) fail('#665: a conflict before any gate passed still reads the branch\'s tip as its back-merge')
+    }
   }
 }
 

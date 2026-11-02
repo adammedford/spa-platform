@@ -63,6 +63,11 @@ The rules, as the collect step states them:
   A number the prose waits for is a wait only while it is an open issue (#284): a listed issue is
   one, and the state of each other number is asked of GitHub in one query; a closed issue or a
   pull request named in prose is stale prose, which the check notes and the forecast leaves out.
+- touches (#665): the Touches line's paths, as tools/ticket_shape.py's touches() reads them; null
+  when the body has no Touches line, [] for one naming no path. The workflow waits a ticket's
+  implement behind an earlier ticket of the night whose paths overlap its own, and waits a ticket
+  with no readable path behind every earlier ticket of its lane. A parser that cannot read the line
+  refuses the answer, as a ticket-shape check that cannot judge does.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 
 Two tickets with one id stop it: exit 1, stdout empty, both issues named on stderr. A read that fails
@@ -426,6 +431,17 @@ def will_end_partial(issue: Issue, rules: list[tuple[str, str]],
             for failure in failures]
 
 
+def touches_of(issue: Issue, rules: list[tuple[str, str]]) -> list[str] | None:
+    """The ticket's Touches paths as ticket_shape.touches() reads them (#665): None when the body
+    has no Touches line, [] for one naming no path. The workflow's path waits read this list, so
+    the line is read by the parser that judges it at creation, never by an agent."""
+    try:
+        return ticket_shape().touches(issue.body, rules)
+    except (Exception, SystemExit) as error:
+        raise Refused(f"the ticket-shape check could not read the Touches line of "
+                      f"#{issue.number}: {type(error).__name__}: {error}") from error
+
+
 def open_boxes(body: str) -> int:
     return len(OPEN_BOX.findall(body)) if ANY_BOX.search(body) else -1
 
@@ -554,6 +570,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "why": why[issue.number] + others_land_apart(others),
             "openBoxes": open_boxes(issue.body),
             "willEndPartial": will_end_partial(issue, rules, states),
+            "touches": touches_of(issue, rules),
         })
     return {
         "tickets": resolved,

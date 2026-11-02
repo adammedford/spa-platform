@@ -528,6 +528,47 @@ class Rules(unittest.TestCase):
         self.assertEqual([{"id": "issue-65", "issue": 65}], answer["landedButOpen"])
 
 
+class Touches(unittest.TestCase):
+    """#665 (#659 Q7): each ticket carries its Touches paths as tools/ticket_shape.py's touches()
+    reads them, so the parser that judges the line at creation is the one the workflow's path waits
+    read at night, and no agent reads the line. null when the body has no Touches line, [] for a
+    line naming no path, and the workflow waits conservatively on both."""
+
+    def test_each_ticket_carries_the_paths_ticket_shape_reads(self):
+        line = ("**Owner:** integrator\n**Touches:** `.claude/workflows/overnight.js`, "
+                "tools/overnight_collect.py and its companion\n\n## Acceptance\n- [ ] one\n")
+        answer = by_issue(resolved(agent=[issue(30, line)], human=[issue(31, line)]))
+        want = [".claude/workflows/overnight.js", "tools/overnight_collect.py"]
+        self.assertEqual(want, collect.ticket_shape().touches(line))
+        self.assertEqual([want, want], [answer[30]["touches"], answer[31]["touches"]])
+
+    def test_no_touches_line_is_null_and_a_line_with_no_path_is_empty(self):
+        prose = "**Owner:** integrator\n**Touches:** the overnight scripts\n\n- [ ] one\n"
+        answer = by_issue(resolved(agent=[issue(32, body()), issue(33, prose)]))
+        self.assertIsNone(answer[32]["touches"])
+        self.assertEqual([], answer[33]["touches"])
+
+    def test_the_json_carries_touches_as_null_or_a_list(self):
+        answer = resolved(agent=[issue(34, body())])
+        printed = json.loads(json.dumps(answer))
+        self.assertIn("touches", printed["tickets"][0])
+        self.assertIsNone(printed["tickets"][0]["touches"])
+
+    def test_a_touches_parser_that_cannot_read_refuses_the_answer(self):
+        """A check fails closed: a parser that throws is no list of paths, so nothing is printed."""
+        shape = collect.ticket_shape()
+        kept = shape.touches
+        def broken(body, parsed=None):
+            raise RuntimeError("parser broken on purpose")
+        shape.touches = broken
+        try:
+            with self.assertRaises(collect.Refused) as refused:
+                resolved(agent=[issue(35, body())])
+        finally:
+            shape.touches = kept
+        self.assertIn("could not read the Touches line of #35", str(refused.exception))
+
+
 class WillEndPartial(unittest.TestCase):
     """#228: the launch plan of 2026-10-21 forecast 22 integrated tickets and got 15 (#226), and
     nothing at collect time said which would end partial. Each ticket now carries "willEndPartial".
