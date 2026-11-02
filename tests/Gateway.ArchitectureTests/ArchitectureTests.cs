@@ -97,8 +97,8 @@ public sealed class ArchitectureTests
         // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
         // its declaration only. The count moves with its subject: a quoted id or code added to or
         // removed from Platform.Abstractions moves it.
-        // Mutation (#726): run on origin/main without #343's item 2 and the count reads 25, Problems.cs
-        // 12 and RuleIds.cs 12.
+        // Mutation (#726): drop SessionStoreUnavailable from Problems and AuthStore from RuleIds, as
+        // before #343's item 2, and the count reads 25, Problems.cs 12 and RuleIds.cs 12.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
         Assert.Equal(27, hits.Length);

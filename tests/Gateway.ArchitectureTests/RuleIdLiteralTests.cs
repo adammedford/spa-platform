@@ -55,9 +55,9 @@ public sealed class RuleIdLiteralTests : IDisposable
         // contracts/http-contract.md -> Errors, not from the types the rule reads: RuleIdsTests and
         // RejectionTableTests hold those types to the tables, and this holds the rule to both types.
         // The twelfth code is shell_unavailable (#427); the thirteenth code is session_store_unavailable
-        // and the thirteenth rule id auth.store, #343's item 2 (#726). Mutation (#726): run on
-        // origin/main without item 2 and the count reads 24 and the session_store_unavailable and
-        // auth.store assertions fail.
+        // and the thirteenth rule id auth.store, both #343's item 2. Mutation (#726): drop
+        // SessionStoreUnavailable from Problems.Rows and AuthStore from RuleIds.All, as before item 2,
+        // and the count reads 24 and neither id is in the set.
         Assert.Equal(26, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains("host.unknown", RuleIdLiterals.Ids);
         Assert.Contains("api.unknown", RuleIdLiterals.Ids);

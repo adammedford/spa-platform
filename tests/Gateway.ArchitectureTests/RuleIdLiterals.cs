@@ -3,7 +3,7 @@ using Platform.Abstractions;
 namespace Gateway.ArchitectureTests;
 
 /// <summary>
-/// No workstream project spells a rule id or a problem code as a quoted literal. ADR-0015 put the thirteen ids of
+/// No workstream project spells a rule id or a problem code as a quoted literal. ADR-0015 put the ids of
 /// <c>contracts/request-gate.md</c> in <c>Platform.Abstractions.RuleIds</c> because four workstreams
 /// raise them, and a copy nobody checks is how the gateway comes to refuse under an id the contract
 /// does not list. <c>RuleIdsTests</c> in <c>tests/Platform.Abstractions.Tests</c> holds those
