@@ -849,6 +849,27 @@ try {
       result = await execute(env)
       const ranNext = env.mutations.filter((m) => m.prompt.includes('held because')).map((m) => m.test)
       if (ranNext.includes(LIB2) || !ranNext.includes(LIB1)) fail(`PR 287 after a caught record: held mutations ${JSON.stringify(ranNext)}, expected ${LIB1} and not ${LIB2}`)
+      // A bare-named catcher (#693): the runner printed the catcher as the inventory names it, so the
+      // caught cell names a test that is itself a candidate, or itself held. The record reproduced the
+      // held test's break, never the catcher's, so a later review neither clears the catcher as a
+      // candidate nor answers it as a held test. The cell is again the one the script wrote.
+      const BARE = { [LIB2]: { ...caught[LIB2], failingNames: [CATCHER] } }
+      const WITH_CATCHER = { 287: { ...SHAPE[287], candidates: [...SHAPE[287].candidates, lib(CATCHER)] } }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, WITH_CATCHER, { range, mutate: BARE, caught: { 287: [LIB2] } })
+      await execute(env)
+      const bareLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by ${CATCHER}) |`)) || ''
+      if (!bareLine) fail(`PR 287's shape with the held ${LIB2} caught by the bare-named ${CATCHER}: no table row reads "${LIB2} (caught by ${CATCHER})"`)
+      const LATER_BARE = { ...LATER, body: LATER.body.replace(cellLine, bareLine) }
+      const unchanged = { 287: { ...range[287], from: H3, changedFiles: ['tests/Platform.Registry.Tests/ReviewFixed.cs'], since: [] } }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, { 287: { ...WITH_CATCHER[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD, LATER_BARE] } }, { range: unchanged })
+      result = await execute(env)
+      if ((resultOf(287, result).clearedByEarlier || []).some((x) => x.test === CATCHER) || !env.mutations.some((m) => m.test === CATCHER)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}: the catcher was cleared by that record (cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)}), though its own break was never mutated`)
+      if (!(resultOf(287, result).clearedByEarlier || []).some((x) => x.test === LIB2)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}: the held ${LIB2} it reproduced is no longer cleared by it (cleared ${JSON.stringify(resultOf(287, result).clearedByEarlier)})`)
+      const HELD_CATCHER = { ...HELD, body: HELD.body.replace(`| ${DOCKER} |`, `| ${CATCHER} | broke what the catcher guards | 0 of 71 | did-not-fail: it stayed green | /log/mutation.txt |\n| ${DOCKER} |`) }
+      env = run({ prs: [287], maxMutationsPerPr: 9 }, { 287: { ...WITH_CATCHER[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD_CATCHER, LATER_BARE] } }, { range: unchanged })
+      await execute(env)
+      const heldBare = env.mutations.filter((m) => m.prompt.includes('held because')).map((m) => m.test)
+      if (!heldBare.includes(CATCHER) || heldBare.includes(LIB2)) fail(`PR 287 after a record whose caught cell names the bare ${CATCHER}, itself held earlier: held mutations ${JSON.stringify(heldBare)}, expected ${CATCHER} and not ${LIB2}`)
     }
     env = run({ prs: [287] }, SHAPE, { range, mutate: caught })
     result = await execute(env)

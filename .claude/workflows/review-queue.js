@@ -78,7 +78,9 @@ export const meta = {
 // head and a full review would otherwise put them back in inventory order. A held break the project
 // now catches through another test is reproduced, its Test cell reading `<held test> (caught by
 // <test>)` once the verdict verifies that test guards it, so a row pinned to a test that could never
-// guard its break is answered by the test that does (#684). A held test the cap cuts
+// guard its break is answered by the test that does (#684). A later review reads that cell as the
+// held test alone, so a catcher, whose own break nobody mutated, is neither answered nor cleared by
+// it (#693). A held test the cap cuts
 // is still unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a `Review: ...` commit touches come
 // next among the candidates. A candidate an earlier record reproduced is not mutated again while
 // neither its test file nor the source it breaks has changed since that record's head; the comment
@@ -216,8 +218,16 @@ const recordsIn = (inv) => {
 }
 // The rows of a review comment's Mutations table, as mutationLines below writes it (#289): one
 // { test, broken, result } per row, each cell unescaped as cell() escaped it, result the leading word
-// of the Result cell. A comment with no such table, a human's or an older shape's, yields none.
+// of the Result cell. A comment with no such table, a human's or an older shape's, yields none. A
+// caught row's cell, `<held test> (caught by <tests>)`, yields the held test alone (#693): the row
+// reproduced the held test's break, not the catchers', so a catcher the runner printed by the name
+// the inventory gives it is neither answered as held nor cleared as a candidate by that row.
 const MUTATION_HEAD = '| Test | What was broken | Failed of total | Result | Log file |'
+const CAUGHT_BY = ' (caught by '
+const heldTestOf = (cellText) => {
+  const at = cellText.indexOf(CAUGHT_BY)
+  return at > 0 && cellText.endsWith(')') ? cellText.slice(0, at) : cellText
+}
 const mutationTableOf = (body) => {
   const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
   const at = lines.indexOf(MUTATION_HEAD)
@@ -227,7 +237,7 @@ const mutationTableOf = (body) => {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
     const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run|removed)\b/.exec(cells[3])
-    if (result && cells[0]) rows.push({ test: cells[0], broken: cells[1], result: result[1] })
+    if (result && cells[0]) rows.push({ test: heldTestOf(cells[0]), broken: cells[1], result: result[1] })
   }
   return rows
 }
@@ -765,7 +775,7 @@ const cell = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
 const mutationLines = (mut) => [
   ...(mut.rows.length
     ? [MUTATION_HEAD, '| --- | --- | --- | --- | --- |',
-      ...mut.rows.map((r) => `| ${[r.caughtBy.length ? `${r.test} (caught by ${r.caughtBy.join(', ')})` : r.test, r.broken || '-', `${r.failed} of ${r.total}`,
+      ...mut.rows.map((r) => `| ${[r.caughtBy.length ? `${r.test}${CAUGHT_BY}${r.caughtBy.join(', ')})` : r.test, r.broken || '-', `${r.failed} of ${r.total}`,
         r.result + (r.countsMatched === true ? ', counts match the stated claim' : r.countsMatched === false ? ', counts differ from the stated claim' : '') + (r.why ? `: ${r.why}` : ''),
         r.logFile].map(cell).join(' | ')} |`)]
     : [mut.outside.length ? 'No mutations run: the range touches no candidate invariant test and no stated mutation.'
