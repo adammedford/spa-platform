@@ -713,21 +713,18 @@ const mutationRow = (n, m, i, got) => {
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   // A held break the project caught through other tests, the held one not among them (#684): the
   // tests that went red, which the verdict must accept before the row answers the held test. A
-  // failing name is the held test when the shorter of it and the held test's dotted name ends the
-  // longer at a dot, so a same-named method of another class is a catch, which fails closed to the
-  // verdict's check, while a bare method or a class-qualified name under a namespace-qualified cell
-  // is the held test (#695). A name is read up to its '(': an xUnit case's arguments follow it.
-  // Python unittest prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a
-  // dotted name in the parenthesis after a bare method is the whole name.
+  // failing name is the held test when it ends in the held test's whole dotted name at a dot. A name
+  // shorter than that, a bare method or a class-qualified name under a namespace-qualified cell, could
+  // be a same-named method of another class, so it is a catch, which fails closed to the verdict's
+  // check (#695). A name is read up to its '(': an xUnit case's arguments follow it. Python unittest
+  // prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a dotted name in the
+  // parenthesis after a bare method is the whole name.
   const dotted = (f) => {
     const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
     if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
     return inner.endsWith(`.${head}`) ? inner : `${inner}.${head}`
   }
-  const isHeld = (f) => {
-    const a = `.${dotted(f)}`; const b = `.${m.test}`
-    return a.length > 1 && (a.endsWith(b) || b.endsWith(a))
-  }
+  const isHeld = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
   row.caughtBy = m.kind === 'held' && row.result === 'reproduced' && row.failingNames.length
     && !row.failingNames.some(isHeld) ? row.failingNames : []
   return row

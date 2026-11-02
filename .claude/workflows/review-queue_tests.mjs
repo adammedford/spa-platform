@@ -873,13 +873,13 @@ try {
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
     }
-    // A failing name shorter than the held cell's dotted name is the held test too (#695): a bare
-    // method, and Python unittest's printed forms, 'test_x (pkg.Class.test_x)' and the older
-    // 'test_x (pkg.Class)'. Each is an ordinary reproduction, no catch, and merges. A printed form
-    // whose parenthesis names another class is still a catch, and holds.
+    // Python unittest's printed forms, 'test_x (pkg.Class.test_x)' and the older 'test_x (pkg.Class)',
+    // name the held test whole (#695): each is an ordinary reproduction, no catch, and merges. A
+    // printed form whose parenthesis names another class is still a catch, and holds. A bare method
+    // is shorter than the held cell's dotted name and could be another class's: it stays a catch.
     const M2 = LIB2.split('.').pop()
     for (const [names, want, verdict] of [
-      [[M2], 'reproduced', 'merge'],
+      [[M2], 'did-not-fail', 'hold'],
       [[`${M2} (tools.check_tests.${LIB2})`], 'reproduced', 'merge'],
       [[`${M2} (tools.check_tests.LibraryTests)`], 'reproduced', 'merge'],
       [[`${M2} (tools.check_tests.OtherTests.${M2})`], 'did-not-fail', 'hold'],
@@ -891,7 +891,8 @@ try {
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
     }
-    // A class-qualified failing name under a namespace-qualified held cell is the held test (#695).
+    // Under a namespace-qualified held cell, the whole name and its unittest printed form are the held
+    // test, while a class-qualified name is shorter than the cell and stays a catch (#695).
     {
       const NS = `tools.check_tests.${LIB2}`
       const NS_HELD = record('https://github.com/o/r/pull/287#issuecomment-2', '2026-10-22T09:00:00Z', H2, 'hold', [
@@ -899,7 +900,9 @@ try {
       ])
       const NS_SHAPE = { 287: { ...SHAPE[287], comments: [NS_HELD], candidates: [lib(NS)] } }
       for (const [names, want, verdict] of [
-        [[LIB2], 'reproduced', 'merge'],
+        [[NS], 'reproduced', 'merge'],
+        [[`${M2} (${NS})`], 'reproduced', 'merge'],
+        [[LIB2], 'did-not-fail', 'hold'],
         [[`OtherTests.${M2}`], 'did-not-fail', 'hold'],
       ]) {
         env = run({ prs: [287] }, NS_SHAPE, { range, mutate: { [NS]: { ...row('reproduced', 1, 71), failingNames: names } } })
