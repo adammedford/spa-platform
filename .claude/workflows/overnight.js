@@ -747,7 +747,8 @@ humanT.forEach((t) => grill(t, ''))
 // order, a ticket blocked on another lane at the head of its lane idled the lane's unblocked work behind it
 // (ws3's free #164 chain behind #151, which waited on the integrator's #145). A ticket is ready when every
 // blocker that is itself one of tonight's agent tickets has settled, integrated or not; a lane with nothing
-// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: by n.
+// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: the most of
+// tonight's lane tickets downstream first, ties by n (#662; see the sort after the close-in-morning tickets leave).
 const done = {}      // id -> Promise<boolean integrated>, one per agent ticket, created before any lane starts
 const settled = {}   // id -> boolean, once its promise settled
 const resolveDone = {}
@@ -771,6 +772,30 @@ closeT.forEach((t) => {
   else resolveDone[t.id](true)
   settled[t.id] = true
 })
+
+// Among a lane's ready tickets, the one with the most of tonight's lane tickets downstream runs first, ties by n
+// (#662). Collect's n orders by plan row and then issue number, which says nothing of what waits: on 2026-10-31 the
+// static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work (#615 to
+// #619) among them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream, so the prep held ten
+// of those back for a night to bring it forward. Downstream is counted once, here, after Route and after the
+// close-in-morning tickets left their lanes: through blockedBy edges, transitively and across lanes, but only through
+// tickets a lane will implement, since a ticket waiting on one that no lane runs is skipped and gains nothing. Each
+// ticket downstream counts once, however many paths reach it.
+{
+  const laneT = Object.values(lanes).flat()
+  const inLane = new Set(laneT.map((t) => t.id))
+  const waiters = {}   // id -> the lane tickets whose blockedBy names it
+  laneT.forEach((d) => d.blockedBy.filter((b) => inLane.has(b)).forEach((b) => { (waiters[b] = waiters[b] || []).push(d.id) }))
+  const downstream = {}
+  laneT.forEach((t) => {
+    const seen = new Set(), stack = [...(waiters[t.id] || [])]
+    while (stack.length) { const d = stack.pop(); if (d === t.id || seen.has(d)) continue; seen.add(d); stack.push(...(waiters[d] || [])) }
+    downstream[t.id] = seen.size
+  })
+  Object.values(lanes).forEach((q) => q.sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n))
+  const ahead = laneT.filter((t) => downstream[t.id]).sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n)
+  if (ahead.length) log(`downstream first: ${ahead.map((t) => `${t.id} (${downstream[t.id]})`).join(', ')}`)
+}
 
 // The forecast (#228), before any lane starts: a lane ticket whose shape collect says will end partial (another owner
 // on its Owner line, or an open box only a sitting, a push or a landing can tick). A ticket with no list (a collect
