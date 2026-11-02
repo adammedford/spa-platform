@@ -27,8 +27,9 @@
 // Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
 // which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
 // main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
-// (#629). Four more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
-// tonight's tickets downstream, counted transitively, across lanes and once per ticket, ties by n (#662). No agent,
+// (#629). Five more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
+// tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
+// runs, ties by n (#662). No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1216,9 +1217,9 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
 
 // 33. A lane runs first the ready ticket with the most of tonight's tickets downstream (#662). On 2026-10-31 the
 //     static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work among
-//     them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream. Four short runs on synthetic
+//     them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream. Five short runs on synthetic
 //     tickets, every agent answering at once; implement starts are counted by ordinal, since the tick does not move.
-const DOWNSTREAM_CASES = 4
+const DOWNSTREAM_CASES = 5
 {
   const orderRun = async (set) => {
     const starts = []
@@ -1280,6 +1281,18 @@ const DOWNSTREAM_CASES = 4
     const { res, starts } = await orderRun(set)
     if ((res.integrated || []).length !== set.length) fail(`#662: the fourth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
     before(starts, 'issue-967', 'issue-968', 'a ticket reached by two paths counts twice downstream')
+  }
+  // Case 5: only tickets a lane runs count (#662's Answer). IDLE (n=987) has two downstream that no lane runs, 990
+  // blocked on an issue outside tonight's set and 991 close-in-morning; BUSY (n=988) has one lane ticket, 989. A count
+  // over every ticket would put IDLE first; a count over lane tickets puts BUSY first.
+  {
+    const lanes5 = [lane(987, 'integrator', []), lane(988, 'integrator', []), lane(989, 'ws1-infra', ['issue-988'])]
+    const set = [...lanes5,
+      { ...synthetic(990, 'issue-990', 'blocked', ['issue-987', 'issue-999'], 1), owner: 'ws2-hosting' },
+      { ...synthetic(991, 'issue-991', 'close-in-morning', ['issue-987'], 0), owner: 'ws3-identity' }]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== lanes5.length) fail(`#662: the fifth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${lanes5.length} lane tickets`)
+    before(starts, 'issue-988', 'issue-987', 'a ticket no lane runs counts downstream')
   }
 }
 
