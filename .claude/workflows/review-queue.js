@@ -597,7 +597,7 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
 3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
-4. failed and total: the counts the runner printed; failingNames: the tests it named as failing. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run. When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ''} broken: what you broke, in one line.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run. When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ''} broken: what you broke, in one line.
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
@@ -713,9 +713,21 @@ const mutationRow = (n, m, i, got) => {
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   // A held break the project caught through other tests, the held one not among them (#684): the
   // tests that went red, which the verdict must accept before the row answers the held test. A
-  // failing name is the held test when it ends in the held test's whole dotted name, so a same-named
-  // method of another class is a catch, which fails closed to the verdict's check.
-  const isHeld = (f) => `.${f.split('(')[0].trim()}`.endsWith(`.${m.test}`)
+  // failing name is the held test when the shorter of it and the held test's dotted name ends the
+  // longer at a dot, so a same-named method of another class is a catch, which fails closed to the
+  // verdict's check, while a bare method or a class-qualified name under a namespace-qualified cell
+  // is the held test (#695). A name is read up to its '(': an xUnit case's arguments follow it.
+  // Python unittest prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a
+  // dotted name in the parenthesis after a bare method is the whole name.
+  const dotted = (f) => {
+    const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+    if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
+    return inner.endsWith(`.${head}`) ? inner : `${inner}.${head}`
+  }
+  const isHeld = (f) => {
+    const a = `.${dotted(f)}`; const b = `.${m.test}`
+    return a.length > 1 && (a.endsWith(b) || b.endsWith(a))
+  }
   row.caughtBy = m.kind === 'held' && row.result === 'reproduced' && row.failingNames.length
     && !row.failingNames.some(isHeld) ? row.failingNames : []
   return row
