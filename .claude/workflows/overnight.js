@@ -849,11 +849,10 @@ const clockPrompt = 'Run `date -u +%s` as one Bash call and return the integer i
 const clock = (label) => agent(clockPrompt, { label, phase: 'Implement', schema: CLOCK, effort: 'low' })
   .then((c) => (c && Number.isInteger(c.epoch) ? c.epoch : null), () => null)
 const pathWaits = []   // {id, issue, behind: [{id, issue, paths}], startEpoch, endEpoch, minutes}, one per ticket that waited
-// A wait starts when the ticket's blockers have settled and a path predecessor has not, and ends when the last one has.
-const watchPath = async (t) => {
-  await Promise.all(laneBlockers(t).map((b) => done[b].then(() => true, () => false)))
-  const open = pathPreds(t).filter((p) => !(p.id in settled))
-  if (!open.length) return
+// A wait starts when its lane, free to take work, would take the ticket but for a path predecessor that has not
+// settled: the minutes are what the wait cost (#659 Q10, Q11), so they never hold time the lane spent implementing a
+// ticket it would have taken first anyway. It ends when the last of those predecessors has settled.
+const watchPath = async (t, open) => {
   for (const p of open) log(`${t.id}: waiting to start behind ${p.id} (${p.paths.join(', ')})`)
   const start = clock(`clock:${t.id}:start`)
   await Promise.all(open.map((p) => done[p.id].then(() => true, () => false)))
@@ -862,7 +861,14 @@ const watchPath = async (t) => {
   pathWaits.push({ id: t.id, issue: t.issue, behind: open, startEpoch: s, endEpoch: e,
     minutes: s !== null && e !== null && e >= s ? Math.round((e - s) / 6) / 10 : null })
 }
-const pathWatch = laneT.filter((t) => pathPreds(t).length).map((t) => watchPath(t).catch(() => {}))
+const pathWatch = {}   // id -> the wait's promise, started once, by its lane (runLane)
+const startPathWait = (t) => {
+  if (t.id in pathWatch) return
+  const open = pathPreds(t).filter((p) => !(p.id in settled))
+  if (!open.length) return
+  // A wait that throws is said so in the log, never dropped silently (CODING_STANDARDS.md: a check fails closed).
+  pathWatch[t.id] = watchPath(t, open).catch((e) => log(`${t.id}: path wait not recorded: ${e && e.message ? e.message : e}`))
+}
 
 // A ticket's implement stage. It returns true or false when the ticket settles here (skipped, stopped, failed), or
 // the implementer's result when it goes on to review and integrate, which the lane runs as a tail (#136).
@@ -1031,6 +1037,10 @@ const runLane = async (owner, queue) => {
   }
   const guard = (t, at, p) => p.catch((e) => fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
+    // The ticket this lane would take now but for the path waits (#665): if a path predecessor holds it, its wait
+    // starts here, when the lane is free for it.
+    const next = queue.find((q) => laneBlockers(q).every((b) => b in settled))
+    if (next) startPathWait(next)
     const t = queue.find(ready)
     if (!t) {
       const waitFor = [...new Set(queue.flatMap((q) => [...laneBlockers(q), ...pathPreds(q).map((p) => p.id)].filter((b) => !(b in settled))))]
@@ -1050,7 +1060,7 @@ const runLane = async (owner, queue) => {
 phase('Implement')
 await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, queue)))
 // Every predecessor has settled once the lanes have, so the last clocks are all that is left (#665).
-await Promise.all(pathWatch)
+await Promise.all(Object.values(pathWatch))
 log(`path waits: ${pathWaits.length}` + pathWaits.map((w) => `\n  ${w.id} behind ${w.behind.map((p) => p.id).join(', ')}: ${w.minutes === null ? 'not measured' : `${w.minutes} min`}`).join(''))
 
 // The closing check (#629), once every lane has settled, so no merge lands after it; it runs beside the grills still

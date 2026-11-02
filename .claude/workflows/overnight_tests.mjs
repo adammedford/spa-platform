@@ -1275,22 +1275,22 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     T(15, 'ws6-verification', ['zz/z'], [id(1)]),               // Z: a real blocker on A, which fails
   ]
   const pById = Object.fromEntries(set.map((t) => [t.id, t]))
-  const ev = [], logged = [], prompts = [], clocks = {}
+  const ev = [], logged = [], prompts = [], clocks = {}, clockSeq = {}
   const pGreens = []
-  let k = 0
+  let k = 0, seq = 0   // seq orders the agent calls, where two in one tick tie
   globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
   globalThis.log = (text) => logged.push({ at: tick, text })
   globalThis.agent = async (prompt, opts) => {
     prompts.push({ label: opts.label, prompt })
     const [kind, tid, edge] = opts.label.split(':')
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
-    if (kind === 'clock') { clocks[`${tid}:${edge}`] = tick; return { epoch: tick * 6 } }   // one tick reads as a tenth of a minute
+    if (kind === 'clock') { clocks[`${tid}:${edge}`] = tick; clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }   // one tick reads as a tenth of a minute
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
     const n = ++k
-    ev.push({ at: tick, kind, id: tid, edge: 'start', n })
+    ev.push({ at: tick, kind, id: tid, edge: 'start', n, seq: ++seq })
     await sleep(kind === 'implement' ? (tid === id(10) ? 150 : 25) : 15)
-    ev.push({ at: tick, kind, id: tid, edge: 'end', n })
+    ev.push({ at: tick, kind, id: tid, edge: 'end', n, seq: ++seq })
     if (kind === 'implement' && tid === id(1)) return { outcome: 'failed', branch: 'b', forkSha: 'f', headSha: 'f', complete: false, outstanding: '', summary: 'failed on purpose', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
@@ -1329,7 +1329,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     after(9, 8, 'backwards by n'); after(8, 10, 'its blocker')
     // No readable path: every earlier ticket of its lane, and none of another lane's, with the reason.
     const reason = `every path: ${id(11)} has no readable Touches path (no Touches line, or one naming no path)`
-    if (!hasLine(waitLine(11, 1, reason)) || !hasLine(waitLine(11, 8, reason))) fail(`#665: ${id(11)}, with no readable path, did not wait on every earlier ticket of its lane naming why: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(11))).map((l) => l.text)))
+    // Not behind issue-1001: it failed and settled before the lane was free to take issue-1011, so that wait cost nothing.
+    if (!hasLine(waitLine(11, 8, reason)) || waitsBehind(11, 1)) fail(`#665: ${id(11)}, with no readable path, did not wait on every earlier ticket of its lane naming why: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(11))).map((l) => l.text)))
     if (waitsBehind(11, 2) || waitsBehind(11, 3)) fail(`#665: ${id(11)}, with no readable path, waited on a ticket of another lane`)
     if (!hasLine(waitLine(12, 11, reason))) fail(`#665: ${id(12)} did not wait on ${id(11)}, the earlier ticket of its lane with no readable path`)
     after(11, 8, 'no readable path'); after(12, 11, 'behind no readable path')
@@ -1356,6 +1357,17 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (e < Math.max(...w.behind.map((b) => settledAt(b.id)))) fail(`#665: ${x}'s wait was clocked to end at ${e}, before its last predecessor settled`)
       if (startOf(x) !== undefined && startOf(x) < e) fail(`#665: ${x} started at ${startOf(x)}, before its wait ended at ${e}`)
       if (w.behind.some((b) => !Array.isArray(b.paths) || !b.paths.length || !b.issue)) fail(`#665: ${x}'s wait does not give each predecessor's issue and paths: ${JSON.stringify(w.behind)}`)
+      // The minutes are time the path wait cost (#659 Q10, Q11), so a wait starts when its lane is free to take the
+      // ticket, never while the lane is still implementing another of its tickets, which it would wait out anyway.
+      const q = clockSeq[`${x}:start`]
+      const busy = ev.filter((b) => b.kind === 'implement' && b.edge === 'start' && b.id !== x && pById[b.id] && pById[b.id].owner === pById[x].owner)
+        .find((b) => { const end = ev.find((y) => y.kind === 'implement' && y.edge === 'end' && y.n === b.n); return b.seq < q && (!end || q < end.seq) })
+      if (busy) fail(`#665: ${x}'s wait was clocked to start at ${s}, while its lane was still implementing ${busy.id}, so its minutes hold time it could not have started in`)
+      // An earlier ticket of its lane with no blocker is taken first in any case, so the wait starts after its implement.
+      for (const y of set.filter((o) => o.owner === pById[x].owner && o.n < pById[x].n && !o.blockedBy.length)) {
+        const end = ev.find((e2) => e2.kind === 'implement' && e2.edge === 'end' && e2.id === y.id)
+        if (end && q < end.seq) fail(`#665: ${x}'s wait was clocked to start before ${y.id}, earlier in its lane, finished its implement, so its minutes hold time it could not have started in`)
+      }
     }
     const rep = prompts.find((x) => x.label === 'report')
     const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
