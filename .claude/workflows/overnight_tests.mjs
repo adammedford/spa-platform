@@ -920,12 +920,16 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
 //     change-request issues are searched before anything is filed; a request is filed ready-for-human, blocking its
 //     ticket; and when GitHub is unreachable a create line is queued in the shape morning.js replays (#433). The
 //     route's body shape is run through tools/ticket_shape.py under ready-for-human, as collect's forecast judges
-//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68).
+//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68). Just before the create, the
+//     route runs tools/ticket_shape.py --since from the time its search began, files only on its pass, folds a
+//     duplicate filed since, and queues the line, carrying that time, when nothing was searched (#678).
 {
   const PENDING = `${LOG}/pending-${fixture.args.date}.jsonl`
   const routed = allPrompts.filter((c) => /^(implement|review|grill):/.test(c.label))
   if (!routed.some((c) => c.label.startsWith('implement:')) || !routed.some((c) => c.label.startsWith('review:')) || !routed.some((c) => c.label.startsWith('grill:'))) fail('#436: no implement, review or grill prompt was rendered, so the route checks read nothing')
-  let shape = null
+  let shape = null, sinceRecipe = null
+  const SEARCHED_NOTE = 'Run `date -u +%FT%TZ` just before it and keep what it prints as <searched>'
+  const SINCE_CHECK = `cd ${fixture.args.repo} && python3 -I tools/ticket_shape.py --since <searched> --title "<title>"`
   for (const c of routed) {
     const id = c.label.split(':')[1], issue = byId[id].issue
     const search = c.prompt.indexOf(REQUEST_SEARCH)
@@ -934,11 +938,46 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
     if (create < 0) { fail(`#436: the ${c.label} prompt does not file a change request ready-for-human, blocking #${issue}`); continue }
     if (search > create) fail(`#436: the ${c.label} prompt files a change request before it searches`)
     if (!c.prompt.includes(`gh issue edit ${issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it.`)) fail(`#436: the ${c.label} prompt adds no edge to a request it finds open, or reports one it did not wire`)
-    const queue = `jq -cn --arg t "<title>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, body: $b}' >> ${PENDING}`
-    if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line when GitHub is unreachable`)
+    const queue = `jq -cn --arg t "<title>" --arg s "<searched>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, searched: $s, body: $b}' >> ${PENDING}`
+    if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line, with the time its search began, when GitHub is unreachable`)
     else if (c.prompt.indexOf(queue) < create) fail(`#436: the ${c.label} prompt queues the create line before it tries to file`)
+    // #678: the time is noted before the search, and the --since check runs from it after the search and before the
+    // create, with a rule for each of its exits; exit 2 files nothing.
+    const route = c.prompt.lastIndexOf('THE CHANGE-REQUEST ROUTE', search)
+    const noted = c.prompt.indexOf(SEARCHED_NOTE, route)
+    const since = c.prompt.indexOf(SINCE_CHECK, search)
+    if (route < 0 || noted < 0 || noted > search) fail(`#678: the ${c.label} prompt does not note the time its change-request search began, as <searched>, before the search`)
+    if (since < 0 || since > create) fail(`#678: the ${c.label} prompt does not run ${SINCE_CHECK} after its search and before its create`)
+    else {
+      const step = c.prompt.slice(since, create)
+      for (const rule of ['On exit 0, its last line starting "ticket-shape: pass:", file it', 'On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names', 'name each that does not with `--not-duplicate-of', 'On any other exit nothing was searched, so file nothing'])
+        if (!c.prompt.slice(since).includes(rule)) fail(`#678: the ${c.label} prompt's --since step lacks "${rule}"`)
+      if (!step.includes('On exit 0')) fail(`#678: the ${c.label} prompt files before it says the --since check must pass`)
+      if (!sinceRecipe) sinceRecipe = (/`cd \S+ && (python3 -I tools\/ticket_shape\.py --since <searched> --title "<title>")`/.exec(c.prompt.slice(since - 1)) || [])[1]
+    }
     if (!shape) shape = (/in this shape:\n([\s\S]*?)\n   Its title/.exec(c.prompt) || [])[1]
   }
+  // #678: the route's --since recipe is run for real against a fake gh on PATH, so a recipe the script refuses (an
+  // argument it does not take, a time it does not read) fails here and not on the night. An empty listing passes; a
+  // listing holding an issue whose title shares three content words with the title fails it on exit 1.
+  if (!sinceRecipe) fail('#678: no prompt gave the --since recipe, so the live run read nothing')
+  else {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-since-'))
+    const gh = path.join(bin, 'gh')
+    fs.writeFileSync(gh, '#!/bin/sh\ncat "$LISTING"\n', { mode: 0o755 })
+    const run = (listing) => {
+      fs.writeFileSync(path.join(bin, 'listing.json'), JSON.stringify(listing))
+      const sh = sinceRecipe.replace('<searched>', '2026-10-31T22:00:00Z').replace('<title>', 'The proxy needs a header contract')
+      return spawnSync('sh', ['-c', sh], { cwd: path.resolve(here, '..', '..'), encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, LISTING: path.join(bin, 'listing.json') } })
+    }
+    const clear = run([])
+    if (clear.status !== 0 || !/^ticket-shape: pass:/m.test(clear.stdout)) fail(`#678: the route's --since recipe does not pass an empty listing: exit ${clear.status}, ${(clear.stdout + clear.stderr).trim()}`)
+    const twin = run([{ number: 901, title: 'A header contract for the proxy', createdAt: '2026-10-31T23:10:00Z', state: 'OPEN' }])
+    if (twin.status !== 1 || !/^ticket-shape: possible-duplicate: #901 /m.test(twin.stdout)) fail(`#678: the route's --since recipe does not fail a possible duplicate filed since the search: exit ${twin.status}, ${(twin.stdout + twin.stderr).trim()}`)
+    fs.rmSync(bin, { recursive: true, force: true })
+  }
+  // morning.js runs its --since check from the line's searched field (#678).
+  if (!fs.readFileSync(path.join(here, 'morning.js'), 'utf8').includes('the line\'s "searched"')) fail('#678: morning.js does not read the create line\'s searched field, so the morning searches from its own time alone')
   for (const c of allPrompts.filter((x) => x.label.startsWith('implement:'))) {
     if (!c.prompt.includes('cite the request\'s number (#<n>)')) fail(`#436: the ${c.label} prompt does not cite the request's number on a partial lane's Outstanding line`)
   }
