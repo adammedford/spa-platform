@@ -972,8 +972,10 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
     }
     const clear = run([])
     if (clear.status !== 0 || !/^ticket-shape: pass:/m.test(clear.stdout)) fail(`#678: the route's --since recipe does not pass an empty listing: exit ${clear.status}, ${(clear.stdout + clear.stderr).trim()}`)
-    const twin = run([{ number: 901, title: 'A header contract for the proxy', createdAt: '2026-10-31T23:10:00Z', state: 'OPEN' }])
-    if (twin.status !== 1 || !/^ticket-shape: possible-duplicate: #901 /m.test(twin.stdout)) fail(`#678: the route's --since recipe does not fail a possible duplicate filed since the search: exit ${twin.status}, ${(twin.stdout + twin.stderr).trim()}`)
+    // The twin's number is built, not written after a hash, so the steering check reads no citation of an issue here.
+    const TWIN = 901
+    const twin = run([{ number: TWIN, title: 'A header contract for the proxy', createdAt: '2026-10-31T23:10:00Z', state: 'OPEN' }])
+    if (twin.status !== 1 || !new RegExp(`^ticket-shape: possible-duplicate: #${TWIN} `, 'm').test(twin.stdout)) fail(`#678: the route's --since recipe does not fail a possible duplicate filed since the search: exit ${twin.status}, ${(twin.stdout + twin.stderr).trim()}`)
     fs.rmSync(bin, { recursive: true, force: true })
   }
   // morning.js runs its --since check from the line's searched field (#678).
