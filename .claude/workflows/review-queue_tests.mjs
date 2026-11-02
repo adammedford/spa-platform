@@ -838,6 +838,7 @@ try {
       if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} caught and accepted: verdict ${c.verdict}, expected merge`)
       if (!/A caught row is a held break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
+      if (!/failingNames: the tests it named as failing, each whole as the runner printed it/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the mutation prompt does not ask for each failing name whole as the runner printed it (#695)')
       const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
       if (!cellLine.includes(CATCHER)) fail(`PR 287's shape with the held ${LIB2} caught: no table row reads "${LIB2} (caught by ...)"`)
       // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated
@@ -894,6 +895,45 @@ try {
       const c = resultOf(287, result)
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // Python unittest's printed forms, 'test_x (pkg.Class.test_x)' and the older 'test_x (pkg.Class)',
+    // name the held test whole (#695): each is an ordinary reproduction, no catch, and merges. A
+    // printed form whose parenthesis names another class is still a catch, and holds. A bare method
+    // is shorter than the held cell's dotted name and could be another class's: it stays a catch.
+    const M2 = LIB2.split('.').pop()
+    for (const [names, want, verdict] of [
+      [[M2], 'did-not-fail', 'hold'],
+      [[`${M2} (tools.check_tests.${LIB2})`], 'reproduced', 'merge'],
+      [[`${M2} (tools.check_tests.LibraryTests)`], 'reproduced', 'merge'],
+      [[`${M2} (tools.check_tests.OtherTests.${M2})`], 'did-not-fail', 'hold'],
+      [[`${M2} (tools.check_tests.OtherTests)`], 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('reproduced', names.length, 71), failingNames: names } } })
+      result = await execute(env)
+      const c = resultOf(287, result)
+      const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
+      if (held.result !== want || c.verdict !== verdict) fail(`PR 287's shape with the held ${LIB2} failing as ${JSON.stringify(names)}: row ${held.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // Under a namespace-qualified held cell, the whole name and its unittest printed form are the held
+    // test, while a class-qualified name is shorter than the cell and stays a catch (#695).
+    {
+      const NS = `tools.check_tests.${LIB2}`
+      const NS_HELD = record('https://github.com/o/r/pull/287#issuecomment-2', '2026-10-22T09:00:00Z', H2, 'hold', [
+        [NS, LIB_BREAK, '1 of 71', 'did-not-fail: the named test stayed green'],
+      ])
+      const NS_SHAPE = { 287: { ...SHAPE[287], comments: [NS_HELD], candidates: [lib(NS)] } }
+      for (const [names, want, verdict] of [
+        [[NS], 'reproduced', 'merge'],
+        [[`${M2} (${NS})`], 'reproduced', 'merge'],
+        [[LIB2], 'did-not-fail', 'hold'],
+        [[`OtherTests.${M2}`], 'did-not-fail', 'hold'],
+      ]) {
+        env = run({ prs: [287] }, NS_SHAPE, { range, mutate: { [NS]: { ...row('reproduced', 1, 71), failingNames: names } } })
+        result = await execute(env)
+        const c = resultOf(287, result)
+        const held = (c.mutations || []).find((m) => m.test === NS) || {}
+        if (held.kind !== 'held' || held.result !== want || c.verdict !== verdict) fail(`the held ${NS} failing as ${JSON.stringify(names)}: row ${held.kind} ${held.result}, verdict ${c.verdict}, expected held, ${want} and ${verdict}`)
+      }
     }
     // A held test the cap cuts stays unanswered, so it holds, and the cap's line still names it: with a
     // cap of 1 only the first held test runs and reproduces, and the second may not let the review merge.
