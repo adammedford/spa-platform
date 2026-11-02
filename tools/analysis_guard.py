@@ -8,19 +8,20 @@ It reads the tracked files of the repository it runs in, from the top level, and
 naming each finding on its own line before a count, when:
 
 - the relaxed tier's section of the root `.editorconfig`, the one headed
-  `[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]`, is missing, has an
-  entry with no reason comment, or is not the last section that matches a C# file (#589-Q8;
-  ADR-0035 decisions 5 and 13). A later section that matches a relaxed-tier file would override it,
-  and the build would stay green while a relaxation, or a strict rule, silently changed; one that
-  matches only a strict-tier file is held to the same rule, because the ADR names the last `*.cs`
-  section and a narrower glob is one edit from overriding the tier. A section matches a C# file
-  when it matches a tracked `.cs` file or a probe path in each relaxed folder;
+  `[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]`, is missing, names a
+  security rule at any severity, has an entry with no reason comment, or is not the last section
+  that matches a C# file (#589-Q8; ADR-0035 decisions 5 and 13). A later section that matches a
+  relaxed-tier file would override it, and the build would stay green while a relaxation, or a
+  strict rule, silently changed; one that matches only a strict-tier file is held to the same rule,
+  because the ADR names the last `*.cs` section and a narrower glob is one edit from overriding the
+  tier. A section matches a C# file when it matches a tracked `.cs` file or a probe path in each
+  relaxed folder;
 - any analyzer config, an `.editorconfig`, `.globalconfig` or `*.globalconfig` at any depth, sets a
   security rule's severity to anything but `error` or `warning`, in any of its sections (#671;
   decision 4). An earlier `[tests/**.cs]` section, an earlier copy of the relaxed header or a nested
   `.editorconfig` relaxes a rule as surely as the relaxed tier's section would, so no glob decides
   which lines are read. The one exception is a pending line (decision 6), which lives in the root
-  `.globalconfig` alone: `suggestion` with `# pending #N` on its own line. `default` is a relaxation,
+  `.globalconfig` alone: `suggestion` with `# pending #N` on the same line. `default` is a relaxation,
   since it hands the rule back to an analyzer that ships most security rules off;
 - any analyzer config has a `dotnet_analyzer_diagnostic.category-*` line (X4; decision 5): under
   `AnalysisMode=All` it adds nothing, and its reach into a package's rules that share the category
@@ -196,6 +197,11 @@ def judge_relaxed_section(path: str, text: str, csharp: list[str], findings: lis
         entry = SEVERITY.match(line)
         if entry:
             diagnostic = entry.group(1).upper()
+            if diagnostic in SECURITY_IDS and entry.group(2).lower() in HELD:
+                # Decision 13: the section never names a security rule, even at error. A relaxed
+                # value is judge_security_lines' finding, so each line is reported once.
+                findings.append(f"{path}:{number}: {diagnostic} is a security rule, which the relaxed tier's "
+                                "section never names, at any severity (ADR-0035 decision 13).")
             reason_above = COMMENT.match(previous) and previous.strip().lstrip("#;").strip()
             if not reason_above and not TRAILING_REASON.search(line):
                 findings.append(f"{path}:{number}: {diagnostic} has no reason comment, on its line or the line "

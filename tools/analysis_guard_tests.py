@@ -178,6 +178,18 @@ class Guard(unittest.TestCase):
         self.files[".globalconfig"] = GLOBALCONFIG + "dotnet_diagnostic.MA0009.severity = suggestion  #  pending #611\n"
         self.assertPasses(self.run_guard())
 
+    def test_a_pending_comment_on_a_declined_security_id_in_the_root_globalconfig_fails(self) -> None:
+        # Decision 6: a pending line is at suggestion; the comment never excuses `none`.
+        self.files[".globalconfig"] = GLOBALCONFIG + "dotnet_diagnostic.CA5351.severity = none # pending #611\n"
+        self.assertFails(self.run_guard(), ".globalconfig:4", "CA5351", "security rule")
+
+    def test_a_security_id_at_error_in_the_relaxed_section_still_fails(self) -> None:
+        # Decision 13: the local check fails the section if it names a security rule, at any value.
+        self.files[".editorconfig"] = EDITORCONFIG + "# A reason.\ndotnet_diagnostic.CA5351.severity = error\n"
+        result = self.run_guard()
+        self.assertFails(result, ".editorconfig:14", "CA5351", "security rule")
+        self.assertIn("1 finding.", result.stderr.splitlines()[-1])
+
     def test_a_security_id_in_the_relaxed_section_is_reported_once(self) -> None:
         self.files[".editorconfig"] = EDITORCONFIG + "# A reason.\ndotnet_diagnostic.CA5351.severity = none\n"
         result = self.run_guard()
