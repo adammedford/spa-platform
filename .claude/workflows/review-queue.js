@@ -115,8 +115,16 @@ export const meta = {
 // one line per pull request with its number, head, verdict, record URL, verified finding and mutation
 // counts and the did-not-fail rows named, because the completion notice cuts a return short and on
 // #287's runs the verdict and the mutation rows were past the cut. A halted run's summary is [].
-// Each pull request's findings, verified and suspected, are in <logDir>/pr-<n>/verdict.json, which a
-// repair session reads in place of the cut return (docs/agents/review.md -> "Repairing findings").
+// A repair session reads a pull request's findings from its log in place of the cut return
+// (docs/agents/review.md -> "Repairing findings"), and they are in two places (#692). The verdict
+// agent's, verified and suspected, are in <logDir>/pr-<n>/verdict.json. The script's own, the head
+// comparison's and the later dates' (#525 below), are never there, since the verdict agent is told not
+// to repeat them: they lead the comment's Spec findings, in <logDir>/pr-<n>/comment.md and the posted
+// record. A pull request reaches verdict.json only by reaching its verdict stage: one skipped for a
+// record already on its head has none from the run, and its findings are in the record its summary
+// line names; one failed before its verdict, at the stage its summary line names, has none, and no
+// findings to repair, only a run to repeat. One failed at posting has its
+// verdict.json, and comment.md when the post agent wrote it.
 //
 // A date later than the run's (#525). A description and its commits are a dated record of what was
 // verified, and a date later than the review's own cannot be true when the review reads it (#507's
