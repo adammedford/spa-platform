@@ -69,7 +69,7 @@ public static class RuleIds
 
     /// <summary>
     /// Every id above, for a test or a suite that has to cover the whole set rather than name one.
-    /// Workstream 6's negative suite can read this instead of keeping a thirteenth copy.
+    /// Workstream 6's negative suite can read this instead of keeping a copy of its own.
     /// </summary>
     public static readonly ImmutableArray<string> All =
     [
