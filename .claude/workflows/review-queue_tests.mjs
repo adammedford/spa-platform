@@ -860,11 +860,13 @@ try {
     }
     // A held test that went red itself is an ordinary reproduction, whatever else failed beside it: it
     // is no catch, needs no acceptance and merges. A same-named method of another class is a catch,
-    // which, unaccepted, reads did-not-fail and holds.
+    // which, unaccepted, reads did-not-fail and holds, and so is one of a class whose name ends in the
+    // held class's name (#694): MyLibraryTests is not LibraryTests, so the match starts at a dot.
     for (const [names, want, verdict] of [
       [[`tools.check_tests.${LIB2}`, `tools.check_tests.${CATCHER}`], 'reproduced', 'merge'],
       [[`tools.check_tests.${LIB2}(case 1)`], 'reproduced', 'merge'],
       [[`tools.check_tests.OtherTests.${LIB2.split('.').pop()}`], 'did-not-fail', 'hold'],
+      [[`tools.check_tests.My${LIB2}`], 'did-not-fail', 'hold'],
     ]) {
       env = run({ prs: [287] }, SHAPE, { range, mutate: { [LIB2]: { ...row('reproduced', names.length, 71), failingNames: names } } })
       result = await execute(env)
