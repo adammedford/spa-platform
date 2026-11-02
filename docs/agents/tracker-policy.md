@@ -41,6 +41,15 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
   rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
   ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
+- **A ticket is filed after a search for what was filed since its subject was last searched.**
+  Another session on the same account can file the same ticket while one drafts: #558 duplicated
+  #547, filed two and a half hours earlier. Just before `gh issue create`, run
+  `python3 -I tools/ticket_shape.py --since <time> --title "<title>"`, where `<time>` is when the
+  session last searched the tracker for the subject, in UTC (`date -u +%FT%TZ`). It lists every
+  issue, open or closed, created since then whose title shares at least three content words with
+  the title about to be filed, and exits 1 on any. Fold a true duplicate into the issue already
+  filed; name each match that is not one with `--not-duplicate-of N[,N…]`, the session's own
+  earlier filings included. Exit 2 means nothing was searched, and nothing is filed on it.
 - **The body is the current spec; the comments are the record.** Grilling records, routing, status
   notes, the implementer's answer and the reviewer's findings are comments, in order. Keep the body
   to what to build and the acceptance list, so a reader who needs only the spec reads only the body.
@@ -143,7 +152,8 @@ never take one for the current state of a moved ticket, whose issue holds it.
 session's own ticket does not authorise. What one is: `GLOSSARY.md` → "Change request".
 
 **Filing.** Anyone may file one. Search the open `change-request` issues first, and when one already
-asks for the change, add a blocked-by edge to it instead of filing another (#409). Label it
+asks for the change, add a blocked-by edge to it instead of filing another (#409). Just before
+filing, run the search for what was filed since (above). Label it
 `change-request` and `ready-for-human`, never `needs-triage`, and title it in plain prose with no id
 prefix. Its body is an `**Owner:** integrator` line, a `**Touches:**` line, a `**Rows:**` line when it
 serves plan rows, then `## The gap` and `## The change`, with every steering paragraph it changes
