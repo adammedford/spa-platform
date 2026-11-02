@@ -322,7 +322,8 @@ integrate run behind it. The integrator has a lane and no workstream. _Avoid_: "
 workstream.
 
 **Integration conflict** — a ticket whose first merge into its overnight run's branch,
-`overnight/<date>`, stops because the ticket and that branch changed the same lines. It is
+`overnight/<date>`, stops on at least one file git could not merge on its own: for example, both
+sides changed the same or neighbouring lines, or one side changed a file the other deleted. It is
 *resolved* when the ticket still integrates that night, after its own branch takes in the run's
 branch, and *unresolved* when it is reported and not merged. Not two tickets that merely changed
 one file and merged cleanly. _Avoid_: "merge failure" for a red check after a clean merge.
