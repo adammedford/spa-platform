@@ -50,6 +50,22 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   another account wrote, and `tools/overnight_collect.py` lists a ticket whose `ready-for-agent`
   another account last applied as `needs-triage`; both read the account from this line, and the
   repository's owner while it is absent.
+- **A decision Adam gives in a session is posted on the issue it decides, by the session he gave it
+  in.** When a foreground session puts an open question that no grill numbered to Adam and he
+  answers it there, the session posts his answer, before the work that rests on it is pushed, as a
+  comment on the issue the question belongs to: the ticket or the change request, never the pull
+  request. The comment names the date, the options offered and the one he chose, and its last line
+  is "Posted from a foreground session on Adam's words in it." On a change request it is the
+  decision comment, in the form under "Change requests" → "Deciding". On any other issue it is
+  headed `## Decided in a session: <what>`, never a first line beginning `Decision:`, which names a
+  change request's decision to the integrator lane and the reviewer; there it is a confirmed answer
+  the ticket's work may rest on and cite by URL, and it authorises no steering change the ticket's
+  acceptance criteria do not ask for, which stays a change request (ADR-0032 decision 3). A
+  question a grill numbered is answered by his `Confirm` on the run's `Overnight <date>` issue,
+  which no session writes. Every session posts as `@adammedford`, so this is a convention the
+  shared account cannot enforce: the prompts and the reviewer guard it, as they guard the `Confirm`
+  rule. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
+  before this one was written.
 - **A body is rewritten only to carry confirmed decisions.** An answer is confirmed when the human
   wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
   answer alone rewrites nothing. A ticket's body is rewritten by the morning run or by the session
@@ -158,10 +174,11 @@ lane and the reviewer read.
 
 A scripted session never posts a comment whose first line begins `Decision:`. Its draft is headed
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
-A foreground session may post a decision comment only on Adam's words given in that session, and the
-comment's last line says so ("Posted from a foreground session on Adam's words in it."). Every
-session posts as `@adammedford`, so this is a convention the shared account cannot enforce, as the
-rule that no agent session writes a `Confirm` is (above): the prompts and the reviewer guard it.
+A foreground session may post a decision comment only on Adam's words given in that session, under
+"A decision Adam gives in a session" (above): its first line is the `Decision:` form, not that
+rule's heading, and its last line is that rule's. Every session posts as `@adammedford`, so this is
+a convention the shared account cannot enforce, as the rule that no agent session writes a
+`Confirm` is (above): the prompts and the reviewer guard it.
 
 A `Confirm` on the Overnight issue never authorises a change request's edit; only the request's
 decision comment does. `.github/steering.py` reads only a cited comment's author, so it cannot tell
