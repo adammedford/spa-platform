@@ -61,7 +61,7 @@ export const meta = {
 // description writer (#300), so such a run may take eleven. The after pass (#635 Q27): 1 cleanup
 // agent, whose first step is the lookup, then Apply's 1 comments index, the body readers, 1
 // classifier and at most maxParallel appliers in the same bounded grouping, and 1 agent for the
-// After comment and the close: seven at the default, besides the body readers.
+// After comment and the close: seven at the default, besides the body readers and their re-reads.
 //
 // The after pass (#635, from #659 Q22 to Q33). A Confirm posted after the landing had no applier,
 // and nothing closed an Overnight issue: on 2026-10-29 nine stood open, #129 with 24 answers never
@@ -1116,8 +1116,10 @@ const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*)?$/
 const undecidableHead = (head) => head.length >= HEAD_CHARS &&
   (head.trim().length < MIN_VISIBLE || (!head.includes('\n') && HEADING_CUT.test(head.trim())))
 // A body the reader returned must be the one the index describes: the same length in bytes and the same
-// first HEAD_CHARS characters (jq slices by character). A reader that drops or rewrites any of it is
-// caught here, whatever the markup, and the comment is read again alone, READ_RETRIES times.
+// first HEAD_CHARS characters (jq slices by character). A reader that drops or adds a byte anywhere, or
+// rewrites any of the first HEAD_CHARS characters, is caught here, whatever the markup, and the comment is
+// read again alone, READ_RETRIES times. A rewrite past them that keeps the byte count is not caught: the
+// index holds only a head, and the fault seen, a dropped marker, changes the count.
 const READ_RETRIES = 2
 const RETRY_NOTE = `\n3. A previous read of this comment came back changed. Return its body exactly as gh printed it: every character, every \`**\` and \`Q<n>.\` marker, nothing summarised, reworded or cleaned up.`
 const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = ch.codePointAt(0); n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4 } return n }

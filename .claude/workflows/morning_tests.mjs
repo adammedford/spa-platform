@@ -296,8 +296,12 @@ function stub(env, scriptArgs, served) {
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
         // served.mangle: 'first' drops the **Q<n>.** marker from every question body the batch reader
-        // returns but not from a re-read (label ends -retry<n>); 'always' drops it from both.
-        const mangled = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
+        // returns but not from a re-read (label ends -retry<n>); 'always' drops it from both. 'head' and
+        // 'tail' change comment 1 on every read so that only one of the index's two fields differs: 'head'
+        // rewrites its first character (same bytes, another head), 'tail' drops its last, past the head.
+        const marker = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
+        const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.slice(0, -1) } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -1414,7 +1418,14 @@ try {
     if (!first.labels.some((l) => /^comments-batch:\d+-retry1$/.test(l))) fail(`a changed body: no re-read: ${first.labels.join(', ')}`)
     if (first.result.refusals.length || !first.result.apply.answers[4]) fail(`a changed body, faithful on re-read: not read: ${JSON.stringify(first.result.refusals)}`)
     const always = await execute(newRepo(), { date: DATE }, { mangle: 'always' })
-    if (!always.result.refusals.some((x) => /was not returned as the index shows it after 2 re-reads/.test(x))) fail(`a body changed on every read: not refused: ${JSON.stringify(always.result.refusals)}`)
+    if (!always.result.refusals.some((x) => x.includes(`${URL(ISSUE)}#issuecomment-1 was not returned as the index shows it after 2 re-reads`))) fail(`a body changed on every read: not refused by its URL: ${JSON.stringify(always.result.refusals)}`)
+    if (!always.labels.includes('comments-batch:1-retry2') || always.labels.some((l) => /-retry3$/.test(l))) fail(`a body changed on every read: not re-read exactly twice: ${always.labels.join(', ')}`)
+    // Each of the index's two fields is checked on its own: a body of the same bytes with another head, and
+    // one with the same head and another length, are each refused.
+    const head = await execute(newRepo(), { date: DATE }, { mangle: 'head' })
+    if (!head.result.refusals.some((x) => /#issuecomment-1 was not returned .*: its first characters differ from the index/.test(x))) fail(`a body with the same bytes and another head: not refused: ${JSON.stringify(head.result.refusals)}`)
+    const tail = await execute(newRepo(), { date: DATE }, { mangle: 'tail' })
+    if (!tail.result.refusals.some((x) => /#issuecomment-1 was not returned .*: \d+ bytes returned, \d+ in the index/.test(x))) fail(`a body with the same head and another length: not refused: ${JSON.stringify(tail.result.refusals)}`)
     if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
