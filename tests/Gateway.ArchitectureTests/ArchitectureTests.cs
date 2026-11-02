@@ -90,22 +90,23 @@ public sealed class ArchitectureTests
     {
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
-        // same rule runs here over the one project that must hold the literals: the twelve declarations
-        // in RuleIds, the twelve code declarations in Problems (#158; shell_unavailable since #427),
+        // same rule runs here over the one project that must hold the literals: the thirteen declarations
+        // in RuleIds (auth.store since #343's item 2), the thirteen code declarations in Problems (#158;
+        // shell_unavailable since #427, session_store_unavailable since #343's item 2),
         // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
         // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
         // its declaration only. The count moves with its subject: a quoted id or code added to or
         // removed from Platform.Abstractions moves it.
-        // Mutation (#444): drop ShellUnavailable from Problems, as before #427's held patch, and the
-        // count reads 24 and Problems.cs 11.
+        // Mutation (#726): run on origin/main without #343's item 2 and the count reads 25, Problems.cs
+        // 12 and RuleIds.cs 12.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(25, hits.Length);
+        Assert.Equal(27, hits.Length);
         Assert.Equal(
             [
                 ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
-                ("Platform.Abstractions/Problems.cs", 12),
-                ("Platform.Abstractions/RuleIds.cs", 12),
+                ("Platform.Abstractions/Problems.cs", 13),
+                ("Platform.Abstractions/RuleIds.cs", 13),
             ],
             hits
                 .GroupBy(hit => hit[..hit.IndexOf(':', StringComparison.Ordinal)], StringComparer.Ordinal)

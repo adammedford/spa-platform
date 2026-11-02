@@ -3,7 +3,7 @@ using Platform.Abstractions;
 namespace Gateway.ArchitectureTests;
 
 /// <summary>
-/// No workstream project spells a rule id or a problem code as a quoted literal. ADR-0015 put the twelve ids of
+/// No workstream project spells a rule id or a problem code as a quoted literal. ADR-0015 put the thirteen ids of
 /// <c>contracts/request-gate.md</c> in <c>Platform.Abstractions.RuleIds</c> because four workstreams
 /// raise them, and a copy nobody checks is how the gateway comes to refuse under an id the contract
 /// does not list. <c>RuleIdsTests</c> in <c>tests/Platform.Abstractions.Tests</c> holds those
@@ -32,8 +32,8 @@ namespace Gateway.ArchitectureTests;
 public static class RuleIdLiterals
 {
     /// <summary>
-    /// What the rule holds the workstream projects to: the twelve rule ids of <see cref="RuleIds.All"/>
-    /// and the twelve problem codes of <see cref="Problems.Rows"/>, the <c>code</c> column of
+    /// What the rule holds the workstream projects to: the thirteen rule ids of <see cref="RuleIds.All"/>
+    /// and the thirteen problem codes of <see cref="Problems.Rows"/>, the <c>code</c> column of
     /// <c>contracts/http-contract.md</c> -> Errors (#158). Read from those two types, never listed
     /// here: <c>RuleIdsTests</c> and <c>RejectionTableTests</c> hold the types to the contract tables, so a
     /// row the contract gains reaches this rule without an edit to it. A code is a stable string four
