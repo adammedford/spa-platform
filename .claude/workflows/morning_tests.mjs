@@ -325,7 +325,14 @@ function stub(env, scriptArgs, served) {
           ],
           claimed: ['claim/ws2-hosting/2.9'],
           record,
+          // The landing's state (#661): an open pull request by default; served.verify.landing, the
+          // fields of a merged one's report over it, as the merged-PR check returns them.
+          prState: 'open', landed: [], merge: { commit: '', mergedAt: '' }, verifiedHead: '', originMain: '', contained: false,
+          ...(v.landing || {}),
         }
+        // served.verifyDrop: fields the agent left out, as a malformed report does; the schema check is
+        // told to expect each one missing, so it judges the rest.
+        for (const f of served.verifyDrop || []) delete out[f]
       } else if (label === 'classify') {
         const qs = jsonAfter(prompt, 'QUESTIONS') || []
         const kinds = served.kinds || {}
@@ -443,7 +450,8 @@ function stub(env, scriptArgs, served) {
         // served.afterHanded: fields of its return, as a hand-over agent that closed anyway would.
         out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: true, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
-      const bad = validate(opts.schema, out)
+      const dropped = label === 'verify' ? (served.verifyDrop || []).map((f) => `$.${f}: missing`) : []
+      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b))
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
       for (const x of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
         fs.mkdirSync(path.dirname(x[1]), { recursive: true })
@@ -674,8 +682,8 @@ try {
 
   // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
   //    file, dispatches at most ten agents besides the comments-batch body readers (nine before #319
-  //    moved the comments read into Apply; the readers are one per 24 KB of questions), and the
-  //    return counts what ran.
+  //    moved the comments read into Apply; the readers pack the questions and Confirm comments in
+  //    order toward BATCH_BYTES, a packing target and no cap, #661), and the return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
@@ -2189,6 +2197,137 @@ try {
       if (d === doc && s === src && m.whenToUse === loadMeta().whenToUse) { fail(`#489: the mutation "${label}" changed nothing`); continue }
       if (!launchProblems(d, s, m).length) fail(`#489: the launch-line check missed ${label}`)
     }
+  }
+
+  // 27. A morning on an already merged pull request (#661). On 2026-10-30 Verify stopped at step 6
+  //     because #620 had merged, and the hand-over said "Review record: none", "CI: none" and repeated
+  //     the landing command; on 2026-10-29 tools/land.sh had pruned the branch and Verify stopped at
+  //     step 2. Verify now looks for a merged landing pull request first and reports it as state the
+  //     script judges with the after pass's checks (Q23, Q26), Apply runs through the after pass's
+  //     path behind the merged head's record and CI (Q22, Q27), and the hand-over says merged (Q25, Q28).
+  const MERGED_AT = '2026-10-21T10:00:00Z'
+  const LANDED_PR = { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400', headRefOid: HEAD, mergeCommit: sha('9'), mergedAt: MERGED_AT }
+  const LANDING = { prState: 'merged', landed: [LANDED_PR], merge: { commit: sha('9'), mergedAt: MERGED_AT }, verifiedHead: HEAD, originMain: sha('9'), contained: true }
+  // The merged report, with the open pull request's stale description served too, so a refresh would show.
+  const mergedRun = (served = {}, landing = {}, verify = {}) => execute(newRepo(), { date: DATE }, {
+    issue: AFTER_NIGHT, kinds: {}, classes: AFTER_CLASSES, ...served,
+    verify: { outcome: 'merged', prReused: true, prBody: BODY_287_FIRST, worktrees: [], ...verify, landing: { ...LANDING, ...landing } },
+  })
+  const landingOf = (r) => section(r.result.handover.text, 'Landing')
+  const MERGED_LINE = /^- Pull request #400 is merged\b/m
+  const MERGED_REFUSED = /merged report was refused/
+  const noCommands = (label, text) => {
+    if (/land\.sh/.test(text)) fail(`#661 Q28, ${label}: the hand-over carries the landing script:\n${text}`)
+    if (/review-queue/.test(text)) fail(`#661 Q28, ${label}: the hand-over carries the review-queue command:\n${text}`)
+    if (text.includes('`')) fail(`#661 Q28, ${label}: the hand-over carries a backtick span`)
+  }
+
+  // 27a. Box 2: a merged report routes into the after pass's path, and nothing that precedes a merge runs.
+  checks++
+  const merged = await mergedRun()
+  {
+    const L = merged.labels
+    if (L.includes('pr-refresh')) fail(`#661 Q23: a merged run refreshed the description of a merged pull request: ${L.join(', ')}`)
+    if (L.includes('after')) fail(`#661 Q28: the morning ran the after pass's cleanup agent, which the hand-over refers to the after pass: ${L.join(', ')}`)
+    if (merged.result.refusals.length) fail(`#661 Q27: a merged run with its evidence in place refused: ${JSON.stringify(merged.result.refusals)}`)
+    if (!merged.result.merged || merged.result.merged.commit !== sha('9') || merged.result.merged.pr !== 400) fail(`#661 Q26: the run does not return the merged pull request: ${JSON.stringify(merged.result.merged)}`)
+    const vp = merged.prompt('verify')
+    const at = vp.indexOf(`gh pr list --head overnight/${DATE} --base main --state merged`)
+    const later = ['1. The main checkout', `--is-ancestor <base> overnight/${DATE}`, 'tools/check.sh --base', `push -u origin overnight/${DATE}`, 'gh pr create']
+    if (!(at > 0) || later.some((s) => !(vp.indexOf(s) > at))) fail(`#661 Q23: the Verify prompt does not ask for the merged-PR check before the steps that need the integration branch (at ${at}; ${later.map((s) => `${s} at ${vp.indexOf(s)}`).join('; ')})`)
+    if (!/run none of steps 1 to 8/.test(vp)) fail('#661 Q23: the Verify prompt does not skip the steps that precede a merge on a merged pull request')
+    for (const f of ['prState', 'merge', 'landed', 'verifiedHead', 'contained']) if (!vp.includes(f)) fail(`#661 Q26: the Verify prompt does not ask for ${f}`)
+  }
+
+  // 27b. Box 3: a malformed or ambiguous merged report is refused, nothing is applied over it, and the
+  //      hand-over prints no merged-PR line and no command over it.
+  checks++
+  for (const [label, served, landing, verify] of [
+    ['no merge commit', {}, { merge: { commit: '', mergedAt: MERGED_AT } }, {}],
+    ['a short merge commit', {}, { merge: { commit: '9999999', mergedAt: MERGED_AT } }, {}],
+    ['no prState', { verifyDrop: ['prState'] }, {}, {}],
+    ['a merged outcome over an open prState', {}, { prState: 'open' }, {}],
+    ['a stop over a merged prState', {}, {}, { outcome: 'stop', step: 2, reason: 'the integration branch does not exist' }],
+    ['two merged pull requests', {}, { landed: [LANDED_PR, { ...LANDED_PR, number: 401, url: LANDED_PR.url.replace('400', '401') }] }, {}],
+    ['a head the morning did not verify', {}, { verifiedHead: OLDER }, {}],
+    ['a head that is not the merged pull request\'s', {}, { landed: [{ ...LANDED_PR, headRefOid: OLDER }] }, {}],
+    ['a head origin/main does not contain', {}, { contained: false }, {}],
+  ]) {
+    const r = await mergedRun(served, landing, verify)
+    const text = r.result.handover.text
+    if (!r.result.refusals.some((x) => MERGED_REFUSED.test(x)) || !MERGED_REFUSED.test(text)) fail(`#661 Q26, ${label}: not refused: ${JSON.stringify(r.result.refusals)}`)
+    if (r.result.merged) fail(`#661 Q26, ${label}: the run returns a merged pull request over a refused report`)
+    if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`#661 Q26, ${label}: Apply ran over a refused merged report: ${r.labels.join(', ')}`)
+    if (MERGED_LINE.test(text) || /\bis merged\b/.test(landingOf(r))) fail(`#661 Q26, ${label}: the hand-over prints a merged-PR line over a refused report:\n${landingOf(r)}`)
+    noCommands(label, text)
+  }
+  // The refusals name what was wrong.
+  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, /d{40}/], ['contained', { contained: false }, /does not contain/]]) {
+    const r = await mergedRun({}, landing)
+    if (!r.result.refusals.some((x) => want.test(x))) fail(`#661 Q26, ${label}: the refusal does not say why: ${JSON.stringify(r.result.refusals)}`)
+  }
+
+  // 27c. Box 4: a merged pull request, a merge record naming its actual head and green CI on it:
+  //      the classifier and the appliers run through the after pass's path.
+  checks++
+  {
+    if (!merged.labels.includes('classify') || !APPLIERS(merged.labels).length) fail(`#661 Q27: a cleared merged run did not dispatch Apply: ${merged.labels.join(', ')}`)
+    for (const c of merged.calls.filter((x) => x.label.startsWith('apply:'))) {
+      if (!c.prompt.includes('This is the after pass (#635)') || !/still in place/.test(c.prompt)) fail(`#661 Q22: the ${c.label} prompt is not the after pass's applier`)
+      if (!(c.schema.properties || {}).verified) fail(`#661 Q22: the ${c.label} applier reports no verified effects, as the after pass's does`)
+      if (!new RegExp(`PHASE FILE: \\S+/morning-${DATE}/after/`).test(c.prompt)) fail(`#661 Q22: the ${c.label} applier keeps the morning's phase file, which a later pass would reuse unverified`)
+    }
+  }
+
+  // 27d. Box 5: with the record missing, a hold, a record of another head, or CI red, pending or none,
+  //      Apply is skipped and the hand-over names the reason; a record without green CI clears nothing.
+  checks++
+  for (const [label, served, verify, why] of [
+    ['no record', { recordComments: [] }, {}, /no review record names c{40}/],
+    ['a hold', { recordComments: HOLD }, {}, /says hold/],
+    ['a record of another head', { agentRecord: { verdict: 'merge', head: OLDER, url: 'https://github.com/adammedford/spa-platform/pull/400#issuecomment-13', reader: 'exit 0' } }, {}, /no review record names c{40}/],
+    ['red CI', {}, { ci: 'red' }, /CI is red on c{40}/],
+    ['pending CI', {}, { ci: 'pending' }, /CI is pending on c{40}/],
+    ['no CI', {}, { ci: 'none' }, /CI is none on c{40}/],
+  ]) {
+    const r = await mergedRun(served, {}, verify)
+    if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`#661 Q27, ${label}: Apply ran: ${r.labels.join(', ')}`)
+    if (!r.result.refusals.some((x) => why.test(x))) fail(`#661 Q27, ${label}: the refusals do not name why Apply did not run: ${JSON.stringify(r.result.refusals)}`)
+    const land = landingOf(r)
+    if (!new RegExp(`^- Apply did not run: [^\\n]*${why.source}`, 'm').test(land)) fail(`#661 Q28, ${label}: the Landing block does not name why Apply did not run:\n${land}`)
+    if (!MERGED_LINE.test(land)) fail(`#661 Q28, ${label}: the merge was refused with the evidence; the hand-over lost its merged line:\n${land}`)
+    if (r.result.refusals.some((x) => MERGED_REFUSED.test(x))) fail(`#661 Q27, ${label}: the merge itself is named as a refusal`)
+    noCommands(label, r.result.handover.text)
+  }
+
+  // 27e. Box 6: the hand-over for a merged pull request.
+  checks++
+  {
+    const text = merged.result.handover.text
+    const land = landingOf(merged)
+    if (!new RegExp(`^- Pull request #400 is merged: merge commit ${sha('9')}[^\\n]*head ${HEAD}[^\\n]*landed`, 'm').test(land)) fail(`#661 Q25: no line calls #400 merged with its merge commit and its rows landed:\n${land}`)
+    if (/(pull request|#400)( itself)? (is|has|was) landed|landed by pull request/i.test(text)) fail(`#661 Q25: the hand-over says the pull request itself landed:\n${land}`)
+    if (!/^- Apply permitted: the review record of c{40} says merge \(https:\S+issuecomment-11\), and CI is green on c{40} \(https:\S+\)/m.test(land)) fail(`#661 Q28: the Landing block does not name the evidence that permitted Apply:\n${land}`)
+    if (!/the after pass/.test(land)) fail(`#661 Q28: the Landing block does not refer the cleanup, the settlement and the close to the after pass:\n${land}`)
+    if (!/completed/.test(land) || /Apply (will|then) run/.test(land)) fail(`#661 Q28: the hand-over promises again what Apply completed:\n${land}`)
+    if (section(text, 'Applied') === 'nothing') fail('#661 Q28: the completed effects are not listed under Applied')
+    if (!/is merged/.test(section(text, 'Pull request description'))) fail(`#661 Q28: "Pull request description" does not say the pull request is merged:\n${section(text, 'Pull request description')}`)
+    if (/fork point not read/.test(text.split('\n')[2] || '')) fail(`#661 Q28: the first line reads a merged run as one whose fork point was not read: ${text.split('\n')[2]}`)
+    noCommands('merged', text)
+  }
+
+  // 27f. Box 7: the Agent budget header states the packing rule as it is, and the agent budget the
+  //      merged path takes; a merged run stays within it.
+  checks++
+  {
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    // The paragraph as prose: its comment markers and line breaks read as one space.
+    const header = ((/^\/\/ Agent budget[\s\S]*?(?=\n\/\/\n)/m.exec(src) || [''])[0]).replace(/\n\/\/ /g, ' ')
+    for (const said of ['24,000-byte', 'BATCH_BYTES', 'read alone', 'no total cap', 'not a hard bound']) if (!header.includes(said)) fail(`#661 Q24: the Agent budget header does not say "${said}":\n${header}`)
+    if (!/^const BATCH_BYTES = 24000$/m.test(src)) fail('#661 Q24: BATCH_BYTES is not the 24,000 bytes the header states')
+    if (!/already merged/.test(header)) fail('#661 Q24: the Agent budget header does not give the merged path\'s budget')
+    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:'))
+    if (core.length > 10 || merged.result.agents !== merged.labels.length) fail(`#661 Q24: a merged run took ${core.length} agents besides the body readers, and counts ${merged.result.agents} of ${merged.labels.length}: ${merged.labels.join(', ')}`)
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
