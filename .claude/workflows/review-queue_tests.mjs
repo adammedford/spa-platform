@@ -1420,7 +1420,8 @@ try {
     const FF = 'merge --ff-only origin/main'
     const halts = [
       ['a clean main 84 behind', { differs: true, behind: 84 }, (h) => h.includes(FF) ? '' : `does not give the fast-forward ${FF}`],
-      ['an uncommitted edit of the script', { differs: true, scriptEdited: true, trackedChanges: true }, (h) => /uncommitted edit/.test(h) && !h.includes(FF) ? '' : 'does not name the uncommitted edit, or gives a fast-forward'],
+      // Behind as well, so the edit's remedy must come first of the four, as the accepted draft orders them.
+      ['an uncommitted edit of the script', { differs: true, scriptEdited: true, trackedChanges: true, behind: 5 },(h) => /uncommitted edit/.test(h) && !h.includes(FF) ? '' : 'does not name the uncommitted edit, or gives a fast-forward'],
       ['a checkout on task/x', { differs: true, branch: 'task/x', behind: 3 }, (h) => h.includes('task/x') && !h.includes(FF) ? '' : 'does not name task/x, or gives a fast-forward'],
       ['a main with tracked changes', { differs: true, trackedChanges: true, behind: 2 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward over tracked changes'],
       ['a main with a commit origin/main lacks', { differs: true, behind: 0 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward that cannot apply'],
@@ -1447,12 +1448,14 @@ try {
       }
     }
     // The launch agent's reading is the run's base tip, whatever the queue or an inventory read
-    // after it; an unread one is "" when the run halts.
+    // after it. A halted run returns the tip the launch agent read, and "" for an unread one.
     checks++
     {
       const env = run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7') } })
       const result = await execute(env)
       if (result.baseTip !== sha('7')) fail(`a launch agent that read origin/main at ${sha('7')}: baseTip ${result.baseTip}, expected the launch agent's`)
+      const read = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7'), differs: true, behind: 1 } }))
+      if (read.baseTip !== sha('7')) fail(`a halted run whose launch agent read origin/main at ${sha('7')}: baseTip ${JSON.stringify(read.baseTip)}, expected the launch agent's`)
       const halted = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: 'not a sha', error: 'rev-parse failed' } }))
       if (halted.baseTip !== '') fail(`a launch agent that read no sha: baseTip ${JSON.stringify(halted.baseTip)}, expected ""`)
     }
@@ -1474,7 +1477,9 @@ try {
       const env = run({ prs: [101] }, PRS)
       await execute(env)
       const p = env.prompts.launch || ''
-      for (const want of [`git -C ${env.repo} fetch origin --tags`, `git -C ${env.repo} diff --quiet origin/main -- .claude/workflows/review-queue.js`, `git -C ${env.repo} symbolic-ref --short -q HEAD`, `git -C ${env.repo} rev-list --count HEAD..origin/main`, `git -C ${env.repo} status --porcelain --untracked-files=no`, `git -C ${env.repo} diff --quiet HEAD -- .claude/workflows/review-queue.js`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/launch.json`, 'House rules (']) if (!p.includes(want)) fail(`the launch prompt lacks ${JSON.stringify(want)}`)
+      // The fetch is held to step 1, before origin/main is read: HOUSE names the same command, so a
+      // bare search for it would pass with the step's fetch gone (#687, Q7: an unfetched tip proves nothing).
+      for (const want of [`1. \`git -C ${env.repo} fetch origin --tags\`, then baseTip = \`git -C ${env.repo} rev-parse origin/main\``,`git -C ${env.repo} diff --quiet origin/main -- .claude/workflows/review-queue.js`, `git -C ${env.repo} symbolic-ref --short -q HEAD`, `git -C ${env.repo} rev-list --count HEAD..origin/main`, `git -C ${env.repo} status --porcelain --untracked-files=no`, `git -C ${env.repo} diff --quiet HEAD -- .claude/workflows/review-queue.js`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/launch.json`, 'House rules (']) if (!p.includes(want)) fail(`the launch prompt lacks ${JSON.stringify(want)}`)
       if (/merge --ff-only|git -C \S+ (checkout|switch|reset|pull)\b/.test(p)) fail('the launch prompt moves the checkout')
     }
   }
