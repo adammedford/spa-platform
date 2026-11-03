@@ -106,8 +106,8 @@ using an older snapshot to choose work.
 - **What has landed:** `git log --oneline origin/main`, where each task's merge names its id.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read from
   origin/main against those tags.
-- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read from origin/main against
-  those tags.
+- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, or for a gate defined after
+  the export the gate register `contracts/gates.md`, read from origin/main against those tags.
 - **All three at once, per gateway capability:** read `docs/roadmap.md` from origin/main with
   `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; after
   landing a row, run that script in the landing checkout.
