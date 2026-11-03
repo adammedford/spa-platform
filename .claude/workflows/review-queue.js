@@ -383,9 +383,10 @@ const STATED = {
   },
   required: ['test', 'project', 'mutation', 'failed', 'total', 'quote'],
 }
+// A nomination's test is the bare test name; the assertion it suspects goes in why (#763).
 const NOMINATION = {
   type: 'object',
-  properties: { test: { type: 'string' }, project: { type: 'string' }, why: { type: 'string' } },
+  properties: { test: { type: 'string', description: 'the test name alone, nothing after it' }, project: { type: 'string' }, why: { type: 'string', description: 'the assertion suspected, and why it cannot fail' } },
   required: ['test', 'project', 'why'],
 }
 const INVENTORY = {
@@ -620,7 +621,7 @@ The pull request, as the inventory read it (${DIR(n)}/inventory.json holds the w
 
 ${d ? deltaBrief(d) : `Read the diff yourself with the review guide's commands (\`git -C ${REPO} diff ${inv.forkPoint}...${inv.head}\`).`} A diff with no code in it, docs-only or tracker-only, is reviewed all the same: no pull request is exempt by what it touches.
 ${axis === 'Standards'
-    ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail, by file and test name.'
+    ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail: its test by the test name alone, with nothing after it, and the assertion itself in why.'
     : `Hold the diff to the spec sources the review guide's table names: the plan row, the issue's body and comments, the contracts and pipeline table, the test and evidence ids the row names, the ticket's change requests and ADRs. ${changeRequestSources(inv)} ${STEERING_AUTHORITY} The pull request body is the author's claim, not the spec: put every claim in claims, verified or not, and how.`}
 ${axis === 'Standards' ? 'Each nomination: test (by the name the inventory\'s candidates use, if it is one), project (what runs it alone), and why you suspect it cannot fail. ' : ''}Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
 
@@ -721,6 +722,32 @@ const sinceHeadsOf = (records, inv) => {
 // as does a held test and a stated mutation naming no file the inventory knows. A candidate an
 // earlier record reproduced is cleared by that record, and not mutated, when neither its file nor its
 // broken source changed since that record's head.
+// A test name as a runner prints it, read up to its '(': an xUnit case's arguments follow it.
+// Python unittest prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a
+// dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
+// reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
+// shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+const dotted = (f, withClass = true) => {
+  const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+  if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
+  return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
+}
+// A nomination is read by its test's bare name, the text before its first space or '(' (#763): on
+// #762 the cell 'X (only the Assert.Null(...) line)' matched no failing name, so a row that went red
+// on X read as caught elsewhere and held. What followed the name stays in why. A Python unittest cell
+// 'test_x (pkg.Class.test_x)' is read as its whole dotted name, by dotted() as mutationRow reads a
+// failing name, so another class's test_x is not this one; 'test_x (pkg.Class)' is read as test_x,
+// since a qualifier such as '(Assert.Null)' has its shape. A candidate keyed by the bare name lends
+// the row what it guards. A cell with no name before its first space or '(' keeps its whole text, so
+// its row still reaches the verdict.
+const nominated = (s, byTest) => {
+  const cell = (s.test || '').trim()
+  const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
+  const whole = dotted(cell, false)
+  const test = whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
+  const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
+  return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated' }
+}
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []
   const byTest = new Map(candidates.map((c) => [c.test, c]))
@@ -738,7 +765,7 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const all = [
     ...held,
     ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
+    ...((standards && standards.nominations) || []).map((s) => nominated(s, byTest)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]
@@ -784,14 +811,7 @@ const mutationRow = (n, m, i, got) => {
   // stays as reported. A failing name is the named test when it ends in the named test's whole dotted
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
-  // fails closed to the verdict's check (#695). A name is read up to its '(': an xUnit case's
-  // arguments follow it. Python unittest prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)'
-  // before 3.11, so a dotted name in the parenthesis after a bare method is the whole name.
-  const dotted = (f) => {
-    const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
-    if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
-    return inner.endsWith(`.${head}`) ? inner : `${inner}.${head}`
-  }
+  // fails closed to the verdict's check (#695). dotted() above reads each name.
   const isNamed = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
