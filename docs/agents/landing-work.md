@@ -29,8 +29,9 @@ file whose changes equal its origin/main content, with nothing staged, may first
 `git restore <path>` or `git checkout -- <path>`, as a call of its own, since once `main` is
 fast-forwarded that restore has changed nothing (#376). In a Claude Code session started in a
 checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
-before each Bash call, and in the main checkout it refuses the branch-moving git commands and those
-that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
+as it stands on `origin/main`, or the checkout's own copy when that ref does not resolve or holds
+none, before each Bash call, and in the main checkout it refuses the branch-moving git commands and
+those that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
 checkout -- <path>`), admits that one fast-forward and that one restore, and names this route (#114,
 #200). A person's terminal runs no such hook.
 
