@@ -234,6 +234,14 @@ rule, and when it deletes anything its own last line names that file.
 
 A task is **done** as `GLOSSARY.md` → "Done" defines it.
 
+## Preparing the overnight launch
+
+The session that will launch the overnight run prepares it, and launches `.claude/workflows/overnight.js` with the Workflow tool by `scriptPath`, so the landed file runs. The previous run's pull request has landed and its after pass, the third of the morning's launches below, has finished first, never beside the new run: it unassigns the partial tickets and removes the worktrees that the next collect would otherwise read as claims.
+
+`tools/overnight_preflight.sh --fixture <path> <date>` judges each launch precondition and prints the launch arguments; its header says what each line checks, and `<date>` is the morning the run ends. Set `standingAnswer` to the grant the human gave for this launch, which is off unless given (ADR-0021 decision 3). The printed `skip` already holds the candidates of the demoted, shape, adr and decision lines. Name with `--skip`, and run again, each other ticket a lane cannot finish, so the arguments and the fixture both carry it. A ticket the claims line lists as held is read as claimed, so no lane takes it; one with an open box a lane can build is freed by the rename that line prints, once its remaining local and remote claims are checked, since the rename frees no same-id branch origin still holds; the rest stay held.
+
+`node .claude/workflows/overnight_harness.mjs .claude/workflows/overnight.js <path>` runs the script on that fixture with every agent mocked, and passes before the launch. The file is git-ignored, and today only the main checkout holds it: a fresh clone or a worktree has none. Check that it is there and is the intended mock before running it; if it is absent, stop and resolve that first, and report no mock pass without it. A landing on `main` or a tracker edit moves the forecast, so after either, run preflight and the mock run again, last before the launch.
+
 ## The morning's launches
 
 An overnight run lands through the morning workflow, `.claude/workflows/morning.js` (#78), which a
