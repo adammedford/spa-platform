@@ -1532,6 +1532,13 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   const integ = prompts712[`integrate:${FRESH}`] || ''
   if (integ.includes('rev-list --merges --first-parent -n 1 HEAD)^1')) fail('#712: the integrate step\'s STEP 0 still takes the run branch\'s latest merge as the ticket\'s own')
   if (!integ.includes('THE GATE ALONE')) fail('#712: the integrate step\'s STEP 0 does not hand a merge already in to the gate alone')
+  // MERGE_OF reads the oldest first-parent merge since the base, `--reverse` then the first sha, never the
+  // latest (#634's fix). The mocked probe returns mergeSha directly, so only the prompts' text can show the
+  // flag: with `--reverse` dropped, both prompts read the newest merge and this companion stayed green (review of #737).
+  for (const [label, p] of [['resume probe', probe], ['integrate STEP 0', integ]]) {
+    if (!p.includes(`rev-list --first-parent --merges --reverse ${BASE_712}..`)) fail(`#712: the ${label} prompt does not read the oldest merge, rev-list --first-parent --merges --reverse <base>.., for the ticket's own merge`)
+    if (!/the first sha/.test(p)) fail(`#712: the ${label} prompt does not take the first sha that rev-list prints`)
+  }
 }
 
 // 37. The report's main-checkout step tells a foreground session's scratch from a file the run left (#714). On

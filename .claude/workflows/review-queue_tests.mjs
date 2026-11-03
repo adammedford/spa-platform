@@ -1367,7 +1367,8 @@ try {
   // ticket no non-merge commit since the fork point names as #n or issue-n (#566), and #683's record
   // cleared a head it then refused. The script applies the same rule after the skip of a recorded head
   // and before the range agent: a ticket only a merge names (a), one named only inside a URL (b), 35
-  // beside commits naming 352 and reissue-35 (d) and a commit with no parent count (h) stop the pull
+  // beside commits naming 352 and reissue-35 (d), a commit with no parent count (h) and an indented
+  // lower-case closes line naming a ticket no commit names (i) stop the pull
   // request at stage closes with no other agent run; issue-n in a one-parent commit (c), a lower-case closes line
   // ending in a carriage return (e) and no Closes line (f) are reviewed; a recorded head is skipped (g).
   // The numbers are built, not written: a literal hash-number here is a citation the steering check
@@ -1394,10 +1395,14 @@ try {
       607: pr(607, ['docs/z.md'], { head: H76, forkPoint: B76, commits: [H76], reviews: [CLEARED_76], description: `Closes ${h(48)}` }),
       // (h) a commit with no parent count does not count.
       608: pr(608, ['docs/z.md'], { description: `Closes ${h(49)}`, commitMessages: [{ sha: C1, message: `Task x: lands it (${h(49)})` }] }),
+      // (i) the keyword's case and the leading whitespace are read: an indented lower-case closes line
+      //     naming a ticket no commit names still stops the pull request. (e) alone cannot show it, since
+      //     its tickets are named, so a matcher reading only `Closes` at the line's start passed (e) (review of #737).
+      609: pr(609, ['docs/z.md'], { description: `Lands it.\r\n\r\n  closes ${h(50)}\r\n`, commitMessages: [one('Task x: lands it')] }),
     }
-    const env = run({ prs: [601, 602, 603, 604, 605, 606, 607, 608] }, SERVED)
+    const env = run({ prs: [601, 602, 603, 604, 605, 606, 607, 608, 609] }, SERVED)
     const result = await execute(env)
-    const stopped = { 601: [41], 602: [42], 604: [35], 608: [49] }
+    const stopped = { 601: [41], 602: [42], 604: [35], 608: [49], 609: [50] }
     for (const [n, tickets] of Object.entries(stopped).map(([k, v]) => [Number(k), v])) {
       const r = resultOf(n, result)
       if (r.outcome !== 'failed') fail(`PR ${n}: outcome ${r.outcome}, expected failed for a Closes line no non-merge commit names`)

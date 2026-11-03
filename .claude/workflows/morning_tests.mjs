@@ -2534,6 +2534,11 @@ try {
     ['a head origin/main does not contain', {}, { contained: false }, {}],
     // A pull request other than the one that merged: judgeMerged's pr-number check (review of #661).
     ['a pull request that is not the merged one', {}, { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, {}],
+    // A full merge-commit sha that is not the one the merged pull request lists, and no merged pull request at
+    // all: the earlier rows gave only an empty or short sha and two pull requests, so the sha comparison and the
+    // exactly-one rule could each be weakened with this companion green (review of #737).
+    ['a merge commit that is not the pull request\'s', {}, { merge: { commit: sha('8'), mergedAt: MERGED_AT } }, {}],
+    ['no merged pull request', {}, { landed: [] }, {}],
   ]) {
     const r = await mergedRun(served, landing, verify)
     const text = r.result.handover.text
@@ -2544,7 +2549,7 @@ try {
     noCommands(label, text)
   }
   // The refusals name what was wrong.
-  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, new RegExp(`the morning verified ${OLDER}`)], ['contained', { contained: false }, /does not contain/], ['another pull request', { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, /#401 is not #400, the one that merged/]]) {
+  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, new RegExp(`the morning verified ${OLDER}`)], ['none', { landed: [] }, /0 merged pull requests/], ['contained', { contained: false }, /does not contain/], ['another pull request', { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, /#401 is not #400, the one that merged/], ['another merge commit', { merge: { commit: sha('8'), mergedAt: MERGED_AT } }, new RegExp(`#400 lists ${sha('9')}`)]]) {
     const r = await mergedRun({}, landing)
     if (!r.result.refusals.some((x) => want.test(x))) fail(`#661 Q26, ${label}: the refusal does not say why: ${JSON.stringify(r.result.refusals)}`)
   }
