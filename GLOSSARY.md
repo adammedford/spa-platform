@@ -41,6 +41,12 @@ default project".
 reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
 the glossary keeps for agent sessions and the gateway's session records.
 
+**Observation box** — an acceptance box whose evidence is a count reported by a later run's retro,
+such as #109's per-run refusal count. A ticket whose open boxes are all observation boxes is an
+observation ticket. Its ticket's routing, dependencies and how it is ticked:
+`docs/agents/tracker-policy.md` → "This repository's additions", ticket-shape rule 2. _Avoid_:
+"sitting box" for a criterion that needs later run evidence rather than a hands-on sitting.
+
 **Unattended run** — one invocation of a script with its documented arguments only, from a shell
 that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
 with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
@@ -272,8 +278,9 @@ contract, a package, a project, an ADR or a steering document. It is how a sessi
 change its own ticket does not authorise. Anyone may file one. The human decides it in a
 decision comment, the integrator makes the edit, and a task that needs it waits on it until it
 closes. Requests filed before ADR-0032 are files under `contracts/changes/`, closed to new files
-and edited only under an authority, cited by their id, and are change requests all the same.
-_Avoid_: "CR" in prose, "proposal", "change-request file" for a new one.
+and edited only under an authority, cited by their id, and are change requests all the same. Its
+lifecycle and decision form: `docs/agents/tracker-policy.md` → "Change requests". _Avoid_: "CR" in
+prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
 cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
@@ -350,6 +357,37 @@ changes or decline, and whether the decision gets an ADR. It is the confirmed an
 landing the change request cites. A draft an agent posts is not one until the human accepts it as
 drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's decision could be
 meant, and "decision" for a draft.
+
+**Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
+a foreground session and posted by that session on the issue the question belongs to, ending with
+the line that says so. On a change request it is the decision comment; on any other issue it is a
+confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
+acceptance criteria do not ask for. Its form and what it covers:
+`docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
+for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
+be read.
+
+**Draft decision** — a scripted session's recommendation on a change request, posted as a comment
+headed `## Draft decision`. It decides nothing. Its form and how the human adopts it:
+`docs/agents/tracker-policy.md` → "Change requests" → "Deciding". _Avoid_: "proposed decision" as
+the comment's name, "decision" for a draft.
+
+**Decision layer** — a place in the repository's reading order for statements about a decision.
+Which statements belong where, including the plan's role as background: `docs/adr/README.md` →
+"Where a decision lives".
+
+**Status-line pointer** — one sentence on an accepted ADR's Status line that names where a fact the
+ADR states is now held, when a later change made that fact stale without changing any decision. It
+amends nothing and restates no rule; the body stays as accepted. How an ADR is amended instead:
+`docs/adr/README.md` → "Where a decision lives". _Avoid_: "body note", "postscript", "amendment"
+for one.
+
+**Write file** — one file holding one tracker write ahead of its posting: a frontmatter block
+naming the target issue and the action, then the body that is posted verbatim. A sub-agent of an
+audit or a cleanup drafts them and the session that posts reads only their index and the ones
+marked for the human. Its keys and how it is posted: `docs/agents/tracker-policy.md` -> "Drafting
+tracker writes". Not a line of the pending-writes file, which queues a write GitHub refused.
+_Avoid_: bare "draft" for this, "batch file".
 
 **Steering document** — a document a session steers by, so a change to it lands only on a cited
 authority. Which documents are in the set, and what counts as authority:
@@ -505,14 +543,15 @@ prefix's sequence and is listed in the test id register.
 **Plan policy** — the assertions on what a Terraform root's plan may contain: P-01 (the platform plan allowlist), P-02 (the apps plan allowlist), P-03 (the task role policy) and P-07 (the identity root's allowlist). Mock-provider `terraform test` runs that read the configuration (ADR-0016), so they prove the configuration and never the account; P-04 to P-06 are the deployed checks. _Avoid_: plan check, for a credentialed plan nothing runs.
 
 **Test id register** — the live list of test ids named after the frozen export, each with its
-tier and the decision that named it, and the tiers of the export's rows that carry none, and the
-checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
-the workstream that needs it. Holds no evidence ids and no rule ids. _Avoid_: post-export ids,
-test catalogue.
+tier and the decision that named it, the tiers of the export's rows that carry none, and the checks
+still owed an id. Kept by the integrator, who adds a row by landing a decided change request, never
+by the workstream that needs it. How ids are added, numbered and retired: `contracts/test-ids.md`.
+Holds no evidence ids and no rule ids. _Avoid_: post-export ids, test catalogue.
 
-**Retired test id** — a test id whose check was dropped. It keeps its number, and its row in the
-test id register is marked retired (an export id gains a row there to be marked), so earlier
-records stay true; no exit test may name it. _Avoid_: deleted, removed id.
+**Retired test id** — a test id whose check was dropped, distinguished from an active test id, so
+that records citing it stay true. Its register row and its number: `contracts/test-ids.md` →
+"Numbering". The exit tests that may not name it: `contracts/gates.md` → "How a gate is added".
+_Avoid_: deleted, removed id, freed number, reused id.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.

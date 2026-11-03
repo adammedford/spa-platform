@@ -240,15 +240,32 @@ const readRecord = (head, comments, reviews = []) => {
   return { verdict: 'none', head: '', url: '', reader: `exit ${r.status}: ${r.stderr.split('\n')[0]}` }
 }
 
+// The follow-ups reader's index of one comment or review (#514), as the prompt's jq prints it: its
+// record-like lines (a looser pattern than the record grammar, which the script applies), its size and
+// whether it holds the follow-ups table's header. SPLIT is the jq's line split, PY_LINE_BREAK's set.
+const SPLIT = /\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/
+const LOOSE = /Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)/
+const indexed = (e, at, review) => {
+  const b = e.body || ''
+  return { url: e.html_url, at: e[at] || '', association: e.author_association, state: review ? e.state || '' : '', bytes: Buffer.byteLength(b), hasTable: b.includes('| Finding | Axis | Where | First carried by |'), lines: b.split(SPLIT).filter((l) => LOOSE.test(l)) }
+}
+// A served pull request with the legacy fixtures' defaults (#514, Q17 of #599), only where the key is absent.
+const servedPrs = (f) => (f.prs || []).map((p) => {
+  const times = [...(p.comments || []).map((c) => c.created_at), ...(p.reviews || []).map((r) => r.submitted_at)].filter(Boolean).sort()
+  return { ...('state' in p ? {} : { state: 'OPEN' }), ...('mergedAt' in p ? {} : { mergedAt: '' }), ...('updatedAt' in p ? {} : { updatedAt: times[times.length - 1] || '2026-10-21T00:00:00Z' }), ...p }
+})
+
 const jsonAfter = (prompt, marker) => {
   const m = new RegExp(`^${marker}: (.*)$`, 'm').exec(prompt)
   return m ? JSON.parse(m[1]) : null
 }
 
 // served: { listing, issue, verify: {...overrides}, recordComments, agentRecord, kinds: {q: kind},
-//           followUps: { prs: [{number, comments, reviews}], filed: [issues already filed] },
+//           followUps: { prs: [{number, state, mergedAt, updatedAt, comments, reviews}], filed: [issues already filed] },
 //           followUps.ownership: OWNERSHIP.md's text as the reader returns it (this checkout's by default),
-//           filerDrops: [title],
+//           followUps.limit, listingError, commentsError, prErrors, readNoState, stripRecord: the reader's failures (#514),
+//           handovers: [{issue, url, author, createdAt, body}], earlier mornings' hand-overs; startedAt, windowRead (#514),
+//           filerDrops: [title], filerUnreachable,
 //           replay: {pending, renamed, stoppedAt, reason}, the Replay agent's own fields as it returned them,
 //           rewrite: [issue], after: {...}, refresh: the description writer's return (#300), nothingFrom: [label], the agents that return nothing,
 //           as a failed agent does }
@@ -325,7 +342,14 @@ function stub(env, scriptArgs, served) {
           ],
           claimed: ['claim/ws2-hosting/2.9'],
           record,
+          // The landing's state (#661): an open pull request by default; served.verify.landing, the
+          // fields of a merged one's report over it, as the merged-PR check returns them.
+          prState: 'open', landed: [], merge: { commit: '', mergedAt: '' }, verifiedHead: '', originMain: '', contained: false,
+          ...(v.landing || {}),
         }
+        // served.verifyDrop: fields the agent left out, as a malformed report does; the schema check is
+        // told to expect each one missing, so it judges the rest.
+        for (const f of served.verifyDrop || []) delete out[f]
       } else if (label === 'classify') {
         const qs = jsonAfter(prompt, 'QUESTIONS') || []
         const kinds = served.kinds || {}
@@ -382,20 +406,82 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'pr-refresh') {
         out = served.refresh || { edited: true, reason: '' }
       } else if (label === 'handover') {
-        out = { url: `${URL(ISSUE)}#issuecomment-99`, posted: true, reason: '' }
+        // The hand-over is posted as Adam's comment on the Overnight issue, and kept in env, so the next
+        // morning on the same checkout reads its Follow-ups window line back as the window reader would (#514).
+        const text = (/BEGIN HAND-OVER\n([\s\S]*)\nEND HAND-OVER/.exec(prompt) || [])[1] || ''
+        env.handovers = env.handovers || []
+        const n = 990 + env.handovers.length
+        env.handovers.push({ issue: ISSUE, url: `${URL(ISSUE)}#issuecomment-${n}`, author: 'adammedford', createdAt: '2026-10-30T23:00:00Z', body: text })
+        out = { url: `${URL(ISSUE)}#issuecomment-${n}`, posted: true, reason: '' }
+      } else if (label === 'followups-window') {
+        // The window reader (#514): the moment discovery starts, by a clock that moves on each run on
+        // one checkout, and every "## Morning" comment on an Overnight issue with its "Follow-ups window:"
+        // lines, as the prompt's jq cuts them: the fixture's earlier hand-overs, then those posted on env.
+        // served.startedAt, served.windowRead: the reader's own fields, as it returned them.
+        env.clock = (env.clock || 0) + 1
+        const hs = [...(served.handovers || []), ...(env.handovers || [])]
+        out = {
+          startedAt: served.startedAt || `2026-10-31T${String(env.clock).padStart(2, '0')}:00:00Z`,
+          issues: { count: 60, limit: 2000, numbers: [...new Set([ISSUE, ...hs.map((h) => h.issue)])], error: '' },
+          handovers: hs.filter((h) => h.body.startsWith('## Morning ')).map((h) => ({ issue: h.issue, url: h.url, author: h.author, createdAt: h.createdAt, lines: h.body.split(SPLIT).filter((l) => l.startsWith('Follow-ups window: ')) })),
+          unread: [], error: '',
+          ...(served.windowRead || {}),
+        }
       } else if (label === 'followups') {
-        // The open pull requests into main with their comments and reviews as gh serves them, and the
-        // issues already filed: those the fixture serves, then those an earlier run's filer filed.
+        // The pull requests into main as gh serves them, played through the prompt's steps: the listing,
+        // the issue comments since the window (none on a backfill), the pull requests the prompt says to
+        // read, and each one's comments and reviews cut to the index its jq prints. The legacy fixtures'
+        // defaults live here and nowhere in morning.js (#514, Q17 of #599): a served pull request with no
+        // state key is open, with no mergedAt unmerged, with no updatedAt updated at its latest entry.
+        // A key set to undefined is served missing, as a reader that dropped it would.
+        // served.followUps: {prs, limit, listingError, commentsError, prErrors: {n: why}, readNoState: [n],
+        // the pull requests whose read drops the state its listing row carries, skipPrs: [n], those the
+        // reader passes over though the prompt's step 3 names them}.
         // served.applyTickets: the open Apply tickets as the reader's listing returns them (#481).
         const f = served.followUps || { prs: [], filed: [] }
-        out = { prs: f.prs, filed: [...f.filed, ...(env.filed || [])], applyTickets: served.applyTickets || [], ownership: f.ownership === undefined ? OWNERSHIP_MD : f.ownership, error: f.error || '' }
+        const since = ((/^WINDOW SINCE: (\S+)/m.exec(prompt) || [])[1] || 'none').replace(/^none$/, '')
+        const prs = servedPrs(f)
+        const limit = f.limit || 1000
+        const rows = prs.map((p) => ({ number: p.number, state: p.state, mergedAt: p.mergedAt, updatedAt: p.updatedAt }))
+        const listing = f.listingError ? { rows: [], limit, error: f.listingError } : { rows: rows.slice(0, limit), limit, error: '' }
+        const recorded = since ? prs.filter((p) => (p.comments || []).some((c) => (c.created_at || '') >= since && LOOSE.test(c.body || ''))).map((p) => p.number) : []
+        const commentPrs = since && f.commentsError ? { numbers: [], error: f.commentsError } : { numbers: recorded, error: '' }
+        const listed = new Set(listing.rows.map((r) => r.number))
+        const toRead = !since ? listing.rows.map((r) => r.number) : [
+          ...listing.rows.filter((r) => r.state === 'OPEN' || (r.mergedAt || '') >= since || (r.updatedAt || '') >= since).map((r) => r.number),
+          ...commentPrs.numbers.filter((n) => listing.error || listed.has(n)),
+        ]
+        out = {
+          listing, commentPrs,
+          prs: [...new Set(toRead)].filter((n) => !(f.skipPrs || []).includes(n)).map((n) => {
+            const p = prs.find((x) => x.number === n)
+            const why = (f.prErrors || {})[n]
+            return { number: n, state: (f.readNoState || []).includes(n) ? undefined : p.state, mergedAt: p.mergedAt, comments: why ? [] : (p.comments || []).map((c) => indexed(c, 'created_at', false)).filter((e) => e.lines.length), reviews: why ? [] : (p.reviews || []).map((r) => indexed(r, 'submitted_at', true)).filter((e) => e.lines.length), error: why || '' }
+          }),
+          applyTickets: served.applyTickets || [], ownership: f.ownership === undefined ? OWNERSHIP_MD : f.ownership, error: f.error || '',
+        }
+        // As JSON carries it: a key served undefined is absent.
+        out = JSON.parse(JSON.stringify(out))
+      } else if (label.startsWith('followups-batch:')) {
+        // A record reader: each record its prompt names, verbatim, and the issues already filed from its
+        // pull requests, as the "Raised by #<n> in:body" search finds them: those the fixture serves,
+        // then those an earlier run's filer filed.
+        const f = served.followUps || { prs: [], filed: [] }
+        const recs = jsonAfter(prompt, 'RECORDS') || []
+        const entries = servedPrs(f).flatMap((p) => [...(p.comments || []).map((c) => ({ e: c, at: c.created_at, state: '' })), ...(p.reviews || []).map((r) => ({ e: r, at: r.submitted_at, state: r.state }))])
+        out = {
+          // served.followUps.stripRecord: [n], the pull requests whose record comes back without its record line.
+          records: recs.map((r) => entries.find((x) => x.e.html_url === r.url)).filter(Boolean).map((x) => ({ url: x.e.html_url, at: x.at, association: x.e.author_association, state: x.state, body: recs.some((r) => r.url === x.e.html_url && (f.stripRecord || []).includes(r.pr)) ? x.e.body.replace(LOOSE, 'Reviewed') : x.e.body })),
+          filed: [...(f.filed || []), ...(env.filed || [])].filter((i) => recs.some((r) => new RegExp(`#${r.pr}(?!\\d)`).test(i.body || ''))),
+          error: '',
+        }
       } else if (label === 'followups-file') {
         // The filer checks each follow-up's body with the real tools/ticket_shape.py under the label it
         // is given (#479), files each that passes, as gh issue create would, and remembers it in env, so
         // a rerun on the same checkout reads it back as filed; one that fails is refused, never filed.
         // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
-        // lost one would.
-        const items = (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
+        // lost one would. served.filerUnreachable: a filer that could not reach GitHub and filed nothing.
+        const items = served.filerUnreachable ? [] : (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
         env.filed = env.filed || []
         env.shaped = []
         const filed = []
@@ -409,7 +495,7 @@ function stub(env, scriptArgs, served) {
           env.filed.push(issue)
           filed.push({ pr: it.pr, title: it.title, number, url: issue.url })
         }
-        out = { filed, skipped: [], refused, unreachable: false, reason: '' }
+        out = served.filerUnreachable ? { filed: [], skipped: [], refused: [], unreachable: true, reason: 'GitHub could not be reached' } : { filed, skipped: [], refused, unreachable: false, reason: '' }
       } else if (label === 'draft-read') {
         // The draft check's one agent (#302) reads the issue and the draft file and returns them verbatim.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
@@ -443,7 +529,8 @@ function stub(env, scriptArgs, served) {
         // served.afterHanded: fields of its return, as a hand-over agent that closed anyway would.
         out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: true, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
-      const bad = validate(opts.schema, out)
+      const dropped = label === 'verify' ? (served.verifyDrop || []).map((f) => `$.${f}: missing`) : []
+      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b))
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
       for (const x of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
         fs.mkdirSync(path.dirname(x[1]), { recursive: true })
@@ -673,17 +760,20 @@ try {
   }
 
   // 9. Budget: at the default maxParallel a night of eight tickets of every kind, with follow-ups to
-  //    file, dispatches at most ten agents besides the comments-batch body readers (nine before #319
-  //    moved the comments read into Apply; the readers are one per 24 KB of questions), and the
-  //    return counts what ran.
+  //    file, dispatches at most eleven agents besides the comments-batch body readers and the
+  //    followups-batch readers of the records (#514, one per 24 KB): nine before #319 moved the
+  //    comments read into Apply, ten before #514 added the window reader. The body readers pack the
+  //    questions and Confirm comments in order toward BATCH_BYTES, a packing target and no cap
+  //    (#661). The return counts what ran.
   checks++
   {
     const kinds = { 1: 'integrator-edit', 2: 'integrator-edit', 3: 'workstream-ticket', 4: 'workstream-ticket', 5: 'decision-to-record', 6: 'decision-to-record', 7: 'integrator-edit', 8: 'workstream-ticket' }
     const { result, labels } = await execute(newRepo(), { date: DATE }, { issue: night(8), kinds, rewrite: [303], followUps: FU287 })
     if (!labels.includes('followups-file')) fail('budget: no follow-up was filed, so the two follow-up agents were not counted')
-    const core = labels.filter((l) => !l.startsWith('comments-batch:'))
-    if (core.length > 10 || APPLIERS(labels).length > 3) fail(`budget: ${core.length} agents besides the body readers (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
-    if (labels.length - core.length !== 1) fail(`budget: ${labels.length - core.length} body readers for a night whose questions fit one batch`)
+    const core = labels.filter((l) => !l.startsWith('comments-batch:') && !l.startsWith('followups-batch:'))
+    if (core.length > 11 || APPLIERS(labels).length > 3) fail(`budget: ${core.length} agents besides the body readers (${APPLIERS(labels).length} appliers): ${labels.join(', ')}`)
+    if (labels.filter((l) => l.startsWith('comments-batch:')).length !== 1) fail(`budget: ${labels.filter((l) => l.startsWith('comments-batch:')).length} body readers for a night whose questions fit one batch`)
+    if (labels.filter((l) => l.startsWith('followups-batch:')).length !== 1) fail(`budget: ${labels.filter((l) => l.startsWith('followups-batch:')).length} record readers for one pull request's latest record`)
     if (result.agents !== labels.length) fail(`budget: the return counts ${result.agents} agents, ${labels.length} ran`)
     const unitsSent = labels.filter((l) => l.startsWith('apply:')).length
     const done = result.apply.done.join('\n')
@@ -1256,6 +1346,204 @@ try {
       try { theirs = JSON.parse(r.stdout) } catch { fail(`#479: ticket_shape's owner_of did not run: ${r.stderr}`) }
       if (theirs) probes.forEach((p, i) => { const mine = port.ownerOfPath(rules, p); if (mine !== theirs[i]) fail(`#479: ${p} is ${mine}'s by morning.js and ${theirs[i]}'s by tools/ticket_shape.py`) })
     }
+  }
+
+  // 17c. The follow-ups window (#514; Q9 to Q17 of #599). The morning reads, beside the open pull
+  //      requests into main, those merged since a durable checkpoint and those in any state that
+  //      received a record since it, as a comment or as a COMMENTED review; the checkpoint is the
+  //      discovery start an earlier morning recorded in its hand-over once its coverage completed, and
+  //      with none recorded the morning backfills every pull request into main. A failed, truncated or
+  //      partial read, a reader's output missing a state or carrying a malformed timestamp, and a filing
+  //      that failed each keep the checkpoint where it was, while what was returned is still filed and
+  //      the hand-over names what was not.
+  checks++
+  {
+    const PRL = (n) => `https://github.com/adammedford/spa-platform/pull/${n}`
+    const CP = '2026-10-29T10:00:00Z'
+    const S1 = '2026-10-30T09:00:00Z'
+    const S2 = '2026-10-31T09:00:00Z'
+    const rec = (pr, id, at, finding, review = false) => {
+      const body = `## Review\n\n## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${finding} | Spec | .claude/workflows/morning.js | this record |\n\nReviewed ${sha('e')} against ${sha('f')}: merge`
+      return review
+        ? { body, author_association: 'OWNER', html_url: `${PRL(pr)}#pullrequestreview-${id}`, submitted_at: at, state: 'COMMENTED' }
+        : { body, author_association: 'OWNER', html_url: `${PRL(pr)}#issuecomment-${id}`, created_at: at }
+    }
+    // An earlier morning's hand-over, as the script writes its window line; author and issue as given.
+    const handover = (boundary, { author = 'adammedford', issue = 528, id = 1, kept = false } = {}) => ({
+      issue, url: `${URL(issue)}#issuecomment-${id}`, author, createdAt: '2026-10-29T10:16:02Z',
+      body: `## Morning 2026-10-29\n\nOvernight #${issue}.\n\n### Follow-ups window\n\nFollow-ups window: checkpoint ${kept ? 'kept at' : 'advanced to'} ${boundary}; window since 2026-10-28T09:00:00Z`,
+    })
+    const PRIOR = [handover(CP)]
+    const windowOf = (r) => (r.result.handover.text.split('\n').filter((l) => l.startsWith('Follow-ups window: ')).pop() || '')
+    const sentTitles = (r) => (jsonAfter(r.prompt('followups-file'), 'FOLLOW-UPS') || []).map((f) => f.title)
+    const advanced = (r, to) => windowOf(r).startsWith(`Follow-ups window: checkpoint advanced to ${to};`)
+    const keptAt = (r, at) => windowOf(r).startsWith(`Follow-ups window: checkpoint kept at ${at};`)
+
+    // Boxes 1 to 4 and 10: one morning reading from the checkpoint CP.
+    const F_MERGED = 'A PR merged since the checkpoint carries this row'
+    const F_REVIEW = 'An old merged PR got a new COMMENTED review'
+    const F_REVIEW_OLD = 'The same PR\'s earlier record, superseded'
+    const F_CLOSED = 'A closed, unmerged PR got a new record'
+    const F_STALE = 'A PR merged and recorded before the checkpoint'
+    const WINDOWED = {
+      prs: [
+        { number: 701, state: 'MERGED', mergedAt: '2026-10-29T12:00:00Z', comments: [rec(701, 1, '2026-10-29T09:00:00Z', F_MERGED)], reviews: [] },
+        { number: 702, state: 'MERGED', mergedAt: '2026-10-20T12:00:00Z', comments: [rec(702, 2, '2026-10-20T11:00:00Z', F_REVIEW_OLD)], reviews: [rec(702, 3, '2026-10-29T15:00:00Z', F_REVIEW, true)] },
+        { number: 703, state: 'CLOSED', mergedAt: '', comments: [rec(703, 4, '2026-10-29T16:00:00Z', F_CLOSED)], reviews: [] },
+        // Its updatedAt is bumped past the checkpoint by a comment that is no record, so the reader reads it.
+        { number: 704, state: 'MERGED', mergedAt: '2026-10-20T12:00:00Z', updatedAt: '2026-10-29T17:00:00Z', comments: [rec(704, 5, '2026-10-20T11:00:00Z', F_STALE)], reviews: [] },
+        { number: 705, state: 'OPEN', mergedAt: '', comments: [], reviews: [] },
+      ],
+      filed: [],
+    }
+    const env1 = newRepo()
+    const w1 = await execute(env1, { date: DATE }, { followUps: WINDOWED, handovers: PRIOR, startedAt: S1 })
+    if (!new RegExp(`^WINDOW SINCE: ${CP}$`, 'm').test(w1.prompt('followups'))) fail(`#514: the reader was not given the checkpoint ${CP} as its window:\n${(/^WINDOW SINCE: .*$/m.exec(w1.prompt('followups')) || ['none'])[0]}`)
+    const t1 = sentTitles(w1)
+    if (!t1.includes(F_MERGED)) fail(`#514 box 1: a PR merged at or after the checkpoint did not have its row filed: ${JSON.stringify(t1)}`)
+    if (!t1.includes(F_REVIEW)) fail(`#514 box 2: a PR merged before the checkpoint with a COMMENTED-review record after it did not have that row filed: ${JSON.stringify(t1)}`)
+    if (t1.includes(F_REVIEW_OLD)) fail('#514 box 2: the earlier record\'s row was filed, not the latest record\'s')
+    if (!t1.includes(F_CLOSED)) fail(`#514 box 3: a closed, unmerged PR with a record after the checkpoint did not have its row filed: ${JSON.stringify(t1)}`)
+    if (t1.includes(F_STALE)) fail('#514 box 4: a PR merged and recorded before the checkpoint had its row filed')
+    if (w1.labels.filter((l) => l.startsWith('followups-batch:')).length < 1) fail(`#514: no record reader was dispatched: ${w1.labels.join(', ')}`)
+    // Box 10: the window line names every field Q15 of #599 asks for.
+    const line1 = windowOf(w1)
+    for (const [what, want] of [
+      ['the checkpoint advanced, to the discovery start', `checkpoint advanced to ${S1}`],
+      ['the window', `window since ${CP}`],
+      ['the checkpoint\'s source', `checkpoint source ${URL(528)}#issuecomment-1`],
+      ['the discovery start', `discovery started ${S1}`],
+      ['whether coverage completed', 'coverage complete'],
+      ['the open count', 'read 1 open'],
+      ['the merged-since count', '1 merged since'],
+      ['the issue-comment records count', '1 issue-comment records since'],
+      ['the COMMENTED-review records count', '1 COMMENTED-review records since'],
+      ['the work left', 'unread or unprocessed: none'],
+    ]) if (!line1.includes(want)) fail(`#514 box 10: the window line does not carry ${what} (${JSON.stringify(want)}):\n${line1}`)
+    if (!(w1.result.followUps.window || {}).advanced) fail(`#514: the return does not say the checkpoint advanced: ${JSON.stringify(w1.result.followUps.window)}`)
+
+    // A checkpoint counts only from Adam's account, the latest boundary wins over an earlier one, and a
+    // "kept at" line records none (CODING_STANDARDS.md -> "An authorisation is read from its author").
+    const picky = await execute(newRepo(), { date: DATE }, { followUps: WINDOWED, startedAt: S1, handovers: [handover('2026-10-20T00:00:00Z', { id: 2 }), handover(CP, { id: 3 }), handover('2026-10-30T08:00:00Z', { id: 4, author: 'someone-else' }), handover('2026-10-30T08:30:00Z', { id: 5, kept: true })] })
+    if (!new RegExp(`^WINDOW SINCE: ${CP}$`, 'm').test(picky.prompt('followups'))) fail(`#514: the checkpoint was not the latest boundary Adam's hand-overs recorded:\n${(/^WINDOW SINCE: .*$/m.exec(picky.prompt('followups')) || ['none'])[0]}`)
+
+    // Box 5: a row served in two overlapping windows, and one already filed as its own issue, are not
+    // filed again. 706's record is posted after S1, while the first morning's discovery ran, so the second
+    // morning, reading from S1, reads it again.
+    const F_OVERLAP = 'A record posted during the first morning\'s read'
+    const F_OWN = 'A row already filed as its own issue'
+    const overlapped = {
+      prs: [
+        { number: 706, state: 'MERGED', mergedAt: '2026-10-30T09:10:00Z', comments: [rec(706, 6, '2026-10-30T09:05:00Z', F_OVERLAP)], reviews: [] },
+        { number: 707, state: 'MERGED', mergedAt: '2026-10-29T13:00:00Z', comments: [rec(707, 7, '2026-10-29T12:00:00Z', F_OWN)], reviews: [] },
+      ],
+      filed: [{ number: 777, title: F_OWN, body: `**Raised by:** ${cite(707)}\n`, url: URL(777) }],
+    }
+    const env5 = newRepo()
+    const o1 = await execute(env5, { date: DATE }, { followUps: overlapped, handovers: PRIOR, startedAt: S1 })
+    if (JSON.stringify(sentTitles(o1)) !== JSON.stringify([F_OVERLAP])) fail(`#514 box 5: the first morning sent ${JSON.stringify(sentTitles(o1))}, expected only the row no issue holds`)
+    const o2 = await execute(env5, { date: DATE }, { followUps: overlapped, handovers: PRIOR, startedAt: S2 })
+    if (!new RegExp(`^WINDOW SINCE: ${S1}$`, 'm').test(o2.prompt('followups'))) fail('#514 box 5: the second morning did not read from the first morning\'s discovery start')
+    if (o2.labels.includes('followups-file')) fail(`#514 box 5: a row served in two overlapping windows was filed again: ${JSON.stringify(sentTitles(o2))}`)
+    if (!(o2.result.followUps.already || []).some((a) => a.title === F_OVERLAP)) fail('#514 box 5: the second morning does not list the overlapping row as already filed')
+    if (!advanced(o2, S2)) fail(`#514 box 5: a morning that filed nothing new over complete reads did not advance:\n${windowOf(o2)}`)
+
+    // Box 6: a morning whose filing failed keeps the checkpoint, and the next, reading from it, files the
+    // older finding the failed morning missed.
+    const F_MISSED = 'A finding the failed morning missed'
+    const missed = { prs: [{ number: 711, state: 'MERGED', mergedAt: '2026-10-29T14:00:00Z', comments: [rec(711, 11, '2026-10-29T13:00:00Z', F_MISSED)], reviews: [] }], filed: [] }
+    const env6 = newRepo()
+    const m1 = await execute(env6, { date: DATE }, { followUps: missed, handovers: PRIOR, startedAt: S1, filerUnreachable: true })
+    if ((env6.filed || []).length) fail('#514 box 6: the unreachable filer filed something')
+    if (!keptAt(m1, CP)) fail(`#514 box 6: a morning whose filing failed did not keep the checkpoint at ${CP}:\n${windowOf(m1)}`)
+    if (!windowOf(m1).includes(F_MISSED)) fail(`#514 box 6: the window line does not name the unfiled finding:\n${windowOf(m1)}`)
+    const m2 = await execute(env6, { date: DATE }, { followUps: missed, handovers: PRIOR, startedAt: S2 })
+    if (!new RegExp(`^WINDOW SINCE: ${CP}$`, 'm').test(m2.prompt('followups'))) fail(`#514 box 6: the next morning did not read from the kept checkpoint ${CP}`)
+    if (!(env6.filed || []).some((i) => i.title === F_MISSED)) fail('#514 box 6: the next morning did not file the finding the failed morning missed')
+    if (!advanced(m2, S2)) fail(`#514 box 6: the recovering morning did not advance the checkpoint:\n${windowOf(m2)}`)
+
+    // Box 7: each failure keeps the checkpoint, files what was returned, and names what was not.
+    const F_A = 'A finding from the pull request that was read'
+    const F_B = 'A finding from the pull request that was not'
+    const pair = {
+      prs: [
+        { number: 721, state: 'MERGED', mergedAt: '2026-10-29T14:00:00Z', comments: [rec(721, 21, '2026-10-29T13:00:00Z', F_A)], reviews: [] },
+        { number: 722, state: 'MERGED', mergedAt: '2026-10-29T15:00:00Z', comments: [rec(722, 22, '2026-10-28T13:00:00Z', F_B)], reviews: [] },
+      ],
+      filed: [],
+    }
+    for (const [what, served, names] of [
+      ['a failed listing', { followUps: { ...pair, listingError: 'HTTP 502 listing pull requests' } }, /HTTP 502 listing pull requests/],
+      ['a truncated listing', { followUps: { ...pair, limit: 1 } }, /at its limit of 1/],
+      ['a partial listing (the issue comments)', { followUps: { ...pair, commentsError: 'HTTP 502 listing comments' } }, /HTTP 502 listing comments/],
+      ['a failed per-PR read', { followUps: { ...pair, prErrors: { 722: `HTTP 502 reading ${cite(722)}` } } }, new RegExp(`HTTP 502 reading ${cite(722)}`)],
+      // Merged before the checkpoint and updated after it, as a COMMENTED review updates it: only its
+      // listing row names it, so a reader that passes it over is named, never read as nothing there.
+      ['a PR the reader passed over', { followUps: { prs: [...pair.prs, { number: 723, state: 'MERGED', mergedAt: '2026-10-20T12:00:00Z', updatedAt: '2026-10-29T18:00:00Z', comments: [], reviews: [rec(723, 23, '2026-10-29T17:00:00Z', 'A review on a PR the reader passed over', true)] }], filed: [], skipPrs: [723] } }, new RegExp(`${cite(723)} was not read`)],
+      ['a failed record read', { followUps: pair, nothingFrom: ['followups-batch:1'] }, /record reader[^|]*returned nothing/],
+      ['a failed filing', { followUps: pair, filerDrops: [F_B] }, new RegExp(F_B)],
+      // A row tools/ticket_shape.py refuses is neither filed nor found already filed (Q12): the
+      // OWNERSHIP.md drift of the #479 case gives #443's deadline row an owner-line failure.
+      ['a filing the shape check refused', { followUps: { prs: [...pair.prs, ...FU443.prs], filed: [], ownership: OWNERSHIP_MD.replace(/^\/tests\/Platform\.Identity\.Tests\/\s+ws3-identity$/m, '/tests/Platform.Identity.Tests/       integrator') } }, new RegExp(`tools/ticket_shape\\.py failed them: ${cite(443)} "${FINDING_DEADLINE.replace(/[()]/g, '\\$&')}"`)],
+      // The window reader's listing of the issues at its limit may miss an Overnight issue's checkpoint.
+      ['a truncated listing of the issues', { followUps: pair, windowRead: { issues: { count: 2000, limit: 2000, numbers: [528], error: '' } } }, /the listing of the issues returned 2000 at its limit of 2000/],
+    ]) {
+      const env = newRepo()
+      const r = await execute(env, { date: DATE }, { handovers: PRIOR, startedAt: S1, ...served })
+      if (!keptAt(r, CP)) fail(`#514 box 7: ${what} advanced the checkpoint:\n${windowOf(r)}`)
+      if (!windowOf(r).includes('coverage incomplete')) fail(`#514 box 7: ${what} reads as complete coverage:\n${windowOf(r)}`)
+      if (!names.test(windowOf(r))) fail(`#514 box 7: the window line does not name ${what}:\n${windowOf(r)}`)
+      if (what !== 'a failed record read' && !(env.filed || []).some((i) => i.title === F_A)) fail(`#514 box 7: under ${what} the finding that was returned was not filed`)
+    }
+
+    // The latest record is picked as latestRecordOf picks it: a comment and a COMMENTED review in the
+    // same second go to the review, the later entry, so the index and the body reader agree.
+    const F_TIE_C = 'A comment record in the same second as a review'
+    const F_TIE_R = 'A review record in the same second as a comment'
+    const tie = { prs: [{ number: 751, state: 'OPEN', mergedAt: '', comments: [rec(751, 51, '2026-10-29T13:00:00Z', F_TIE_C)], reviews: [rec(751, 52, '2026-10-29T13:00:00Z', F_TIE_R, true)] }], filed: [] }
+    const tied = await execute(newRepo(), { date: DATE }, { followUps: tie, handovers: PRIOR, startedAt: S1 })
+    if (JSON.stringify(sentTitles(tied)) !== JSON.stringify([F_TIE_R])) fail(`#514: with a comment and a review record in one second, the morning sent ${JSON.stringify(sentTitles(tied))}, expected the review's row only`)
+    if (!advanced(tied, S1)) fail(`#514: the same-second records did not read as complete:\n${windowOf(tied)}`)
+
+    // Box 8: reader output missing a PR's state, or carrying a malformed timestamp, is incomplete.
+    const F_OK = 'A finding beside the malformed one'
+    const good = { number: 732, state: 'MERGED', mergedAt: '2026-10-29T14:00:00Z', comments: [rec(732, 32, '2026-10-29T13:00:00Z', F_OK)], reviews: [] }
+    for (const [what, served, names] of [
+      ['a PR with no state', { followUps: { prs: [good, { number: 731, state: undefined, mergedAt: '', updatedAt: '2026-10-29T18:00:00Z', comments: [], reviews: [] }], filed: [] } }, new RegExp(cite(731))],
+      ['a PR read with no state its listing row carries', { followUps: { prs: [good, { number: 735, state: 'OPEN', mergedAt: '', comments: [], reviews: [] }], filed: [], readNoState: [735] } }, new RegExp(`${cite(735)} was read with no state`)],
+      ['a malformed merge time', { followUps: { prs: [good, { number: 733, state: 'MERGED', mergedAt: '2026-10-29 14:00', updatedAt: '2026-10-29T18:00:00Z', comments: [], reviews: [] }], filed: [] } }, new RegExp(cite(733))],
+      ['a malformed record time', { followUps: { prs: [good, { number: 734, state: 'OPEN', mergedAt: '', updatedAt: '2026-10-29T18:00:00Z', comments: [rec(734, 34, 'yesterday', 'x')], reviews: [] }], filed: [] } }, new RegExp(`${cite(734)}: \\S+ carries the time "yesterday"`)],
+      ['a malformed discovery start', { followUps: { prs: [good], filed: [] }, startedAt: '2026-10-30' }, /the discovery start "2026-10-30" is not a UTC timestamp/],
+      // A record reader that returns a body without the record line its index named.
+      ['a record served without its record line', { followUps: { prs: [good, { number: 736, state: 'OPEN', mergedAt: '', comments: [rec(736, 36, '2026-10-29T13:00:00Z', 'Never filed')], reviews: [] }], filed: [], stripRecord: [736] } }, new RegExp(`${cite(736)}'s record \\S+ was returned without the record its index named`)],
+    ]) {
+      const env = newRepo()
+      const r = await execute(env, { date: DATE }, { handovers: PRIOR, startedAt: S1, ...served })
+      if (windowOf(r).startsWith('Follow-ups window: checkpoint advanced')) fail(`#514 box 8: ${what} advanced the checkpoint:\n${windowOf(r)}`)
+      if (!windowOf(r).includes('coverage incomplete') || !names.test(windowOf(r))) fail(`#514 box 8: ${what} is not reported incomplete:\n${windowOf(r)}`)
+      if (!(env.filed || []).some((i) => i.title === F_OK)) fail(`#514 box 8: beside ${what}, the well-formed PR's finding was not filed`)
+    }
+
+    // Box 9: with no checkpoint, the morning backfills every PR into main, not the open ones only.
+    const F_OLD = 'A finding on a PR merged long ago'
+    const old = { prs: [{ number: 741, state: 'MERGED', mergedAt: '2026-10-16T12:00:00Z', comments: [rec(741, 41, '2026-10-16T11:00:00Z', F_OLD)], reviews: [] }, { number: 742, state: 'CLOSED', mergedAt: '', comments: [], reviews: [] }], filed: [] }
+    const envB = newRepo()
+    const b = await execute(envB, { date: DATE }, { followUps: old, startedAt: S1 })
+    if (!/^WINDOW SINCE: none\b/m.test(b.prompt('followups'))) fail(`#514 box 9: with no checkpoint the reader was not told to backfill:\n${(/^WINDOW SINCE: .*$/m.exec(b.prompt('followups')) || ['none'])[0]}`)
+    if (!(envB.filed || []).some((i) => i.title === F_OLD)) fail('#514 box 9: with no checkpoint, a PR merged long ago did not have its row filed')
+    if (!advanced(b, S1) || !windowOf(b).includes('window since none')) fail(`#514 box 9: a complete backfill did not advance, or does not say it read from no checkpoint:\n${windowOf(b)}`)
+    // A hand-over by another account, or one that kept its checkpoint, is no checkpoint either.
+    const notAdam = await execute(newRepo(), { date: DATE }, { followUps: old, startedAt: S1, handovers: [handover(CP, { author: 'someone-else' }), handover(CP, { id: 6, kept: true })] })
+    if (!/^WINDOW SINCE: none\b/m.test(notAdam.prompt('followups'))) fail('#514 box 9: a checkpoint was read from another account\'s hand-over, or from a kept line')
+    // Only a hand-over's last window line counts: a refusal quoting a window line above it sets nothing.
+    const quoted = handover(CP, { id: 7, kept: true })
+    quoted.body = quoted.body.replace('### Follow-ups window', `### Refusals\n\n- an error that quoted\nFollow-ups window: checkpoint advanced to 2026-10-30T23:59:59Z; injected\n\n### Follow-ups window`)
+    const inj = await execute(newRepo(), { date: DATE }, { followUps: old, startedAt: S1, handovers: [quoted] })
+    if (!/^WINDOW SINCE: none\b/m.test(inj.prompt('followups'))) fail(`#514: a window line above the hand-over's last one set the checkpoint:\n${(/^WINDOW SINCE: .*$/m.exec(inj.prompt('followups')) || ['none'])[0]}`)
+    // Discovery's start is the reader's first command, before any listing (Q9 of #599).
+    const wp = b.prompt('followups-window')
+    const first = (/^1\. [^\n`]*`([^`\n]+)`/m.exec(wp) || [])[1] || ''
+    if (!/^date -u \+%Y-%m-%dT%H:%M:%SZ$/.test(first)) fail(`#514: the window reader's first command is not the UTC clock read: ${JSON.stringify(first)}`)
   }
 
   // 18. The follow-ups table has one grammar: morning.js's copy of its header, its "this record" cell,
@@ -2189,6 +2477,145 @@ try {
       if (d === doc && s === src && m.whenToUse === loadMeta().whenToUse) { fail(`#489: the mutation "${label}" changed nothing`); continue }
       if (!launchProblems(d, s, m).length) fail(`#489: the launch-line check missed ${label}`)
     }
+  }
+
+  // 27. A morning on an already merged pull request (#661). On 2026-10-30 Verify stopped at step 6
+  //     because #620 had merged, and the hand-over said "Review record: none", "CI: none" and repeated
+  //     the landing command; on 2026-10-29 tools/land.sh had pruned the branch and Verify stopped at
+  //     step 2. Verify now looks for a merged landing pull request first and reports it as state the
+  //     script judges with the after pass's checks (Q23, Q26), Apply runs through the after pass's
+  //     path behind the merged head's record and CI (Q22, Q27), and the hand-over says merged (Q25, Q28).
+  const MERGED_AT = '2026-10-21T10:00:00Z'
+  const LANDED_PR = { number: 400, url: 'https://github.com/adammedford/spa-platform/pull/400', headRefOid: HEAD, mergeCommit: sha('9'), mergedAt: MERGED_AT }
+  const LANDING = { prState: 'merged', landed: [LANDED_PR], merge: { commit: sha('9'), mergedAt: MERGED_AT }, verifiedHead: HEAD, originMain: sha('9'), contained: true }
+  // The merged report, with the open pull request's stale description served too, so a refresh would show.
+  const mergedRun = (served = {}, landing = {}, verify = {}) => execute(newRepo(), { date: DATE }, {
+    issue: AFTER_NIGHT, kinds: {}, classes: AFTER_CLASSES, ...served,
+    verify: { outcome: 'merged', prReused: true, prBody: BODY_287_FIRST, worktrees: [], ...verify, landing: { ...LANDING, ...landing } },
+  })
+  const landingOf = (r) => section(r.result.handover.text, 'Landing')
+  const MERGED_LINE = /^- Pull request #400 is merged\b/m
+  const MERGED_REFUSED = /merged report was refused/
+  const noCommands = (label, text) => {
+    if (/land\.sh/.test(text)) fail(`#661 Q28, ${label}: the hand-over carries the landing script:\n${text}`)
+    if (/review-queue/.test(text)) fail(`#661 Q28, ${label}: the hand-over carries the review-queue command:\n${text}`)
+    if (text.includes('`')) fail(`#661 Q28, ${label}: the hand-over carries a backtick span`)
+  }
+
+  // 27a. Box 2: a merged report routes into the after pass's path, and nothing that precedes a merge runs.
+  checks++
+  const merged = await mergedRun()
+  {
+    const L = merged.labels
+    if (L.includes('pr-refresh')) fail(`#661 Q23: a merged run refreshed the description of a merged pull request: ${L.join(', ')}`)
+    if (L.includes('after')) fail(`#661 Q28: the morning ran the after pass's cleanup agent, which the hand-over refers to the after pass: ${L.join(', ')}`)
+    if (merged.result.refusals.length) fail(`#661 Q27: a merged run with its evidence in place refused: ${JSON.stringify(merged.result.refusals)}`)
+    if (!merged.result.merged || merged.result.merged.commit !== sha('9') || merged.result.merged.pr !== 400) fail(`#661 Q26: the run does not return the merged pull request: ${JSON.stringify(merged.result.merged)}`)
+    const vp = merged.prompt('verify')
+    const at = vp.indexOf(`gh pr list --head overnight/${DATE} --base main --state merged`)
+    const later = ['1. The main checkout', `--is-ancestor <base> overnight/${DATE}`, 'tools/check.sh --base', `push -u origin overnight/${DATE}`, 'gh pr create']
+    if (!(at > 0) || later.some((s) => !(vp.indexOf(s) > at))) fail(`#661 Q23: the Verify prompt does not ask for the merged-PR check before the steps that need the integration branch (at ${at}; ${later.map((s) => `${s} at ${vp.indexOf(s)}`).join('; ')})`)
+    if (!/run none of steps 1 to 8/.test(vp)) fail('#661 Q23: the Verify prompt does not skip the steps that precede a merge on a merged pull request')
+    for (const f of ['prState', 'merge', 'landed', 'verifiedHead', 'contained']) if (!vp.includes(f)) fail(`#661 Q26: the Verify prompt does not ask for ${f}`)
+  }
+
+  // 27b. Box 3: a malformed or ambiguous merged report is refused, nothing is applied over it, and the
+  //      hand-over prints no merged-PR line and no command over it.
+  checks++
+  for (const [label, served, landing, verify] of [
+    ['no merge commit', {}, { merge: { commit: '', mergedAt: MERGED_AT } }, {}],
+    ['a short merge commit', {}, { merge: { commit: '9999999', mergedAt: MERGED_AT } }, {}],
+    ['no prState', { verifyDrop: ['prState'] }, {}, {}],
+    ['a merged outcome over an open prState', {}, { prState: 'open' }, {}],
+    ['a stop over a merged prState', {}, {}, { outcome: 'stop', step: 2, reason: 'the integration branch does not exist' }],
+    ['two merged pull requests', {}, { landed: [LANDED_PR, { ...LANDED_PR, number: 401, url: LANDED_PR.url.replace('400', '401') }] }, {}],
+    ['a head the morning did not verify', {}, { verifiedHead: OLDER }, {}],
+    ['a head that is not the merged pull request\'s', {}, { landed: [{ ...LANDED_PR, headRefOid: OLDER }] }, {}],
+    ['a head origin/main does not contain', {}, { contained: false }, {}],
+    // A pull request other than the one that merged: judgeMerged's pr-number check (review of #661).
+    ['a pull request that is not the merged one', {}, { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, {}],
+    // A full merge-commit sha that is not the one the merged pull request lists, and no merged pull request at
+    // all: the earlier rows gave only an empty or short sha and two pull requests, so the sha comparison and the
+    // exactly-one rule could each be weakened with this companion green (review of #737).
+    ['a merge commit that is not the pull request\'s', {}, { merge: { commit: sha('8'), mergedAt: MERGED_AT } }, {}],
+    ['no merged pull request', {}, { landed: [] }, {}],
+  ]) {
+    const r = await mergedRun(served, landing, verify)
+    const text = r.result.handover.text
+    if (!r.result.refusals.some((x) => MERGED_REFUSED.test(x)) || !MERGED_REFUSED.test(text)) fail(`#661 Q26, ${label}: not refused: ${JSON.stringify(r.result.refusals)}`)
+    if (r.result.merged) fail(`#661 Q26, ${label}: the run returns a merged pull request over a refused report`)
+    if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`#661 Q26, ${label}: Apply ran over a refused merged report: ${r.labels.join(', ')}`)
+    if (MERGED_LINE.test(text) || /\bis merged\b/.test(landingOf(r))) fail(`#661 Q26, ${label}: the hand-over prints a merged-PR line over a refused report:\n${landingOf(r)}`)
+    noCommands(label, text)
+  }
+  // The refusals name what was wrong.
+  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, new RegExp(`the morning verified ${OLDER}`)], ['none', { landed: [] }, /0 merged pull requests/], ['contained', { contained: false }, /does not contain/], ['another pull request', { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, /#401 is not #400, the one that merged/], ['another merge commit', { merge: { commit: sha('8'), mergedAt: MERGED_AT } }, new RegExp(`#400 lists ${sha('9')}`)]]) {
+    const r = await mergedRun({}, landing)
+    if (!r.result.refusals.some((x) => want.test(x))) fail(`#661 Q26, ${label}: the refusal does not say why: ${JSON.stringify(r.result.refusals)}`)
+  }
+
+  // 27c. Box 4: a merged pull request, a merge record naming its actual head and green CI on it:
+  //      the classifier and the appliers run through the after pass's path.
+  checks++
+  {
+    if (!merged.labels.includes('classify') || !APPLIERS(merged.labels).length) fail(`#661 Q27: a cleared merged run did not dispatch Apply: ${merged.labels.join(', ')}`)
+    for (const c of merged.calls.filter((x) => x.label.startsWith('apply:'))) {
+      if (!c.prompt.includes('This is the after pass (#635)') || !/still in place/.test(c.prompt)) fail(`#661 Q22: the ${c.label} prompt is not the after pass's applier`)
+      if (!(c.schema.properties || {}).verified) fail(`#661 Q22: the ${c.label} applier reports no verified effects, as the after pass's does`)
+      if (!new RegExp(`PHASE FILE: \\S+/morning-${DATE}/after/`).test(c.prompt)) fail(`#661 Q22: the ${c.label} applier keeps the morning's phase file, which a later pass would reuse unverified`)
+    }
+  }
+
+  // 27d. Box 5: with the record missing, a hold, a record of another head, or CI red, pending or none,
+  //      Apply is skipped and the hand-over names the reason; a record without green CI clears nothing.
+  checks++
+  for (const [label, served, verify, why] of [
+    ['no record', { recordComments: [] }, {}, /no review record names c{40}/],
+    ['a hold', { recordComments: HOLD }, {}, /says hold/],
+    ['a record of another head', { agentRecord: { verdict: 'merge', head: OLDER, url: 'https://github.com/adammedford/spa-platform/pull/400#issuecomment-13', reader: 'exit 0' } }, {}, /no review record names c{40}/],
+    ['red CI', {}, { ci: 'red' }, /CI is red on c{40}/],
+    ['pending CI', {}, { ci: 'pending' }, /CI is pending on c{40}/],
+    ['no CI', {}, { ci: 'none' }, /CI is none on c{40}/],
+  ]) {
+    const r = await mergedRun(served, {}, verify)
+    if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`#661 Q27, ${label}: Apply ran: ${r.labels.join(', ')}`)
+    if (!r.result.refusals.some((x) => why.test(x))) fail(`#661 Q27, ${label}: the refusals do not name why Apply did not run: ${JSON.stringify(r.result.refusals)}`)
+    const land = landingOf(r)
+    if (!new RegExp(`^- Apply did not run: [^\\n]*${why.source}`, 'm').test(land)) fail(`#661 Q28, ${label}: the Landing block does not name why Apply did not run:\n${land}`)
+    if (!MERGED_LINE.test(land)) fail(`#661 Q28, ${label}: the merge was refused with the evidence; the hand-over lost its merged line:\n${land}`)
+    if (!/Apply made nothing in this pass: the merged head's review record or CI does not clear it/.test(land)) fail(`#661 Q28, ${label}: the after-pass line does not say why this pass made nothing:\n${land}`)
+    if (r.result.refusals.some((x) => MERGED_REFUSED.test(x))) fail(`#661 Q27, ${label}: the merge itself is named as a refusal`)
+    noCommands(label, r.result.handover.text)
+  }
+
+  // 27e. Box 6: the hand-over for a merged pull request.
+  checks++
+  {
+    const text = merged.result.handover.text
+    const land = landingOf(merged)
+    if (!new RegExp(`^- Pull request #400 is merged: merge commit ${sha('9')}[^\\n]*head ${HEAD}[^\\n]*landed`, 'm').test(land)) fail(`#661 Q25: no line calls #400 merged with its merge commit and its rows landed:\n${land}`)
+    if (/(pull request|#400)( itself)? (is|has|was) landed|landed by pull request/i.test(text)) fail(`#661 Q25: the hand-over says the pull request itself landed:\n${land}`)
+    if (!/^- Apply permitted: the review record of c{40} says merge \(https:\S+issuecomment-11\), and CI is green on c{40} \(https:\S+\)/m.test(land)) fail(`#661 Q28: the Landing block does not name the evidence that permitted Apply:\n${land}`)
+    if (!/the after pass/.test(land)) fail(`#661 Q28: the Landing block does not refer the cleanup, the settlement and the close to the after pass:\n${land}`)
+    if (!/completed/.test(land) || /Apply (will|then) run/.test(land)) fail(`#661 Q28: the hand-over promises again what Apply completed:\n${land}`)
+    if (section(text, 'Applied') === 'nothing') fail('#661 Q28: the completed effects are not listed under Applied')
+    if (!/is merged/.test(section(text, 'Pull request description'))) fail(`#661 Q28: "Pull request description" does not say the pull request is merged:\n${section(text, 'Pull request description')}`)
+    if (/fork point not read/.test(text.split('\n')[2] || '')) fail(`#661 Q28: the first line reads a merged run as one whose fork point was not read: ${text.split('\n')[2]}`)
+    noCommands('merged', text)
+  }
+
+  // 27f. Box 7: the Agent budget header states the packing rule as it is, and the agent budget the
+  //      merged path takes; a merged run stays within it.
+  checks++
+  {
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    // The paragraph as prose: its comment markers and line breaks read as one space.
+    const header = ((/^\/\/ Agent budget[\s\S]*?(?=\n\/\/\n)/m.exec(src) || [''])[0]).replace(/\n\/\/ /g, ' ')
+    for (const said of ['24,000-byte', 'BATCH_BYTES', 'read alone', 'no total cap', 'not a hard bound']) if (!header.includes(said)) fail(`#661 Q24: the Agent budget header does not say "${said}":\n${header}`)
+    if (!/^const BATCH_BYTES = 24000$/m.test(src)) fail('#661 Q24: BATCH_BYTES is not the 24,000 bytes the header states')
+    if (!/already merged/.test(header)) fail('#661 Q24: the Agent budget header does not give the merged path\'s budget')
+    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:'))
+    if (core.length > 10 || merged.result.agents !== merged.labels.length) fail(`#661 Q24: a merged run took ${core.length} agents besides the body readers, and counts ${merged.result.agents} of ${merged.labels.length}: ${merged.labels.join(', ')}`)
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

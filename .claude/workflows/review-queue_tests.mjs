@@ -27,6 +27,8 @@ const top = path.resolve(here, '..', '..')
 
 const sha = (c) => c.repeat(40)
 const FORK = sha('b')
+// What the launch agent reports by default (#687): repo's script is origin/main's, on a clean main.
+const LAUNCH_OK = { baseTip: sha('c'), differs: false, branch: 'main', behind: 0, trackedChanges: false, scriptEdited: false, error: '' }
 
 // One open pull request into main, as the inventory agent reports it from gh and git.
 const pr = (number, changedFiles, extra = {}) => ({
@@ -140,6 +142,11 @@ function run(scriptArgs, served, behave = {}) {
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
+    }
+    if (kind === 'launch') {
+      // The launch agent's reading of repo against origin/main (#687): behave.launch, or a checkout
+      // whose script is origin/main's.
+      return behave.launch === 'null' ? null : (behave.launch || LAUNCH_OK)
     }
     if (kind === 'queue') {
       // gh pr list as the queue agent reports it: behave.queue, or no open pull request.
@@ -277,7 +284,7 @@ try {
   if (r76.skippedBecauseRecorded !== true) fail('PR 76: a record on the current head did not skip it')
   if (r76.outcome !== 'skipped') fail(`PR 76: outcome ${r76.outcome}, expected skipped`)
   if (r76.recordUrl !== CLEARED_76.html_url) fail(`PR 76: recordUrl ${r76.recordUrl}, expected the record's URL`)
-  const ran76 = env.calls.filter((c) => !c.startsWith('inventory:'))
+  const ran76 = env.calls.filter((c) => c !== 'launch' && !c.startsWith('inventory:'))
   if (ran76.length) fail(`PR 76: agents ran after the inventory of a recorded head: ${ran76.join(', ')}`)
   if (env.posted.length) fail(`PR 76: ${env.posted.length} comment(s) posted on a recorded head`)
 
@@ -495,6 +502,64 @@ try {
     if (noTotal.countsMatched !== true) fail(`PR 206: a stated "failed 4" with no total reproduced as 4 of 153 has countsMatched ${noTotal.countsMatched}`)
     const said = (env.mutations[0] || {}).prompt || ''
     if (!said.includes('(failed 4).')) fail('PR 206: the mutation prompt does not give the stated "failed 4" alone, with no total')
+  }
+
+  // A caught candidate (#689): the inventory pinned a break to a test that could not go red on it, and
+  // the project caught it through a sibling. Accepted by the verdict, the row is reproduced, merges and
+  // its cell names both tests; not accepted, it holds, reads did-not-fail and loses its caught cell. A
+  // stated or nominated mutation keeps its own test: reported reproduced on other tests alone, it is
+  // did-not-fail and holds, with no caught cell, whatever the verdict accepts.
+  checks++
+  {
+    const SIBLING = 'Platform.Registry.Tests.SiblingTests.Excludes_the_stand_in'
+    const CAND = { 207: pr(207, ['tests/c.cs'], { candidates: [cand('Misaimed')] }) }
+    const caughtCand = { Misaimed: { ...row('reproduced', 1, 222), failingNames: [SIBLING], why: 'the break is caught by the sibling, not by Misaimed' } }
+    env = run({ prs: [207] }, CAND, { mutate: caughtCand, caught: { 207: ['Misaimed'] } })
+    result = await execute(env)
+    {
+      const c = resultOf(207, result)
+      const m = (c.mutations || [])[0] || {}
+      if (m.result !== 'reproduced' || JSON.stringify(m.caughtBy) !== JSON.stringify([SIBLING])) fail(`PR 207 with the candidate Misaimed caught and accepted: its row is ${JSON.stringify(m)}`)
+      if (c.verdict !== 'merge') fail(`PR 207 with the candidate Misaimed caught and accepted: verdict ${c.verdict}, expected merge`)
+      const cells = (tableOf(commentOf(env, 207)) || [])[0] || []
+      if (cells[0] !== `Misaimed (caught by ${SIBLING})`) fail(`PR 207 with the candidate Misaimed caught and accepted: its Test cell is ${JSON.stringify(cells[0])}, expected one naming both tests`)
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!/stayed green, the result is reproduced all the same/.test(prompt)) fail('the candidate mutation prompt does not say a break caught by another test is reproduced')
+      if (/removed, for this held mutation only/.test(prompt)) fail('the candidate mutation prompt offers removed, which is for a held mutation only')
+      const verdictPrompt = env.prompts['verdict:207'] || ''
+      if (!/A caught row is a held or candidate break/.test(verdictPrompt)) fail('the verdict prompt does not say a candidate break can be caught')
+      if (!/why the named test could not go red on that break/.test(verdictPrompt) || !/A candidate that guards the break and stayed green proves nothing/.test(verdictPrompt)) fail('the verdict prompt does not ask, for a caught candidate, why the named test could not go red')
+    }
+    env = run({ prs: [207] }, CAND, { mutate: caughtCand })
+    result = await execute(env)
+    {
+      const c = resultOf(207, result)
+      const m = (c.mutations || [])[0] || {}
+      if (c.verdict !== 'hold' || m.result !== 'did-not-fail') fail(`PR 207 with the candidate Misaimed caught and not accepted: verdict ${c.verdict}, row ${m.result}, expected hold and did-not-fail`)
+      if (commentOf(env, 207).includes('(caught by ')) fail('a caught candidate the verdict did not accept still reads "caught by" in the table')
+    }
+    // A nominated mutation, and a stated one, the project caught on another test alone: did-not-fail,
+    // even when the verdict lists the test as accepted, since neither may be answered by a catch.
+    const NOM = { 208: pr(208, ['tests/n.cs'], { candidates: [cand('Nom')] }) }
+    const nominations = { 208: [{ test: 'Nom', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }
+    for (const [n, served, test, kind, extra] of [[208, NOM, 'Nom', 'nominated', { nominations }], [206, HOLDS, 'Said', 'stated', {}]]) {
+      env = run({ prs: [n] }, served, { ...extra, mutate: { [test]: { ...row('reproduced', 1, 153), failingNames: [SIBLING], why: 'went red' } }, caught: { [n]: [test] } })
+      result = await execute(env)
+      const c = resultOf(n, result)
+      const m = (c.mutations || []).find((x) => x.test === test) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR ${n} with the ${kind} ${test} red only on ${SIBLING}: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+      if ((m.caughtBy || []).length || commentOf(env, n).includes('(caught by ')) fail(`PR ${n} with the ${kind} ${test} red only on another test: it has a caught cell`)
+      if (!(m.why || '').includes(`the project went red only on ${SIBLING}, and a ${kind} mutation keeps its own test`)) fail(`PR ${n} with the ${kind} ${test} red only on another test: why ${JSON.stringify(m.why)}`)
+      // The fail-closed check runs before the counts are compared, so a stated row it turns
+      // did-not-fail carries no counts verdict (#689's Answer).
+      if (m.countsMatched !== null) fail(`PR ${n} with the ${kind} ${test} red only on another test: countsMatched ${m.countsMatched}, expected null on a did-not-fail row`)
+      const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
+      if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
+    }
+    // Reported reproduced with no failing names, a nominated row stays as reported: nothing names a catch.
+    env = run({ prs: [208] }, NOM, { nominations, mutate: { Nom: row('reproduced', 1, 10) } })
+    result = await execute(env)
+    if (((resultOf(208, result).mutations || [])[0] || {}).result !== 'reproduced') fail('PR 208: a nominated row reproduced with no failing names did not stay reproduced')
   }
 
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
@@ -836,7 +901,7 @@ try {
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== 'reproduced' || JSON.stringify(held.caughtBy) !== JSON.stringify([`tools.check_tests.${CATCHER}`])) fail(`PR 287's shape with the held ${LIB2} caught and accepted: its row is ${JSON.stringify(held)}`)
       if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} caught and accepted: verdict ${c.verdict}, expected merge`)
-      if (!/A caught row is a held break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
+      if (!/A caught row is a held or candidate break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
       if (!/failingNames: the tests it named as failing, each whole as the runner printed it/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the mutation prompt does not ask for each failing name whole as the runner printed it (#695)')
       const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
@@ -1016,16 +1081,16 @@ try {
     else {
       if (JSON.stringify(result.prs) !== '[]') fail(`an empty queue: prs ${JSON.stringify(result.prs)}, expected []`)
       if (env.posted.length) fail(`an empty queue: ${env.posted.length} comment(s) posted`)
-      if (JSON.stringify(env.calls) !== '["queue"]') fail(`an empty queue: agents ${JSON.stringify(env.calls)}, expected the queue agent alone`)
-      if (result.agents !== 1) fail(`an empty queue: agents ${result.agents}, expected 1, the queue agent`)
+      if (JSON.stringify(env.calls) !== '["launch","queue"]') fail(`an empty queue: agents ${JSON.stringify(env.calls)}, expected the launch agent and the queue agent alone`)
+      if (result.agents !== 2) fail(`an empty queue: agents ${result.agents}, expected 2, the launch and queue agents`)
       if (result.date !== '2026-10-21' || result.baseTip !== sha('c') || result.logDir !== `${env.repo}/.scratch/review-queue/log/2026-10-21`) fail(`an empty queue: date ${result.date}, baseTip ${result.baseTip}, logDir ${result.logDir}`)
     }
   }
 
   // 19. The open queue, with pull requests in it: each one into main is reviewed and posted, a row of
-  //     another base is not, and the base tip reported is the one the queue read. With a named list
-  //     the base tip is the inventory's. A queue agent that returns nothing is not an empty queue: the
-  //     run halts saying so and posts nothing.
+  //     another base is not, and the base tip reported is the launch agent's reading (#687), not the
+  //     queue's, nor with a named list the inventory's. A queue agent that returns nothing is not an
+  //     empty queue: the run halts saying so and posts nothing.
   checks++
   {
     const TIP = sha('9')
@@ -1036,21 +1101,22 @@ try {
     if (JSON.stringify(got) !== '["101 recorded","102 recorded"]') fail(`a queue of 101, 102 and a develop-based 999: results ${JSON.stringify(got)}, expected 101 and 102 recorded`)
     if (env.calls.some((c) => c.endsWith(':999'))) fail('a queue row whose base is not main was reviewed')
     if (env.posted.map((p) => p.n).sort().join(',') !== '101,102') fail(`a queue of 101 and 102: comments on ${env.posted.map((p) => p.n).join(',')}`)
-    if (result.baseTip !== TIP) fail(`a queue: baseTip ${result.baseTip}, expected the queue's ${TIP}`)
-    env = run({ prs: [101] }, PRS)
+    if (result.baseTip !== sha('c')) fail(`a queue: baseTip ${result.baseTip}, expected the launch agent's ${sha('c')}, not the queue's ${TIP}`)
+    env = run({ prs: [101] }, { 101: { ...PRS[101], baseTip: TIP } })
     result = await execute(env)
-    if (result.baseTip !== sha('c')) fail(`a named list: baseTip ${result.baseTip}, expected the inventory's ${sha('c')}`)
+    if (result.baseTip !== sha('c')) fail(`a named list: baseTip ${result.baseTip}, expected the launch agent's ${sha('c')}, not the inventory's ${TIP}`)
     if (env.calls.includes('queue')) fail('a named list ran the queue agent')
     env = run({ prs: undefined }, PRS, { queue: 'null' })
     result = await execute(env)
-    if (!result || !result.halted || JSON.stringify(result.prs) !== '[]' || env.posted.length || env.calls.length !== 1) fail(`a queue agent that returned nothing: ${JSON.stringify(result)}, ${env.calls.length} agent(s), ${env.posted.length} comment(s); expected a halt naming the queue, no review and no post`)
+    if (!result || !result.halted || JSON.stringify(result.prs) !== '[]' || env.posted.length || env.calls.length !== 2) fail(`a queue agent that returned nothing: ${JSON.stringify(result)}, ${env.calls.length} agent(s), ${env.posted.length} comment(s); expected a halt naming the queue, no review and no post`)
   }
 
   // 20. The agent budget (#86). Three pull requests with four candidates each, a mutation cap of 2 and
   //     agents that take different times, so the pipelines overlap. Per pull request that is one
-  //     inventory, two axes, two mutations, one verdict and one post: 7, so 21 named and 22 with the
-  //     queue. The return reports exactly the agents that ran, and no more than the slot count are ever
-  //     in flight at once. One pull request's mutations start while another is still under review.
+  //     inventory, two axes, two mutations, one verdict and one post: 7, so 21, 22 with the launch
+  //     agent (#687) and 23 with the queue too. The return reports exactly the agents that ran, and no
+  //     more than the slot count are ever in flight at once. One pull request's mutations start while
+  //     another is still under review.
   checks++
   {
     const four = (n) => pr(n, ['tests/q.cs'], { candidates: [cand(`Q${n}a`), cand(`Q${n}b`), cand(`Q${n}c`), cand(`Q${n}d`)] })
@@ -1061,7 +1127,7 @@ try {
       if (kind === 'standards' || kind === 'spec') return { 301: 2, 302: 40, 303: 15 }[n] || 1
       return kind === 'mutate' ? 5 + Number(label.split(':')[2]) : 3
     }
-    for (const [slots, queued, want] of [[2, false, 21], [1, false, 21], [3, true, 22], [5, false, 21]]) {
+    for (const [slots, queued, want] of [[2, false, 22], [1, false, 22], [3, true, 23], [5, false, 22]]) {
       env = run({ prs: queued ? undefined : [301, 302, 303], maxParallel: slots, maxMutationsPerPr: 2 }, WIDE3,
         { delay, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
       result = await execute(env)
@@ -1297,6 +1363,68 @@ try {
     if (!(env.prompts['verdict:511'] || '').includes('2026-10-22')) fail('PR 511: the verdict prompt does not carry the later-date finding it is to weigh')
   }
 
+  // A Closes line no commit names (#688). tools/land.sh refuses a description whose Closes #n names a
+  // ticket no non-merge commit since the fork point names as #n or issue-n (#566), and #683's record
+  // cleared a head it then refused. The script applies the same rule after the skip of a recorded head
+  // and before the range agent: a ticket only a merge names (a), one named only inside a URL (b), 35
+  // beside commits naming 352 and reissue-35 (d), a commit with no parent count (h) and an indented
+  // lower-case closes line naming a ticket no commit names (i) stop the pull
+  // request at stage closes with no other agent run; issue-n in a one-parent commit (c), a lower-case closes line
+  // ending in a carriage return (e) and no Closes line (f) are reviewed; a recorded head is skipped (g).
+  // The numbers are built, not written: a literal hash-number here is a citation the steering check
+  // reads, and these name no issue of this repository.
+  checks++
+  {
+    const C1 = sha('e')
+    const one = (message, parents = 1) => ({ sha: C1, message, parents })
+    const h = (n) => '#' + n
+    const SERVED = {
+      // (a) named only by a merge.
+      601: pr(601, ['docs/z.md'], { description: `Lands it.\n\nCloses ${h(41)}\n`, commitMessages: [one('Task x: lands it', 1), one(`Merge task x\n\nTicket: ${h(41)}`, 2)] }),
+      // (b) named only inside a URL.
+      602: pr(602, ['docs/z.md'], { description: `Closes ${h(42)}`, commitMessages: [one(`Task x: lands it\n\nAuthority: https://github.com/o/r/issues/42${h('issuecomment-9')}`)] }),
+      // (c) named as issue-n by a one-parent commit.
+      603: pr(603, ['docs/z.md'], { description: `Closes ${h(43)}`, commitMessages: [one('Task issue-43: lands it')] }),
+      // (d) 35 is not found inside 352, nor issue-35 after a letter, digit or underscore.
+      604: pr(604, ['docs/z.md'], { description: `Closes ${h(35)}`, commitMessages: [one(`Task x: lands it (${h(352)})`), one('Task issue-352: and the rest'), one('Task x: reissue-35, 0issue-35 and _issue-35')] }),
+      // (e) the keyword in any case, and a carriage return after the number.
+      605: pr(605, ['docs/z.md'], { description: `Lands it.\r\n\r\n  closes ${h(45)}\r\nCLOSES ${h(46)}\r\n`, commitMessages: [one(`Task x: lands it\n\nTicket: ${h(45)}, ${h(46)}`)] }),
+      // (f) no Closes line.
+      606: pr(606, ['docs/z.md'], { description: `Advances ${h(47)}.`, commitMessages: [one('Task x: lands it', 2)] }),
+      // (g) a head that already carries a record is skipped, whatever its Closes line.
+      607: pr(607, ['docs/z.md'], { head: H76, forkPoint: B76, commits: [H76], reviews: [CLEARED_76], description: `Closes ${h(48)}` }),
+      // (h) a commit with no parent count does not count.
+      608: pr(608, ['docs/z.md'], { description: `Closes ${h(49)}`, commitMessages: [{ sha: C1, message: `Task x: lands it (${h(49)})` }] }),
+      // (i) the keyword's case and the leading whitespace are read: an indented lower-case closes line
+      //     naming a ticket no commit names still stops the pull request. (e) alone cannot show it, since
+      //     its tickets are named, so a matcher reading only `Closes` at the line's start passed (e) (review of #737).
+      609: pr(609, ['docs/z.md'], { description: `Lands it.\r\n\r\n  closes ${h(50)}\r\n`, commitMessages: [one('Task x: lands it')] }),
+    }
+    const env = run({ prs: [601, 602, 603, 604, 605, 606, 607, 608, 609] }, SERVED)
+    const result = await execute(env)
+    const stopped = { 601: [41], 602: [42], 604: [35], 608: [49], 609: [50] }
+    for (const [n, tickets] of Object.entries(stopped).map(([k, v]) => [Number(k), v])) {
+      const r = resultOf(n, result)
+      if (r.outcome !== 'failed') fail(`PR ${n}: outcome ${r.outcome}, expected failed for a Closes line no non-merge commit names`)
+      if (!String(r.stage).startsWith('closes')) fail(`PR ${n}: stage ${JSON.stringify(r.stage)}, expected one starting closes`)
+      for (const t of tickets) if (!new RegExp(`#${t}(?!\\d)`).test(String(r.stage))) fail(`PR ${n}: the stage ${JSON.stringify(r.stage)} does not name ${h(t)}`)
+      if (!/Ticket: #n/.test(String(r.stage))) fail(`PR ${n}: the stage ${JSON.stringify(r.stage)} does not give land.sh's remedy`)
+      const ran = env.calls.filter((c) => c.split(':')[1] === String(n) && !c.startsWith('inventory:'))
+      if (ran.length) fail(`PR ${n}: stopped at closes, but ${ran.join(', ')} ran`)
+      if (env.posted.some((p) => p.n === n)) fail(`PR ${n}: stopped at closes, but a comment was posted`)
+      if (r.verdict || r.recordUrl) fail(`PR ${n}: stopped at closes, but carries verdict ${JSON.stringify(r.verdict)} and record ${JSON.stringify(r.recordUrl)}`)
+    }
+    if (String(resultOf(604, result).stage).includes(h(352))) fail(`PR 604: the stage names ${h(352)}, which a commit names: ${JSON.stringify(resultOf(604, result).stage)}`)
+    for (const n of [603, 605, 606]) {
+      const r = resultOf(n, result)
+      if (r.outcome === 'failed' || r.verdict !== 'merge') fail(`PR ${n}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, verdict ${r.verdict}, expected a review that reaches its verdict`)
+      for (const k of ['standards', 'spec', 'verdict', 'post']) if (!env.calls.includes(`${k}:${n}`)) fail(`PR ${n}: no ${k} agent ran`)
+    }
+    const g = resultOf(607, result)
+    if (g.outcome !== 'skipped' || !g.skippedBecauseRecorded) fail(`PR 607: outcome ${g.outcome} at ${JSON.stringify(g.stage)}, expected a recorded head skipped, not stopped`)
+    if (!/parents/.test(env.prompts['inventory:601'] || '') || !/--format=%P/.test(env.prompts['inventory:601'] || '')) fail('the inventory prompt does not ask for each commit\'s parent count from git log --format=%P')
+  }
+
   // The return leads with one line per request (#294): the completion notice cuts the return short,
   // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
   // field, one line per pull request with its number, head, verdict, record URL, verified finding and
@@ -1323,8 +1451,9 @@ try {
     const r = await execute(dead)
     const line = (r.summary || [])[0] || ''
     if (!/^#306 6{40} - \(failed: verdict: the verdict agent returned nothing\) \(no record\): 0 verified finding\(s\), 2 mutation\(s\), did-not-fail: none$/.test(line)) fail(`a failed pull request's summary line is ${JSON.stringify(line)}`)
-    // A halted run, a bad launch or a queue nobody could read, leads with an empty summary.
-    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }]]) {
+    // A halted run, a bad launch, a queue nobody could read or a script that is not origin/main's
+    // (#687), leads with an empty summary.
+    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }], ['a script that is not origin/main\'s', {}, { launch: { ...LAUNCH_OK, differs: true, behind: 1 } }]]) {
       const h = await execute(run(a, SERVED, b))
       if (Object.keys(h || {})[0] !== 'summary' || !Array.isArray(h.summary) || h.summary.length) fail(`${why} returns ${JSON.stringify(h)}, expected summary [] first`)
     }
@@ -1400,6 +1529,79 @@ try {
     if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
+
+  // A script that is not origin/main's (#687; ADR-0026 decision 3: no launch runs a scriptPath from an
+  // unlanded copy). The launch agent runs first and alone, and when repo's copy of the script differs
+  // from origin/main's, or it cannot tell, the run halts before any other agent: summary [] first,
+  // prs [], nothing posted, and a halted line starting `launch:` that names the fix the checkout's
+  // state allows. Only a clean main behind origin/main is given the fast-forward.
+  {
+    const FF = 'merge --ff-only origin/main'
+    const halts = [
+      ['a clean main 84 behind', { differs: true, behind: 84 }, (h) => h.includes(FF) ? '' : `does not give the fast-forward ${FF}`],
+      // Behind as well, so the edit's remedy must come first of the four, as the accepted draft orders them.
+      ['an uncommitted edit of the script', { differs: true, scriptEdited: true, trackedChanges: true, behind: 5 },(h) => /uncommitted edit/.test(h) && !h.includes(FF) ? '' : 'does not name the uncommitted edit, or gives a fast-forward'],
+      ['a checkout on task/x', { differs: true, branch: 'task/x', behind: 3 }, (h) => h.includes('task/x') && !h.includes(FF) ? '' : 'does not name task/x, or gives a fast-forward'],
+      ['a main with tracked changes', { differs: true, trackedChanges: true, behind: 2 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward over tracked changes'],
+      ['a main with a commit origin/main lacks', { differs: true, behind: 0 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward that cannot apply'],
+      ['a launch agent that returns nothing', 'null', (h) => h.startsWith('launch: could not tell') ? '' : 'does not start "launch: could not tell"'],
+      ['a launch agent that reports an error', { error: 'git fetch origin --tags: could not reach origin' }, (h) => h.startsWith('launch: could not tell') && h.includes('could not reach origin') ? '' : 'does not start "launch: could not tell" with the error'],
+      ['a launch agent whose differs is no boolean', { differs: 'yes' }, (h) => h.startsWith('launch: could not tell') ? '' : 'does not start "launch: could not tell"'],
+    ]
+    for (const [what, launch, judge] of halts) {
+      for (const a of [{}, { prs: [101, 102] }]) {
+        checks++
+        const env = run(a, PRS, { launch: launch === 'null' ? 'null' : { ...LAUNCH_OK, ...launch }, queue: { baseTip: sha('c'), prs: [{ number: 101, head: sha('1'), baseRef: 'main' }], error: '' } })
+        const result = await execute(env)
+        const how = `${what}${a.prs ? ', with a list' : ', from the queue'}`
+        if (!result || Object.keys(result)[0] !== 'summary' || !Array.isArray(result.summary) || result.summary.length) { fail(`${how}: returns ${JSON.stringify(result)}, expected summary [] first`); continue }
+        if (JSON.stringify(result.prs) !== '[]' || env.posted.length) fail(`${how}: prs ${JSON.stringify(result.prs)}, ${env.posted.length} comment(s); expected none`)
+        if (JSON.stringify(env.calls) !== '["launch"]' || result.agents !== 1) fail(`${how}: agents ${JSON.stringify(env.calls)} (${result.agents} reported), expected the launch agent alone`)
+        const h = String(result.halted || '')
+        if (!h.startsWith('launch: ') || !h.endsWith('nothing was reviewed and nothing was posted')) fail(`${how}: halted ${JSON.stringify(h)}, expected a launch: line ending "nothing was reviewed and nothing was posted"`)
+        if (h.includes('bad launch')) fail(`${how}: halted ${JSON.stringify(h)} says bad launch, which is an argument halt that started no agent`)
+        if (!h.startsWith('launch: could not tell') && !h.includes(`${env.repo}/.claude/workflows/review-queue.js`)) fail(`${how}: halted ${JSON.stringify(h)} does not name repo's script`)
+        const wrong = judge(h)
+        if (wrong) fail(`${how}: halted ${JSON.stringify(h)} ${wrong}`)
+        if (result.date !== '2026-10-21' || result.logDir !== `${env.repo}/.scratch/review-queue/log/2026-10-21` || JSON.stringify(result.headMoved) !== '[]') fail(`${how}: date ${result.date}, logDir ${result.logDir}, headMoved ${JSON.stringify(result.headMoved)}`)
+      }
+    }
+    // The launch agent's reading is the run's base tip, whatever the queue or an inventory read
+    // after it. A halted run returns the tip the launch agent read, and "" for an unread one.
+    checks++
+    {
+      const env = run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7') } })
+      const result = await execute(env)
+      if (result.baseTip !== sha('7')) fail(`a launch agent that read origin/main at ${sha('7')}: baseTip ${result.baseTip}, expected the launch agent's`)
+      const read = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7'), differs: true, behind: 1 } }))
+      if (read.baseTip !== sha('7')) fail(`a halted run whose launch agent read origin/main at ${sha('7')}: baseTip ${JSON.stringify(read.baseTip)}, expected the launch agent's`)
+      const halted = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: 'not a sha', error: 'rev-parse failed' } }))
+      if (halted.baseTip !== '') fail(`a launch agent that read no sha: baseTip ${JSON.stringify(halted.baseTip)}, expected ""`)
+    }
+    // With a list, every pipeline starts at once, so only an agent run before them all can stop the
+    // axes: the launch agent is the first call, and every inventory comes after it ends.
+    checks++
+    {
+      const WIDE3 = { 301: pr(301, ['docs/a.md']), 302: pr(302, ['docs/b.md']), 303: pr(303, ['docs/c.md']) }
+      const env = run({ prs: [301, 302, 303], maxParallel: 5 }, WIDE3)
+      await execute(env)
+      const ended = env.events.indexOf('end launch')
+      if (env.calls[0] !== 'launch') fail(`three pull requests: the first agent is ${env.calls[0]}, expected launch`)
+      if (ended < 0 || env.events.some((e, i) => e.startsWith('start inventory:') && i < ended)) fail(`three pull requests: an inventory started before the launch agent ended: ${env.events.join(', ')}`)
+    }
+    // The launch prompt reads and reports: it compares repo's script with origin/main's, reads the
+    // checkout's state, carries the house rules, and moves nothing.
+    checks++
+    {
+      const env = run({ prs: [101] }, PRS)
+      await execute(env)
+      const p = env.prompts.launch || ''
+      // The fetch is held to step 1, before origin/main is read: HOUSE names the same command, so a
+      // bare search for it would pass with the step's fetch gone (#687, Q7: an unfetched tip proves nothing).
+      for (const want of [`1. \`git -C ${env.repo} fetch origin --tags\`, then baseTip = \`git -C ${env.repo} rev-parse origin/main\``,`git -C ${env.repo} diff --quiet origin/main -- .claude/workflows/review-queue.js`, `git -C ${env.repo} symbolic-ref --short -q HEAD`, `git -C ${env.repo} rev-list --count HEAD..origin/main`, `git -C ${env.repo} status --porcelain --untracked-files=no`, `git -C ${env.repo} diff --quiet HEAD -- .claude/workflows/review-queue.js`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/launch.json`, 'House rules (']) if (!p.includes(want)) fail(`the launch prompt lacks ${JSON.stringify(want)}`)
+      if (/merge --ff-only|git -C \S+ (checkout|switch|reset|pull)\b/.test(p)) fail('the launch prompt moves the checkout')
+    }
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a

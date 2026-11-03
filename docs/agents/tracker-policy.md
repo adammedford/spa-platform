@@ -187,10 +187,12 @@ as it stood when the decision was posted: if the draft comment was edited after 
 `updated_at` is later than the decision's `created_at`), the decision does not cover it, and the
 integrator asks again. A comment that departs from this form is not a decision comment: the
 integrator lane treats the request as undecided and relabels it `ready-for-human`. One parser reads
-the form, for one purpose: `tools/decision_citation.py` reads the first two lines and the author of
-each comment on a change request a merge closes, so that `tools/land.sh` can refuse a merge body
-that cites no decision (#530, "Landing" below). Everything else the form decides, the integrator
-lane and the reviewer read.
+the form, `tools/decision_citation.py`, which reads the first two lines and the author of each
+comment on a change request, for two purposes: so that `tools/land.sh` can refuse a merge body
+that cites no decision for a request the merge closes (#530, "Landing" below), and so that
+`tools/overnight_preflight.sh`'s `decision` line can name, before a launch, a request labelled
+`ready-for-agent` whose latest decision does not accept it with `ADR: no` (#663). Everything else
+the form decides, the integrator lane and the reviewer read.
 
 A scripted session never posts a comment whose first line begins `Decision:`. Its draft is headed
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
@@ -243,7 +245,8 @@ explains.
 is a pending-writes verb: `comment`, `create`, `edit` or `close`. A create carries `title:`,
 `labels:` (comma-separated) and, when it blocks one, `blocking:`; an edit carries `flags:`, its
 `gh issue edit` flags, such as `--add-blocked-by 533`; a close carries `reason:`, `completed` or
-`not planned`. `decide: yes` marks a write that waits on Adam.
+`not planned`. `decide: yes` marks a write that waits on Adam. A file with a repeated key, or a
+key not named here, is not posted.
 
 **The body.** Everything after the closing `---` line is posted byte for byte: the poster
 substitutes, strips and parses nothing in it, and a `---` there is body. It holds no placeholder.
@@ -265,8 +268,9 @@ puts each marked write to Adam, and posts it only on his words in that session.
 **Posting.** First search each create's title and list the issues and pull requests opened since
 the drafts were made, dropping any write another session has made. Then post each unmarked file
 with one `gh` call, in name order, appending its name to `writes/posted` as it posts, so a second
-pass skips it. A loop of many writes is a bulk tracker write, which auto mode refuses: run it in
-manual mode.
+pass skips it. On a second pass, a file not in `writes/posted` whose create or comment is already
+on the issue counts as posted: it is appended, not posted again. A loop of many writes is a bulk
+tracker write, which auto mode refuses: run it in manual mode.
 
 ## The archive: tickets filed before ADR-0020
 

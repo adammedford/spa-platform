@@ -41,7 +41,7 @@ contracts rows naming it, cited by path. In practice:
 | The interfaces and the stage order | `contracts/`, `docs/plan/02-contracts.md` |
 | A test id the row names (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, `contracts/test-ids.md` |
 | An evidence id (`S-`, `R-`, `T-`) | `docs/plan/07-evidence.md` |
-| A decision the task was handed | the change requests blocking the ticket, with their decision comments; an archived request under `contracts/changes/`; `docs/adr/` |
+| A decision the task was handed | the change requests blocking the ticket, with their decision comments; a decision given in a session, posted on the ticket under `docs/agents/tracker-policy.md` → "A decision Adam gives in a session"; an archived request under `contracts/changes/`; `docs/adr/` |
 
 The pull request body is the author's claim, not the spec. Check it against the diff and say which
 claims you verified and how. When it closes a change request whose decision comment says
@@ -101,8 +101,10 @@ merge body, which `docs/agents/landing-work.md` requires anyway, and end the rev
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
 review-queue workflow writes. The morning run files each row as an issue of its own while the pull
 request is still open (#292, #514); a row still unfiled when `tools/land.sh` merges is named by its
-`land:` warning (#573), and is filed by hand with the finding as the title and a
-`**Raised by:** #<pr>` line, the shape the morning's `filedAs` reads. Hold when a finding shows the
+`land:` warning (#573), and is filed by hand with the finding as the title and the body
+`node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose
+`**Raised by:** #<pr>` line is the shape the morning's `filedAs` reads and whose stderr names the
+label to file it under (#643). Hold when a finding shows the
 change does not do what it says, or when the test that proves it cannot fail.
 
 ### The review record
@@ -175,7 +177,9 @@ A session that repairs what a review found works from the record, not from the P
   moves the head, so the record names an old one: the pull request needs a delta review of the
   commits since it (#85) before `tools/land.sh`.
 - **A description is not a commit.** Correct a false claim in it with `gh pr edit`; it moves no
-  head. An integration branch such as `overnight/<date>` takes no repair commit from here.
+  head. After a repair push, edit it in the same step: name the new head as the head, and each
+  evidence line of an older one as "the earlier head `<sha>`", which the review's head comparison
+  (#294) passes over. An integration branch such as `overnight/<date>` takes no repair commit from here.
 - **A brief for a repair agent states the finished result**: the changed lines, the sha and the
   `tools/check.sh --full` verdict, quoted, in its final message. Verify a value it reports against
   the branch or the tracker before relaying it.

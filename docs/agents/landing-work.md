@@ -29,8 +29,9 @@ file whose changes equal its origin/main content, with nothing staged, may first
 `git restore <path>` or `git checkout -- <path>`, as a call of its own, since once `main` is
 fast-forwarded that restore has changed nothing (#376). In a Claude Code session started in a
 checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
-before each Bash call, and in the main checkout it refuses the branch-moving git commands and those
-that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
+as it stands on `origin/main`, or the checkout's own copy when that ref does not resolve or holds
+none, before each Bash call, and in the main checkout it refuses the branch-moving git commands and
+those that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
 checkout -- <path>`), admits that one fast-forward and that one restore, and names this route (#114,
 #200). A person's terminal runs no such hook.
 
@@ -211,9 +212,9 @@ rebuild, and the lane worktrees it would move, and writes nothing. Read that, th
 `--apply`: it moves each clean lane worktree under the root to its rebuilt tip, names each dirty one
 and leaves it to its owner, writes the body, and comments the map on the issue.
 
-**`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
---delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
-commands that recreate each deleted branch at its old tip:
+**`tools/land.sh` deletes a finished branch**, after a merge into `main`, by running
+`tools/prune_branches.py --delete` (#71), and when that deletes anything, land.sh's last line names
+the file holding the commands that recreate each deleted branch at its old tip:
 `pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
 `git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
 cannot write that file stops deleting, and the last line says it stopped (#115). A command
@@ -226,7 +227,8 @@ ticket, left from the archived tracker, claims nothing and is held to the rest o
 alone; an `overnight/*` branch goes once its pull request has merged. Either goes only when its
 current tip's work is on `main`, as an ancestor or as patch-equivalent commits with no merge
 carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
-on `origin` since it was checked keeps it there. Everything else is listed with the reason it stays.
+on `origin` since it was checked keeps it there. Everything else stays: a `--delete` run counts
+what it keeps under each reason, and `--verbose` or a dry run lists each with its reason (#524).
 A part-landed row keeps its claim, because the claim is how the next session knows the row is
 taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do,
 deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same

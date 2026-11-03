@@ -52,8 +52,11 @@ public sealed class PipelineContractTests
         Assert.Contains("The shutdown timeout exceeds the refresh holder's 20-second write deadline", section);
         Assert.Contains("durable write", section);
 
-        // The lease appears only as the deadline's source, so no rewording can make it the bound
-        // the shutdown timeout is set against (#707's review).
+        // Every "21-second lease" the section spells sits in the deadline's derivation, so a
+        // sentence that names the lease by that phrase cannot also make it the bound the shutdown
+        // timeout is set against (#707's review). The check matches the phrase and no more: a
+        // sentence that makes the lease the bound without spelling "21-second lease" stays green,
+        // and only review catches it (#718).
         int leases = Occurrences(section, "21-second lease");
         Assert.True(leases > 0, "The section no longer derives the write deadline from the 21-second lease.");
         Assert.Equal(leases, Occurrences(section, "(the 21-second lease less 1 second of clock skew"));
