@@ -66,8 +66,16 @@ internal static class AccessTokenStep
                     await Problems.WriteAsync(context, Problems.IdpUnavailable);
                     break;
 
-                // An outcome the frozen contract does not name. Never forwarded: with no token to attach
-                // the call would go on bare, and that is a decision, not a default. A 500.
+                // A session store operation failed or ran out its deadline, or a refresh ended at the
+                // store's bound, and the session is kept. auth.store is the source's to note before it
+                // returns, as auth.session is above, so only the body is left here
+                // (contracts/request-gate.md -> Rule ids, change request #729).
+                case AccessTokenResult.StoreUnavailable:
+                    await Problems.WriteAsync(context, Problems.SessionStoreUnavailable);
+                    break;
+
+                // An outcome the contract does not name. Never forwarded: with no token to attach the
+                // call would go on bare, and that is a decision, not a default. A 500.
                 default:
                     throw new InvalidOperationException(
                         $"IAccessTokenSource returned {result.GetType().Name}, which the proxy does not answer.");
