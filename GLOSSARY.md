@@ -373,6 +373,13 @@ amends nothing and restates no rule; the body stays as accepted. How an ADR is a
 `docs/adr/README.md` → "Where a decision lives". _Avoid_: "body note", "postscript", "amendment"
 for one.
 
+**Write file** — one file holding one tracker write ahead of its posting: a frontmatter block
+naming the target issue and the action, then the body that is posted verbatim. A sub-agent of an
+audit or a cleanup drafts them and the session that posts reads only their index and the ones
+marked for the human. Its keys and how it is posted: `docs/agents/tracker-policy.md` -> "Drafting
+tracker writes". Not a line of the pending-writes file, which queues a write GitHub refused.
+_Avoid_: bare "draft" for this, "batch file".
+
 **Steering document** — a document a session steers by, so a change to it lands only on a cited
 authority. Which documents are in the set, and what counts as authority:
 `docs/agents/landing-work.md` → "A commit that changes a steering document".
