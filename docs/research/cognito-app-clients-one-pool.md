@@ -52,8 +52,9 @@
    style per client for that reason. The pool is the cell's, so 20 bounds shell plus fragments plus every
    other app in the cell, not fragments per shell. Whether a style-less client could still complete a
    cookie-only, page-less authorization is a live check (section 9), but a fragment's first login in a
-   fresh browser, or after the hour, needs pages anyway, so treat 20 as binding. App clients themselves
-   are 1,000 per pool, adjustable to 10,000 ([quotas][quotas]).
+   fresh browser, or after the hour, needs pages anyway, so treat 20 as binding; whether a default-valued
+   style counts like a customised one is also unverified. App clients themselves are 1,000 per pool,
+   adjustable to 10,000 ([quotas][quotas]).
 4. **Both redirect-URI shapes are registrable; Cognito constrains nothing here.** A callback URL must be
    absolute, pre-registered on the client, without a fragment component and HTTPS (except localhost),
    custom TCP ports allowed; up to 100 per client, each up to 1,024 characters
@@ -181,9 +182,10 @@ navigating to `/bff/login?fragment=...` completes with no page only inside the h
 last interactive sign-in at this pool. Outside it, the user sees managed login (and any MFA) for the
 fragment although the shell still has a session. Options the docs leave open, for the spec to choose:
 send `prompt=none` on a fragment's authorization and treat `login_required` as "ask the user" (the
-ASP.NET handler has an `OpenIdConnectOptions.Prompt` setting; how it surfaces `login_required` at the
-callback is section 9's); or accept a visible prompt after the hour; or log every fragment in eagerly
-inside the hour, which the map rejected as N redirects.
+ASP.NET handler exposes `OpenIdConnectOptions.Prompt`, a string that "gets or sets the 'prompt'"
+([Microsoft Learn][learn-prompt]); how the handler surfaces `login_required` at the callback is section
+9's); or accept a visible prompt after the hour; or log every fragment in eagerly inside the hour, which
+the map rejected as N redirects.
 
 ## 2. Redirect URIs
 
@@ -228,7 +230,11 @@ in-place update (the apps root's parameter re-creates only on the client's id, `
   `resourceServerIdentifier/scopeName`; "you can authorize any app client in your user pool to issue
   custom scopes from any of your resource servers"; deleting a scope marks it inactive rather than
   removing its client associations. Two clients sharing `https://orders.spa-poc.test/read` is the normal
-  case, and the fixtures already give app1 and app2 scopes from the same two resource servers.
+  case, and the fixtures already give app1 and app2 scopes from the same two resource servers. In
+  Terraform the resource server is `aws_cognito_resource_server`, keyed here by `identifier`, whose
+  `scope_identifiers` attribute lists the full names "in the format identifier/scope_name"
+  ([provider v6.68.0][tf-rs]); the identity root outputs those and the apps root checks a client's
+  scopes against them.
 - Per client ([CreateUserPoolClient][cupc], `AllowedOAuthScopes`; [authorize][authz], `scope`): the
   client's allowed list bounds what it may request; "if the client doesn't request any scopes, the
   authentication server uses all scopes that are associated with the client"; `openid` is needed for an
@@ -279,9 +285,10 @@ revocation is idempotent. ADR-0017 recorded the form-body refusal and the Basic 
 **Scope of a revocation** ([token revocation][rev]): "When you revoke a refresh token, all access tokens
 that were previously issued by that refresh token become invalid. The other refresh tokens issued to the
 user are not affected." "Your request to revoke a refresh token must include the client ID that was used
-to obtain the token." Revocation is per client in an app client's settings (`EnableTokenRevocation`,
-default on; `enable_token_revocation` in Terraform) and revoking a rotated-out token reaches its successor
-(C-2.19). Hence the map's logout is one revocation per token set, each with its own client's secret, and a
+to obtain the token." The API form says the same: `RevokeToken` takes `ClientId`, "the ID of the app
+client where the token that you want to revoke was issued", required, and `ClientSecret` when the client
+has one ([RevokeToken][rtok]). Revocation is switched per client (`EnableTokenRevocation`, default on;
+`enable_token_revocation` in Terraform) and revoking a rotated-out token reaches its successor (C-2.19). Hence the map's logout is one revocation per token set, each with its own client's secret, and a
 failure on one does not touch another. The `UserToken` category (`RevokeToken`) allows 120 requests per
 second per Region, adjustable ([quotas][quotas]).
 
@@ -346,10 +353,14 @@ pool, which bounds how fast an apply with many new clients runs, not whether it 
 because, by API, a client has no managed login pages without one ([`ManagedLoginVersion`][mlv]: "when you
 create an app client programmatically, your app client has no branding style. To use managed login, create
 a branding style"), and a style is bound to one `ClientId` for its life ([CreateManagedLoginBranding][cmlb];
-[branding][branding]: "you can't change the assigned styles of an app client"). Twenty styles per pool,
-not adjustable, is twenty clients that can show a managed login page in the cell. Every fragment client
-counts against the same twenty as the shell and as every other app in the cell. That is the number the
-map's "how many fragments a shell may carry" meets first, before the session record's size.
+[branding][branding]: "you can't change the assigned styles of an app client"; Terraform's
+`aws_cognito_managed_login_branding` takes `client_id` as required, [provider v6.68.0][tf-branding]).
+Twenty styles per pool, not adjustable, is twenty clients that can show a managed login page in the cell.
+Every fragment client counts against the same twenty as the shell and as every other app in the cell. That
+is the number the map's "how many fragments a shell may carry" meets first, before the session record's
+size. One caveat, which no page read answers: whether a style created with `UseCognitoProvidedValues:
+true`, which is what the apps root makes, counts against the twenty like a customised one. The quota row
+says "styles" without qualification, so this finding reads it as counting (section 9).
 
 ## 6. What `infra/` creates per client today
 
@@ -379,8 +390,10 @@ map's "how many fragments a shell may carry" meets first, before the session rec
 **The fragment entry's Terraform shape, as the facts above bound it.** A fragment's client is the same
 resource with the same arguments and a different `callback_urls` line; its style is the same resource
 and counts against the twenty; its parameter needs a path, for which `/spa-platform/<cell>/apps/<appId>/
-fragments/<fragmentId>/client-secret` keeps the task role's prefix. The flatten is `for app in apps, for f
-in try(app.fragments, [])`. What the shape cannot do without a change request: `fragments[]` on an app
+fragments/<fragmentId>/client-secret` stays inside the grants that exist: the task role reads
+`parameter/spa-platform/<cell>/apps/*` (`infra/modules/cell/iam.tf`) and the CI plan role
+`parameter/spa-platform/<cell>/*` (`infra/bootstrap/ci-role.tf`), and an IAM resource wildcard matches
+across `/`. The flatten is `for app in apps, for f in try(app.fragments, [])`. What the shape cannot do without a change request: `fragments[]` on an app
 definition (schema `additionalProperties: false`, frozen at G1a), and a fragment's row in the outputs'
 `clients` (keyed by app, frozen at G1a). The refresh-token validity stays per client; a fragment's token
 set expires on its own clock inside the one record, as the map already decided.
@@ -410,6 +423,9 @@ set expires on its own clock inside the one record, as the map already decided.
   from docs.aws.amazon.com and repost.aws. They are documentation reads only; no `run_script`, no
   `aws` CLI, no Terraform, no credential, no cell read. Pages longer than the tool's output limit were
   saved by the tool and sliced locally with `python3 -I`.
+- `WebFetch` of RFC 6749 §3.1.2.3 and of the Microsoft Learn page for `OpenIdConnectOptions.Prompt`.
+  `WebFetch` condenses a page through a model, so each is cited for one sentence that the condensed
+  answer quoted verbatim.
 
 **Read only:** every provider fact above. **Observed earlier, cited and not re-run:** C-2.6, C-2.7,
 C-2.9, C-2.14, C-2.19 and C-3.x from `spikes/g0/cognito/output-cognito.txt` (2026-10-16, the original
@@ -419,8 +435,10 @@ step, no `describe-user-pool-client`, no browser against the cell.
 ## 9. Unverified: what only a live check settles
 
 1. Whether a client **without a branding style** completes a cookie-only authorization that renders no
-   page, or fails as a page would. Bears on whether the twenty-style quota binds fragments that are only
-   ever logged in silently. Reading says treat it as binding.
+   page, or fails as a page would; and whether a **default-valued style** (`UseCognitoProvidedValues:
+   true`, the apps root's kind) counts against the twenty like a customised one. Both bear on whether
+   the twenty-style quota binds fragments. Reading says treat it as binding; the first apply of a
+   twenty-first client answers both.
 2. Whether `max_age` on `/oauth2/authorize` acts **without `acr_values`** on an Essentials pool, and
    whether it is live in the cell's Region, given the "rolling out gradually" note.
 3. The exact **comparison rule** for `redirect_uri` against `CallbackURLs` (case, trailing slash, query):
@@ -450,6 +468,7 @@ step, no `describe-user-pool-client`, no browser against the cell.
 [mlv]: https://docs.aws.amazon.com/sdk-for-ruby/v3/api/Aws/CognitoIdentityProvider/Types/CreateUserPoolDomainRequest.html
 [repost]: https://repost.aws/knowledge-center/cognito-logout-endpoint-globalsignoutapi
 [rfc6749]: https://www.rfc-editor.org/rfc/rfc6749#section-3.1.2.3
+[learn-prompt]: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.authentication.openidconnect.openidconnectoptions.prompt
 [tf-client]: https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/cognito_user_pool_client.html.markdown
 [tf-rs]: https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/cognito_resource_server.html.markdown
 [tf-branding]: https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/cognito_managed_login_branding.html.markdown
