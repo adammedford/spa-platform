@@ -1273,6 +1273,18 @@ class UnblocksTests(PreflightTestCase):
                                   "blocker. It is informational and adds no skip candidate"),
                          result.row("unblocks"))
 
+    def test_a_cycle_among_the_downstream_tickets_is_walked_once(self):
+        # 20 holds 21, and 21 and 22 hold each other: the walk from 20 meets 21 again through 22,
+        # and only its seen guard stops it, so 20 counts 21 and 22 once each and the line ends.
+        tickets = [ticket("issue-20", 20, "integrator", "ready-for-agent"),
+                   ticket("issue-21", 21, "integrator", "blocked", blocked_by=("issue-20", "issue-22")),
+                   ticket("issue-22", 22, "integrator", "blocked", blocked_by=("issue-21",))]
+        result = Case(self, tickets=tickets).run()
+        self.assertOnlyFails(result)
+        self.assertIn("downstream tickets: issue-20 (#20, ready-for-agent): 2 downstream; issue-21 (#21, "
+                      "blocked): 1 downstream; issue-22 (#22, blocked): 1 downstream. It is informational",
+                      result.row("unblocks")[1])
+
     def test_a_blocker_whose_labels_gh_cannot_read_fails_the_line(self):
         tickets = [ticket("issue-21", 21, "integrator", "blocked", blocked_by=("issue-99",))]
         result = Case(self, tickets=tickets).run()
@@ -1335,10 +1347,13 @@ class ClaimsBlockerTests(PreflightTestCase):
         return case.git("rev-parse", f"task/{tid}-x", cwd=case.checkout)
 
     def test_a_blocker_met_tonight_gets_the_rename_and_one_not_met_is_left_held(self):
-        tickets = [ticket("issue-10", 10, "integrator", "claimed", blocked_by=("issue-20",)),
+        # Both statuses the body counts as met tonight, ready-for-agent and close-in-morning, are
+        # held by #10's two blockers, so dropping either from the met set turns this red.
+        tickets = [ticket("issue-10", 10, "integrator", "claimed", blocked_by=("issue-20", "issue-22")),
                    ticket("issue-11", 11, "integrator", "claimed", blocked_by=("issue-20", "issue-21")),
                    ticket("issue-20", 20, "integrator", "ready-for-agent"),
-                   ticket("issue-21", 21, "integrator", "ready-for-human")]
+                   ticket("issue-21", 21, "integrator", "ready-for-human"),
+                   ticket("issue-22", 22, "integrator", "close-in-morning", open_boxes=0)]
         case = Case(self, tickets=tickets)
         tip = self.held(case, "issue-10")
         self.held(case, "issue-11")
@@ -1346,7 +1361,8 @@ class ClaimsBlockerTests(PreflightTestCase):
         result = case.run("--fixture", str(fixture), DATE)
         self.assertOnlyFails(result)
         evidence = result.row("claims")[1]
-        self.assertIn("issue-10 (#10, 2 open boxes; open blockers: issue-20, met tonight): "
+        self.assertIn("issue-10 (#10, 2 open boxes; open blockers: issue-20, met tonight, issue-22, met "
+                      "tonight): "
                       f"git -C {case.checkout} branch -m task/issue-10-x hold/issue-10-{tip[:7]}", evidence)
         self.assertIn("issue-11 (#11, 2 open boxes; open blockers: issue-20, met tonight, issue-21, not met "
                       "tonight): leave held", evidence)
