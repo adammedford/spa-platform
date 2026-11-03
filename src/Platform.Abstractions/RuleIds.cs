@@ -10,8 +10,9 @@ namespace Platform.Abstractions;
 /// Four workstreams need the same strings and no two of them may disagree: workstream 2 refuses a
 /// host and a path, workstream 4 the gate, antiforgery and an unknown upstream, workstream 3 a
 /// login callback and a session after G1b and a failed session store after G3, and workstream 6
-/// counts them in <c>UsePlatformTelemetry</c> and asserts on them in the negative suite. A-03 stops a workstream project from reading another's constants, so
-/// before this type each owner kept a copy and the contract was agreed by hand. The matching test
+/// counts them in <c>UsePlatformTelemetry</c> and asserts on them in the negative suite. A-03 stops
+/// a workstream project from reading another's constants, so before this type each owner kept a
+/// copy and the contract was agreed by hand. The matching test
 /// in tests/Platform.Abstractions.Tests reads the contract's own table and fails if the two drift.
 ///
 /// A rule id reaches a log line and <c>security.rejections</c>, never a response body: the
@@ -62,10 +63,11 @@ public static class RuleIds
 
     /// <summary>
     /// A session store operation failed or ran out <c>StoreDeadline</c>: the <c>continuity</c> spec's
-    /// F17 (#332), landed with G3's tag (#343). Also a refresh that ended at the store's bound, 2 × TTL,
-    /// with the session kept: the spec's D2, a distinct cause, answered <c>idp_unavailable</c> until
-    /// #727 moves it here. Under <c>auth.</c> because workstream 3's session code
-    /// is the one caller of the store, as it is of <see cref="AuthSession"/>.
+    /// F17 (#332), landed with G3's tag (#343). Also a refresh that ended at the store's bound,
+    /// 2 × TTL, with the session kept: the spec's D2, a distinct cause. Not the session remove
+    /// <c>POST /bff/logout</c> makes, which answers the usual logout (F11). Under <c>auth.</c> because
+    /// workstream 3's session code is the one caller of the store, as it is of
+    /// <see cref="AuthSession"/>.
     /// </summary>
     public const string AuthStore = "auth.store";
 

@@ -110,7 +110,7 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 500 | `shell_unavailable` | The app's release has no readable index.html |
 | 502 | `upstream_unavailable` | The upstream could not be reached |
 | 503 | `idp_unavailable` | The identity provider could not be reached to refresh the token; the session is kept |
-| 503 | `session_store_unavailable` | A session store operation failed or ran out `StoreDeadline`, or a refresh ended at the store's bound (2 × TTL, the `continuity` spec's D2, answered `idp_unavailable` until #727); no cookie is cleared and the session, if it exists, is kept |
+| 503 | `session_store_unavailable` | A session store operation failed or ran out `StoreDeadline`, or a refresh ended at the store's bound (2 × TTL, the `continuity` spec's D2); not the session remove `POST /bff/logout` makes, which answers the usual logout (F11); no cookie is cleared and the session, if it exists, is kept |
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |
 
 One refusal is not a problem body. A login callback the OpenID Connect handler refuses (a bad state,
