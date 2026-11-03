@@ -1473,6 +1473,11 @@ try {
       ['a PR the reader passed over', { followUps: { prs: [...pair.prs, { number: 723, state: 'MERGED', mergedAt: '2026-10-20T12:00:00Z', updatedAt: '2026-10-29T18:00:00Z', comments: [], reviews: [rec(723, 23, '2026-10-29T17:00:00Z', 'A review on a PR the reader passed over', true)] }], filed: [], skipPrs: [723] } }, new RegExp(`${cite(723)} was not read`)],
       ['a failed record read', { followUps: pair, nothingFrom: ['followups-batch:1'] }, /record reader[^|]*returned nothing/],
       ['a failed filing', { followUps: pair, filerDrops: [F_B] }, new RegExp(F_B)],
+      // A row tools/ticket_shape.py refuses is neither filed nor found already filed (Q12): the
+      // OWNERSHIP.md drift of the #479 case gives #443's deadline row an owner-line failure.
+      ['a filing the shape check refused', { followUps: { prs: [...pair.prs, ...FU443.prs], filed: [], ownership: OWNERSHIP_MD.replace(/^\/tests\/Platform\.Identity\.Tests\/\s+ws3-identity$/m, '/tests/Platform.Identity.Tests/       integrator') } }, new RegExp(`tools/ticket_shape\\.py failed them: ${cite(443)} "${FINDING_DEADLINE.replace(/[()]/g, '\\$&')}"`)],
+      // The window reader's listing of the issues at its limit may miss an Overnight issue's checkpoint.
+      ['a truncated listing of the issues', { followUps: pair, windowRead: { issues: { count: 2000, limit: 2000, numbers: [528], error: '' } } }, /the listing of the issues returned 2000 at its limit of 2000/],
     ]) {
       const env = newRepo()
       const r = await execute(env, { date: DATE }, { handovers: PRIOR, startedAt: S1, ...served })
@@ -1481,6 +1486,15 @@ try {
       if (!names.test(windowOf(r))) fail(`#514 box 7: the window line does not name ${what}:\n${windowOf(r)}`)
       if (what !== 'a failed record read' && !(env.filed || []).some((i) => i.title === F_A)) fail(`#514 box 7: under ${what} the finding that was returned was not filed`)
     }
+
+    // The latest record is picked as latestRecordOf picks it: a comment and a COMMENTED review in the
+    // same second go to the review, the later entry, so the index and the body reader agree.
+    const F_TIE_C = 'A comment record in the same second as a review'
+    const F_TIE_R = 'A review record in the same second as a comment'
+    const tie = { prs: [{ number: 751, state: 'OPEN', mergedAt: '', comments: [rec(751, 51, '2026-10-29T13:00:00Z', F_TIE_C)], reviews: [rec(751, 52, '2026-10-29T13:00:00Z', F_TIE_R, true)] }], filed: [] }
+    const tied = await execute(newRepo(), { date: DATE }, { followUps: tie, handovers: PRIOR, startedAt: S1 })
+    if (JSON.stringify(sentTitles(tied)) !== JSON.stringify([F_TIE_R])) fail(`#514: with a comment and a review record in one second, the morning sent ${JSON.stringify(sentTitles(tied))}, expected the review's row only`)
+    if (!advanced(tied, S1)) fail(`#514: the same-second records did not read as complete:\n${windowOf(tied)}`)
 
     // Box 8: reader output missing a PR's state, or carrying a malformed timestamp, is incomplete.
     const F_OK = 'A finding beside the malformed one'
