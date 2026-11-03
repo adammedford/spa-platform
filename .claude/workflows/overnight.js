@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Collect', detail: 'open issues labelled ready-for-agent / ready-for-human become tonight\'s tickets; plan rows with no issue yet get one' },
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
-    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
+    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
@@ -274,6 +274,21 @@ const RESET = {
   properties: { ok: { type: 'boolean' }, head: { type: 'string' }, notes: { type: 'string' } },
   required: ['ok', 'head', 'notes'],
 }
+// The resume probe (#712), before a lane implements a ticket: merged when the ticket's branch, with a "Task <id>:"
+// commit of its own since the run base, is already on the run branch; mergeSha is its merge there and subject that
+// merge's subject, "" when not merged.
+const PROBE = {
+  type: 'object',
+  properties: { merged: { type: 'boolean' }, mergeSha: { type: 'string' }, subject: { type: 'string' }, notes: { type: 'string' } },
+  required: ['merged', 'mergeSha', 'subject', 'notes'],
+}
+// The gate alone (#712), for a ticket whose merge is already on the run branch: ran is false when the integrate log
+// already records a pass on a head holding the merge, true when the gate ran now; headSha the head it passed on.
+const GATED = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'ran', 'mergeSha', 'headSha', 'notes'],
+}
 // The closing check (#629): ok as the agent read it, the head it ran on, and its log's last line unchanged; the
 // script reads the verdict from that line.
 const CLOSING = {
@@ -476,6 +491,42 @@ ${REQUEST_ROUTE(t)}
 Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), changeRequests (each change request the route above filed, queued or added an edge to, held changes included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
 }
 
+// A resumed lane whose work is already on the run branch (#712). On 2026-11-01, after two resumes, #677's merge
+// 02d755d was on the branch while its result read "skipped": its lane's STEP 0 found no "Task" commit outside the run
+// branch, since the run branch held them all, so it re-forked from a tip holding its own merge and saw head equal to
+// fork. #634's merge fd8c797 was on the branch while its result read "failed": its integrate agent had died before the
+// gate finished, and the replayed one took the run branch's latest merge, #553's 1435e21, for its own, and judged that.
+// So before a lane implements a ticket the probe asks git whether its work is already in, and a ticket whose merge is
+// there skips implement and review and goes to the gate alone. A resume replays the cached prefix of agent calls and
+// runs the rest live (the Workflow tool's resume), so the probe is asked per ticket, just before its implement: a
+// probe asked once at the start would be replayed from the first attempt, when nothing had merged.
+// <merge>, the ticket's own merge on the run branch: the oldest first-parent merge since the run base that holds the
+// branch, never the latest, which is another ticket's once a later merge has landed on it.
+const MERGE_OF = (branch, dir = INT_WT, head = 'HEAD') => `the first sha \`git -C ${dir} rev-list --first-parent --merges --reverse ${BASE}..${head}\` prints for which \`git -C ${dir} merge-base --is-ancestor ${branch} <that sha>\` succeeds`
+const probePrompt = (t) => `Resume probe for ticket ${t.n} (task ${t.id}, issue #${t.issue}), before its lane implements it (#712): is its work already on ${INT_BRANCH}, from an earlier attempt of this run? Read only: no checkout, no worktree, no commit, no gh call, and write no file.
+1. \`git -C ${REPO} rev-parse -q --verify refs/heads/task/${t.id}-${t.slug}\`. If it prints nothing, the branch does not exist: return merged false.
+2. The work is on the run branch only when both hold: \`git -C ${REPO} merge-base --is-ancestor task/${t.id}-${t.slug} ${INT_BRANCH}\` succeeds, and \`git -C ${REPO} log ${BASE}..task/${t.id}-${t.slug} --format=%s\` prints a subject starting "Task ${t.id}:". So a branch forked from the run branch with no commit of its own yet, and an earlier night's branch already on main, are not merged. Otherwise return merged false.
+3. When both hold, mergeSha is ${MERGE_OF(`task/${t.id}-${t.slug}`, REPO, INT_BRANCH)}, and subject is \`git -C ${REPO} log -1 --format=%s <mergeSha>\`. When no merge holds the branch (it reached ${INT_BRANCH} some other way), return merged false and say so in notes.
+Return merged, mergeSha and subject ("" when not merged), and notes (what each command printed, in a line).`
+// The gate alone (#712): the ticket's merge is already on the run branch, so nothing merges and nothing is fixed. A
+// pass already recorded on a head holding the merge stands, since each integrate judges its merge alone against its
+// first parent (#629); otherwise the gate runs once. A red gate resets the branch only when nothing has been built on
+// the merge: a merge with later merges on it stays, unverified, and the closing check and the landing's CI judge it.
+const GATE_ALONE = (t, merge) => `THE GATE ALONE (#712), for ${merge}, ${t.id}'s merge, already on ${INT_BRANCH}. Merge, resolve and fix nothing.
+a. Recorded: if the first line of ${LOG}/${t.id}-integrate.txt is "HEAD=<h>", its last line starts "check: pass:", and both \`git -C ${INT_WT} merge-base --is-ancestor ${merge} <h>\` and \`git -C ${INT_WT} merge-base --is-ancestor <h> HEAD\` succeed, the gate passed on an earlier attempt: do not run it again; return ok true, ran false, headSha <h>.
+b. Otherwise run it once, judged against <old>, the merge's first parent, \`git -C ${INT_WT} rev-parse ${merge}^1\`. In the command below, write <old>'s 40-character sha where it says <old>, and nothing else changes: in bash, \`<old>\` itself is a redirect from a file named old.
+${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration, the merge already in', fork: '<old>', port: PORT(t.n) })}
+Green: return ok true, ran true, headSha the sha after "HEAD=" on the log's first line.
+Red: read \`git -C ${INT_WT} log --format=%s ${merge}..HEAD\`. When it prints nothing, or only "Refresh the generated roadmap blocks after merging ${t.id}", nothing is built on the merge: \`git -C ${INT_WT} reset --hard <old>\`, and notes say so. Otherwise later merges sit on it, so reset nothing: notes begin "the merge stays on ${INT_BRANCH}, unverified: later merges sit on it." Either way notes quote the log's last line unchanged, and you return ok false, ran true, headSha "".`
+const gatePrompt = (t, probe) => `Gate ticket ${t.n} (task ${t.id}, issue #${t.issue}), whose merge is already on ${INT_BRANCH} (#712). You are the only integrator running.
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The resume probe found task/${t.id}-${t.slug} on ${INT_BRANCH}, merged by ${probe.mergeSha} ("${probe.subject}"), so its lane skipped implement and review.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${probe.mergeSha} HEAD\` fails, the merge is not on the branch the worktree holds: change nothing, and return ok false, ran false, headSha "", notes "${probe.mergeSha} is not on ${INT_BRANCH} at <HEAD>".
+${GATE_ALONE(t, probe.mergeSha)}
+
+Return ok, ran, mergeSha (${probe.mergeSha}), headSha and notes.`
+
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
 ${HOUSE}
 ${retry ? `
@@ -487,7 +538,8 @@ The reviewer's summary: ${rev.summary}
 Findings the review fixed: ${(rev.findingsFixed || []).join(' | ') || 'none'}.
 These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0=="## Acceptance")} p'\`; an unticked box naming a test id is outstanding.`}
 
-STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in: if the last line of ${LOG}/${t.id}-integrate.txt starts "check: pass:" and its first line is "HEAD=" the current HEAD, return ok with that merge's sha; otherwise old is that merge's first parent (\`git -C ${INT_WT} rev-parse "$(git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD)^1"\`), and skip to the gate.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in, and STEP 1 and STEP 2 do not run: <merge> is ${MERGE_OF(impl.branch)}, never the run branch's latest merge, which may be another ticket's (#712). Follow THE GATE ALONE below for <merge>, and return what it returns, with mergeSha <merge>, conflictFiles [], and old, redHead and reach "", so a red gate there is never re-run or reset by the script.
+${GATE_ALONE(t, '<merge>')}
 
 STEP 1 — merge. Record old=\`git -C ${INT_WT} rev-parse HEAD\`. ${impl.complete ? `The lane is complete, but its ticket is not its row (#388): before writing the message, ask the subject's head of the run branch as it stands, \`cd ${INT_WT} && python3 -I tools/landing_subjects.py --subject-for ${t.id} --ticket ${t.issue}\`. <head> is its last line after "landing-subjects: subject: ", taken as printed: "Merge task ${t.id}" when nothing more is owed; "Merge part of task ${t.id}" while an open part ticket declares itself part of the row, each named on a "landing-subjects: open part: " line; or "Merge tasks ${t.id} and <row>" when this ticket is the last open part of a row landed in part, which names the row (#388 Q6). The integration gate's tools/landing_subjects.py holds a full subject this question would not have given, so never write one it did not give. When it exits non-zero, <head> is "Merge task ${t.id}", and notes quote its last line. ` : ''}The merge message is the one docs/agents/landing-work.md "Land it" gives:
 - subject "${impl.complete ? '<head>: <what landed>' : `Merge part of task ${t.id}: <what landed>`}"
@@ -867,6 +919,17 @@ const implement = async (t) => {
     if (unmet.length) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: `blocker not integrated: ${unmet.join(', ')}` }; return false }
     if (halted) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: halted }; return false }
 
+    // The resume probe (#712): a ticket whose work is already on the run branch skips implement and review, and its
+    // tail runs the gate alone. A probe that died fails the ticket: whether its work is in is unknown, and an implement
+    // on that guess is how #677 read as skipped (CODING_STANDARDS.md, "A check fails closed").
+    const probe = await withSlot(() => ask(probePrompt(t), { label: `resume:${t.id}`, phase: 'Implement', schema: PROBE, effort: 'low' }))
+    if (!probe) return fail(t, 'implement', { why: 'the resume probe died, so whether its work is already on the run branch is unknown (#712)' })
+    if (probe.merged) {
+      if (!SHA.test(probe.mergeSha || '')) return fail(t, 'implement', { why: `the resume probe found its branch on ${INT_BRANCH} but gave no merge sha: ${probe.notes}` })
+      log(`${t.id}: its merge ${probe.mergeSha} is already on ${INT_BRANCH}; implement and review skipped, the gate alone (#712)`)
+      return { resumed: probe }
+    }
+
     const impl = await withSlot(() => ask(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
     if (!impl) return fail(t, 'implement', { why: 'agent died; worktree may be mid-change' })
     // A ticket closed since collect has no work tonight; it counts as met for the tickets it blocked, as GitHub's
@@ -914,9 +977,31 @@ const keepRule = (rr, red, projects) => {
   return { kept: true }
 }
 
+// The tail of a ticket whose merge the resume probe found on the run branch (#712): the gate alone, under the
+// integration lock, so no merge lands while it runs, and no file lock, since nothing merges. A "Merge part of task"
+// subject is a partial row, as the integrate step's subject was when it merged. The gate's red is the ticket's
+// failure, never re-run as a flake nor reset by the script: the gate alone resets only a merge nothing is built on.
+const gateAlone = async (t, probe, at) => {
+  at.stage = 'integrate'
+  const g = await serial(() => withSlot(async () => {
+    const out = await ask(gatePrompt(t, probe), { label: `gate:${t.id}`, phase: 'Integrate', schema: GATED })
+    if (out && out.ok && out.ran && out.headSha) verifiedTip = out.headSha
+    return out
+  }))
+  if (!g || !g.ok) return fail(t, 'integrate', { why: g ? g.notes : 'the gate agent died', resumed: probe })
+  const complete = !/^Merge part of task/.test(probe.subject)
+  results[t.id] = { stage: 'integrated', outcome: complete ? 'integrated' : 'partial', mergeSha: probe.mergeSha,
+    outstanding: complete ? '' : `its merge ${probe.mergeSha} is "Merge part of task": the Outstanding lines are in that merge's body`,
+    summary: `on ${INT_BRANCH} from an earlier attempt of this run, merge ${probe.mergeSha} ("${probe.subject}"); implement and review skipped, and the gate ${g.ran ? 'ran once and passed' : 'had already passed'} (#712)`,
+    findingsFixed: [], delegatedDecisions: [], resumed: { mergeSha: probe.mergeSha, gateRan: !!g.ran }, changeRequests: { implement: [], review: [] } }
+  log(`${t.id}: integrated ${probe.mergeSha}, already on ${INT_BRANCH}; the gate ${g.ran ? 'ran once' : 'was on record'}`)
+  return true
+}
+
 // Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
 // names the stage it is in, so a throw from the tail is reported against that stage, not always review.
 const finish = async (t, impl, at) => {
+    if (impl.resumed) return gateAlone(t, impl.resumed, at)
     const rev = await withSlot(() => ask(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
     if (!rev) return fail(t, 'review', { why: 'agent died', impl })
     if (rev.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev, impl }; grill(t, `The reviewer stopped on: ${rev.question}`); return false }
