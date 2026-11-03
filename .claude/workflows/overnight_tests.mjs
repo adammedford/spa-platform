@@ -1509,10 +1509,14 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   if (calls712.some((l) => l.startsWith('reset:'))) fail('#712: a red gate on a merge already on the run branch launched a reset agent')
   // The probe asks git, not the issue: the branch, the run branch, the run base and the "Task <id>:" commit it must own.
   const probe = prompts712[`resume:${AS_677}`] || ''
-  for (const part of [`task/${AS_677}-${AS_677}`, 'overnight/', BASE_712, `"Task ${AS_677}:"`, 'merge-base --is-ancestor']) if (!probe.includes(part)) fail(`#712: the resume probe's prompt lacks ${JSON.stringify(part)}`)
+  // The ancestor check is named whole, branch against run branch: MERGE_OF's own "merge-base --is-ancestor" against
+  // a merge sha would otherwise keep the probe's prompt passing with that check deleted (#712's review).
+  for (const part of [`task/${AS_677}-${AS_677}`, 'overnight/', BASE_712, `"Task ${AS_677}:"`, `merge-base --is-ancestor task/${AS_677}-${AS_677} overnight/`]) if (!probe.includes(part)) fail(`#712: the resume probe's prompt lacks ${JSON.stringify(part)}`)
   // The gate alone judges the ticket's own merge against its first parent, and resets only a merge nothing sits on.
+  // A recorded pass stands only on a head that holds the merge and that the run branch still holds (#712's review).
   const gate = prompts712[`gate:${AS_634}`] || ''
-  for (const part of [mergeOf(AS_634), `${LOG}/${AS_634}-integrate.txt`, '--base <old>', '^1', 'reset nothing']) if (!gate.includes(part)) fail(`#712: the gate-alone prompt lacks ${JSON.stringify(part)}`)
+  for (const part of [mergeOf(AS_634), `${LOG}/${AS_634}-integrate.txt`, '--base <old>', '^1', 'reset nothing',
+    `merge-base --is-ancestor ${mergeOf(AS_634)} <h>`, 'merge-base --is-ancestor <h> HEAD']) if (!gate.includes(part)) fail(`#712: the gate-alone prompt lacks ${JSON.stringify(part)}`)
   // The integrate step's own durable state, for an integrate agent replayed after it died mid-gate, finds the ticket's
   // own merge, not the run branch's latest (#634: its gate re-ran against #553's 1435e21).
   const integ = prompts712[`integrate:${FRESH}`] || ''
