@@ -367,6 +367,12 @@ the comment's name, "decision" for a draft.
 Which statements belong where, including the plan's role as background: `docs/adr/README.md` →
 "Where a decision lives".
 
+**Status-line pointer** — one sentence on an accepted ADR's Status line that names where a fact the
+ADR states is now held, when a later change made that fact stale without changing any decision. It
+amends nothing and restates no rule; the body stays as accepted. How an ADR is amended instead:
+`docs/adr/README.md` → "Where a decision lives". _Avoid_: "body note", "postscript", "amendment"
+for one.
+
 **Steering document** — a document a session steers by, so a change to it lands only on a cited
 authority. Which documents are in the set, and what counts as authority:
 `docs/agents/landing-work.md` → "A commit that changes a steering document".
