@@ -100,8 +100,8 @@ locals {
     # names the value itself -- "The ALB subnets, in CIDR form"
     # (contracts/platform-config.schema.json -> ForwardedHeaders.TrustedNetworks) -- so it is the
     # subnets the load balancer sits in, which is where its addresses come from (alb.tf). The cell's
-    # whole VPC range would also trust every unallocated address in it, and only two subnets out of
-    # the range are allocated.
+    # whole VPC range would also trust every address outside those two: the unallocated ones and,
+    # under multi_task, the private subnets the tasks sit in.
     { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
     # Continuity (#338). Each is present only behind its input, so the default inputs add no key and
@@ -275,7 +275,16 @@ resource "aws_ecs_service" "gateway" {
   name            = local.service_name
   cluster         = aws_ecs_cluster.cell.id
   task_definition = aws_ecs_task_definition.gateway.arn
-  desired_count   = 1
+  desired_count   = var.multi_task ? 2 : 1
+
+  # Two tasks over two private subnets in two zones (#347 Q14). Fargate takes no placement strategy
+  # and spreads tasks across zones on a best effort; rebalancing starts a task in the zone with
+  # fewest and stops one in the zone with most when the spread goes uneven. Set explicitly because
+  # an update leaves a service that never had a value DISABLED. #348 shows one task per zone on
+  # the deployed cell.
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement.html#fargate-launch-type
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-rebalancing.html
+  availability_zone_rebalancing = var.multi_task ? "ENABLED" : null
 
   # Fargate by launch type rather than by capacity provider: the cell has no EC2 capacity to fall
   # back to, so a capacity-provider strategy would be a second way of saying the same thing.
@@ -322,13 +331,16 @@ resource "aws_ecs_service" "gateway" {
   health_check_grace_period_seconds = 60
 
   network_configuration {
-    subnets         = [for subnet in aws_subnet.public : subnet.id]
+    subnets         = [for subnet in(var.multi_task ? aws_subnet.private : aws_subnet.public) : subnet.id]
     security_groups = [aws_security_group.task.id]
 
-    # The cell has no NAT gateway, so this public address is the task's only route out, to Cognito,
-    # S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security group
-    # accepts the gateway's port from the ALB security group alone (test P-06).
-    assign_public_ip = true
+    # Phase 1's cell has no NAT gateway, so this public address is the task's only route out, to
+    # Cognito, S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security
+    # group accepts the gateway's port from the ALB security group alone (test P-06). Under
+    # multi_task the tasks sit in the private subnets with no address, and go out through the NAT
+    # gateway and the two gateway endpoints (network.tf); P-06's second sentence then reads as "the
+    # task has no public address" (#583).
+    assign_public_ip = !var.multi_task
   }
 
   load_balancer {
