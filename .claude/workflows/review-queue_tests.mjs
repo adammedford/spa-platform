@@ -497,6 +497,61 @@ try {
     if (!said.includes('(failed 4).')) fail('PR 206: the mutation prompt does not give the stated "failed 4" alone, with no total')
   }
 
+  // A caught candidate (#689): the inventory pinned a break to a test that could not go red on it, and
+  // the project caught it through a sibling. Accepted by the verdict, the row is reproduced, merges and
+  // its cell names both tests; not accepted, it holds, reads did-not-fail and loses its caught cell. A
+  // stated or nominated mutation keeps its own test: reported reproduced on other tests alone, it is
+  // did-not-fail and holds, with no caught cell, whatever the verdict accepts.
+  checks++
+  {
+    const SIBLING = 'Platform.Registry.Tests.SiblingTests.Excludes_the_stand_in'
+    const CAND = { 207: pr(207, ['tests/c.cs'], { candidates: [cand('Misaimed')] }) }
+    const caughtCand = { Misaimed: { ...row('reproduced', 1, 222), failingNames: [SIBLING], why: 'the break is caught by the sibling, not by Misaimed' } }
+    env = run({ prs: [207] }, CAND, { mutate: caughtCand, caught: { 207: ['Misaimed'] } })
+    result = await execute(env)
+    {
+      const c = resultOf(207, result)
+      const m = (c.mutations || [])[0] || {}
+      if (m.result !== 'reproduced' || JSON.stringify(m.caughtBy) !== JSON.stringify([SIBLING])) fail(`PR 207 with the candidate Misaimed caught and accepted: its row is ${JSON.stringify(m)}`)
+      if (c.verdict !== 'merge') fail(`PR 207 with the candidate Misaimed caught and accepted: verdict ${c.verdict}, expected merge`)
+      const cells = (tableOf(commentOf(env, 207)) || [])[0] || []
+      if (cells[0] !== `Misaimed (caught by ${SIBLING})`) fail(`PR 207 with the candidate Misaimed caught and accepted: its Test cell is ${JSON.stringify(cells[0])}, expected one naming both tests`)
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!/stayed green, the result is reproduced all the same/.test(prompt)) fail('the candidate mutation prompt does not say a break caught by another test is reproduced')
+      if (/removed, for this held mutation only/.test(prompt)) fail('the candidate mutation prompt offers removed, which is for a held mutation only')
+      const verdictPrompt = env.prompts['verdict:207'] || ''
+      if (!/A caught row is a held or candidate break/.test(verdictPrompt)) fail('the verdict prompt does not say a candidate break can be caught')
+      if (!/why the named test could not go red on that break/.test(verdictPrompt) || !/A candidate that guards the break and stayed green proves nothing/.test(verdictPrompt)) fail('the verdict prompt does not ask, for a caught candidate, why the named test could not go red')
+    }
+    env = run({ prs: [207] }, CAND, { mutate: caughtCand })
+    result = await execute(env)
+    {
+      const c = resultOf(207, result)
+      const m = (c.mutations || [])[0] || {}
+      if (c.verdict !== 'hold' || m.result !== 'did-not-fail') fail(`PR 207 with the candidate Misaimed caught and not accepted: verdict ${c.verdict}, row ${m.result}, expected hold and did-not-fail`)
+      if (commentOf(env, 207).includes('(caught by ')) fail('a caught candidate the verdict did not accept still reads "caught by" in the table')
+    }
+    // A nominated mutation, and a stated one, the project caught on another test alone: did-not-fail,
+    // even when the verdict lists the test as accepted, since neither may be answered by a catch.
+    const NOM = { 208: pr(208, ['tests/n.cs'], { candidates: [cand('Nom')] }) }
+    const nominations = { 208: [{ test: 'Nom', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }
+    for (const [n, served, test, kind, extra] of [[208, NOM, 'Nom', 'nominated', { nominations }], [206, HOLDS, 'Said', 'stated', {}]]) {
+      env = run({ prs: [n] }, served, { ...extra, mutate: { [test]: { ...row('reproduced', 1, 153), failingNames: [SIBLING], why: 'went red' } }, caught: { [n]: [test] } })
+      result = await execute(env)
+      const c = resultOf(n, result)
+      const m = (c.mutations || []).find((x) => x.test === test) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR ${n} with the ${kind} ${test} red only on ${SIBLING}: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+      if ((m.caughtBy || []).length || commentOf(env, n).includes('(caught by ')) fail(`PR ${n} with the ${kind} ${test} red only on another test: it has a caught cell`)
+      if (!(m.why || '').includes(`the project went red only on ${SIBLING}, and a ${kind} mutation keeps its own test`)) fail(`PR ${n} with the ${kind} ${test} red only on another test: why ${JSON.stringify(m.why)}`)
+      const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
+      if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
+    }
+    // Reported reproduced with no failing names, a nominated row stays as reported: nothing names a catch.
+    env = run({ prs: [208] }, NOM, { nominations, mutate: { Nom: row('reproduced', 1, 10) } })
+    result = await execute(env)
+    if (((resultOf(208, result).mutations || [])[0] || {}).result !== 'reproduced') fail('PR 208: a nominated row reproduced with no failing names did not stay reproduced')
+  }
+
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
   //     still posted, its record names the head the inventory read, and the return flags the move,
   //     per pull request and at run level, so the operator runs again.
@@ -836,7 +891,7 @@ try {
       const held = (c.mutations || []).find((m) => m.test === LIB2) || {}
       if (held.result !== 'reproduced' || JSON.stringify(held.caughtBy) !== JSON.stringify([`tools.check_tests.${CATCHER}`])) fail(`PR 287's shape with the held ${LIB2} caught and accepted: its row is ${JSON.stringify(held)}`)
       if (c.verdict !== 'merge') fail(`PR 287's shape with the held ${LIB2} caught and accepted: verdict ${c.verdict}, expected merge`)
-      if (!/A caught row is a held break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
+      if (!/A caught row is a held or candidate break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
       if (!/failingNames: the tests it named as failing, each whole as the runner printed it/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the mutation prompt does not ask for each failing name whole as the runner printed it (#695)')
       const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
