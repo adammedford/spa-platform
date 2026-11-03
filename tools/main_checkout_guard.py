@@ -4,7 +4,7 @@ Owner: integrator.
 
 A Claude Code PreToolUse hook (#114, #200). The entry in the tracked `.claude/settings.json` runs it
 before each Bash call of a session started in a checkout that holds that file, as this file stands on
-origin/main (#298), or as the checkout holds it, under "Its answer" below. The main checkout is
+origin/main (#298), or as the checkout holds it, under "Which copy runs" below. The main checkout is
 the clone's own working tree, the worktree whose git directory is the common directory, and the sessions
 running at once share it: its branch is whichever one a session last left it on. On 2026-10-18 a
 session ran `git rebase origin/main` there, taking it for its own branch, after another had switched

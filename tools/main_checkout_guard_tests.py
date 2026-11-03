@@ -27,8 +27,9 @@ Claude Code runs it (https://code.claude.com/docs/en/hooks), because the entry r
 origin/main holds it, or the checkout's own copy only when the file is there, and a mistyped path
 or ref in it would otherwise be a guard that silently never runs. For that read (#298), a `main`
 one commit behind an origin/main that holds this guard keeps an older copy of its own, which refuses
-the fast-forward and lets `git rm` through, with a linked worktree; three more are one commit behind
-an origin/main that holds no guard, the same with the own copy deleted, and one whose guard crashes.
+the fast-forward and lets `git rm` through, with a linked worktree. Three more are one commit behind
+an origin/main: one that holds no guard, the same with the own copy deleted, and one whose guard
+crashes.
 
 Run: python3 -I tools/main_checkout_guard_tests.py
 """
