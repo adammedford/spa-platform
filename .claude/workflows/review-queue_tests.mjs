@@ -1301,8 +1301,8 @@ try {
   // ticket no non-merge commit since the fork point names as #n or issue-n (#566), and #683's record
   // cleared a head it then refused. The script applies the same rule after the skip of a recorded head
   // and before the range agent: a ticket only a merge names (a), one named only inside a URL (b), 35
-  // beside a commit naming 352 (d) and a commit with no parent count (h) stop the pull request at
-  // stage closes with no other agent run; issue-n in a one-parent commit (c), a lower-case closes line
+  // beside commits naming 352 and reissue-35 (d) and a commit with no parent count (h) stop the pull
+  // request at stage closes with no other agent run; issue-n in a one-parent commit (c), a lower-case closes line
   // ending in a carriage return (e) and no Closes line (f) are reviewed; a recorded head is skipped (g).
   // The numbers are built, not written: a literal hash-number here is a citation the steering check
   // reads, and these name no issue of this repository.
@@ -1318,8 +1318,8 @@ try {
       602: pr(602, ['docs/z.md'], { description: `Closes ${h(42)}`, commitMessages: [one(`Task x: lands it\n\nAuthority: https://github.com/o/r/issues/42${h('issuecomment-9')}`)] }),
       // (c) named as issue-n by a one-parent commit.
       603: pr(603, ['docs/z.md'], { description: `Closes ${h(43)}`, commitMessages: [one('Task issue-43: lands it')] }),
-      // (d) 35 is not found inside 352.
-      604: pr(604, ['docs/z.md'], { description: `Closes ${h(35)}`, commitMessages: [one(`Task x: lands it (${h(352)})`), one('Task issue-352: and the rest')] }),
+      // (d) 35 is not found inside 352, nor issue-35 after a letter, digit or underscore.
+      604: pr(604, ['docs/z.md'], { description: `Closes ${h(35)}`, commitMessages: [one(`Task x: lands it (${h(352)})`), one('Task issue-352: and the rest'), one('Task x: reissue-35, 0issue-35 and _issue-35')] }),
       // (e) the keyword in any case, and a carriage return after the number.
       605: pr(605, ['docs/z.md'], { description: `Lands it.\r\n\r\n  closes ${h(45)}\r\nCLOSES ${h(46)}\r\n`, commitMessages: [one(`Task x: lands it\n\nTicket: ${h(45)}, ${h(46)}`)] }),
       // (f) no Closes line.
