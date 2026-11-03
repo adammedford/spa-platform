@@ -226,7 +226,8 @@ ticket, left from the archived tracker, claims nothing and is held to the rest o
 alone; an `overnight/*` branch goes once its pull request has merged. Either goes only when its
 current tip's work is on `main`, as an ancestor or as patch-equivalent commits with no merge
 carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
-on `origin` since it was checked keeps it there. Everything else is listed with the reason it stays.
+on `origin` since it was checked keeps it there. Everything else stays: a `--delete` run counts
+what it keeps under each reason, and `--verbose` or a dry run lists each with its reason (#524).
 A part-landed row keeps its claim, because the claim is how the next session knows the row is
 taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do,
 deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same
