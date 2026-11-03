@@ -1561,11 +1561,13 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
 //     after its first lane's status note; TRIAGED_LIVE is live needs-triage; UNLABELLED carries no triage label;
 //     CLOSED_LIVE closed since collect; READY is still ready-for-agent; LIVE_DIED's read dies and LIVE_UNREAD's gh
 //     failed; and MERGED_LIVE's merge is already on the run branch while its labels read ready-for-human. AFTER_544
-//     waits on AS_544 and AFTER_CLOSED on CLOSED_LIVE.
+//     waits on AS_544 and AFTER_CLOSED on CLOSED_LIVE. HUMAN_OVER_AGENT still carries ready-for-agent beside
+//     ready-for-human, and TRIAGE_OVER_AGENT beside needs-triage, so the precedence collect reads is held live too.
 {
   const AS_544 = 'issue-1301', TRIAGED_LIVE = 'issue-1302', UNLABELLED = 'issue-1303', CLOSED_LIVE = 'issue-1304', READY = 'issue-1305'
   const LIVE_DIED = 'issue-1306', LIVE_UNREAD = 'issue-1307', MERGED_LIVE = 'issue-1308', AFTER_544 = 'issue-1309', AFTER_CLOSED = 'issue-1310'
-  const RELABELLED = [AS_544, TRIAGED_LIVE, UNLABELLED]
+  const HUMAN_OVER_AGENT = 'issue-1311', TRIAGE_OVER_AGENT = 'issue-1312'
+  const RELABELLED = [AS_544, TRIAGED_LIVE, UNLABELLED, HUMAN_OVER_AGENT, TRIAGE_OVER_AGENT]
   const liveOf = {
     [AS_544]: { state: 'OPEN', labels: ['ready-for-human', 'change-request'], assignees: ['adammedford'], notes: '' },
     [TRIAGED_LIVE]: { state: 'OPEN', labels: ['needs-triage'], assignees: [], notes: '' },
@@ -1574,6 +1576,8 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     [LIVE_DIED]: null,
     [LIVE_UNREAD]: { state: 'UNREAD', labels: [], assignees: [], notes: 'error connecting to api.github.com' },
     [MERGED_LIVE]: { state: 'OPEN', labels: ['ready-for-human'], assignees: [], notes: '' },
+    [HUMAN_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'ready-for-human'], assignees: [], notes: '' },
+    [TRIAGE_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'needs-triage'], assignees: [], notes: '' },
   }
   const calls721 = []
   const prompts721 = {}
@@ -1599,7 +1603,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   const CARRIED_GRILL_SUMMARY = 'carried from an earlier night, not re-grilled'
   const lane721 = (n, blockedBy = []) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', blockedBy, 1), owner: 'integrator' })
   const set721 = [lane721(1301), lane721(1302), lane721(1303), lane721(1304), lane721(1305), lane721(1306), lane721(1307), lane721(1308),
-    lane721(1309, [AS_544]), lane721(1310, [CLOSED_LIVE])]
+    lane721(1309, [AS_544]), lane721(1310, [CLOSED_LIVE]), lane721(1311), lane721(1312)]
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
   let res = null
   try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#721: the live-label run threw: ${e && e.message ? e.message : e}`) }
@@ -1624,7 +1628,10 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (!h || h.outcome !== 'needs-human' || h.stage !== 'implement' || !h.reason.includes('ready-for-human') || !h.reason.includes('relabelled since collect')) fail(`#721: ${AS_544}'s reason does not say it was relabelled ready-for-human at implement: ${JSON.stringify(h)}`)
     if (count(`grill:${AS_544}`) !== 1) fail(`#721: ${AS_544}'s grill ran ${count(`grill:${AS_544}`)} time(s), not once`)
     if (/Context from tonight/.test(prompts721[`grill:${AS_544}`] || '')) fail(`#721: ${AS_544}'s grill was given context, so its STEP 0 would grill again rather than carry the earlier record`)
-    for (const [id, label] of [[TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'kind:ticket']]) {
+    // ready-for-human outranks a ready-for-agent label left beside it, as in collect's precedence.
+    const ho = reasonOf(HUMAN_OVER_AGENT)
+    if (!(res.needsHuman || []).includes(HUMAN_OVER_AGENT) || !ho || ho.outcome !== 'needs-human' || ho.stage !== 'implement') fail(`#721: ${HUMAN_OVER_AGENT}, live ready-for-human beside ready-for-agent, is not a human ticket at implement: ${JSON.stringify(ho)}`)
+    for (const [id, label] of [[TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'kind:ticket'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
       const r = reasonOf(id)
       if (!(res.skipped || []).includes(id) || !r || r.stage !== 'implement' || !r.reason.includes(label)) fail(`#721: ${id}, live ${label}, is not skipped at implement naming its live labels: ${JSON.stringify(r)}`)
       if (count(`grill:${id}`)) fail(`#721: ${id}, live ${label}, was grilled`)
@@ -1641,7 +1648,8 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     // The report reads each ticket's reconciled status, not the cached one.
     const sum = JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report721) || [, 'null'])[1])
     const st = (id) => ((sum && sum.tickets) || []).find((t) => t.id === id)
-    for (const [id, status] of [[AS_544, 'ready-for-human'], [TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'unlabelled']]) {
+    for (const [id, status] of [[AS_544, 'ready-for-human'], [TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'unlabelled'],
+      [HUMAN_OVER_AGENT, 'ready-for-human'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
       if (!st(id) || st(id).status !== status) fail(`#721: the report reads ${id}'s status as ${JSON.stringify(st(id) && st(id).status)}, not its live ${status}`)
     }
   }
