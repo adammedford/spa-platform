@@ -642,7 +642,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Closing check (#629): the run results' "closingCheck", under its own heading \`### Closing check\`, the same text every night: its status, its log and its last line quoted unchanged, the head it ran on and the run base it was judged against. "pass" says the whole run was judged once against the run base and passed. "fail" says so plainly, and that every merge was kept, since each passed its own check against its first parent and this one cannot name the merge that broke it, and that there is no morning hold: the landing pull request's CI and required checks hold the landing as the existing rules say. "not-run" gives its why. Never call it a gate;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Foreground (#480): every entry of the run results' "foreground", the tickets collect gave the status foreground, whose "why" is "${FOREGROUND_WHY}": no lane, Route or grill ran, because a tracker edit is worked in a foreground session the next day. List them under a "## Foreground" heading, each as #<issue>, its title and the issue it edits (the #<m> its title or body names as the edit's target, as in "Apply Q4 of Overnight <date> to #248"; "target not named" when neither names one), so Adam opens one session for them; "none" under the heading when the list is empty;
-   - Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it, as #482's did not on 2026-10-29), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge (for each open pull request it names, \`git -C ${REPO} merge-tree --write-tree ${INT_BRANCH} <its head>\`, its head being the headRefOid \`cd ${REPO} && gh pr view <n> --json headRefOid\` gives: list every file that conflicts, or "none conflict"; git prints the merged tree's id on its first line, then, on a conflict, the conflicting files (https://git-scm.com/docs/git-merge-tree), and a head not among ${REPO}'s objects exits 1 as a conflict does, so a run whose first line is not a tree id, such as "not something we can merge", reads "not checked: <that line>", never "none conflict" and never a conflict; and when a file conflicts, the Morning steps say which pull request lands first and that the other back-merges main before its review, since GitHub runs no CI on a pull request CONFLICTING with main, as #529 met on 2026-10-29); every ticket cited as #<issue>;
+   - Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it, as #482's did not on 2026-10-29), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Stopped by the usage limit (#710: every entry of the run results' "stopped", each as #<issue> with the stage its agent died at or was not started at, listed apart from Failed and counted as no failure, since the ticket kept the state it had and a resume runs it again; "halted" names when to resume; "none" when the list is empty), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge (for each open pull request it names, \`git -C ${REPO} merge-tree --write-tree ${INT_BRANCH} <its head>\`, its head being the headRefOid \`cd ${REPO} && gh pr view <n> --json headRefOid\` gives: list every file that conflicts, or "none conflict"; git prints the merged tree's id on its first line, then, on a conflict, the conflicting files (https://git-scm.com/docs/git-merge-tree), and a head not among ${REPO}'s objects exits 1 as a conflict does, so a run whose first line is not a tree id, such as "not something we can merge", reads "not checked: <that line>", never "none conflict" and never a conflict; and when a file conflicts, the Morning steps say which pull request lands first and that the other back-merges main before its review, since GitHub runs no CI on a pull request CONFLICTING with main, as #529 met on 2026-10-29); every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
    - Change requests (#421 Q7, #436 Q11): five lists, from the run results' "changeRequests", each reading "none" when empty. "Filed tonight" (its "filed"): one line per request, \`#<n> <title> — blocks #<ticket>\`, or \`#<n> <title> — blocks nothing (raised by #<ticket>)\` when its blocking is 0, the ticket being the one whose lane, review or grill filed it. "Edges added to an existing request" (its "edges"): the same line form. "Queued for the morning" (its "queued"): \`queued for the morning: <title> (pending line <k>, body ${LOG}/<task id>-cr.md)\`. "Awaiting a decision" (its "awaiting"): an open change request grilled tonight with no decision comment, each as #<issue>, its title and its draft's link. "Decided, not yet labelled ready-for-agent or closed" (its "decided"): each as #<issue>, its title and its decision's first line. A change request adds no numbered question: Adam decides it on the request itself;
    - Pending tracker writes: if ${PENDING} exists, how many lines it holds, by action, and that the morning session replays them (a comment, label change or close that GitHub refused tonight, or a change request's create line); otherwise "none";
@@ -682,9 +682,39 @@ const lockFiles = async (t, files) => {
   return me.release
 }
 
+// The usage limit (#710). An agent that dies on the account's usage limit is no failure: the next agent would die the
+// same way until the limit resets, so the first such death stops the run. On 2026-11-01 the error read "You've hit
+// your weekly limit · resets 10pm (America/Chicago)", and each death went through fail() toward maxFailures, so the
+// run halted at "8 failures" with 4 real ones, and a resume before the reset lost 18 more agents. Every agent of the
+// run starts through ask(): once the limit is met it starts none, and throws a stop instead, so each caller records
+// its ticket as stopped, not failed, keeping the state it had, and a resume runs it again. Only an error the runtime
+// throws carries the message; an agent() that returns null is a death with no message, and stays one.
+const USAGE_LIMIT = /\bhit your (?:\w+ )?limit\b/i
+const RESETS = /\bresets\s+(.+?)\s*$/i
+let halted = null
+let usageLimit = null   // {message, reset, label}, from the first agent that died on the limit
+const limitStop = () => Object.assign(new Error(`stopped by the usage limit: ${usageLimit.message}`), { usageLimit: true })
+const isStop = (e) => !!(e && e.usageLimit)
+const ask = async (prompt, opts) => {
+  if (usageLimit) throw limitStop()
+  try { return await agent(prompt, opts) } catch (e) {
+    const message = String((e && e.message) || e || '')
+    if (!USAGE_LIMIT.test(message)) throw e
+    if (!usageLimit) {
+      const reset = (RESETS.exec(message) || [])[1] || ''
+      usageLimit = { message, reset, label: opts.label }
+      // It replaces any earlier halt in front, since the time to resume is what the launching session needs first.
+      halted = `usage limit; resume after ${reset || 'the reset (the message names no time)'}${halted ? `; earlier: ${halted}` : ''}`
+      log(`${opts.label}: ${message}; ${halted}; no new agent starts`)
+    }
+    throw limitStop()
+  }
+}
+
 // ---------------------------------------------------------------- run
 phase('Collect')
-const col = await agent(collectPrompt, { label: 'collect', phase: 'Collect', schema: COLLECT })
+let col
+try { col = await ask(collectPrompt, { label: 'collect', phase: 'Collect', schema: COLLECT }) } catch (e) { if (isStop(e)) return { halted }; throw e }
 if (!col) return { halted: 'collect agent died' }
 if (col.outcome !== 'ok') return { halted: `dirty-start: ${col.reason}` }
 // The Bash tool must be bash (#129): on 2026-10-19 every agent ran /bin/zsh. Halt before Route, as the bad-launch
@@ -703,12 +733,15 @@ const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 // Read from collect's statuses before any route returns, so the batch routes on the labels collect read (#379).
 const held = triage.map((t) => heldBy(t, byId))
 const routed = await parallel(triage.map((t, i) => () =>
-  agent(held[i].length ? heldRoutePrompt(t, held[i]) : routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })))
+  ask(held[i].length ? heldRoutePrompt(t, held[i]) : routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })
+    .catch((e) => { if (isStop(e)) return null; throw e })))
 // A ticket routed to a human stopped at route, with the router's reason (#280). One held by a ready-for-human blocker
 // goes to a human whatever its route agent returned (#379).
 const humanStage = {}, humanWhy = {}
+const routeStopped = []   // stopped by the usage limit at route (#710): each keeps needs-triage, so a resume routes it
 triage.forEach((t, i) => {
   const r = routed[i]
+  if (!r && usageLimit) { routeStopped.push(t); return }
   t.status = !held[i].length && r && r.flow === 'agent' ? 'ready-for-agent' : 'ready-for-human'
   if (t.status === 'ready-for-human') {
     humanStage[t.id] = 'route'
@@ -728,11 +761,18 @@ let failures = 0
 let verifiedTip = ''
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
 const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes, why, reset}, one per re-run (#375); why and reset are "" when the merge was kept (#397)
-let halted = null
+// A ticket the usage limit stopped (#710): its agent died on the limit, or was not started after it. It counts as no
+// failure and keeps the state it had, so a resume runs it again.
+const stop = (t, stage, info) => {
+  results[t.id] = { ...(results[t.id] || {}), stage, outcome: 'stopped', why: `stopped by the usage limit at ${stage}: ${usageLimit.message}`, ...info }
+  return false
+}
+routeStopped.forEach((t) => stop(t, 'route'))
 
 const grill = (t, context) => {
-  const p = agent(grillPrompt(t, context), { label: `grill:${t.id}`, phase: 'Grill', schema: GRILL })
-    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, changeRequests: g.changeRequests || [], adrCandidates: g.adrCandidates, draftDecision: g.draftDecision || '', decided: g.decided || '', summary: g.summary } : 'grill agent died' } })
+  const p = ask(grillPrompt(t, context), { label: `grill:${t.id}`, phase: 'Grill', schema: GRILL })
+    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, changeRequests: g.changeRequests || [], adrCandidates: g.adrCandidates, draftDecision: g.draftDecision || '', decided: g.decided || '', summary: g.summary } : 'grill agent died' } },
+      (e) => { if (!isStop(e)) throw e; results[t.id] = { ...(results[t.id] || {}), grill: `grill stopped by the usage limit: ${usageLimit.message}` } })
   grillQueue.push(p)
   return p
 }
@@ -826,7 +866,7 @@ const implement = async (t) => {
     if (unmet.length) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: `blocker not integrated: ${unmet.join(', ')}` }; return false }
     if (halted) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: halted }; return false }
 
-    const impl = await withSlot(() => agent(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
+    const impl = await withSlot(() => ask(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
     if (!impl) return fail(t, 'implement', { why: 'agent died; worktree may be mid-change' })
     // A ticket closed since collect has no work tonight; it counts as met for the tickets it blocked, as GitHub's
     // blocked-by count, which reads open blockers only, already says (#108).
@@ -876,7 +916,7 @@ const keepRule = (rr, red, projects) => {
 // Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
 // names the stage it is in, so a throw from the tail is reported against that stage, not always review.
 const finish = async (t, impl, at) => {
-    const rev = await withSlot(() => agent(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
+    const rev = await withSlot(() => ask(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
     if (!rev) return fail(t, 'review', { why: 'agent died', impl })
     if (rev.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev, impl }; grill(t, `The reviewer stopped on: ${rev.question}`); return false }
     if (rev.outcome !== 'committed') return fail(t, 'review', { ...rev, impl })
@@ -888,11 +928,11 @@ const finish = async (t, impl, at) => {
     // keep rule, not the re-run agent's ok, decides whether its merge stays, and a reset inside that lock undoes one
     // it does not keep (#397).
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
-      let out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      let out = await ask(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
       const rule = rerunRule(out)
       if (rule.projects) {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
-        const rr = await agent(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
+        const rr = await ask(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
         const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr, or one naming no project, records each project as not passed, and the keep rule keeps no merge
         const projects = rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) }))
         // The script's verdict, not the agent's ok (#397).
@@ -905,7 +945,7 @@ const finish = async (t, impl, at) => {
         // the merge in, so the script puts the branch back before the lock is released (#397).
         if (!kept && (!rr || rr.ok)) {
           log(`flake: ${t.id} ${rule.projects.join(', ')} -> not kept: ${keep.why}; resetting ${INT_BRANCH} to ${out.old}`)
-          const rs = await agent(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+          const rs = await ask(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
           // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
           const back = !!(rs && rs.ok && rs.head === out.old)
           flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
@@ -930,14 +970,14 @@ const finish = async (t, impl, at) => {
         // integration lock, holding its file locks, and the retry merges once; a second conflict fails the ticket.
         at.stage = 'resolve'
         log(`${t.id}: conflict at integrate in ${files.join(', ')}; back to its lane to back-merge ${INT_BRANCH} into ${impl.branch}`)
-        const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
+        const res = await withSlot(() => ask(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
         if (!res || res.outcome !== 'resolved') {
           integ = { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }
           conflict = { files, resolved: false }
         } else {
           at.stage = 'review'
           const head = { ...impl, headSha: res.headSha }
-          rev2 = await withSlot(() => agent(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
+          rev2 = await withSlot(() => ask(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
           if (!rev2 || rev2.outcome !== 'committed') {
             conflict = { files, resolved: false }
             if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, rev1: rev, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
@@ -976,7 +1016,8 @@ const runLane = async (owner, queue) => {
     settled[t.id] = ok === true   // set here, before the promise's own handler runs, so this lane's next pick sees it
     resolveDone[t.id](ok === true)
   }
-  const guard = (t, at, p) => p.catch((e) => fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
+  // A stop is the usage limit's (#710), not a lane that threw: the ticket is stopped, and counts as no failure.
+  const guard = (t, at, p) => p.catch((e) => isStop(e) ? stop(t, at.stage) : fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
     const t = queue.find(ready)
     if (!t) {
@@ -1003,9 +1044,12 @@ await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, q
 // there is nothing to judge.
 const closeRun = async () => {
   const base = { log: CLOSING_LOG, base: BASE, headSha: '', lastLine: '' }
+  const limited = { ...base, log: '', status: 'not-run', why: `${halted}, so no closing check started (#710)` }
+  if (usageLimit) return limited
   if (!Object.values(results).some((r) => r.stage === 'integrated')) return { ...base, log: '', status: 'not-run', why: 'nothing integrated tonight, so the run branch is its base' }
   phase('Closing check')
-  const c = await withSlot(() => agent(closingPrompt(), { label: 'closing', phase: 'Closing check', schema: CLOSING }))
+  let c
+  try { c = await withSlot(() => ask(closingPrompt(), { label: 'closing', phase: 'Closing check', schema: CLOSING })) } catch (e) { if (isStop(e)) return limited; throw e }
   if (!c) return { ...base, status: 'not-run', why: `the closing-check agent died; its log, if it wrote one, is ${CLOSING_LOG}` }
   const lastLine = String(c.lastLine || '')
   const status = /^check: pass:/.test(lastLine) ? 'pass' : 'fail'
@@ -1051,9 +1095,13 @@ const summary = {
   willEndPartial, forecastFailed,
   conflicts, flakes, changeRequests,
   closingCheck,
+  stopped: Object.entries(results).filter(([, r]) => r.outcome === 'stopped').map(([id, r]) => ({ id, issue: byId[id].issue, stage: r.stage })),
   results,
 }
-const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
+// After the usage limit (#710) the report is one more agent, so it starts only on a run the limit did not stop; the
+// return value lists the stopped tickets for the launching session either way.
+let rep = null
+try { rep = await ask(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT }) } catch (e) { if (!isStop(e)) throw e }
 
 const ids = (pred) => Object.entries(results).filter(([, r]) => pred(r)).map(([id]) => id)
 // Why, in the return value (#280): one entry per failed, skipped and needs-human ticket, with the stage it stopped
@@ -1080,6 +1128,7 @@ const grillNote = (id) => {
 const humanWithoutOutcome = humanT.map((t) => t.id).filter((id) => !(results[id] && results[id].outcome))
 const reasons = [
   ...fromResults('failed'),
+  ...fromResults('stopped'),
   ...fromResults('skipped'),
   ...humanWithoutOutcome.map((id) => entry(id, 'needs-human', humanStage[id] || 'collect',
     oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; ${grillNote(id)}`))),
@@ -1091,6 +1140,8 @@ return {
   partial: ids((r) => r.outcome === 'partial'),
   skipped: ids((r) => r.outcome === 'skipped'),
   failed: ids((r) => r.outcome === 'failed'),
+  failures,
+  stopped: summary.stopped,
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
   closeInMorning: closeT.map((t) => t.id),

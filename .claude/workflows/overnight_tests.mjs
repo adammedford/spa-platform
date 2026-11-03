@@ -29,7 +29,9 @@
 // main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
 // (#629). Five more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
 // tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
-// runs, ties by n (#662). No agent,
+// runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
+// halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
+// and starts no agent after it (#710). No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1335,6 +1337,60 @@ const DOWNSTREAM_CASES = 5
     if ((res.integrated || []).length !== lanes5.length) fail(`#662: the fifth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${lanes5.length} lane tickets`)
     before(starts, 'issue-988', 'issue-987', 'a ticket no lane runs counts downstream')
   }
+}
+
+// 34. An agent that dies on the account's usage limit halts the run with the reset the message names, and counts as no
+//     failure (#710). On 2026-11-01 each such death went through fail() toward maxFailures, so the run halted at "8
+//     failures" with 4 real ones, and a resume before the reset lost 18 more agents the same way. One short run on
+//     synthetic tickets, with the agents timed by sleeps: in the integrator lane DIES's implement throws the
+//     message, which the 2026-11-01 run quoted, at 40 ms, and AFTER waits behind it in the same lane; in ws1 FIRST's
+//     implement runs from 0 to 30 ms and its review from 30 to 60 ms, both started before the death, and SECOND's
+//     implement from 30 to 60 ms; in ws2 BROKEN's review fails at about 10 ms, a real failure. After the death no agent
+//     may start: not FIRST's integrate, not SECOND's review, not AFTER's implement, not the closing check or the report.
+const LIMIT_MESSAGE = 'You\'ve hit your weekly limit · resets 10pm (America/Chicago)'
+const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
+{
+  const started710 = [], late = []
+  let died = false
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    if (died) late.push(opts.label)
+    started710.push(opts.label)
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set710.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(id === 'issue-1001' ? 40 : id === 'issue-1003' || id === 'issue-1004' ? 30 : 5)
+    if (kind === 'implement' && id === 'issue-1001') { died = true; throw new Error(LIMIT_MESSAGE) }
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review' && id === 'issue-1005') return { outcome: 'failed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 'a real failure', question: '', changeRequests: [], changedFiles: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the usage-limit run`)
+  }
+  const lane710 = (n, owner) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner })
+  const set710 = [lane710(1001, 'integrator'), lane710(1002, 'integrator'), lane710(1003, 'ws1-infra'), lane710(1004, 'ws1-infra'), lane710(1005, 'ws2-hosting')]
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#710: the usage-limit run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    if (res.halted !== LIMIT_HALTED) fail(`#710: a usage-limit death leaves halted ${JSON.stringify(res.halted)}, not ${JSON.stringify(LIMIT_HALTED)}`)
+    if (res.failures !== 1) fail(`#710: the usage-limit run counts ${JSON.stringify(res.failures)} failures, not 1 (issue-1005's review alone; the death is no failure)`)
+    if (JSON.stringify(res.failed) !== JSON.stringify(['issue-1005'])) fail(`#710: the usage-limit run's failed list is ${JSON.stringify(res.failed)}, not ["issue-1005"]`)
+    // The tickets the limit stopped, each with the stage its agent died at or was refused at, apart from the failed.
+    const stopped = Object.fromEntries((res.stopped || []).map((s) => [s.id, s.stage]))
+    const wantStopped = { 'issue-1001': 'implement', 'issue-1003': 'integrate', 'issue-1004': 'review' }
+    if (JSON.stringify(stopped) !== JSON.stringify(wantStopped)) fail(`#710: the usage-limit run's stopped list is ${JSON.stringify(res.stopped)}, not ${JSON.stringify(wantStopped)}`)
+    if (!(res.skipped || []).includes('issue-1002')) fail(`#710: issue-1002, queued behind the death, is not skipped: ${JSON.stringify(res.skipped)}`)
+    if (!res.reasons || !res.reasons.some((r) => r.id === 'issue-1001' && r.outcome === 'stopped' && r.reason.includes(LIMIT_MESSAGE))) fail(`#710: the reasons do not give issue-1001 as stopped, quoting the message: ${JSON.stringify(res.reasons)}`)
+    if (!res.closingCheck || res.closingCheck.status !== 'not-run' || !res.closingCheck.why.includes(LIMIT_HALTED)) fail(`#710: the closing check after a usage-limit death is ${JSON.stringify(res.closingCheck)}, not not-run naming the limit`)
+  }
+  if (!started710.includes('implement:issue-1001')) fail('#710: issue-1001\'s implement never started, so the usage-limit run proved nothing')
+  if (late.length) fail(`#710: agents started after the usage-limit death: ${late.join(', ')}`)
+  // The report prompt lists the stopped tickets apart from the failed ones, for a run whose report can run.
+  const item710 = (/^ {3}- Partial \(Outstanding\).*$/m.exec(reportPrompt) || [''])[0]
+  if (!item710.includes('Stopped by the usage limit (#710') || !item710.includes('"stopped"')) fail('#710: the report prompt does not list the tickets the usage limit stopped apart from the failed ones')
 }
 
 if (failures.length) {
