@@ -31,8 +31,10 @@
 // tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
 // runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
 // halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
-// and starts no agent after it (#710); a last one checks that a re-run dying on the limit says the run branch may
-// hold its merge, and that a grill the limit stopped does not read as died. No agent,
+// and starts no agent after it (#710); one more checks that a re-run dying on the limit says the run branch may
+// hold its merge, and that a grill the limit stopped does not read as died. A last short run has the resume probe
+// find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
+// and checks that each skips implement and review, runs the gate once and integrates. No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -126,6 +128,8 @@ const changeRequestsOf = (kind, id, k) => (kind === 'implement' && id === AFTER_
   : (kind === 'implement' && id === CONFLICT_ALWAYS) ? [KEPT_IMPL] : (kind === 'review' && id === CONFLICT_ALWAYS) ? [k === 1 ? KEPT_REV1 : KEPT_REV] : []
 const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [QUEUED] : [], adrCandidates: [],
   draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: id === REQUEST_DECIDED.id ? DECIDED_LINE : '', summary: 'companion' })
+// The resume probe's answer for a ticket whose work is not yet on the run branch (#712), the case of every run but 36.
+const NOT_MERGED = { merged: false, mergeSha: '', subject: '', notes: 'companion' }
 const reviewCalls = {}     // id -> review calls so far, so a ticket's first and second review can report apart
 // One more, added after the tickets above so none of their choices moves (#480): a tracker edit whose Touches line says
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
@@ -187,6 +191,7 @@ globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+  if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
   if (kind === 'grill') {
     const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
       : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
@@ -1172,7 +1177,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   for (const c of integrates) {
     if (!c.prompt.includes('tools/check.sh --full --base <old> --port ')) fail(`#629: the ${c.label} prompt's local check is not judged against <old>, the merge's first parent`)
     if (c.prompt.includes(`--base ${RUN_BASE}`)) fail(`#629: the ${c.label} prompt still judges a check against the run base`)
-    if (!c.prompt.includes('Record old=') || !c.prompt.includes('otherwise old is that merge\'s first parent')) fail(`#629: the ${c.label} prompt does not define <old> on both the first and the resumed path`)
+    if (!c.prompt.includes('Record old=') || !c.prompt.includes('judged against <old>, the merge\'s first parent')) fail(`#629: the ${c.label} prompt does not define <old> on both the first and the resumed path`)
     if (!c.prompt.includes('STEP 2 — the integrate step\'s local check, judged against the merge\'s first parent <old>')) fail(`#629: the ${c.label} prompt's STEP 2 does not name the check in the glossary's words (Q13, Q17)`)
     // The check's command is run exactly as written, and a bare `<old>` in it is a bash redirect from a file named old,
     // so the step says to write the sha in its place (#629's review).
@@ -1233,6 +1238,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
       prompts.push({ label: opts.label, prompt })
       const [kind, id] = opts.label.split(':')
       if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: RUN_BASE, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
       if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
       if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
@@ -1272,6 +1278,7 @@ const DOWNSTREAM_CASES = 5
     globalThis.agent = async (prompt, opts) => {
       const [kind, id] = opts.label.split(':')
       if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
       if (kind === 'implement') { starts.push(id); return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] } }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
       if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
@@ -1360,6 +1367,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (died) late.push(opts.label)
     started710.push(opts.label)
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set710.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
     await sleep(id === 'issue-1001' ? 40 : id === 'issue-1003' || id === 'issue-1004' ? 30 : 5)
@@ -1408,6 +1416,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   globalThis.agent = async (prompt, opts) => {
     const [kind] = opts.label.split(':')
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
     await sleep(kind === 'grill' ? 60 : 5)
@@ -1425,6 +1434,90 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (!r1 || r1.outcome !== 'stopped' || r1.stage !== 'integrate' || !r1.reason.includes(`may hold issue-1101's unverified merge`) || !r1.reason.includes(OLD)) fail(`#710: a re-run that died on the limit does not say the run branch may hold the merge: ${JSON.stringify(r1)}`)
     if (!r2 || !r2.reason.includes('the usage limit stopped its grill')) fail(`#710: a grill the limit stopped does not say so: ${JSON.stringify(r2)}`)
   }
+}
+
+// 36. A resumed lane whose work is already on the run branch is integrated, not failed or skipped (#712). On
+//     2026-11-01, after two resumes, #677's merge 02d755d was on the branch while its result read "skipped" (its lane
+//     re-forked from a tip holding its own merge and saw head equal to fork), and #634's merge fd8c797 was on the
+//     branch while its result read "failed" (its integrate agent had died before the gate finished). Before a lane
+//     implements a ticket, the resume probe asks whether its branch is already on the run branch; a ticket whose merge
+//     is there skips implement and review and goes to the gate alone, which passes on the record or runs once. One
+//     short run on synthetic tickets, every agent answering at once: AS_677 is on the branch with its gate recorded as
+//     passing, AS_634 is on the branch with no pass line, so its gate runs; PART is on the branch as "Merge part of
+//     task"; GATE_RED's gate runs red with later merges on it; FRESH is not on the branch and is built as before; and
+//     PROBE_DIED's probe dies. A mocked implement answers as the resumed lane of #677 did, head equal to fork, so a
+//     script that skips the probe reads AS_677 as skipped.
+{
+  const AS_677 = 'issue-1201', AS_634 = 'issue-1202', PART = 'issue-1203', GATE_RED = 'issue-1204', FRESH = 'issue-1205', PROBE_DIED = 'issue-1206'
+  const ON_BRANCH = [AS_677, AS_634, PART, GATE_RED]
+  const BASE_712 = 'a'.repeat(40)
+  const mergeOf = (id) => `${id.slice(6)}`.padEnd(40, '0')
+  const RED_LINE = 'check: fail: the workflow test companion .claude/workflows/review-queue_tests.mjs failed.'
+  const calls712 = []
+  const prompts712 = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    calls712.push(opts.label)
+    prompts712[opts.label] = prompt
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set712.map((t) => ({ ...t })), landed: [], base: BASE_712, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'resume') {
+      if (id === PROBE_DIED) return null
+      if (!ON_BRANCH.includes(id)) return { merged: false, mergeSha: '', subject: '', notes: 'no commit of its own on the run branch' }
+      return { merged: true, mergeSha: mergeOf(id), subject: `${id === PART ? 'Merge part of task' : 'Merge task'} ${id}: companion`, notes: '' }
+    }
+    // The resumed lane of #677: its STEP 0 found no "Task" commit outside the run branch, re-forked, and changed nothing.
+    if (kind === 'implement') return ON_BRANCH.includes(id)
+      ? { outcome: 'resolved', branch: `task/${id}`, forkSha: mergeOf(id), headSha: mergeOf(id), complete: true, outstanding: '', summary: 'changed nothing', question: '', delegatedDecisions: [], changeRequests: [] }
+      : { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'gate') {
+      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
+      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, notes: '' }
+    }
+    throw new Error(`unexpected agent label ${opts.label} in the resumed-lane run`)
+  }
+  const lane712 = (n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner: 'integrator' })
+  const set712 = [1201, 1202, 1203, 1204, 1205, 1206].map(lane712)
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#712: the resumed-lane run threw: ${e && e.message ? e.message : e}`) }
+  const count = (label) => calls712.filter((l) => l === label).length
+  if (res) {
+    for (const id of [AS_677, AS_634]) if (!(res.integrated || []).includes(id)) fail(`#712: ${id}, whose merge was on the run branch at resume (${id === AS_677 ? "#677's case" : "#634's case"}), is not integrated: integrated ${JSON.stringify(res.integrated)}, skipped ${JSON.stringify(res.skipped)}, failed ${JSON.stringify(res.failed)}`)
+    if (!(res.partial || []).includes(PART)) fail(`#712: ${PART}, on the run branch as "Merge part of task", is not partial: ${JSON.stringify(res.partial)}`)
+    if (!(res.integrated || []).includes(FRESH)) fail(`#712: ${FRESH}, not on the run branch, is not built and integrated as before: ${JSON.stringify(res.integrated)}`)
+    if (!(res.failed || []).includes(GATE_RED)) fail(`#712: ${GATE_RED}, whose gate went red, is not failed: ${JSON.stringify(res.failed)}`)
+    const red = (res.reasons || []).find((r) => r.id === GATE_RED)
+    if (!red || red.stage !== 'integrate' || !red.reason.includes(RED_LINE)) fail(`#712: the red gate's reason does not quote its last line at integrate: ${JSON.stringify(red)}`)
+    // A probe that dies fails closed: the ticket is not implemented on a guess (CODING_STANDARDS.md, "A check fails closed").
+    const died = (res.reasons || []).find((r) => r.id === PROBE_DIED)
+    if (!(res.failed || []).includes(PROBE_DIED) || !died || !/resume probe/.test(died.reason)) fail(`#712: a resume probe that died does not fail its ticket, naming the probe: ${JSON.stringify(died)}`)
+  }
+  for (const id of [AS_677, AS_634, PART, GATE_RED]) {
+    for (const kind of ['implement', 'review', 'integrate']) if (count(`${kind}:${id}`)) fail(`#712: ${id}'s merge was on the run branch, yet its ${kind} agent ran ${count(`${kind}:${id}`)} time(s)`)
+    if (count(`gate:${id}`) !== 1) fail(`#712: ${id}'s gate ran ${count(`gate:${id}`)} time(s), not once`)
+    if (count(`resume:${id}`) !== 1) fail(`#712: ${id}'s resume probe ran ${count(`resume:${id}`)} time(s), not once`)
+  }
+  if (count(`implement:${PROBE_DIED}`)) fail(`#712: ${PROBE_DIED}'s probe died, yet its implement ran`)
+  for (const kind of ['implement', 'review', 'integrate']) if (count(`${kind}:${FRESH}`) !== 1) fail(`#712: ${FRESH}'s ${kind} ran ${count(`${kind}:${FRESH}`)} time(s), not once`)
+  if (count(`gate:${FRESH}`)) fail(`#712: ${FRESH} is not on the run branch, yet the gate alone ran for it`)
+  if (calls712.some((l) => l.startsWith('reset:'))) fail('#712: a red gate on a merge already on the run branch launched a reset agent')
+  // The probe asks git, not the issue: the branch, the run branch, the run base and the "Task <id>:" commit it must own.
+  const probe = prompts712[`resume:${AS_677}`] || ''
+  for (const part of [`task/${AS_677}-${AS_677}`, 'overnight/', BASE_712, `"Task ${AS_677}:"`, 'merge-base --is-ancestor']) if (!probe.includes(part)) fail(`#712: the resume probe's prompt lacks ${JSON.stringify(part)}`)
+  // The gate alone judges the ticket's own merge against its first parent, and resets only a merge nothing sits on.
+  const gate = prompts712[`gate:${AS_634}`] || ''
+  for (const part of [mergeOf(AS_634), `${LOG}/${AS_634}-integrate.txt`, '--base <old>', '^1', 'reset nothing']) if (!gate.includes(part)) fail(`#712: the gate-alone prompt lacks ${JSON.stringify(part)}`)
+  // The integrate step's own durable state, for an integrate agent replayed after it died mid-gate, finds the ticket's
+  // own merge, not the run branch's latest (#634: its gate re-ran against #553's 1435e21).
+  const integ = prompts712[`integrate:${FRESH}`] || ''
+  if (integ.includes('rev-list --merges --first-parent -n 1 HEAD)^1')) fail('#712: the integrate step\'s STEP 0 still takes the run branch\'s latest merge as the ticket\'s own')
+  if (!integ.includes('THE GATE ALONE')) fail('#712: the integrate step\'s STEP 0 does not hand a merge already in to the gate alone')
 }
 
 if (failures.length) {
