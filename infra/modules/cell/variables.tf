@@ -24,8 +24,10 @@ variable "vpc_cidr" {
   description = <<-EOT
     The cell's address range. Two /24 subnets are carved out of it, one per zone, and
     two more under multi_task, which then needs /22 or larger.
-    Platform configuration's ForwardedHeaders:TrustedNetworks names this range, so
-    the gateway trusts X-Forwarded-For from the load balancer and from nowhere else.
+    Platform configuration's ForwardedHeaders:TrustedNetworks names the two public
+    subnets the load balancer sits in, not this whole range, so the gateway trusts
+    X-Forwarded-For from the load balancer and from nowhere else; under multi_task
+    the private subnets stay untrusted.
 
     No default: the root decides the range, and this module is called by each cell's
     root. The poc root's default is 10.20.0.0/16.

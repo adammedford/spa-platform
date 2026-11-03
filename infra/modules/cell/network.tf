@@ -4,12 +4,15 @@
 #
 # What is deliberately absent is as much of the design as what is here. There is no
 # NAT gateway, no bastion and no database: the task sends 443 out from a public
-# address. The resource-type allowlist in tests/module.tftest.hcl fails on any of
-# the three, P-01 in the platform root's tests fails on them whatever that
-# allowlist says, and tests/network.tftest.hcl fails on any ingress rule beyond
-# the two below. The one exception is the two-task cell's private half at the end
-# of this file, planned only under multi_task (#347), whose NAT gateway P-01
-# admits in that one gated form (#583).
+# address. P-01 in the platform root's tests fails on any of the three whatever
+# the module declares, and tests/network.tftest.hcl fails on any ingress rule
+# beyond the two below. The resource-type allowlist in tests/module.tftest.hcl
+# fails on an instance, but it names the NAT gateway's type and the session
+# table's, so it cannot tell a gated one from an ungated one: P-01 alone holds
+# them to their gates. There are two exceptions, each in one gated form P-01
+# admits: the session table, planned only under session_store = dynamodb, and
+# the two-task cell's private half at the end of this file, whose NAT gateway is
+# planned only under multi_task (#347, #583).
 
 data "aws_availability_zones" "available" {
   state = "available"
@@ -189,7 +192,8 @@ resource "aws_default_security_group" "cell" {
 # --- Continuity (#347, #332 D6): the private half, behind multi_task -----------------------------------
 #
 # Two private subnets at cidrsubnet indices 2 and 3, one per zone, each with its own route table so
-# that a second NAT gateway, or a regional one, is a route change and nothing else (#347 Q11); one
+# that a second NAT gateway, or a regional one, is a new gateway and a route change on these tables
+# and nothing else (#347 Q11); one
 # NAT gateway in the first zone's public subnet, which is the saving over one per zone (about $33 a
 # month each) and the reason zone failure stays out of G6's scope (#332 F15); and the S3 and DynamoDB
 # gateway endpoints on both private tables, which carry the registry, the releases and the session
@@ -197,6 +201,10 @@ resource "aws_default_security_group" "cell" {
 # CloudWatch Logs, ssmmessages for the tunnel and the provider's OAuth endpoints. The task security
 # group's egress stays 443 alone (task_https_out above). Every declaration here plans no instance on
 # the default inputs, which is what P-01 reads (change request #583).
+#
+# Gateway endpoints carry no charge: https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html
+# A regional NAT gateway needs no public subnet and takes the private tables' routes:
+# https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html
 
 resource "aws_subnet" "private" {
   for_each = var.multi_task ? { for index, zone in local.zones : zone => index } : {}

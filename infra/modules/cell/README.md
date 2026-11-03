@@ -72,9 +72,11 @@ is what the switch adds.
   and the task security group accepts the gateway's port from the ALB security group
   alone. Those are two of the cell's four rules. `tests/network.tftest.hcl` fails on
   a fifth rule, an inline rule, a third group, or an address range on any rule but
-  the task's 443 out, and the resource-type allowlist in `tests/module.tftest.hcl`
-  fails on a NAT gateway, an instance or a database. Both read the configuration
-  (ADR-0016). P-06's deployed half, a connection from outside to the task's port
+  the task's 443 out, and P-01 in the platform root's tests fails on a NAT gateway,
+  an instance or a database outside the gated forms it admits. The resource-type
+  allowlist in `tests/module.tftest.hcl` fails on an instance, but names the gated
+  types, so it cannot tell a gated one from an ungated one. All of them read the
+  configuration (ADR-0016). P-06's deployed half, a connection from outside to the task's port
   timing out, runs against the applied cell at G3 (task 6.9).
 - **No rule in the default security group.** AWS creates one in every VPC, admitting
   all traffic from its own members, and puts some resources created without a group of
@@ -103,10 +105,11 @@ Under `multi_task = true` (#347, #332 D6):
   private route table per zone routing `0.0.0.0/0` to it. It carries what has no
   gateway endpoint: Parameter Store, ECR, CloudWatch Logs, `ssmmessages` for the
   tunnel and the provider's OAuth endpoints. Zone failure is out of G6's scope
-  (#332 F15); a NAT gateway per zone, or a regional one, is a route change on the
-  tables that are already per zone.
+  (#332 F15); a NAT gateway per zone, or a regional one, is a new gateway and a
+  route change on the tables that are already per zone. A regional one needs no
+  public subnet ([AWS](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html)).
 - **The S3 and DynamoDB gateway endpoints** on both private tables, with AWS's
-  default policy. They are not a destination allowlist, which is P2-9's.
+  default policy, at no charge ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)). They are not a destination allowlist, which is P2-9's.
 - **The task's egress stays 443 alone**, and `ForwardedHeaders:TrustedNetworks` still
   names only the load balancer's public subnets, so no private subnet is trusted.
 - **About $70.50 a month** for the whole cell left running, $0.10 an hour applied
@@ -246,8 +249,9 @@ account.
   allowlist says, save the gated session table and the two-task cell's gated NAT
   gateway (#583), which it holds at no instance on the default inputs, the table at
   one under `dynamodb` and the gateway at one under `multi_task`. This module's own
-  type allowlist, in `tests/module.tftest.hcl`, fails on any of them as well, and
-  names the session table and the two-task cell's three egress types.
+  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, and names the
+  session table and the two-task cell's three egress types, so it cannot tell their
+  gated forms from ungated ones: P-01 is what holds them to their gates.
 - **P-03, the task role policy,** is the task role's runs above.
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an

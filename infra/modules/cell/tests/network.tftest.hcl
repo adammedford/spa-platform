@@ -4,9 +4,10 @@
 #   terraform -chdir=infra/modules/cell test
 #
 # Plan row 1.2's done-when is "the plan has no NAT, bastion or database, and no other ingress rule".
-# Under ADR-0016 both halves are properties of the configuration, proved here at plan time. The
-# resource-type allowlist in module.tftest.hcl holds the first half: no instance type can be
-# declared, and a NAT gateway or a database only in the gated form P-01 admits (#583, issue-338).
+# Under ADR-0016 both halves are properties of the configuration, proved here at plan time. P-01
+# in the platform root's tests holds the first half: a NAT gateway or a database only in the gated
+# form it admits (#583, issue-338). The resource-type allowlist in module.tftest.hcl adds that no
+# instance type can be declared; it names the gated types, so it cannot tell gated from ungated.
 # This file holds the second. The cell declares exactly the four security-group rules plan row 1.2
 # names, two in each direction, and the VPC's default group, which AWS creates admitting all traffic
 # from its own members, is adopted with none. Two runs check what a deployment would otherwise trip
