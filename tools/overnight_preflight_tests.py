@@ -81,6 +81,16 @@ spec.loader.exec_module(real_collect)
 # The real files the shape line's tools/ticket_shape.py runs on, committed on each case's origin/main
 # at the same paths: the check itself, A-05's ownership reader and the ownership it reads.
 SHAPE_FILES = ("tools/ticket_shape.py", ".github/path-ownership.py", "OWNERSHIP.md")
+# The real files the decision line's tools/decision_citation.py runs on (#663): the reader, and the
+# guide whose "The human's account is" line names the account a decision is read from.
+DECISION_FILES = ("tools/decision_citation.py", "docs/agents/tracker-policy.md")
+spec = importlib.util.spec_from_file_location("decision_citation", ROOT / "tools" / "decision_citation.py")
+decision_citation = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(decision_citation)
+LOGIN = decision_citation.named_account(ROOT / decision_citation.GUIDE)
+# Two files every case's origin/main holds under docs/adr/, so the adr exemption has an existing ADR
+# file and README to find, and docs/adr/0099-new.md is a path origin/main lacks.
+ADR_FILES = {"docs/adr/README.md": "# Decisions\n", "docs/adr/0026-example.md": "# ADR-0026\n"}
 # The fields the gh double answers for `gh issue view`, read from the check itself: the script
 # copies them, so a FIELDS change the script misses turns a case red here.
 spec = importlib.util.spec_from_file_location("ticket_shape", ROOT / "tools" / "ticket_shape.py")
@@ -98,7 +108,10 @@ DATE = "2026-10-26"
 TOOLS = ("git", "ps", "tar", "mktemp", "mkdir", "rm")
 
 # The lines, by name, in the order the ticket gives them.
-LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims", "shape"]
+LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims", "shape",
+         "adr", "decision", "unblocks"]
+# The lines that fail with the forecast, since each reads collect's answer.
+WITH_FORECAST = ("forecast", "claims", "shape", "adr", "decision", "unblocks")
 
 LIST_TRIAGE = ["issue", "list", "--state", "open", "--label", "needs-triage", "--limit", "500",
                "--json", "number"]
@@ -112,16 +125,36 @@ def view_call(number: int) -> list[str]:
     return ["issue", "view", str(number), "--json", SHAPE_FIELDS]
 
 
+def comments_call(number: int) -> list[str]:
+    return ["api", "--paginate", "--slurp", f"repos/{{owner}}/{{repo}}/issues/{number}/comments?per_page=100"]
+
+
+def labels_call(number: int) -> list[str]:
+    return ["issue", "view", str(number), "--json", "labels"]
+
+
+def comment(body: str, *, login: str = LOGIN, hours: float = 1, edited: float | None = None,
+            id: int = 1) -> dict:
+    """An issue comment as GitHub's REST listing gives one, trimmed to the fields read."""
+    return {"id": id, "body": body, "user": {"login": login},
+            "html_url": f"https://github.com/o/r/issues/1#issuecomment-{id}",
+            "created_at": ago(hours), "updated_at": ago(hours if edited is None else edited)}
+
+
+ACCEPT_NO = "Decision: accept\nADR: no\n\nThe why."
+
+
 def ticket(id: str, issue: int, owner: str, status: str, open_boxes: int = 2,
            blocked_by: tuple = ()) -> dict:
     return {"id": id, "issue": issue, "owner": owner, "status": status, "openBoxes": open_boxes,
             "blockedBy": list(blocked_by)}
 
 
-def issue_json(number: int, label: str, body: str) -> dict:
+def issue_json(number: int, label: str, body: str, also: tuple = ()) -> dict:
     """`gh issue view <n> --json` with ticket_shape.py's fields, as gh prints it."""
     return {"number": number, "body": body,
-            "labels": [{"id": "LA_x", "name": label, "description": "", "color": "ededed"}],
+            "labels": [{"id": "LA_x", "name": name, "description": "", "color": "ededed"}
+                       for name in (label, *also)],
             "subIssuesSummary": {"total": 0, "completed": 0, "percentCompleted": 0},
             "blockedBy": {"nodes": []}}
 
@@ -160,7 +193,7 @@ if __name__ == "__main__":
 
 # The gh double: the two reads, each from the case's canned output, and 97 for anything else.
 GH_DOUBLE = """#!{python}
-import json, os, pathlib, sys
+import json, os, pathlib, re, sys
 argv = sys.argv[1:]
 with open({calls!r}, "a") as calls:
     calls.write(json.dumps({{"argv": argv, "cwd": os.getcwd()}}) + "\\n")
@@ -172,6 +205,14 @@ if argv == {list_triage!r}:
     print((canned / "triage.json").read_text())
     sys.exit(0)
 if len(argv) == 4 and argv[:3] == ["api", "--paginate", "--slurp"]:
+    found = re.fullmatch(r"repos/\\{{owner\\}}/\\{{repo\\}}/issues/([0-9]+)/comments\\?per_page=100", argv[3])
+    if found:
+        page = canned / ("comments-%s.json" % found.group(1))
+        if not page.exists():
+            print("HTTP 502", file=sys.stderr)
+            sys.exit(1)
+        print(page.read_text())
+        sys.exit(0)
     for number in json.loads((canned / "triage.json").read_text()):
         if argv[3] == "repos/{{owner}}/{{repo}}/issues/%d/timeline?per_page=100" % number["number"]:
             page = canned / ("timeline-%d.json" % number["number"])
@@ -186,6 +227,13 @@ if len(argv) == 5 and argv[:2] == ["issue", "view"] and argv[3:] == ["--json", {
         print("GraphQL: Could not resolve to an issue or pull request", file=sys.stderr)
         sys.exit(1)
     print(issue.read_text())
+    sys.exit(0)
+if len(argv) == 5 and argv[:2] == ["issue", "view"] and argv[3:] == ["--json", "labels"]:
+    labels = canned / ("labels-%s.json" % argv[2])
+    if not labels.exists():
+        print("GraphQL: Could not resolve to an issue or pull request", file=sys.stderr)
+        sys.exit(1)
+    print(labels.read_text())
     sys.exit(0)
 print("gh double: unexpected call", argv, file=sys.stderr)
 sys.exit(97)
@@ -217,6 +265,21 @@ def setUpModule():
                           capture_output=True, text=True, check=True).stdout
     print(f"overnight_preflight_tests: tools/overnight_preflight.sh runs under {BASH} {full}",
           file=sys.stderr)
+
+
+def header_lines() -> list[str]:
+    """The script's header comment, line by line, each without its `#` and the space after it."""
+    lines = []
+    for line in SCRIPT.read_text().splitlines()[1:]:
+        if not line.startswith("#"):
+            break
+        lines.append(line[2:] if line.startswith("# ") else line[1:])
+    return lines
+
+
+def header_text() -> str:
+    """The header as one run of words, so a phrase reads the same wherever the lines wrap."""
+    return " ".join(" ".join(header_lines()).split())
 
 
 class Result:
@@ -294,8 +357,12 @@ class Case:
         (self.pusher / ".claude" / "workflows" / "overnight.js").write_text("// the workflow\n")
         (self.pusher / "tools").mkdir()
         (self.pusher / ".github").mkdir()
-        for path in SHAPE_FILES:
+        (self.pusher / "docs" / "agents").mkdir(parents=True)
+        (self.pusher / "docs" / "adr").mkdir()
+        for path in SHAPE_FILES + DECISION_FILES:
             (self.pusher / path).write_bytes((ROOT / path).read_bytes())
+        for path, text in ADR_FILES.items():
+            (self.pusher / path).write_text(text)
         self.push_collect("Lay out the repository", tickets=tickets, summary=summary,
                           status=collect_status)
         self.clone(self.checkout)
@@ -345,9 +412,20 @@ class Case:
             # One page, as `gh api --paginate --slurp` wraps them.
             (self.canned / f"timeline-{number}.json").write_text(json.dumps([events]))
 
-    def issue(self, number: int, label: str, body: str):
-        """What `gh issue view <number> --json` answers, with the label the issue carries now."""
-        (self.canned / f"issue-{number}.json").write_text(json.dumps(issue_json(number, label, body)))
+    def issue(self, number: int, label: str, body: str, also: tuple = ()):
+        """What `gh issue view <number> --json` answers, with the label the issue carries now and
+        any others `also` names."""
+        (self.canned / f"issue-{number}.json").write_text(json.dumps(issue_json(number, label, body, also)))
+
+    def comments(self, number: int, comments: list):
+        """An issue's comments, one page, as `gh api --paginate --slurp` wraps them."""
+        (self.canned / f"comments-{number}.json").write_text(json.dumps([comments]))
+
+    def labels(self, number: int, *names: str):
+        """What `gh issue view <number> --json labels` answers."""
+        (self.canned / f"labels-{number}.json").write_text(json.dumps(
+            {"labels": [{"id": "LA_x", "name": name, "description": "", "color": "ededed"}
+                        for name in names]}))
 
     # --- running ---
 
@@ -418,10 +496,10 @@ class CleanStartTests(PreflightTestCase):
         result = case.run()
         self.assertOrder(result)
         self.assertOnlyFails(result)
-        self.assertEqual(11, len(result.lines), result.stdout)
+        self.assertEqual(14, len(result.lines), result.stdout)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
-        self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": []},
+        self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 4, "skip": []},
                          result.arguments())
         self.assertIn("standingAnswer", result.lines[-2])
         self.assertIn("ADR-0021 decision 3", result.lines[-2])
@@ -634,7 +712,7 @@ class ForecastTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: #56 and #180 share 1.4",
                     collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertOnlyFails(result, *WITH_FORECAST)
         self.assertEqual("origin/main's overnight_collect.py --repo exited 1: overnight_collect: no "
                          "tickets printed: #56 and #180 share 1.4", result.row("forecast")[1])
         self.assertNotIn("maxParallel", result.arguments())
@@ -646,16 +724,21 @@ class ForecastTests(PreflightTestCase):
         case.git("push", "-q", "origin", "main", cwd=case.pusher)
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertOnlyFails(result, *WITH_FORECAST)
         self.assertEqual("origin/main has no tools/overnight_collect.py", result.row("forecast")[1])
 
-    def test_max_parallel_is_the_owners_with_ready_tickets_and_at_least_one(self):
+    def test_max_parallel_is_twice_the_lanes_capped_at_seven_and_a_heuristic(self):
+        # #663: lanes is the owners with ready-for-agent tickets, at least 1; the value is
+        # min(2 x lanes, 7), worked by hand: 1 lane 2, 3 lanes 6, 5 lanes 10 capped at 7.
+        def ready(*owners: str) -> list:
+            return [ticket(f"issue-{n}", n, owner, "ready-for-agent") for n, owner in enumerate(owners, 1)]
         for tickets, expected, owners in (
-            ([ticket("issue-1", 1, "integrator", "ready-for-agent")], 1, "integrator 1"),
-            ([ticket("issue-1", 1, "integrator", "blocked")], 1, "none"),
-            ([ticket(f"issue-{n}", n, owner, "ready-for-agent")
-              for n, owner in enumerate(("integrator", "ws1-infra", "ws2-hosting", "ws6-verification"), 1)],
-             4, "integrator 1, ws1-infra 1, ws2-hosting 1, ws6-verification 1"),
+            (ready("integrator"), 2, "integrator 1"),
+            ([ticket("issue-1", 1, "integrator", "blocked")], 2, "none"),
+            (ready("integrator", "ws1-infra", "integrator", "ws2-hosting"), 6,
+             "integrator 2, ws1-infra 1, ws2-hosting 1"),
+            (ready("integrator", "ws1-infra", "ws2-hosting", "ws3-identity", "ws6-verification"), 7,
+             "integrator 1, ws1-infra 1, ws2-hosting 1, ws3-identity 1, ws6-verification 1"),
         ):
             with self.subTest(expected=expected, owners=owners):
                 case = Case(self, tickets=tickets)
@@ -663,6 +746,23 @@ class ForecastTests(PreflightTestCase):
                 self.assertOnlyFails(result)
                 self.assertEqual(expected, result.arguments()["maxParallel"])
                 self.assertTrue(result.row("forecast")[1].endswith(f"ready-for-agent by owner: {owners}"))
+                verdict = result.lines[-2]
+                self.assertIn(f"maxParallel is {expected}, min(2 x lanes, 7), a launch heuristic", verdict)
+                self.assertIn("7 bounds the slot-counted work (implement, review, the serialised merge and "
+                              "resolve), not every agent", verdict)
+
+    def test_the_header_calls_max_parallel_a_heuristic_and_names_what_seven_bounds(self):
+        header = header_text()
+        self.assertIn("min(2 x lanes, 7)", header)
+        self.assertIn("heuristic", header)
+        self.assertIn("7 bounds the slot-counted work", header)
+        self.assertIn("withSlot", header)
+
+    def test_a_failed_forecast_names_no_max_parallel_in_the_verdict(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertNotIn("maxParallel", result.arguments())
+        self.assertNotIn("maxParallel is", result.lines[-2])
 
 
 class DemotedTests(PreflightTestCase):
@@ -714,7 +814,7 @@ class DemotedTests(PreflightTestCase):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         case.triage([358], {358: [labelled("unlabeled", "ready-for-agent", 2)]})
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertOnlyFails(result, *WITH_FORECAST)
         self.assertEqual(["issue-358"], result.arguments()["skip"])
 
 
@@ -743,7 +843,9 @@ class ClaimsTests(PreflightTestCase):
         self.assertEqual(
             ("pass", "these tickets have open boxes and are held by a local task branch whose id a "
                      "`Merge part of task <id>` subject on origin/main names, so collect reads them as "
-                     f"claimed; free each by renaming its branch: issue-10 (#10, 2 open boxes): "
+                     "claimed; free each whose open blockers are all met tonight by renaming its "
+                     "branch, and leave held each with an open blocker that is not (#663): "
+                     "issue-10 (#10, 2 open boxes; no open blocker): "
                      f"git -C {case.checkout} branch -m {branch} hold/issue-10-{tip[:7]}"),
             result.row("claims"))
         # The line names; it renames nothing, and adds no skip.
@@ -756,8 +858,8 @@ class ClaimsTests(PreflightTestCase):
         case.git("branch", "task/issue-12-a", cwd=case.checkout)
         case.git("branch", "task/2.1-b", cwd=case.checkout)
         evidence = case.run().row("claims")[1]
-        self.assertIn("2.1 (#11, 2 open boxes): git -C", evidence)
-        self.assertIn("issue-12 (#12, 2 open boxes): git -C", evidence)
+        self.assertIn("2.1 (#11, 2 open boxes; no open blocker): git -C", evidence)
+        self.assertIn("issue-12 (#12, 2 open boxes; no open blocker): git -C", evidence)
         self.assertIn("branch -m task/2.1-b hold/2.1-", evidence)
 
     def test_a_ticket_without_the_subject_or_without_an_open_box_is_not_listed(self):
@@ -815,7 +917,7 @@ class ClaimsTests(PreflightTestCase):
     def test_a_failed_forecast_fails_the_line_for_want_of_the_open_boxes(self):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertOnlyFails(result, *WITH_FORECAST)
         self.assertEqual("the forecast failed, so no ticket's open boxes are known and no claim was judged",
                          result.row("claims")[1])
 
@@ -882,7 +984,8 @@ class ShapeTests(PreflightTestCase):
         (case.canned / "issue-11.json").unlink()
         case.issue(358, "needs-triage", "**Touches:** none\n")
         result = case.run()
-        self.assertOnlyFails(result, "shape")
+        # The adr and decision lines read the same issues, so #11 is unread on each (#663).
+        self.assertOnlyFails(result, "shape", "adr", "decision")
         self.assertEqual("4 ready-for-agent and needs-triage tickets; gh could not read #11, so those "
                          "are unjudged; of the rest, these fail and are skip candidates: 6.9 (#358: "
                          "owner-line)", result.row("shape")[1])
@@ -900,7 +1003,7 @@ class ShapeTests(PreflightTestCase):
     def test_a_failed_forecast_or_no_check_on_origin_fails_the_line(self):
         case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
         result = case.run()
-        self.assertOnlyFails(result, "forecast", "claims", "shape")
+        self.assertOnlyFails(result, *WITH_FORECAST)
         self.assertEqual("the forecast failed, so no ticket was judged", result.row("shape")[1])
 
         case = Case(self)
@@ -909,9 +1012,375 @@ class ShapeTests(PreflightTestCase):
         case.git("push", "-q", "origin", "main", cwd=case.pusher)
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
-        self.assertOnlyFails(result, "shape")
+        # The adr and decision lines import the same check, so they cannot judge either (#663).
+        self.assertOnlyFails(result, "shape", "adr", "decision")
         self.assertEqual("origin/main has no tools/ticket_shape.py, so no ticket was judged",
                          result.row("shape")[1])
+
+
+def touching(paths: str, owner: str = "integrator") -> str:
+    """A body ticket_shape.py passes whose Touches line is `paths`."""
+    return f"**Owner:** {owner}\n**Touches:** {paths}\n\n## Acceptance criteria\n\n- [ ] A test proves it\n"
+
+
+# The Touches lines under docs/adr/ the adr line flags, each with what its evidence says (#663).
+ADR_TOUCHES = {
+    "a bare docs/adr/": ("`docs/adr/`", "docs/adr/; every path is under docs/adr/"),
+    "an existing ADR file": ("`docs/adr/0026-example.md`", "docs/adr/0026-example.md; every path is under docs/adr/"),
+    "docs/adr/README.md": ("`docs/adr/README.md`", "docs/adr/README.md; every path is under docs/adr/"),
+    "a mixed line": ("`docs/adr/0026-example.md`, `tools/overnight_preflight.sh`",
+                     "docs/adr/0026-example.md, tools/overnight_preflight.sh; not every path is under docs/adr/"),
+}
+
+
+class AdrTests(PreflightTestCase):
+    """#663: the adr line flags a ticket whose Touches line names a path under docs/adr/, which a
+    scripted session only drafts (ADR-0021 decision 4), exempting only the authorised edit."""
+
+    def test_each_touches_line_under_docs_adr_is_a_skip_candidate_saying_whether_all_its_paths_are(self):
+        for name, (paths, said) in ADR_TOUCHES.items():
+            with self.subTest(name):
+                case = Case(self)
+                case.issue(12, "ready-for-agent", touching(paths))
+                result = case.run()
+                self.assertOrder(result)
+                self.assertOnlyFails(result)
+                verdict, evidence = result.row("adr")
+                self.assertIn("these name a path under docs/adr/, which a lane only drafts (ADR-0021 "
+                              f"decision 4), and are skip candidates: issue-12 (#12: {said})", evidence)
+                self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_tickets_with_no_such_path_pass_listing_none(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", touching("`tools/overnight_preflight.sh`, `docs/agents/review.md`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; none names a path "
+                                  "under docs/adr/ on its Touches line. A pass means the screen completed "
+                                  "its checks, not that it authorised implementation"),
+                         result.row("adr"))
+        self.assertEqual([], result.arguments()["skip"])
+
+    def change_request(self, case: Case, number: int, paths: str, comments: list):
+        case.issue(number, "ready-for-agent", touching(paths), also=("change-request",))
+        case.comments(number, comments)
+
+    def test_an_accepted_adr_no_request_naming_one_existing_adr_file_is_exempt(self):
+        case = Case(self)
+        decided = comment(ACCEPT_NO, id=77)
+        self.change_request(case, 12, "`docs/adr/0026-example.md`", [decided])
+        result = case.run()
+        self.assertOnlyFails(result)
+        evidence = result.row("adr")[1]
+        self.assertIn(f"exempt: issue-12 (#12: docs/adr/0026-example.md, decided at {decided['html_url']}; "
+                      "the exemption covers that authorised edit only, which the lane validates)", evidence)
+        self.assertNotIn("skip candidates", evidence)
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_the_same_decision_with_a_bare_a_new_or_a_mixed_path_stays_flagged(self):
+        for paths in ("`docs/adr/`", "`docs/adr/0099-new.md`",
+                      "`docs/adr/0026-example.md`, `tools/overnight_preflight.sh`"):
+            with self.subTest(paths=paths):
+                case = Case(self)
+                self.change_request(case, 12, paths, [comment(ACCEPT_NO)])
+                result = case.run()
+                self.assertOnlyFails(result)
+                evidence = result.row("adr")[1]
+                self.assertIn("skip candidates: issue-12 (#12: ", evidence)
+                self.assertNotIn("exempt:", evidence)
+                # The decision line passes it: only the adr line names it.
+                self.assertNotIn("issue-12 (#12: #12", result.row("decision")[1])
+                self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_ticket_that_is_not_a_change_request_is_never_exempt(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", touching("`docs/adr/0026-example.md`"))
+        case.comments(12, [comment(ACCEPT_NO)])
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("skip candidates: issue-12 (#12: docs/adr/0026-example.md; every path is under docs/adr/)",
+                      result.row("adr")[1])
+        # Its comments are not even read: only a change request's decision can exempt it.
+        self.assertNotIn(comments_call(12), [call["argv"] for call in case.gh()])
+
+    def test_a_request_the_decision_line_flags_is_named_there_and_not_on_the_adr_line(self):
+        case = Case(self)
+        self.change_request(case, 12, "`docs/adr/0026-example.md`", [])
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertNotIn("issue-12", result.row("adr")[1])
+        self.assertIn("issue-12 (#12: ", result.row("decision")[1])
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_request_whose_decision_cannot_be_read_leaves_its_exemption_unjudged(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", touching("`docs/adr/0026-example.md`"), also=("change-request",))
+        result = case.run()
+        self.assertOnlyFails(result, "adr", "decision")
+        self.assertIn("the decision of #12, a change request naming a path under docs/adr/, could not be "
+                      "read, so its exemption is unjudged", result.row("adr")[1])
+
+
+class DecisionTests(PreflightTestCase):
+    """#663: the decision line screens each ready-for-agent and needs-triage change request's latest
+    decision with origin/main's decision_citation.judge(), flagging all but an accept with ADR: no."""
+
+    def test_no_decision_a_decline_and_adr_yes_are_flagged_naming_the_reason_and_adr_no_passes(self):
+        tickets = TICKETS + [ticket(f"issue-{n}", n, "integrator", "ready-for-agent") for n in (20, 21, 22, 23)]
+        case = Case(self, tickets=tickets)
+        for number in (20, 21, 22, 23):
+            case.issue(number, "ready-for-agent", clean_body("integrator"), also=("change-request",))
+        # #20 has a comment in the form from another account, which judge() passes over.
+        case.comments(20, [comment(ACCEPT_NO, login="someone-else", id=1)])
+        case.comments(21, [comment(ACCEPT_NO, hours=3, id=2), comment("Decision: decline\nADR: no", hours=1, id=3)])
+        case.comments(22, [comment("Decision: accept\nADR: yes", id=4)])
+        accepted = comment("Decision: accept with changes\nADR: no", id=5)
+        case.comments(23, [accepted])
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        evidence = result.row("decision")[1]
+        self.assertIn("4 change requests among the 8 ready-for-agent and needs-triage tickets", evidence)
+        self.assertIn("issue-20 (#20: a comment in the decision form by someone-else, not by "
+                      f"{LOGIN}, is not read as a decision; #20 carries no decision comment by {LOGIN}", evidence)
+        self.assertIn("issue-21 (#21: #21 is declined by its latest decision, "
+                      "https://github.com/o/r/issues/1#issuecomment-3", evidence)
+        self.assertIn("issue-22 (#22: #22's latest decision, https://github.com/o/r/issues/1#issuecomment-4, "
+                      "says ADR: yes", evidence)
+        self.assertIn(f"these pass: issue-23 (#23: accepts with ADR: no at {accepted['html_url']})", evidence)
+        self.assertEqual(["issue-20", "issue-21", "issue-22"], result.arguments()["skip"])
+        # Only the change requests' comments are read, each once, from the checkout.
+        reads = [call for call in case.gh() if call["argv"][3:4] and "/comments" in call["argv"][3]]
+        self.assertEqual([comments_call(n) for n in (20, 21, 22, 23)], [call["argv"] for call in reads])
+        self.assertEqual({str(case.checkout)}, {call["cwd"] for call in reads})
+
+    def test_an_accept_as_drafted_whose_draft_was_edited_after_passes_and_the_screen_says_what_it_leaves(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", clean_body("integrator"), also=("change-request",))
+        draft = comment("## Draft\n\nThe change, as drafted.", login="claude-bot", hours=5, edited=0.5, id=10)
+        decided = comment(f"Decision: accept as drafted {draft['html_url']}\nADR: no", hours=2, id=11)
+        case.comments(12, [draft, decided])
+        result = case.run()
+        self.assertOnlyFails(result)
+        evidence = result.row("decision")[1]
+        self.assertIn(f"these pass: issue-12 (#12: accepts with ADR: no at {decided['html_url']})", evidence)
+        for said in ("the screen reads the latest decision's form and author only",
+                     "the accepted draft's identity and freshness (an `accept as drafted` whose draft was "
+                     "edited after the decision passes here)",
+                     "the frozen-contract restrictions and the edit authority are the lane's to validate",
+                     "a pass does not authorise implementation"):
+            self.assertIn(said, evidence)
+        header = header_text()
+        self.assertIn("reads the decision's form and author only", header)
+        self.assertIn("the draft's identity and freshness, the frozen-contract restrictions and the edit "
+                      "authority to the lane", header)
+
+    def test_no_change_request_passes_naming_none_and_reads_no_comments(self):
+        case = Case(self)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertTrue(result.row("decision")[1].startswith(
+            "0 change requests among the 4 ready-for-agent and needs-triage tickets; none is flagged;"),
+            result.row("decision"))
+        self.assertEqual([], [call for call in case.gh() if "/comments" in " ".join(call["argv"])])
+
+    def test_comments_gh_cannot_read_or_judge_cannot_read_fail_the_line(self):
+        case = Case(self)
+        case.issue(12, "ready-for-agent", clean_body("integrator"), also=("change-request",))
+        result = case.run()
+        self.assertOnlyFails(result, "decision")
+        self.assertIn("gh could not read the comments of #12, so its decision is unjudged",
+                      result.row("decision")[1])
+        self.assertEqual([], result.arguments()["skip"])
+
+        case = Case(self)
+        case.issue(12, "ready-for-agent", clean_body("integrator"), also=("change-request",))
+        broken = comment(ACCEPT_NO)
+        broken["created_at"] = "yesterday"
+        case.comments(12, [broken])
+        result = case.run()
+        self.assertOnlyFails(result, "decision")
+        self.assertIn("judge() could not read #12 (a decision comment, https://github.com/o/r/issues/1"
+                      "#issuecomment-1, has no created_at in GitHub's form)", result.row("decision")[1])
+
+    def test_origin_without_the_reader_fails_the_line(self):
+        case = Case(self)
+        case.git("rm", "-q", "tools/decision_citation.py", cwd=case.pusher)
+        case.git("commit", "-q", "-m", "Drop the reader", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        result = case.run()
+        self.assertOnlyFails(result, "adr", "decision")
+        self.assertIn("origin/main's tools/decision_citation.py or tools/ticket_shape.py could not be "
+                      "loaded", result.row("decision")[1])
+
+
+class UnblocksTests(PreflightTestCase):
+    """#663: the unblocks line names the five open blockers with the most downstream tickets over the
+    forecast's known blockedBy edges, and adds no skip candidate."""
+
+    def test_a_chain_counts_every_downstream_ticket_once_ties_go_low_and_five_are_named(self):
+        tickets = [
+            # 20 <- 21 <- 22, and 23 waits on both 20 and 21: 20 reaches 21, 22, 23 (23 by two paths).
+            ticket("issue-20", 20, "integrator", "ready-for-agent"),
+            ticket("issue-21", 21, "integrator", "blocked", blocked_by=("issue-20",)),
+            ticket("issue-22", 22, "integrator", "blocked", blocked_by=("issue-21",)),
+            ticket("issue-23", 23, "integrator", "blocked", blocked_by=("issue-20", "issue-21")),
+            # issue-99 is outside the forecast and holds 30 and 31; 32 to 35 each hold one ticket.
+            ticket("issue-30", 30, "integrator", "blocked", blocked_by=("issue-99",)),
+            ticket("issue-31", 31, "ws2-hosting", "blocked", blocked_by=("issue-99",)),
+            ticket("issue-32", 32, "integrator", "ready-for-human"),
+            ticket("issue-33", 33, "integrator", "needs-triage"),
+            ticket("issue-34", 34, "integrator", "close-in-morning", open_boxes=0),
+            ticket("issue-35", 35, "integrator", "claimed"),
+            ticket("issue-40", 40, "integrator", "blocked", blocked_by=("issue-35",)),
+            ticket("issue-41", 41, "integrator", "blocked", blocked_by=("issue-34",)),
+            ticket("issue-42", 42, "integrator", "blocked", blocked_by=("issue-33",)),
+            ticket("issue-43", 43, "integrator", "blocked", blocked_by=("issue-32",)),
+        ]
+        case = Case(self, tickets=tickets)
+        case.labels(99, "change-request", "ready-for-human")
+        result = case.run()
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        # By hand: issue-20 3, issue-21 2, issue-99 2, then the four holding one each, 32 to 35, of
+        # which the lowest two make five.
+        self.assertEqual(("pass", "counted over the forecast's known blockedBy edges in collect's answer, "
+                                  "not over every issue in the repository; the open blockers with the most "
+                                  "downstream tickets: issue-20 (#20, ready-for-agent): 3 downstream; "
+                                  "issue-21 (#21, blocked): 2 downstream; issue-99 (#99, outside the "
+                                  "forecast; labels: change-request, ready-for-human): 2 downstream; "
+                                  "issue-32 (#32, ready-for-human): 1 downstream; issue-33 (#33, "
+                                  "needs-triage): 1 downstream. It is informational and adds no skip "
+                                  "candidate"),
+                         result.row("unblocks"))
+        self.assertEqual([], result.arguments()["skip"])
+        # One labels read, for the one blocker outside the forecast.
+        self.assertEqual([labels_call(99)], [call["argv"] for call in case.gh()
+                                             if call["argv"][-2:] == ["--json", "labels"]])
+
+    def test_fewer_blockers_are_named_when_fewer_exist_and_none_when_none(self):
+        tickets = [ticket("issue-20", 20, "integrator", "close-in-morning", open_boxes=0),
+                   ticket("issue-21", 21, "integrator", "ready-for-agent", blocked_by=("issue-20",))]
+        result = Case(self, tickets=tickets).run()
+        self.assertOnlyFails(result)
+        self.assertIn("downstream tickets: issue-20 (#20, close-in-morning): 1 downstream. It is informational",
+                      result.row("unblocks")[1])
+
+        result = Case(self).run()
+        self.assertEqual(("pass", "counted over the forecast's known blockedBy edges in collect's answer, "
+                                  "not over every issue in the repository; no forecast ticket has an open "
+                                  "blocker. It is informational and adds no skip candidate"),
+                         result.row("unblocks"))
+
+    def test_a_blocker_whose_labels_gh_cannot_read_fails_the_line(self):
+        tickets = [ticket("issue-21", 21, "integrator", "blocked", blocked_by=("issue-99",))]
+        result = Case(self, tickets=tickets).run()
+        self.assertOnlyFails(result, "unblocks")
+        self.assertIn("gh could not read the labels of #99, outside the forecast", result.row("unblocks")[1])
+
+
+class NewLinesSkipAndFailureTests(PreflightTestCase):
+    """#663: the adr and decision candidates join the printed skip and the fixture's; unblocks adds
+    none; each new line fails only when it could not judge."""
+
+    def test_adr_and_decision_candidates_are_in_both_skips_and_unblocks_adds_none(self):
+        tickets = TICKETS + [ticket("issue-20", 20, "integrator", "ready-for-agent"),
+                             ticket("issue-21", 21, "integrator", "ready-for-agent", blocked_by=("issue-10",))]
+        case = Case(self, tickets=tickets)
+        case.issue(12, "ready-for-agent", touching("`docs/adr/`"))
+        case.issue(20, "ready-for-agent", clean_body("integrator"), also=("change-request",))
+        case.comments(20, [])
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
+        self.assertOnlyFails(result)
+        self.assertEqual(["issue-12", "issue-20"], result.arguments()["skip"])
+        written = json.loads(fixture.read_text())
+        self.assertEqual(["issue-12", "issue-20"], written["args"]["skip"])
+        self.assertEqual(["issue-10", "2.1", "issue-21"], written["expect"]["integrated"])
+        # issue-10 blocks issue-21 and is named by unblocks, and stays out of both skips.
+        self.assertIn("issue-10 (#10, ready-for-agent): 1 downstream", result.row("unblocks")[1])
+
+    def test_a_failed_forecast_fails_each_new_line_saying_so(self):
+        case = Case(self, summary="overnight_collect: no tickets printed: broken", collect_status=1)
+        result = case.run()
+        self.assertOnlyFails(result, *WITH_FORECAST)
+        self.assertEqual("the forecast failed, so no ticket's Touches line was read", result.row("adr")[1])
+        self.assertEqual("the forecast failed, so no change request's decision was read",
+                         result.row("decision")[1])
+        self.assertEqual("the forecast failed, so no blocker was counted", result.row("unblocks")[1])
+
+
+class OrderTests(PreflightTestCase):
+    def test_the_header_lists_the_lines_in_the_printed_order_and_cites_663(self):
+        named = [match.group(1) for line in header_lines()
+                 if (match := re.match(r"^  ([a-z]+)  +\S", line))]
+        self.assertEqual(LINES, named)
+        self.assertIn("#663", header_text())
+        result = Case(self).run()
+        self.assertOrder(result)
+        # Then the verdict and the arguments, last.
+        self.assertTrue(result.lines[-2].startswith("overnight_preflight: pass:"), result.lines[-2])
+        self.assertEqual(len(LINES) + 2, len(result.lines), result.stdout)
+
+
+class ClaimsBlockerTests(PreflightTestCase):
+    """#663: a held ticket's waits are its open blocked-by edges only, as collect gives them."""
+
+    def held(self, case: Case, tid: str = "issue-10"):
+        case.git("commit", "-q", "--allow-empty", "-m", f"Merge part of task {tid}: half", cwd=case.pusher)
+        case.git("push", "-q", "origin", "main", cwd=case.pusher)
+        case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+        case.git("branch", f"task/{tid}-x", cwd=case.checkout)
+        return case.git("rev-parse", f"task/{tid}-x", cwd=case.checkout)
+
+    def test_a_blocker_met_tonight_gets_the_rename_and_one_not_met_is_left_held(self):
+        tickets = [ticket("issue-10", 10, "integrator", "claimed", blocked_by=("issue-20",)),
+                   ticket("issue-11", 11, "integrator", "claimed", blocked_by=("issue-20", "issue-21")),
+                   ticket("issue-20", 20, "integrator", "ready-for-agent"),
+                   ticket("issue-21", 21, "integrator", "ready-for-human")]
+        case = Case(self, tickets=tickets)
+        tip = self.held(case, "issue-10")
+        self.held(case, "issue-11")
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
+        self.assertOnlyFails(result)
+        evidence = result.row("claims")[1]
+        self.assertIn("issue-10 (#10, 2 open boxes; open blockers: issue-20, met tonight): "
+                      f"git -C {case.checkout} branch -m task/issue-10-x hold/issue-10-{tip[:7]}", evidence)
+        self.assertIn("issue-11 (#11, 2 open boxes; open blockers: issue-20, met tonight, issue-21, not met "
+                      "tonight): leave held", evidence)
+        self.assertNotIn("task/issue-11-x hold/", evidence)
+        self.assertEqual(["issue-10", "issue-11"], json.loads(fixture.read_text())["args"]["skip"])
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_a_blocker_outside_the_forecast_is_not_met_tonight(self):
+        tickets = [ticket("issue-10", 10, "integrator", "claimed", blocked_by=("issue-99",))]
+        case = Case(self, tickets=tickets)
+        case.labels(99, "ready-for-agent")
+        self.held(case)
+        self.assertIn("issue-10 (#10, 2 open boxes; open blockers: issue-99, not met tonight): leave held",
+                      case.run().row("claims")[1])
+
+    def test_prose_is_no_wait_and_no_line_adds_an_edge_on_the_347_shape(self):
+        # #10 is held and its body names the open #20 in prose; #20, an open change request, names
+        # #10; no edge exists either way, as between #583 and #347.
+        tickets = [ticket("issue-10", 10, "integrator", "claimed"),
+                   ticket("issue-20", 20, "integrator", "ready-for-human")]
+        case = Case(self, tickets=tickets)
+        case.issue(10, "ready-for-agent", clean_body("integrator") + "\nWaits for #20 to land.\n")
+        case.issue(20, "ready-for-human", clean_body("integrator") + "\nThis holds #10.\n",
+                   also=("change-request",))
+        tip = self.held(case)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn(f"issue-10 (#10, 2 open boxes; no open blocker): git -C {case.checkout} branch -m "
+                      f"task/issue-10-x hold/issue-10-{tip[:7]}", result.row("claims")[1])
+        self.assertIsNone(re.search(r"add(ing)?[- ](the )?(an )?(blocked-by|edge)|--add-blocked-by",
+                                    result.stdout, re.IGNORECASE), result.stdout)
+        header = header_text()
+        self.assertIn("claims reads edges only", header)
+        self.assertIsNone(re.search(r"--add-blocked-by", header))
 
 
 class FixtureTests(PreflightTestCase):
@@ -925,7 +1394,7 @@ class FixtureTests(PreflightTestCase):
         self.assertOnlyFails(result)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
-        printed = {"repo": repo, "date": DATE, "wt": wt, "maxParallel": 2, "skip": ["issue-12"]}
+        printed = {"repo": repo, "date": DATE, "wt": wt, "maxParallel": 4, "skip": ["issue-12"]}
         self.assertEqual(printed, result.arguments())
         self.assertEqual({
             "args": printed,
@@ -936,7 +1405,7 @@ class FixtureTests(PreflightTestCase):
         }, json.loads(fixture.read_text()))
         self.assertNotIn("standingAnswer", fixture.read_text())
         # The stdout contract holds: the verdict, then the arguments, last.
-        self.assertEqual(11, len(result.lines), result.stdout)
+        self.assertEqual(14, len(result.lines), result.stdout)
         self.assertIn(f"overnight_preflight: wrote the harness fixture {fixture}", result.stderr)
 
     def test_the_shape_and_claims_lines_candidates_are_in_the_written_skip(self):
