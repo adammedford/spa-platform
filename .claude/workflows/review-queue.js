@@ -724,11 +724,17 @@ const sinceHeadsOf = (records, inv) => {
 // broken source changed since that record's head.
 // A nomination is read by its test's bare name, the text before its first space or '(' (#763): on
 // #762 the cell 'X (only the Assert.Null(...) line)' matched no failing name, so a row that went red
-// on X read as caught elsewhere and held. What followed the name stays in why.
+// on X read as caught elsewhere and held. What followed the name stays in why. A Python unittest cell
+// 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)', is read as the whole dotted name, as
+// mutationRow reads a failing name (#695), so another class's test_x is not this one. A cell with no
+// name before its first space or '(' keeps its whole text, so its row still reaches the verdict.
 const nominated = (s, byTest) => {
-  const test = (/^[^\s(]*/.exec(s.test || '') || [''])[0]
+  const cell = (s.test || '').trim()
+  const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
+  const inner = (/^[A-Za-z_]\w* \(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)$/.exec(cell) || [])[1]
+  const test = inner ? (inner.endsWith(`.${bare}`) ? inner : `${inner}.${bare}`) : bare || cell
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
-  return { ...byTest.get(test), ...s, test, why, kind: 'nominated' }
+  return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated' }
 }
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []

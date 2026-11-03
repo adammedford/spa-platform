@@ -566,7 +566,27 @@ try {
       const c = resultOf(208, result)
       const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
       if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination "Nom (only the ... line)" red on Nom: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
-      if (!/asserts a header nothing sets/.test(((env.mutations.find((x) => x.test === 'Nom') || {}).prompt) || '')) fail('PR 208: the qualified nomination\'s why did not reach the mutation prompt')
+      const prompt = (env.mutations.find((x) => x.test === 'Nom') || {}).prompt || ''
+      if (!/asserts a header nothing sets/.test(prompt)) fail('PR 208: the qualified nomination\'s why did not reach the mutation prompt')
+      if (!/nominated as Nom \(only the Assert\.Null/.test(prompt)) fail('PR 208: the qualified nomination\'s qualifier did not reach the mutation prompt')
+    }
+    // A cell with no name before its first space or '(' keeps its whole text and still gets a row: an
+    // empty name would be dropped with no row the verdict could see.
+    {
+      const UNNAMED = { 208: [{ test: '(x) Nom', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }
+      env = run({ prs: [208] }, NOM, { nominations: UNNAMED, mutate: { '(x) Nom': row('did-not-fail') } })
+      result = await execute(env)
+      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated')
+      if (!m || m.test !== '(x) Nom') fail(`PR 208 with the nomination "(x) Nom": row ${JSON.stringify(m && { test: m.test, result: m.result })}, expected a row for "(x) Nom"`)
+    }
+    // A Python unittest cell is read as its whole dotted name: red on its own class it reads
+    // reproduced, red only on another class's same-named method it is did-not-fail.
+    for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
+      const PY = { 208: [{ test: 'test_x (pkg.C.test_x)', project: 'tests/py', why: 'asserts a constant' }] }
+      env = run({ prs: [208] }, NOM, { nominations: PY, mutate: { 'pkg.C.test_x': { ...row('reproduced', 1, 10), failingNames: [red] } } })
+      result = await execute(env)
+      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+      if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "test_x (pkg.C.test_x)" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
     }
     // Reported reproduced with no failing names, a nominated row stays as reported: nothing names a catch.
     env = run({ prs: [208] }, NOM, { nominations, mutate: { Nom: row('reproduced', 1, 10) } })
