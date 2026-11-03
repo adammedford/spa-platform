@@ -12,7 +12,8 @@
   `c32f9da`, SystemJS at `9647576`, `import-map-overrides` at `c0a0992`, `import-map-injector` at
   `2690334`, `@originjs/vite-plugin-federation` at `91014da` (lib 1.4.1), and this repository's
   `contracts/http-contract.md`, `contracts/s3-layout.md`, `contracts/registry.schema.json`,
-  `src/Platform.Security/SecurityHeaders.cs` and `src/Platform.Hosting/Assets.cs` at `e7ffb47`.
+  `src/Platform.Security/SecurityHeaders.cs`, `src/Platform.Hosting/Assets.cs` and `src/Platform.Identity/Bff.cs`
+  at `e7ffb47`.
   The HTML and CSP3 text was downloaded with `curl` and grepped, so the quotes are verbatim; the vendor
   docs were read from the repositories' raw files by three parallel readers whose quotes section 12
   lists. No container engine is on this machine, nothing used AWS, and nothing was built: this is a read
@@ -95,7 +96,8 @@ fragment's id and live entry URL; ESM entry plus import map as the default mecha
    immutable); the entry pointer, `mf-manifest.json`, a stable `remoteEntry.js` and `index.html` outside
    `assets/` (`no-cache` with an ETag, revalidated per use); the import map inside `index.html` inherits
    its revalidation; `/bff/fragments` is an API response and should say `no-store`, as `/bff/session`
-   does by being identity-bound. vite-plugin-federation emits `assets/remoteEntry.js` by default, which
+   does (`Bff.cs` line 40: "It carries the antiforgery request token, which is per user, so no cache
+   keeps it"; [Bff.cs][bff]). vite-plugin-federation emits `assets/remoteEntry.js` by default, which
    is safe only because each release has its own prefix and the URL comes from `/bff/fragments`.
 
 ## 1. What the baseline allows today (read from the repository)
@@ -440,7 +442,7 @@ manifest; or a plain `remoteEntry.js` at the root, revalidated. Neither docs set
 | Entry pointer `entry.js` (section 4) | release root | `no-cache` + ETag | Stable name, changes per release |
 | `mf-manifest.json`, stable `remoteEntry.js` | release root | `no-cache` + ETag | Stable names; MF docs give no cache guidance |
 | Import map | inside the shell's `index.html` | the shell's `no-cache` + ETag | Inline is the only delivery |
-| `GET /bff/fragments` | API | `no-store` (recommendation) | Identity-bound like `/bff/session`; the live pointer must not be served from a browser cache after a swap |
+| `GET /bff/fragments` | API | `no-store` (recommendation) | As `/bff/session` sends today ([Bff.cs][bff]); the live pointer must not be served from a browser cache after a swap |
 | Vite default `assets/remoteEntry.js` | `assets/**` | a year, `immutable` | Safe per release prefix; relocate if a stable URL is wanted |
 
 ## 10. (d) CSP additions, per mechanism
@@ -480,7 +482,8 @@ manifest; or a plain `remoteEntry.js` at the root, revalidated. Neither docs set
 - `grep`/`sed`/`python3 -c` over this worktree: `contracts/http-contract.md`, `contracts/s3-layout.md`,
   `contracts/registry.schema.json` (`csp`, `cspSource`, `scriptSrcSource`, `appId`, `release`),
   `src/Platform.Security/SecurityHeaders.cs` (`Baseline`, `Build`, `CanSplice`),
-  `src/Platform.Hosting/Assets.cs` (cache constants, streaming), `docs/adr/0008`, `.github/steering.py`
+  `src/Platform.Hosting/Assets.cs` (cache constants, streaming), `src/Platform.Identity/Bff.cs`
+  (`/bff/session` sends `no-store`), `docs/adr/0008`, `.github/steering.py`
   (`docs/research/` is not a steering path).
 
 **Read only:** every vendor source, through three parallel readers working from raw repository files
@@ -497,6 +500,7 @@ path-only entry URL in a real page (by construction in the source, undocumented)
 [hc]: ../../contracts/http-contract.md
 [sh]: ../../src/Platform.Security/SecurityHeaders.cs
 [assets]: ../../src/Platform.Hosting/Assets.cs
+[bff]: ../../src/Platform.Identity/Bff.cs
 [html-im]: https://html.spec.whatwg.org/multipage/webappapis.html#import-maps
 [html-prep]: https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
 [html-resolved]: https://html.spec.whatwg.org/multipage/webappapis.html#resolved-module-set
