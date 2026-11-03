@@ -1600,7 +1600,7 @@ const handoverText = (s) => {
       `${ap.ran ? 'Apply ran in this pass: each effect listed under Applied is completed, and the after pass checks it is still in place rather than making it again' : `Apply made nothing in this pass${s.skipped ? `: ${s.skipped}` : ''}`}. The cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's: launch it with after: true, as docs/agents/landing-work.md -> "The morning's launches" gives the line`,
     ])
     list('Pull request description', [`#${m.pr} is merged, so its description is not compared or refreshed`])
-    const lanes = (s.verify && s.verify.lanes) || [] // empty-ok: Verify's lanes are only reported here
+    const lanes = (v && v.lanes) || [] // empty-ok: Verify's lanes are only reported here
     list('Issues landed by the merge', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closed it at the merge; the after pass closes it if still open`))
     list('Partial rows, for the after pass to unassign', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
   } else {
