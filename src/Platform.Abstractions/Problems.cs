@@ -75,9 +75,10 @@ public static class Problems
     public const string IdpUnavailable = "idp_unavailable";
 
     /// <summary>
-    /// 503. A session store operation failed or ran out <c>StoreDeadline</c>; no cookie is cleared and
-    /// the session, if it exists, is kept. The <c>continuity</c> spec's F17 row (#332), landed with
-    /// G3's tag (#343). Distinct from <see cref="IdpUnavailable"/>, so that a store outage and a
+    /// 503. A session store operation failed or ran out <c>StoreDeadline</c>, or a refresh ended at the
+    /// store's bound (2 × TTL, the spec's D2, answered <see cref="IdpUnavailable"/> until #727); no
+    /// cookie is cleared and the session, if it exists, is kept. The <c>continuity</c> spec's F17 row
+    /// (#332), landed with G3's tag (#343). Distinct from <see cref="IdpUnavailable"/>, so that a store outage and a
     /// provider outage stay distinguishable causes.
     /// </summary>
     public const string SessionStoreUnavailable = "session_store_unavailable";
