@@ -1379,7 +1379,7 @@ const handoverText = (s) => {
     list('Landing', [
       `Pull request #${m.pr} is merged: merge commit ${m.commit}${m.mergedAt ? ` at ${m.mergedAt}` : ''}, head ${m.head}; the rows it carries are landed (${m.url})`,
       m.evidence ? `Apply did not run: ${m.evidence}` : `Apply permitted: the review record of ${m.head} says merge (${m.record.url}), and CI is green on ${m.head} (${m.ciUrl || 'no run URL'})`,
-      `${ap.ran ? 'Apply ran in this pass: each effect listed under Applied is completed, and the after pass checks it is still in place rather than making it again' : 'Apply made nothing in this pass'}. The cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's: launch it with after: true, as docs/agents/landing-work.md -> "The morning's launches" gives the line`,
+      `${ap.ran ? 'Apply ran in this pass: each effect listed under Applied is completed, and the after pass checks it is still in place rather than making it again' : `Apply made nothing in this pass${s.skipped ? `: ${s.skipped}` : ''}`}. The cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's: launch it with after: true, as docs/agents/landing-work.md -> "The morning's launches" gives the line`,
     ])
     list('Pull request description', [`#${m.pr} is merged, so its description is not compared or refreshed`])
     const lanes = (s.verify && s.verify.lanes) || [] // empty-ok: Verify's lanes are only reported here
@@ -1856,7 +1856,7 @@ phase('Apply')
 // A merged pull request's answers are applied through the after pass's path (#661 Q22): its appliers
 // fetch origin/main fresh, verify each effect before they skip it and reuse no applier's phase file,
 // behind the merged head's record and CI (judgeEvidence).
-const { apply } = await applyAnswers({
+const { apply, skipped: applySkipped } = await applyAnswers({
   date: DATE, issue: ISSUE, refusals, reuse, after: !!verdict.merged,
   gate: verdict.merged ? (verdict.evidence ? 'the merged head\'s review record or CI does not clear it (see Refusals)' : '') : verdict.ok ? '' : 'Verify did not clear the head',
 })
@@ -1905,7 +1905,7 @@ else {
 }
 
 phase('Hand-over')
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, replay: rep, followUps, refresh, applyTickets })
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
 log(text)
 const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)

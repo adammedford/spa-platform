@@ -2296,6 +2296,7 @@ try {
     const land = landingOf(r)
     if (!new RegExp(`^- Apply did not run: [^\\n]*${why.source}`, 'm').test(land)) fail(`#661 Q28, ${label}: the Landing block does not name why Apply did not run:\n${land}`)
     if (!MERGED_LINE.test(land)) fail(`#661 Q28, ${label}: the merge was refused with the evidence; the hand-over lost its merged line:\n${land}`)
+    if (!/Apply made nothing in this pass: the merged head's review record or CI does not clear it/.test(land)) fail(`#661 Q28, ${label}: the after-pass line does not say why this pass made nothing:\n${land}`)
     if (r.result.refusals.some((x) => MERGED_REFUSED.test(x))) fail(`#661 Q27, ${label}: the merge itself is named as a refusal`)
     noCommands(label, r.result.handover.text)
   }
