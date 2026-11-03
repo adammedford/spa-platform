@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath; copy the launch line, with every argument, from docs/agents/landing-work.md -> "The morning\'s launches": the morning pass, the draft Confirm check, and the pass once Adam has landed the pull request',
   phases: [
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
-    { title: 'Verify', detail: 'one agent, eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
+    { title: 'Verify', detail: 'one agent, first the merged-PR check (#661): a landing pull request already merged is reported as such, and none of the steps below runs; otherwise eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
     { title: 'Apply', detail: 'one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads the discovery start and the checkpoint the earlier hand-overs recorded; one reads the pull requests into main the window reaches (open, merged since, recorded since; every one with no checkpoint) as an index of their records, and the open Apply tickets of every night; one record reader per batch returns the latest records\' bodies and the follow-ups already filed; the script reads each follow-ups table, one filer files the rows no issue holds, and the hand-over records the new checkpoint only when every read and filing completed' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first' },
@@ -52,19 +52,38 @@ export const meta = {
 // verify agent and writes nothing. It fails only on a question number no questions comment yields; a
 // leading "no" is a normal override, listed and never a failure.
 //
-// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, one body reader
-// per batch of the questions and Confirm comments, 1 classifier and at most maxParallel appliers,
-// Follow-ups 1 window reader (#514), 1 reader, one record reader per batch of the latest records it
-// indexed, and at most 1 filer (#292), Hand-over 1: eleven at the default, besides the body readers
-// and their re-reads, at most READ_RETRIES for each comment a reader returned changed (#724), and the
-// record readers. A night reads one batch of records or none; a backfill, with no checkpoint, about
-// twenty (#514: 455 KB of latest records with a table on 2026-10-31). The issue lookup is the Replay
-// agent's first step, not an agent of its own. A re-run whose open pull request's description names
-// an older head than the branch's adds one, the description writer (#300), so such a run may take
-// twelve. The after pass (#635 Q27): 1 cleanup
-// agent, whose first step is the lookup, then Apply's 1 comments index, the body readers, 1
-// classifier and at most maxParallel appliers in the same bounded grouping, and 1 agent for the
-// After comment and the close: seven at the default, besides the body readers and their re-reads.
+// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, the body
+// readers, 1 classifier and at most maxParallel appliers, Follow-ups 1 window reader (#514), 1
+// reader, one record reader per batch of the latest records it indexed, and at most 1 filer (#292),
+// Hand-over 1: eleven at the default, besides the body readers and their re-reads, at most
+// READ_RETRIES for each comment a reader returned changed (#724), and the record readers. The body
+// readers' cost rule (#661 Q24): the questions and Confirm comments are packed in order toward a
+// 24,000-byte body budget (BATCH_BYTES), one reader per batch, and a comment larger than that is
+// read alone; no total cap on the readers is imposed here. That is a packing target, not a hard
+// bound on a return's size, and not an exact one-reader-per-24-KB formula. A night reads one batch
+// of records or none; a backfill, with no checkpoint, about twenty (#514: 455 KB of latest records
+// with a table on 2026-10-31). The issue lookup is the Replay agent's first step, not an agent of
+// its own. A re-run whose open pull request's description names an older head than the branch's
+// adds one, the description writer (#300), so such a run may take twelve. A morning whose landing
+// pull request is already merged (#661) takes the same eleven at most: Verify reports the merge in
+// place of steps 1 to 8, no description writer runs, and Apply's classifier and appliers are the
+// after pass's, in the same bounded grouping. The after pass (#635 Q27): 1 cleanup agent, whose
+// first step is the lookup, then Apply's 1 comments index, the body readers, 1 classifier and at
+// most maxParallel appliers in the same bounded grouping, and 1 agent for the After comment and the
+// close: seven at the default, besides the body readers and their re-reads.
+//
+// An already merged landing pull request (#661, from #706 Q21 to Q29). On 2026-10-30 Verify stopped
+// at step 6 because #620 had merged, and the hand-over said "Review record: none" and "CI: none" and
+// repeated the landing command; on 2026-10-29 tools/land.sh had pruned the integration branch and
+// Verify stopped at step 2 (#476). Apply ran on neither. So Verify looks for a merged landing pull
+// request first, before any step that needs the integration branch, and reports it as state, never
+// as a step number: prState, merge {commit, mergedAt}, the merged pull requests it found, and the
+// outcome merged, which is not a stop. judgeVerify refuses a malformed or ambiguous report and judges
+// the rest with the after pass's own checks (judgeLanding, judgeEvidence): the merged head matched to
+// the head an earlier morning verified, contained in a fresh origin/main, and its review record and
+// CI. Apply then runs as the after pass runs it, and the hand-over calls the pull request merged,
+// names the evidence or the reason Apply did not run, carries no landing or review command, and
+// leaves the cleanup, the settlement and the close to the after pass.
 //
 // The after pass (#635, from #659 Q22 to Q33). A Confirm posted after the landing had no applier,
 // and nothing closed an Overnight issue: on 2026-10-29 nine stood open, #129 with 24 answers never
@@ -268,7 +287,13 @@ const COMMENTS_BATCH = {
 const VERIFY = {
   type: 'object',
   properties: {
-    outcome: { type: 'string', enum: ['ok', 'stop'] }, step: { type: 'integer' }, reason: { type: 'string' },
+    outcome: { type: 'string', enum: ['ok', 'stop', 'merged'] }, step: { type: 'integer' }, reason: { type: 'string' },
+    // The landing's state (#661 Q26), read first: prState, the merged pull requests from the branch
+    // (landed), the merge, and the after pass's evidence fields for the merged head.
+    prState: { type: 'string', enum: ['open', 'merged', 'none'] },
+    landed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, url: { type: 'string' }, headRefOid: { type: 'string' }, mergeCommit: { type: 'string' }, mergedAt: { type: 'string' } }, required: ['number', 'url', 'headRefOid', 'mergeCommit', 'mergedAt'] } },
+    merge: { type: 'object', properties: { commit: { type: 'string' }, mergedAt: { type: 'string' } }, required: ['commit', 'mergedAt'] },
+    verifiedHead: { type: 'string' }, originMain: { type: 'string' }, contained: { type: 'boolean' },
     base: { type: 'string' }, forkPoint: { type: 'string' }, head: { type: 'string' }, branch: { type: 'string' },
     pr: { type: 'object', properties: { number: { type: 'integer' }, url: { type: 'string' } }, required: ['number', 'url'] },
     prBodyFile: { type: 'string' }, mergeBodyFile: { type: 'string' }, mergeSubject: { type: 'string' },
@@ -282,7 +307,7 @@ const VERIFY = {
     claimed: { type: 'array', items: { type: 'string' } },
     record: { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] },
   },
-  required: ['outcome', 'step', 'reason', 'base', 'forkPoint', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
+  required: ['outcome', 'step', 'reason', 'prState', 'landed', 'merge', 'verifiedHead', 'originMain', 'contained', 'base', 'forkPoint', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
 }
 const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
 // Every question carries the follow-up and ticket-edit fields, empty when its kind is another (#320),
@@ -983,8 +1008,38 @@ const laneTipsRemedy = (v, off, issue, intBranch) => {
   else lines.push(`Every tip has a tree-equal partner, so ${intBranch} was rebuilt (#318). Run the remap, read its dry run, then run it again with --apply: \`cd ${REPO} && python3 -I tools/remap_rebuild.py --old ${v.oldTip} --new ${v.head} --issue ${issue} --worktree-root ${WTROOT} --session "<who rebuilt it, and why>"\``)
   return lines.join('\n')
 }
+// A merged landing pull request (#661 Q23, Q26), judged from the state Verify reports, never from its
+// step number or its reason. A report that is malformed or ambiguous is refused whole: a merged
+// outcome with no prState or another one, a merged prState under another outcome, more than one
+// merged pull request from the branch, or no full merge-commit sha. The rest is the after pass's own
+// landing gate, judgeLanding, over the same fields its agent reports: the merged pull request's head,
+// matched to the head an earlier morning's verify.json recorded when there is one, contained in a
+// fresh origin/main. A full merge-commit sha alone establishes none of those. The record and the CI
+// are judgeEvidence's (Q27): they decide whether Apply runs, not whether the merge is believed, so
+// the merge itself is never a refusal.
+const MERGED_REFUSED = 'Verify\'s merged report was refused, so no pull request is named as merged and nothing is applied over it'
+const judgeMerged = (v, date) => {
+  const no = (why) => ({ stop: `${MERGED_REFUSED}: ${why}`, kind: 'merged' })
+  if (v.outcome !== 'merged') return no(`it reports prState merged under the outcome ${JSON.stringify(v.outcome)}, which is ambiguous`)
+  if (v.prState !== 'merged') return no(`it reports the outcome merged with prState ${v.prState === undefined ? 'missing' : JSON.stringify(v.prState)}`)
+  const landed = Array.isArray(v.landed) ? v.landed : []
+  if (landed.length !== 1) return no(`${landed.length} merged pull requests from overnight/${date} were reported (${landed.map((p) => '#' + p.number).join(', ') || 'none'}), and the landing is exactly one`)
+  const only = landed[0]
+  const merge = v.merge || {}
+  if (!FULL.test(merge.commit || '') || merge.commit !== only.mergeCommit) return no(`it names no full merge-commit sha of #${only.number} (${JSON.stringify(merge.commit)}${only.mergeCommit && merge.commit !== only.mergeCommit ? `, and #${only.number} lists ${only.mergeCommit}` : ''})`)
+  if (!v.pr || v.pr.number !== only.number) return no(`its pull request #${(v.pr || {}).number} is not #${only.number}, the one that merged`)
+  const a = {
+    pr: { number: only.number, state: 'MERGED', headRefOid: only.headRefOid, mergeCommit: merge.commit },
+    tip: v.head, verifiedHead: v.verifiedHead, originMain: v.originMain, contained: v.contained === true,
+    record: v.record || {}, ci: v.ci, ciUrl: v.ciUrl,
+  }
+  const landing = judgeLanding(a, date)
+  if (landing) return no(landing)
+  return { merged: true, pr: only.number, url: only.url || (v.pr || {}).url || '', head: v.head, commit: merge.commit, mergedAt: merge.mergedAt || only.mergedAt || '', record: a.record, ci: a.ci, ciUrl: a.ciUrl, evidence: judgeEvidence(a) }
+}
 const judgeVerify = (v, subject, issue, intBranch) => {
   if (!v) return { stop: 'Verify returned nothing', kind: 'stop' }
+  if (v.outcome === 'merged' || v.prState === 'merged') return judgeMerged(v, intBranch.replace(/^overnight\//, ''))
   const off = offBranch(v)
   if (v.outcome === 'stop' && v.step === 3 && off.length) return { stop: `Verify stopped at step 3: ${v.reason}\n${laneTipsRemedy(v, off, issue, intBranch)}`, kind: 'stop' }
   if (v.outcome === 'stop') return { stop: `Verify stopped at step ${v.step}: ${v.reason}`, kind: 'stop' }
@@ -1240,10 +1295,13 @@ ${HOUSE(p.mdir)}
 PHASE FILE: ${p.mdir}/verify.json INPUTS: ${phaseKey}
 OUTPUT FILE: ${p.mdir}/pr-body.md
 OUTPUT FILE: ${p.mdir}/merge-body.md
-Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
+Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return, except on the merged outcome of step 0, which leaves the PHASE FILE as an earlier morning wrote it: it holds the head that morning verified, which step 0 and the after pass compare against.
 MERGE SUBJECT: ${JSON.stringify(subjectFor(date))}
 
-Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Each step below reads durable state first and skips what is already done. Each step is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
+Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Step 0 runs first and is not a stop. Each step after it reads durable state first and skips what is already done. Each of steps 1 to 8 is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
+0. The landing, first, before any step that needs ${p.intBranch}, which tools/land.sh deletes once the pull request merges (#661; #476). \`git -C ${REPO} fetch origin\`, then \`cd ${REPO} && gh pr list --head ${p.intBranch} --base main --state merged --json number,url,headRefOid,mergeCommit,mergedAt\`. landed is every pull request it lists, each as {number, url, headRefOid, mergeCommit: its merge commit's full oid, mergedAt}, never filtered or chosen among.
+   - When it lists none: prState is "open" when \`cd ${REPO} && gh pr list --head ${p.intBranch} --base main --state open --json number\` lists one or step 6 opens one, else "none"; merge is {"commit": "", "mergedAt": ""}, verifiedHead and originMain are "", contained is false, and go on to step 1.
+   - When it lists one or more: prState is "merged" and outcome "merged", which is not a stop, and you run none of steps 1 to 8: push nothing, open, edit or comment on no pull request, and run no check, since the pull request has merged. When it lists exactly one, pr is its {number, url}, head its headRefOid and merge {commit: its merge commit's full oid, mergedAt}; when it lists more, leave pr, head and merge empty and return, because the script refuses the report. verifiedHead is the result's head in ${p.mdir}/verify.json as an earlier morning wrote it, read before anything else and never overwritten on this outcome, or "" when that file does not exist. originMain is \`git -C ${REPO} rev-parse origin/main\`, after the fetch above; contained is whether \`git -C ${REPO} merge-base --is-ancestor <head> origin/main\` exits 0. The record naming head, read as step 8 reads it from that pull request's comments and reviews, with exit 2 read as record {verdict "none", head "", url ""}; CI on head as step 7 reads it, without the wait: \`cd ${REPO} && gh pr checks <number> --json name,state,bucket,link\`, ci green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported. lanes and claimed from the issue, as below; every other field empty. Then return.
 1. The main checkout's tracked files are unchanged: \`git -C ${REPO} status --porcelain --untracked-files=no\` prints nothing. Untracked files are listed in findings against what the run recorded at its start, never a stop.
 2. \`git -C ${REPO} fetch origin\`. The integration branch exists and the base the issue names, resolved to its full sha, is an ancestor of it: \`git -C ${REPO} merge-base --is-ancestor <base> ${p.intBranch}\`. mainMoved is whether origin/main has moved past the base; that is reported, never merged in or rebased onto. forkPoint is the integration branch's merge base with origin/main, the commit the landing merges onto, as a full sha: \`git -C ${REPO} merge-base origin/main ${p.intBranch}\`. It is the base unless main was merged into the branch (#326). Return it even on a stop at this step; "" only when the branch does not exist.
 3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings. Read every worktree before you stop, and return each as {path, branch, tip: its full sha, clean, ancestor, lane, partner}: lane is the task id of the issue's row whose branch it holds, "" for a worktree no row names; partner, for a tip that is not an ancestor, is the commit on the integration branch with the same tree, which marks a rebuild rather than a lane that never merged: compare \`git -C ${REPO} rev-parse <tip>^{tree}\` with \`git -C ${REPO} log --format=%H%x09%T%x09%P <base>..${p.intBranch}\` and take the matching commit with one parent over a merge, whose tree a --no-ff merge of a lane forked from the branch's own tip shares (tools/remap_rebuild.py); "" when none matches or the tip is an ancestor. oldTip, when any integrated or partial lane's tip is not an ancestor, is the integration tip those lanes were merged into: the tip the issue's Run: paragraph names, resolved to its full sha, when every such lane tip is an ancestor of it, else the newest entry of \`git -C ${REPO} reflog --format=%H refs/heads/${p.intBranch}\` that every such lane tip is an ancestor of; "" when neither is, or when every lane tip is an ancestor. head is the integration tip, \`git -C ${REPO} rev-parse ${p.intBranch}\`, and lanes are the issue's rows, both returned even on a stop here. The script builds this stop's remedy from those fields (#321): your reason states the symptoms only.
@@ -1526,37 +1584,59 @@ const handoverText = (s) => {
     if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push(none)
   }
   L.push(`## Morning ${s.date}`, '')
-  // The fork point, not the night's base, is what the landing merges onto: on 2026-10-23 main was
-  // merged into the branch, and the hand-over named the night's start as its base (#326).
-  const same = v && v.forkPoint && v.forkPoint === v.base
-  const fork = !v ? ''
-    : `, fork point ${v.forkPoint ? `${v.forkPoint} (its merge base with origin/main${same ? ', the night\'s base' : ''})` : 'not read'}${v.base && !same ? `; the night's base ${v.base}` : ''}`
-  L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${fork}. Apply: ${s.apply.ran ? (s.apply.dry ? 'dry, no Confirm comment' : 'applied') : 'not run'}.`)
-  list('Refusals', s.refusals)
-  const prN = v && v.pr && v.pr.number
-  const land = []
-  if (prN) {
-    land.push(`Pull request #${prN}: ${v.pr.url}`)
-    land.push(v.record && v.record.verdict !== 'none' && v.record.head === v.head
-      ? `Review record (${v.record.verdict}): ${v.record.url}`
-      : `Review record: none names ${v.head || 'the head'}. Review-queue command for #${prN}: the Workflow tool with scriptPath ${REPO}/.claude/workflows/review-queue.js and args {"repo": "${REPO}", "date": "${s.date}", "wt": "${WTROOT}-review-queue", "prs": [${prN}]}; then relaunch the morning.`)
-    land.push(`CI on ${v.head || 'the head'}: ${v.ci}${v.ciUrl ? ` (${v.ciUrl})` : ''}`)
-    land.push(`Landing command, yours to run once a record names this head with merge and CI is green: git -C ${REPO} worktree add --detach ${p.landWt} origin/main, then cd ${p.landWt} && tools/land.sh ${prN} --subject "${subjectFor(s.date)}" --body-file ${v.mergeBodyFile || p.mdir + '/merge-body.md'}`)
+  // A merged landing pull request (#661 Q25, Q28), keyed on the script's verdict, never the agent's
+  // outcome, so a refused report prints no merged line. The pull request is merged and its rows are
+  // landed; no landing or review command is given; the record and the CI appear only as the evidence
+  // that permitted Apply or as the reason it did not run; what is left goes to the after pass.
+  const m = s.verdict && s.verdict.merged ? s.verdict : null
+  const refusedMerge = !!(s.verdict && s.verdict.kind === 'merged')
+  if (m) {
+    const ap = s.apply
+    L.push(`Overnight #${s.issue}; pull request #${m.pr} from ${p.intBranch} is merged into main, merge commit ${m.commit}, at head ${m.head}. Apply: ${ap.ran ? 'applied' : 'not run'}.`)
+    list('Refusals', s.refusals)
+    list('Landing', [
+      `Pull request #${m.pr} is merged: merge commit ${m.commit}${m.mergedAt ? ` at ${m.mergedAt}` : ''}, head ${m.head}; the rows it carries are landed (${m.url})`,
+      m.evidence ? `Apply did not run: ${m.evidence}` : `Apply permitted: the review record of ${m.head} says merge (${m.record.url}), and CI is green on ${m.head} (${m.ciUrl || 'no run URL'})`,
+      `${ap.ran ? 'Apply ran in this pass: each effect listed under Applied is completed, and the after pass checks it is still in place rather than making it again' : `Apply made nothing in this pass${s.skipped ? `: ${s.skipped}` : ''}`}. The cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's: launch it with after: true, as docs/agents/landing-work.md -> "The morning's launches" gives the line`,
+    ])
+    list('Pull request description', [`#${m.pr} is merged, so its description is not compared or refreshed`])
+    const lanes = (s.verify && s.verify.lanes) || [] // empty-ok: Verify's lanes are only reported here
+    list('Issues landed by the merge', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closed it at the merge; the after pass closes it if still open`))
+    list('Partial rows, for the after pass to unassign', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
+  } else {
+    // The fork point, not the night's base, is what the landing merges onto: on 2026-10-23 main was
+    // merged into the branch, and the hand-over named the night's start as its base (#326).
+    const same = v && v.forkPoint && v.forkPoint === v.base
+    const fork = !v ? ''
+      : `, fork point ${v.forkPoint ? `${v.forkPoint} (its merge base with origin/main${same ? ', the night\'s base' : ''})` : 'not read'}${v.base && !same ? `; the night's base ${v.base}` : ''}`
+    L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${fork}. Apply: ${s.apply.ran ? (s.apply.dry ? 'dry, no Confirm comment' : 'applied') : 'not run'}.`)
+    list('Refusals', s.refusals)
+    const prN = v && v.pr && v.pr.number
+    const land = []
+    if (refusedMerge) land.push(`Verify reported a merged landing pull request and the report was refused (see Refusals), so no pull request is named here as merged and no review or landing command is given; relaunch the morning once Verify reports exactly one merged pull request it can judge`)
+    else if (prN) {
+      land.push(`Pull request #${prN}: ${v.pr.url}`)
+      land.push(v.record && v.record.verdict !== 'none' && v.record.head === v.head
+        ? `Review record (${v.record.verdict}): ${v.record.url}`
+        : `Review record: none names ${v.head || 'the head'}. Review-queue command for #${prN}: the Workflow tool with scriptPath ${REPO}/.claude/workflows/review-queue.js and args {"repo": "${REPO}", "date": "${s.date}", "wt": "${WTROOT}-review-queue", "prs": [${prN}]}; then relaunch the morning.`)
+      land.push(`CI on ${v.head || 'the head'}: ${v.ci}${v.ciUrl ? ` (${v.ciUrl})` : ''}`)
+      land.push(`Landing command, yours to run once a record names this head with merge and CI is green: git -C ${REPO} worktree add --detach ${p.landWt} origin/main, then cd ${p.landWt} && tools/land.sh ${prN} --subject "${subjectFor(s.date)}" --body-file ${v.mergeBodyFile || p.mdir + '/merge-body.md'}`)
+    }
+    list('Landing', land, 'no pull request: Verify stopped before step 6')
+    const rf = s.refresh || { state: 'none' }
+    const described = rf.state === 'rewritten'
+      ? [`#${prN}'s description named ${rf.named}, not ${v.head}; ${rf.edited ? 'rewritten' : `not rewritten (${rf.reason || 'the writer returned nothing'})`}. The lines ${rf.edited ? 'it rewrote' : 'it would have rewritten'}, everything else kept:`, ...rf.rewrote]
+      : rf.state === 'untouched' ? [`#${prN}'s description names this head (${rf.named}); untouched`]
+        : rf.state === 'refused' ? [rf.reason]
+          : []
+    list('Pull request description', described, prN ? 'drafted by this run, or no open pull request was read' : 'none')
+    const lanes = (v && v.lanes) || [] // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
+    list('Issues to close', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closes it at the landing; after: true closes it if still open`))
+    list('Issues to unassign, once merged', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
+    list('Worktrees to remove after the landing, then git worktree prune', ((v && v.worktrees) || []).map((w) => `${w.path} (${w.branch} at ${w.tip}: ${w.clean ? 'clean' : 'dirty'}, ${w.ancestor ? 'on the integration branch' : 'not on the integration branch'})`)) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
+    list('Claimed branches needing their own pull requests', (v && v.claimed) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
+    list('Failed lanes\' branches, kept', lanes.filter((l) => l.outcome === 'failed').map((l) => `#${l.issue} (${l.task})`))
   }
-  list('Landing', land, 'no pull request: Verify stopped before step 6')
-  const rf = s.refresh || { state: 'none' }
-  const described = rf.state === 'rewritten'
-    ? [`#${prN}'s description named ${rf.named}, not ${v.head}; ${rf.edited ? 'rewritten' : `not rewritten (${rf.reason || 'the writer returned nothing'})`}. The lines ${rf.edited ? 'it rewrote' : 'it would have rewritten'}, everything else kept:`, ...rf.rewrote]
-    : rf.state === 'untouched' ? [`#${prN}'s description names this head (${rf.named}); untouched`]
-      : rf.state === 'refused' ? [rf.reason]
-        : []
-  list('Pull request description', described, prN ? 'drafted by this run, or no open pull request was read' : 'none')
-  const lanes = (v && v.lanes) || [] // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
-  list('Issues to close', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closes it at the landing; after: true closes it if still open`))
-  list('Issues to unassign, once merged', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
-  list('Worktrees to remove after the landing, then git worktree prune', ((v && v.worktrees) || []).map((w) => `${w.path} (${w.branch} at ${w.tip}: ${w.clean ? 'clean' : 'dirty'}, ${w.ancestor ? 'on the integration branch' : 'not on the integration branch'})`)) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
-  list('Claimed branches needing their own pull requests', (v && v.claimed) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
-  list('Failed lanes\' branches, kept', lanes.filter((l) => l.outcome === 'failed').map((l) => `#${l.issue} (${l.task})`))
   const mb = s.apply.morning
   list('Morning branch', mb.commits ? [`${p.morningBranch}: ${mb.commits} commit(s), ${mb.pushed ? 'pushed' : `not pushed (${mb.reason})`}. Its pull request is yours to open: gh pr create --base main --head ${p.morningBranch}`] : [], 'no commits')
   list('Applied', s.apply.done, 'nothing')
@@ -1575,7 +1655,7 @@ const handoverText = (s) => {
   const stopped = replayStop(s.replay)
   const none = !stopped && !s.replay.renamed && VERBS.every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
-  list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
+  if (!m) list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [], refused: [], forHuman: [] }
   list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title} (${f.url})`), 'none')
@@ -1970,7 +2050,8 @@ phase('Verify')
 const verifyKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT })
 const v = await run(verifyPrompt(DATE, ISSUE, verifyKey), { label: 'verify', phase: 'Verify', schema: VERIFY })
 const verdict = judgeVerify(v, SUBJECT, ISSUE, P.intBranch)
-if (!verdict.ok) refusals.push(verdict.stop)
+// A merge is not a refusal (#661 Q27): only the reason Apply did not run over it is.
+if (verdict.merged) { if (verdict.evidence) refusals.push(verdict.evidence) } else if (!verdict.ok) refusals.push(verdict.stop)
 // The description of a pull request an earlier morning opened, refreshed to this head (#300). Read
 // whatever the record says: on 2026-10-22 it was the stale description a review held on.
 let refresh = { state: 'none' }
@@ -1992,7 +2073,13 @@ if (v && v.outcome === 'ok' && v.prReused && !v.prBody) {
 }
 
 phase('Apply')
-const { apply } = await applyAnswers({ date: DATE, issue: ISSUE, gate: verdict.ok ? '' : 'Verify did not clear the head', refusals, reuse })
+// A merged pull request's answers are applied through the after pass's path (#661 Q22): its appliers
+// fetch origin/main fresh, verify each effect before they skip it and reuse no applier's phase file,
+// behind the merged head's record and CI (judgeEvidence).
+const { apply, skipped: applySkipped } = await applyAnswers({
+  date: DATE, issue: ISSUE, refusals, reuse, after: !!verdict.merged,
+  gate: verdict.merged ? (verdict.evidence ? 'the merged head\'s review record or CI does not clear it (see Refusals)' : '') : verdict.ok ? '' : 'Verify did not clear the head',
+})
 
 phase('Follow-ups')
 // Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
@@ -2068,13 +2155,16 @@ followUps.window.line = windowLineOf(followUps.window)
 if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the checkpoint stays at ${win.since || 'none'} and the next morning reads the span again; the Follow-ups window line names what was not read or not processed`)
 
 phase('Hand-over')
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, refusals, apply, replay: rep, followUps, refresh, applyTickets })
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
 log(text)
 const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
 return {
   mode: 'morning', date: DATE, issue: ISSUE, runLog: P.mdir,
-  ok: verdict.ok === true, refusals, stop: verdict.ok ? '' : verdict.stop, stopKind: verdict.ok ? '' : verdict.kind,
+  ok: verdict.ok === true || (!!verdict.merged && !verdict.evidence), refusals,
+  stop: verdict.ok ? '' : verdict.merged ? verdict.evidence : verdict.stop,
+  stopKind: verdict.ok ? '' : verdict.merged ? (verdict.evidence ? 'evidence' : '') : verdict.kind,
+  merged: verdict.merged ? { pr: verdict.pr, url: verdict.url, head: verdict.head, commit: verdict.commit, mergedAt: verdict.mergedAt, applyCleared: !verdict.evidence } : null,
   replay: { counts: rep.counts, renamed: rep.renamed, stoppedAt: rep.stoppedAt, reason: rep.reason },
   pr: v ? v.pr : null, head: v ? v.head : '', ci: v ? v.ci : 'none', record: v ? v.record : null,
   apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
