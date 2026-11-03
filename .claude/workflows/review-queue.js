@@ -383,9 +383,10 @@ const STATED = {
   },
   required: ['test', 'project', 'mutation', 'failed', 'total', 'quote'],
 }
+// A nomination's test is the bare test name; the assertion it suspects goes in why (#763).
 const NOMINATION = {
   type: 'object',
-  properties: { test: { type: 'string' }, project: { type: 'string' }, why: { type: 'string' } },
+  properties: { test: { type: 'string', description: 'the test name alone, nothing after it' }, project: { type: 'string' }, why: { type: 'string', description: 'the assertion suspected, and why it cannot fail' } },
   required: ['test', 'project', 'why'],
 }
 const INVENTORY = {
@@ -620,7 +621,7 @@ The pull request, as the inventory read it (${DIR(n)}/inventory.json holds the w
 
 ${d ? deltaBrief(d) : `Read the diff yourself with the review guide's commands (\`git -C ${REPO} diff ${inv.forkPoint}...${inv.head}\`).`} A diff with no code in it, docs-only or tracker-only, is reviewed all the same: no pull request is exempt by what it touches.
 ${axis === 'Standards'
-    ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail, by file and test name.'
+    ? 'Hold the diff to CODING_STANDARDS.md, AGENTS.md, CLAUDE.md and OWNERSHIP.md; a path-ownership refusal or a diff outside one owner\'s set is a finding of its own. Name in nominations every assertion you suspect cannot fail: its test by the test name alone, with nothing after it, and the assertion itself in why.'
     : `Hold the diff to the spec sources the review guide's table names: the plan row, the issue's body and comments, the contracts and pipeline table, the test and evidence ids the row names, the ticket's change requests and ADRs. ${changeRequestSources(inv)} ${STEERING_AUTHORITY} The pull request body is the author's claim, not the spec: put every claim in claims, verified or not, and how.`}
 ${axis === 'Standards' ? 'Each nomination: test (by the name the inventory\'s candidates use, if it is one), project (what runs it alone), and why you suspect it cannot fail. ' : ''}Each finding: axis "${axis}", what and where, what you read or ran to check it, verified or suspected, and an advisory severity the verdict re-takes. List every source you read in sourcesRead. Write the result as JSON to the OUTPUT FILE, then return it.`
 
@@ -721,6 +722,14 @@ const sinceHeadsOf = (records, inv) => {
 // as does a held test and a stated mutation naming no file the inventory knows. A candidate an
 // earlier record reproduced is cleared by that record, and not mutated, when neither its file nor its
 // broken source changed since that record's head.
+// A nomination is read by its test's bare name, the text before its first space or '(' (#763): on
+// #762 the cell 'X (only the Assert.Null(...) line)' matched no failing name, so a row that went red
+// on X read as caught elsewhere and held. What followed the name stays in why.
+const nominated = (s, byTest) => {
+  const test = (/^[^\s(]*/.exec(s.test || '') || [''])[0]
+  const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
+  return { ...byTest.get(test), ...s, test, why, kind: 'nominated' }
+}
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []
   const byTest = new Map(candidates.map((c) => [c.test, c]))
@@ -738,7 +747,7 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const all = [
     ...held,
     ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'nominated' })), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
+    ...((standards && standards.nominations) || []).map((s) => nominated(s, byTest)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]

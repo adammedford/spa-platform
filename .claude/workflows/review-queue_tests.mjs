@@ -556,6 +556,18 @@ try {
       const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
       if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
     }
+    // A nomination whose test carries a qualifier after its name is mutated under the bare name, and
+    // red on that test it reads reproduced and merges (#763): on #762 the qualifier turned it did-not-fail.
+    {
+      const QUALIFIED = { 208: [{ test: 'Nom (only the Assert.Null(response.Headers.Location) line)', project: 'tests/Platform.Registry.Tests', why: 'asserts a header nothing sets' }] }
+      const red = { ...row('reproduced', 1, 10), failingNames: ['Platform.Registry.Tests.NomTests.Nom'] }
+      env = run({ prs: [208] }, NOM, { nominations: QUALIFIED, mutate: { Nom: red, [QUALIFIED[208][0].test]: red } })
+      result = await execute(env)
+      const c = resultOf(208, result)
+      const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+      if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination "Nom (only the ... line)" red on Nom: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
+      if (!/asserts a header nothing sets/.test(((env.mutations.find((x) => x.test === 'Nom') || {}).prompt) || '')) fail('PR 208: the qualified nomination\'s why did not reach the mutation prompt')
+    }
     // Reported reproduced with no failing names, a nominated row stays as reported: nothing names a catch.
     env = run({ prs: [208] }, NOM, { nominations, mutate: { Nom: row('reproduced', 1, 10) } })
     result = await execute(env)
