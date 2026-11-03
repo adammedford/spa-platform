@@ -751,6 +751,20 @@ class ForecastTests(PreflightTestCase):
                 self.assertIn("7 bounds the slot-counted work (implement, review, the serialised merge and "
                               "resolve), not every agent", verdict)
 
+    def test_two_owners_print_a_max_parallel_above_the_lane_count_and_the_header_says_why(self):
+        # #711: launches overrode a printed lane count of 2 or 3 to 6 to 8. Two owners, integrator
+        # with two ready tickets and ws2-hosting with one: 2 lanes, and 4 by min(2 x 2, 7).
+        case = Case(self)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertTrue(result.row("forecast")[1].endswith(
+            "ready-for-agent by owner: integrator 2, ws2-hosting 1"))
+        self.assertGreater(result.arguments()["maxParallel"], 2)
+        self.assertEqual(4, result.arguments()["maxParallel"])
+        self.assertIn("So it exceeds the lane count", header_text())
+        self.assertIn("one slot per lane leaves a lane's review waiting on another lane's implement",
+                      header_text())
+
     def test_the_header_calls_max_parallel_a_heuristic_and_names_what_seven_bounds(self):
         header = header_text()
         self.assertIn("min(2 x lanes, 7)", header)
@@ -1309,7 +1323,7 @@ class NewLinesSkipAndFailureTests(PreflightTestCase):
         self.assertEqual(["issue-12", "issue-20"], result.arguments()["skip"])
         written = json.loads(fixture.read_text())
         self.assertEqual(["issue-12", "issue-20"], written["args"]["skip"])
-        self.assertEqual(["issue-10", "2.1", "issue-21"], written["expect"]["integrated"])
+        self.assertEqual(["issue-10", "2.1", "6.9", "issue-21"], written["expect"]["integrated"])
         # issue-10 blocks issue-21 and is named by unblocks, and stays out of both skips.
         self.assertIn("issue-10 (#10, ready-for-agent): 1 downstream", result.row("unblocks")[1])
 
@@ -1415,9 +1429,13 @@ class FixtureTests(PreflightTestCase):
         self.assertEqual({
             "args": printed,
             "tickets": TICKETS,
-            # The ready-for-agent tickets outside the skip, in the forecast's order: not the blocked
-            # issue-13, not the needs-triage 6.9, not the skipped issue-12.
-            "expect": {"integrated": ["issue-10", "2.1"], "skippedForBlocker": [], "startsBefore": []},
+            # The ready-for-agent and needs-triage tickets outside the skip, in the forecast's order:
+            # not the blocked issue-13, not the skipped issue-12; the needs-triage 6.9 with its note
+            # (#711).
+            "expect": {"integrated": ["issue-10", "2.1", "6.9"], "skippedForBlocker": [], "startsBefore": [],
+                       "note": "6.9 is needs-triage and integrates only if Route sends it to an agent, as "
+                               "the mock route of the harness does; on the night a route to a human "
+                               "leaves it out"},
         }, json.loads(fixture.read_text()))
         self.assertNotIn("standingAnswer", fixture.read_text())
         # The stdout contract holds: the verdict, then the arguments, last.
@@ -1437,7 +1455,7 @@ class FixtureTests(PreflightTestCase):
         self.assertOnlyFails(result)
         written = json.loads(fixture.read_text())
         self.assertEqual(["issue-12", "issue-10", "2.1"], written["args"]["skip"])
-        self.assertEqual([], written["expect"]["integrated"])
+        self.assertEqual(["6.9"], written["expect"]["integrated"])
         # The printed arguments leave the held ticket out: a rename frees it before launch (#484).
         self.assertEqual(["issue-12", "2.1"], result.arguments()["skip"])
 
@@ -1448,7 +1466,7 @@ class FixtureTests(PreflightTestCase):
         case.run("--fixture", str(fixture), DATE)
         written = json.loads(fixture.read_text())
         self.assertEqual(["issue-14"], written["args"]["skip"])
-        self.assertEqual(["issue-10", "2.1", "issue-12"], written["expect"]["integrated"])
+        self.assertEqual(["issue-10", "2.1", "issue-12", "6.9"], written["expect"]["integrated"])
 
     def test_a_ready_ticket_a_skipped_one_blocks_is_skipped_for_the_blocker(self):
         # overnight.js gives a skipped ticket no lane, so issue-15, which waits on issue-12, and
@@ -1464,6 +1482,61 @@ class FixtureTests(PreflightTestCase):
         expect = json.loads(fixture.read_text())["expect"]
         self.assertEqual(["issue-10", "2.1"], expect["integrated"])
         self.assertEqual(["issue-16", "issue-15"], expect["skippedForBlocker"])
+
+    def test_a_needs_triage_ticket_outside_the_skip_is_expected_to_integrate_with_the_note(self):
+        # #711: the harness's mock routes every needs-triage ticket to an agent, so 6.9 and 6.11
+        # integrate under it; 6.10 is in the skip and is not written; and the note says the routing
+        # is Route's.
+        tickets = TICKETS + [ticket("6.10", 359, "ws6-verification", "needs-triage"),
+                             ticket("6.11", 360, "ws6-verification", "needs-triage")]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), "--skip", "6.10", DATE)
+        self.assertOnlyFails(result)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "2.1", "issue-12", "6.9", "6.11"], expect["integrated"])
+        self.assertEqual("6.9, 6.11 are needs-triage and integrate only if Route sends them to an agent, "
+                         "as the mock route of the harness does; on the night a route to a human leaves "
+                         "that one out", expect["note"])
+
+    def test_a_needs_triage_ticket_a_ready_for_human_blocker_holds_goes_to_a_human(self):
+        # overnight.js routes a needs-triage ticket with a ready-for-human blocker to a human whatever
+        # its route agent returns (#379), so 6.9 is not expected, and issue-14, which waits on it,
+        # skips on the blocker; 6.8, waiting on a ready-for-agent ticket, is expected.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("issue-11", 11, "integrator", "ready-for-human"),
+                   ticket("6.9", 358, "ws6-verification", "needs-triage", blocked_by=("issue-11",)),
+                   ticket("6.8", 357, "ws6-verification", "needs-triage", blocked_by=("issue-10",)),
+                   ticket("issue-14", 14, "integrator", "ready-for-agent", blocked_by=("6.9",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "6.8"], expect["integrated"])
+        self.assertEqual(["issue-14"], expect["skippedForBlocker"])
+        self.assertEqual("6.8 is needs-triage and integrates only if Route sends it to an agent, as the "
+                         "mock route of the harness does; on the night a route to a human leaves it out",
+                         expect["note"])
+
+    def test_a_needs_triage_ticket_waiting_on_a_ticket_no_lane_runs_skips_on_the_blocker(self):
+        # #711 review: overnight.js's implement counts a blocker collect lists as met only when a lane
+        # integrates it or it is close-in-morning. Collect makes a ready-for-agent ticket with any
+        # other blocker "blocked", but a needs-triage one keeps its status, so 6.9 (waiting on the
+        # blocked issue-13) and 6.7 (on the claimed issue-15) skip on the blocker, and 6.8 (on the
+        # close-in-morning issue-16) integrates.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("issue-13", 13, "ws1-infra", "blocked"),
+                   ticket("issue-15", 15, "integrator", "claimed"),
+                   ticket("issue-16", 16, "integrator", "close-in-morning", open_boxes=0),
+                   ticket("6.9", 358, "ws6-verification", "needs-triage", blocked_by=("issue-13",)),
+                   ticket("6.7", 356, "ws6-verification", "needs-triage", blocked_by=("issue-15",)),
+                   ticket("6.8", 357, "ws6-verification", "needs-triage", blocked_by=("issue-16",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "6.8"], expect["integrated"])
+        self.assertEqual(["6.9", "6.7"], expect["skippedForBlocker"])
 
     def test_without_the_flag_no_fixture_is_written(self):
         case = Case(self)

@@ -13,10 +13,15 @@
 # input of the overnight harness (.claude/workflows/overnight_harness.mjs, git-ignored), which each
 # prep used to build by hand from collect's JSON (#485): `{args, tickets, expect}`, with args the
 # printed arguments, their skip joined by the tickets the claims line lists as held, tickets the
-# forecast's, verbatim, and expect.integrated the forecast's ready-for-agent ids outside that skip,
-# less expect.skippedForBlocker: the ready ones a skipped ticket blocks, directly or through another
-# of them, which overnight.js skips on the blocker. A held ticket is in the fixture's skip and not
-# the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
+# forecast's, verbatim, and expect.integrated the forecast's ready-for-agent and needs-triage ids
+# outside that skip, less expect.skippedForBlocker: the ready ones a skipped ticket blocks, directly
+# or through another of them, which overnight.js skips on the blocker. A needs-triage ticket is
+# expected because the harness's mock route sends every one to an agent (#711), and expect.note,
+# written when there is one, says it integrates only if Route sends it to an agent; one with a
+# ready-for-human blocker is not expected, since overnight.js routes it to a human whatever its route
+# agent returns (#379), and it stops the ready ones it blocks as a skipped ticket does, as does a
+# blocker collect lists with no lane (blocked, claimed, foreground, ready-for-human). A held ticket
+# is in the fixture's skip and not the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
 # before launch frees it for the run (#484). expect.startsBefore is written empty, as is
 # standingAnswer left out of args: the harness reads both, and they are the human's to fill. A
 # failed forecast writes no fixture: one with no tickets would pass the harness and prove nothing.
@@ -131,7 +136,9 @@
 # cap implement, review, the serialised merge and resolve (withSlot in
 # .claude/workflows/overnight.js), a lane wants one implement and one review slot at once, and 7
 # bounds the slot-counted work and not every agent, since grill and route agents take no slot; 7 is
-# the most any launch has used. The human can raise or lower it at launch. It leaves out standingAnswer, which the workflow requires: the grant
+# the most any launch has used. So it exceeds the lane count, which is what preflight printed before
+# #663 and every launch from 2026-10-25 overrode to 6 to 8 (#711): one slot per lane leaves a lane's
+# review waiting on another lane's implement. The human can raise or lower it at launch. It leaves out standingAnswer, which the workflow requires: the grant
 # is the human's, per launch (ADR-0021 decision 3), so the arguments do not run until they set it.
 # The JSON is printed on a fail as well, so the evidence and the arguments are read together.
 #
@@ -877,10 +884,22 @@ if fixture:
     tickets = json.load(open(collect))["tickets"]
     held = [line.strip() for line in open(held) if line.strip()]
     skip = list(dict.fromkeys(named + held + given))
-    ready = [t for t in tickets if t["status"] == "ready-for-agent" and t["id"] not in skip]
+    # A needs-triage ticket gets a lane once Route sends it to an agent, as the mock route of the
+    # harness does every one (#711), except one with a ready-for-human blocker, which overnight.js routes to
+    # a human whatever its route agent returns (heldBy, #379).
+    status = {t["id"]: t["status"] for t in tickets}
+    human = {t["id"] for t in tickets if t["status"] == "needs-triage"
+             and any(status.get(b) == "ready-for-human" for b in t["blockedBy"])}
+    ready = [t for t in tickets if t["status"] in ("ready-for-agent", "needs-triage")
+             and t["id"] not in skip and t["id"] not in human]
     # overnight.js gives a skipped ticket no lane, so a ready ticket it blocks, directly or through
-    # another such ticket, settles as skipped on the blocker and never integrates (#485 review).
-    stopped = set(skip)
+    # another such ticket, settles as skipped on the blocker and never integrates (#485 review); a
+    # ticket routed to a human gets none either. Nor does a ticket collect lists as blocked, claimed,
+    # foreground or ready-for-human, and the implement stage of overnight.js counts a listed blocker as met only
+    # when a lane integrates it or it is close-in-morning. Collect gives no ready-for-agent ticket
+    # such a blocker, but a needs-triage one keeps its label whatever it waits on (#711 review).
+    lane = ("ready-for-agent", "needs-triage", "close-in-morning")
+    stopped = set(skip) | human | {t["id"] for t in tickets if t["status"] not in lane}
     grew = True
     while grew:
         grew = False
@@ -890,8 +909,15 @@ if fixture:
                 grew = True
     integrated = [t["id"] for t in ready if t["id"] not in stopped]
     blocked = [t["id"] for t in ready if t["id"] in stopped]
-    written = {"args": {**args, "skip": skip}, "tickets": tickets,
-               "expect": {"integrated": integrated, "skippedForBlocker": blocked, "startsBefore": []}}
+    expect = {"integrated": integrated, "skippedForBlocker": blocked, "startsBefore": []}
+    triaged = [t["id"] for t in ready if t["id"] in integrated and t["status"] == "needs-triage"]
+    if triaged:
+        one = len(triaged) == 1
+        be, verb, them, left = ("is", "integrates", "it", "it") if one else ("are", "integrate", "them", "that one")
+        expect["note"] = (", ".join(triaged) + f" {be} needs-triage and {verb} only if Route sends {them} "
+                          "to an agent, as the mock route of the harness does; on the night a route to a "
+                          f"human leaves {left} out")
+    written = {"args": {**args, "skip": skip}, "tickets": tickets, "expect": expect}
     with open(fixture, "w") as out:
         json.dump(written, out, indent=1)
         out.write("\n")
