@@ -187,10 +187,12 @@ as it stood when the decision was posted: if the draft comment was edited after 
 `updated_at` is later than the decision's `created_at`), the decision does not cover it, and the
 integrator asks again. A comment that departs from this form is not a decision comment: the
 integrator lane treats the request as undecided and relabels it `ready-for-human`. One parser reads
-the form, for one purpose: `tools/decision_citation.py` reads the first two lines and the author of
-each comment on a change request a merge closes, so that `tools/land.sh` can refuse a merge body
-that cites no decision (#530, "Landing" below). Everything else the form decides, the integrator
-lane and the reviewer read.
+the form, `tools/decision_citation.py`, which reads the first two lines and the author of each
+comment on a change request, for two purposes: so that `tools/land.sh` can refuse a merge body
+that cites no decision for a request the merge closes (#530, "Landing" below), and so that
+`tools/overnight_preflight.sh`'s `decision` line can name, before a launch, a request labelled
+`ready-for-agent` whose latest decision does not accept it with `ADR: no` (#663). Everything else
+the form decides, the integrator lane and the reviewer read.
 
 A scripted session never posts a comment whose first line begins `Decision:`. Its draft is headed
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
