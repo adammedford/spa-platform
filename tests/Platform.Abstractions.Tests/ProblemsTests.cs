@@ -23,6 +23,7 @@ public sealed class ProblemsTests
     [InlineData("shell_unavailable", 500)]
     [InlineData("upstream_unavailable", 502)]
     [InlineData("idp_unavailable", 503)]
+    [InlineData("session_store_unavailable", 503)]
     [InlineData("upstream_timeout", 504)]
     public void A_code_s_status_is_the_Errors_table_s(string code, int status)
     {
