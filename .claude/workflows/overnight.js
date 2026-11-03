@@ -693,7 +693,8 @@ const USAGE_LIMIT = /\bhit your (?:\w+ )?limit\b/i
 const RESETS = /\bresets\s+(.+?)\s*$/i
 let halted = null
 let usageLimit = null   // {message, reset, label}, from the first agent that died on the limit
-const limitStop = () => Object.assign(new Error(`stopped by the usage limit: ${usageLimit.message}`), { usageLimit: true })
+// died: this agent was the one that died on the limit, mid-task, rather than one refused before it started.
+const limitStop = (died = false) => Object.assign(new Error(`stopped by the usage limit: ${usageLimit.message}`), { usageLimit: true, died })
 const isStop = (e) => !!(e && e.usageLimit)
 const ask = async (prompt, opts) => {
   if (usageLimit) throw limitStop()
@@ -707,7 +708,7 @@ const ask = async (prompt, opts) => {
       halted = `usage limit; resume after ${reset || 'the reset (the message names no time)'}${halted ? `; earlier: ${halted}` : ''}`
       log(`${opts.label}: ${message}; ${halted}; no new agent starts`)
     }
-    throw limitStop()
+    throw limitStop(true)
   }
 }
 
@@ -764,7 +765,7 @@ const flakes = []       // {id, issue, projects: [{project, log, passed}], gateL
 // A ticket the usage limit stopped (#710): its agent died on the limit, or was not started after it. It counts as no
 // failure and keeps the state it had, so a resume runs it again.
 const stop = (t, stage, info) => {
-  results[t.id] = { ...(results[t.id] || {}), stage, outcome: 'stopped', why: `stopped by the usage limit at ${stage}: ${usageLimit.message}`, ...info }
+  results[t.id] = { ...(results[t.id] || {}), stage, outcome: 'stopped', why: `stopped by the usage limit at ${stage}: ${usageLimit.message}${info && info.note ? `; ${info.note}` : ''}`, ...info }
   return false
 }
 routeStopped.forEach((t) => stop(t, 'route'))
@@ -927,12 +928,17 @@ const finish = async (t, impl, at) => {
     // A red gate on test projects the change cannot reach is re-run inside the same lock and slot (#375); the script's
     // keep rule, not the re-run agent's ok, decides whether its merge stays, and a reset inside that lock undoes one
     // it does not keep (#397).
+    // A stop that may leave this ticket's merge on the run branch says so in the ticket's why (#710): after the limit
+    // no reset agent can start, so the branch stays as the agent that died left it, and a resume must check it first.
+    const mayHold = (why, when) => (e) => { if (isStop(e) && when(e)) e.note = `${INT_BRANCH} may hold ${t.id}'s unverified merge (${why}): check it before a resume`; throw e }
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
       let out = await ask(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+        .catch(mayHold('integrate died on the limit mid-merge', (e) => e.died))
       const rule = rerunRule(out)
       if (rule.projects) {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
         const rr = await ask(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
+          .catch(mayHold(`re-run died on the limit; no reset to ${out.old} ran`, (e) => e.died))
         const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr, or one naming no project, records each project as not passed, and the keep rule keeps no merge
         const projects = rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) }))
         // The script's verdict, not the agent's ok (#397).
@@ -946,6 +952,7 @@ const finish = async (t, impl, at) => {
         if (!kept && (!rr || rr.ok)) {
           log(`flake: ${t.id} ${rule.projects.join(', ')} -> not kept: ${keep.why}; resetting ${INT_BRANCH} to ${out.old}`)
           const rs = await ask(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+            .catch(mayHold(`re-run not kept; the limit stopped the reset to ${out.old}`, () => true))
           // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
           const back = !!(rs && rs.ok && rs.head === out.old)
           flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
@@ -1017,7 +1024,7 @@ const runLane = async (owner, queue) => {
     resolveDone[t.id](ok === true)
   }
   // A stop is the usage limit's (#710), not a lane that threw: the ticket is stopped, and counts as no failure.
-  const guard = (t, at, p) => p.catch((e) => isStop(e) ? stop(t, at.stage) : fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
+  const guard = (t, at, p) => p.catch((e) => isStop(e) ? stop(t, at.stage, e.note ? { note: e.note } : undefined) : fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
     const t = queue.find(ready)
     if (!t) {
@@ -1118,7 +1125,8 @@ const fromResults = (outcome) => ids((r) => r.outcome === outcome).map((id) => e
 const grillNote = (id) => {
   const g = results[id] && results[id].grill
   if (!g) return 'grilled on paper'
-  if (typeof g !== 'object') return 'grilled on paper: the grill agent died'
+  // A grill the usage limit stopped (#710) did not die: it keeps its state, and a resume grills it again.
+  if (typeof g !== 'object') return String(g).startsWith('grill stopped by the usage limit') ? 'not grilled: the usage limit stopped its grill' : 'grilled on paper: the grill agent died'
   const n = (g.questions || []).length, issue = byId[id].issue
   // The clause before the comma, as the report's rule reads it, so a grill that drops "not re-grilled" still counts.
   return String(g.summary || '').toLowerCase().includes(CARRIED_GRILL.split(',')[0])

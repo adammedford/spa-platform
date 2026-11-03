@@ -31,7 +31,8 @@
 // tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
 // runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
 // halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
-// and starts no agent after it (#710). No agent,
+// and starts no agent after it (#710); a last one checks that a re-run dying on the limit says the run branch may
+// hold its merge, and that a grill the limit stopped does not read as died. No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1391,6 +1392,39 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   // The report prompt lists the stopped tickets apart from the failed ones, for a run whose report can run.
   const item710 = (/^ {3}- Partial \(Outstanding\).*$/m.exec(reportPrompt) || [''])[0]
   if (!item710.includes('Stopped by the usage limit (#710') || !item710.includes('"stopped"')) fail('#710: the report prompt does not list the tickets the usage limit stopped apart from the failed ones')
+}
+
+// 35. A death that may leave a merge on the run branch says so, and a stopped grill does not read as died (#710's
+//     review). After the limit no reset agent can start, so a re-run agent that dies on the limit, having put the
+//     ticket's red merge back on the run branch (its STEP 1), leaves it there with no record unless the stop names it.
+//     One short run: issue-1101's integrate is red on a project its change cannot reach, at about 15 ms, and its
+//     re-run throws the usage-limit message at about 25 ms; issue-1102, ready-for-human, has its grill die on the limit
+//     at 60 ms.
+{
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  const reach = JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] })
+  const set = [{ ...synthetic(1101, 'issue-1101', 'ready-for-agent', [], 1), owner: 'integrator' }, synthetic(1102, 'issue-1102', 'ready-for-human', [], 1)]
+  globalThis.agent = async (prompt, opts) => {
+    const [kind] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(kind === 'grill' ? 60 : 5)
+    if (kind === 'grill' || kind === 'rerun') throw new Error(LIMIT_MESSAGE)
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['tools/bench/report.py'] }
+    if (kind === 'integrate') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach }
+    throw new Error(`unexpected agent label ${opts.label} in the usage-limit merge run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#710: the usage-limit merge run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const r1 = (res.reasons || []).find((r) => r.id === 'issue-1101'), r2 = (res.reasons || []).find((r) => r.id === 'issue-1102')
+    if (!r1 || r1.outcome !== 'stopped' || r1.stage !== 'integrate' || !r1.reason.includes(`may hold issue-1101's unverified merge`) || !r1.reason.includes(OLD)) fail(`#710: a re-run that died on the limit does not say the run branch may hold the merge: ${JSON.stringify(r1)}`)
+    if (!r2 || !r2.reason.includes('the usage limit stopped its grill')) fail(`#710: a grill the limit stopped does not say so: ${JSON.stringify(r2)}`)
+  }
 }
 
 if (failures.length) {
