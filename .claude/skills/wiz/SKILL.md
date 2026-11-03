@@ -778,8 +778,9 @@ keeps the Phase 1 one (#347 Q7). The bootstrap root stays.
 **The end of D.** After D10, and after every stop that declined it, print what was posted where
 (each #348 comment URL by its step), what is held, and what the human still owes. Under "Held" print
 the tick of #348's first box, which D never makes (rule 5), and say that the gate-evidence route for
-G6 waits for #364 (G6's row in `contracts/gates.md`) and #328, and that the tag is Adam's, on D0's
-commit, after that report (#348 Q34). D has no gate-evidence or tag step: C4 does not run for G6.
+G6 reads its exit test from G6's row in `contracts/gates.md` (#364) and runs outside D, and that the
+tag is Adam's, on D0's commit, after that report (#348 Q34). D has no gate-evidence or tag step: C4
+does not run for G6.
 
 ## Outside the sittings
 
