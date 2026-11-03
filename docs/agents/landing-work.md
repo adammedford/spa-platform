@@ -212,9 +212,9 @@ rebuild, and the lane worktrees it would move, and writes nothing. Read that, th
 `--apply`: it moves each clean lane worktree under the root to its rebuilt tip, names each dirty one
 and leaves it to its owner, writes the body, and comments the map on the issue.
 
-**`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
---delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
-commands that recreate each deleted branch at its old tip:
+**`tools/land.sh` deletes a finished branch**, after a merge into `main`, by running
+`tools/prune_branches.py --delete` (#71), and when that deletes anything, land.sh's last line names
+the file holding the commands that recreate each deleted branch at its old tip:
 `pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
 `git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
 cannot write that file stops deleting, and the last line says it stopped (#115). A command
