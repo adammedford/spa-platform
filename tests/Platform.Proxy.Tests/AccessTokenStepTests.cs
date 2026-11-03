@@ -7,9 +7,10 @@ namespace Platform.Proxy.Tests;
 /// <summary>
 /// Task 4.2's first half: the token is acquired ahead of the forwarder, and a call with no token is
 /// answered 401 with a problem body and reaches no upstream (N-19, the <c>/api</c> clause;
-/// <c>/bff/session</c> is workstream 3's), or 503 when the provider or the session store could not be
-/// reached and the session stands. The step is a pipeline step and not a YARP transform, so the 401 is
-/// an ordinary response (plan, workstream 4; finding T-C21).
+/// <c>/bff/session</c> is workstream 3's), or 503 when the session stands and the provider could not be
+/// reached, or a session store operation failed or ran out its deadline, or a refresh ended at the
+/// store's bound. The step is a pipeline step and not a YARP transform, so the 401 is an ordinary
+/// response (plan, workstream 4; finding T-C21).
 /// </summary>
 public sealed class AccessTokenStepTests
 {
