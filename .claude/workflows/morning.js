@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
     { title: 'Verify', detail: 'one agent, first the merged-PR check (#661): a landing pull request already merged is reported as such, and none of the steps below runs; otherwise eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
     { title: 'Apply', detail: 'one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
-    { title: 'Follow-ups', detail: 'one agent reads every open pull request into main, the follow-ups already filed and the open Apply tickets of every night; the script reads the follow-ups table of each one\'s latest review record, and one filer files the rows no issue holds' },
+    { title: 'Follow-ups', detail: 'one agent reads the discovery start and the checkpoint the earlier hand-overs recorded; one reads the pull requests into main the window reaches (open, merged since, recorded since; every one with no checkpoint) as an index of their records, and the open Apply tickets of every night; one record reader per batch returns the latest records\' bodies and the follow-ups already filed; the script reads each follow-ups table, one filer files the rows no issue holds, and the hand-over records the new checkpoint only when every read and filing completed' },
     { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
     { title: 'After', detail: 'after: true only (#635): one agent refuses a closed Overnight issue, and refuses until the merged landing pull request\'s head, matched to the head the morning verified, is in a fresh origin/main; then it closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes. Apply follows as in the morning pass, gated on the landed head\'s review record and CI, then one agent posts ## After <date> and closes the issue once every question is settled and the pass refused nothing' },
@@ -53,22 +53,24 @@ export const meta = {
 // leading "no" is a normal override, listed and never a failure.
 //
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, the body
-// readers, 1 classifier and at most maxParallel appliers, Follow-ups 1 reader and at most 1 filer
-// (#292), Hand-over 1: ten at the default, besides the body readers and their re-reads, at most
-// READ_RETRIES for each comment a reader returned changed (#724). The body readers' cost rule
-// (#661 Q24): the questions and Confirm comments are packed in order toward a 24,000-byte body
-// budget (BATCH_BYTES), one reader per batch, and a comment larger than that is read alone; no
-// total cap on the readers is imposed here. That is a packing target, not a hard bound on a
-// return's size, and not an exact one-reader-per-24-KB formula. The issue lookup is the Replay
-// agent's first step, not an agent of its own. A re-run whose open pull request's description names
-// an older head than the branch's adds one, the description writer (#300), so such a run may take
-// eleven. A morning whose landing pull request is already merged (#661) takes the same ten at most:
-// Verify reports the merge in place of steps 1 to 8, no description writer runs, and Apply's
-// classifier and appliers are the after pass's, in the same bounded grouping. The after pass (#635
-// Q27): 1 cleanup agent, whose first step is the lookup, then Apply's 1 comments index, the body
-// readers, 1 classifier and at most maxParallel appliers in the same bounded grouping, and 1 agent
-// for the After comment and the close: seven at the default, besides the body readers and their
-// re-reads.
+// readers, 1 classifier and at most maxParallel appliers, Follow-ups 1 window reader (#514), 1
+// reader, one record reader per batch of the latest records it indexed, and at most 1 filer (#292),
+// Hand-over 1: eleven at the default, besides the body readers and their re-reads, at most
+// READ_RETRIES for each comment a reader returned changed (#724), and the record readers. The body
+// readers' cost rule (#661 Q24): the questions and Confirm comments are packed in order toward a
+// 24,000-byte body budget (BATCH_BYTES), one reader per batch, and a comment larger than that is
+// read alone; no total cap on the readers is imposed here. That is a packing target, not a hard
+// bound on a return's size, and not an exact one-reader-per-24-KB formula. A night reads one batch
+// of records or none; a backfill, with no checkpoint, about twenty (#514: 455 KB of latest records
+// with a table on 2026-10-31). The issue lookup is the Replay agent's first step, not an agent of
+// its own. A re-run whose open pull request's description names an older head than the branch's
+// adds one, the description writer (#300), so such a run may take twelve. A morning whose landing
+// pull request is already merged (#661) takes the same eleven at most: Verify reports the merge in
+// place of steps 1 to 8, no description writer runs, and Apply's classifier and appliers are the
+// after pass's, in the same bounded grouping. The after pass (#635 Q27): 1 cleanup agent, whose
+// first step is the lookup, then Apply's 1 comments index, the body readers, 1 classifier and at
+// most maxParallel appliers in the same bounded grouping, and 1 agent for the After comment and the
+// close: seven at the default, besides the body readers and their re-reads.
 //
 // An already merged landing pull request (#661, from #706 Q21 to Q29). On 2026-10-30 Verify stopped
 // at step 6 because #620 had merged, and the hand-over said "Review record: none" and "CI: none" and
@@ -114,8 +116,9 @@ export const meta = {
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
-// name no open ticket; the morning reads the table of the latest record on each open pull request
-// into main, and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
+// name no open ticket; the morning reads the table of the latest record on each pull request into main
+// its window reaches (open, merged since its checkpoint, or recorded since it; see "follow-ups, the
+// window", #514), and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
 // to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not. Each
 // carries the "**Owner:**" and "**Touches:**" lines its place derives, or is filed ready-for-human
@@ -335,24 +338,44 @@ const APPLIED = {
   },
   required: ['unit', 'commits', 'issues', 'candidates', 'rewrites', 'edits', 'edges', 'skipped', 'pushed', 'refused', 'unreachable'],
 }
-const ENTRY = {
+// The follow-ups window reader (#514): the discovery start and the "Follow-ups window:" lines of every
+// "## Morning" comment on an Overnight issue, cut by its jq so no body is carried.
+const WINDOW_READ = {
   type: 'object',
   properties: {
-    body: { type: 'string' }, author_association: { type: 'string' }, html_url: { type: 'string' },
-    created_at: { type: 'string' }, submitted_at: { type: 'string' }, state: { type: 'string' },
+    startedAt: { type: 'string' },
+    issues: { type: 'object', properties: { count: { type: 'integer' }, limit: { type: 'integer' }, numbers: { type: 'array', items: { type: 'integer' } }, error: { type: 'string' } }, required: ['count', 'limit', 'numbers', 'error'] },
+    handovers: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, url: { type: 'string' }, author: { type: 'string' }, createdAt: { type: 'string' }, lines: { type: 'array', items: { type: 'string' } } }, required: ['issue', 'url', 'author', 'createdAt', 'lines'] } },
+    unread: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, error: { type: 'string' } }, required: ['issue', 'error'] } },
+    error: { type: 'string' },
   },
-  required: ['body', 'author_association', 'html_url'],
+  required: ['startedAt', 'issues', 'handovers', 'unread', 'error'],
 }
+// One comment or review as the follow-ups reader's jq indexes it (#514): its record-like lines, size and
+// whether it holds the follow-ups table's header, never its body; the record readers return the bodies.
+const INDEXED = { type: 'object', properties: { url: { type: 'string' }, at: { type: 'string' }, association: { type: 'string' }, state: { type: 'string' }, bytes: { type: 'integer' }, hasTable: { type: 'boolean' }, lines: { type: 'array', items: { type: 'string' } } }, required: ['url', 'at', 'association', 'state', 'bytes', 'hasTable', 'lines'] }
+// A pull request's state and merge time are not required here: the script judges them, so a reader that
+// drops one is reported as incomplete rather than refused by the schema (#514 box 8).
 const FOLLOWUPS = {
   type: 'object',
   properties: {
-    prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, comments: { type: 'array', items: ENTRY }, reviews: { type: 'array', items: ENTRY } }, required: ['number', 'comments', 'reviews'] } },
-    filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
+    listing: { type: 'object', properties: { rows: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, state: { type: 'string' }, mergedAt: { type: 'string' }, updatedAt: { type: 'string' } }, required: ['number'] } }, limit: { type: 'integer' }, error: { type: 'string' } }, required: ['rows', 'limit', 'error'] },
+    commentPrs: { type: 'object', properties: { numbers: { type: 'array', items: { type: 'integer' } }, error: { type: 'string' } }, required: ['numbers', 'error'] },
+    prs: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, state: { type: 'string' }, mergedAt: { type: 'string' }, comments: { type: 'array', items: INDEXED }, reviews: { type: 'array', items: INDEXED }, error: { type: 'string' } }, required: ['number', 'comments', 'reviews', 'error'] } },
     applyTickets: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' }, state: { type: 'string' }, author: { type: 'object', properties: { login: { type: 'string' } }, required: ['login'] } }, required: ['number', 'title', 'body', 'url', 'state', 'author'] } },
     ownership: { type: 'string' },
     error: { type: 'string' },
   },
-  required: ['prs', 'filed', 'applyTickets', 'ownership', 'error'],
+  required: ['listing', 'commentPrs', 'prs', 'applyTickets', 'ownership', 'error'],
+}
+const RECORDS_READ = {
+  type: 'object',
+  properties: {
+    records: { type: 'array', items: { type: 'object', properties: { url: { type: 'string' }, at: { type: 'string' }, association: { type: 'string' }, state: { type: 'string' }, body: { type: 'string' } }, required: ['url', 'at', 'association', 'state', 'body'] } },
+    filed: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string' } }, required: ['number', 'title', 'body', 'url'] } },
+    error: { type: 'string' },
+  },
+  required: ['records', 'filed', 'error'],
 }
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
 const SHAPE_REFUSED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
@@ -602,6 +625,163 @@ const followUpsToFile = (read, mdir) => {
   }
   return { toFile, already }
 }
+
+// ---------------------------------------------------------------- follow-ups, the window (#514)
+// A pull request tools/land.sh merged before the next morning took its carried findings with it, since
+// the reader listed only the open ones (#38, #39, #40, #494 and #568 were filed by hand). So the reader
+// also reads those merged since a durable checkpoint and those in any state that received a record since
+// it (Q9 to Q17 of #599, confirmed at https://github.com/adammedford/spa-platform/issues/599#issuecomment-6526553163).
+// - The checkpoint. A workflow script reads no clock, so the window reader's first command is the UTC
+//   clock read, before any listing; that is the discovery start. When the morning's coverage completes,
+//   its hand-over's last "Follow-ups window:" line opens "checkpoint advanced to <discovery start>", and
+//   the next morning's window opens at the latest such boundary any of Adam's "## Morning" comments on an
+//   Overnight issue records. A boundary is the discovery start, never the posting time, so windows
+//   overlap, and filedAs absorbs the overlap. With none recorded the morning backfills every pull request
+//   into main. Only Adam's comments count (CODING_STANDARDS.md -> "An authorisation is read from its
+//   author"), only a comment's last window line, so text a refusal quotes above it cannot set one, and
+//   a "kept at" line records none.
+// - Discovery. One listing of every pull request into main gives the open ones, those merged since and
+//   those updated since; a record submitted as a COMMENTED review bumps its pull request's updatedAt and
+//   is found that way, since no repository-wide listing serves reviews; the issue comments since the
+//   window are listed too, as the confirmed answer names them. Both are candidate queries: the script
+//   keeps a pull request only when it is open, merged at or after the checkpoint, or its latest record's
+//   own time (created_at, submitted_at) is at or after it.
+// - Size. On 2026-10-31 the 83 pull requests with a record held 147 records, 1.5 MB, and the latest with
+//   a follow-ups table 41, 455 KB, far past what one agent's return has carried (#659). So the reader
+//   returns an index (each record-like line, a size, whether the table's header is there) and never a
+//   body; the script picks each kept pull request's latest record from it by the record grammar, and one
+//   record reader per BATCH_BYTES of them returns those bodies, with the issues already filed from their
+//   pull requests (the only ones filedAs is asked about).
+// - Failing closed (Q12). What was returned is filed; every listing, pull request or record not read and
+//   every finding not filed is named on the window line, and then the checkpoint is kept, so the next
+//   morning reads the same span again. A malformed or missing state or timestamp is such a gap (Q17).
+const UTC = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/
+const isUtc = (s) => typeof s === 'string' && UTC.test(s)
+const WINDOW_LINE = 'Follow-ups window: '
+const BOUNDARY = /^Follow-ups window: checkpoint advanced to (\S+?);/
+const PR_STATES = ['OPEN', 'CLOSED', 'MERGED']
+// The window reader's return: the checkpoint (since, "" for none), its source, the discovery start, and
+// what it could not read. A boundary that is not a timestamp is named and passed over, so the window
+// opens at the latest one that is: earlier, and so reading more, never less.
+const judgeWindow = (w) => {
+  if (!w) return { since: '', source: '', startedAt: '', unread: ['the window reader returned nothing, so no checkpoint or discovery start was read'] }
+  const unread = []
+  if (w.error) unread.push(`the window reader: ${w.error}`)
+  const startedAt = isUtc(w.startedAt) ? w.startedAt : ''
+  if (!startedAt) unread.push(`the discovery start ${JSON.stringify(w.startedAt)} is not a UTC timestamp`)
+  const iss = w.issues || {}
+  if (iss.error) unread.push(`the listing of the Overnight issues: ${iss.error}`)
+  else if (!(iss.limit > 0) || !Number.isInteger(iss.count) || iss.count >= iss.limit) unread.push(`the listing of the issues returned ${iss.count} at its limit of ${iss.limit}, so an Overnight issue may be missing from it`)
+  for (const u of w.unread || []) unread.push(`the hand-overs on #${u.issue}: ${u.error || 'not read'}`)
+  const overnight = new Set(iss.numbers || [])
+  let best = null
+  for (const h of w.handovers || []) {
+    if (!h || h.author !== ADAM || !overnight.has(h.issue)) continue
+    const lines = (h.lines || []).filter((l) => typeof l === 'string' && l.startsWith(WINDOW_LINE))
+    const m = lines.length ? BOUNDARY.exec(lines[lines.length - 1]) : null
+    if (!m) continue
+    if (!isUtc(m[1])) { unread.push(`the hand-over ${h.url} records the boundary ${JSON.stringify(m[1])}, which is not a UTC timestamp`); continue }
+    if (!best || m[1] > best.since) best = { since: m[1], source: h.url || `a hand-over on #${h.issue}` }
+  }
+  if (best && startedAt && startedAt < best.since) unread.push(`the discovery start ${startedAt} is before the checkpoint ${best.since}`)
+  return { since: best ? best.since : '', source: best ? best.source : '', startedAt, unread }
+}
+// Whether an index entry is a record by latestRecordOf's rule: a repository account, a comment or a
+// COMMENTED review, a line the record grammar reads.
+const indexedRecord = (e, kind) => !!e && REPOSITORY_ACCOUNTS.includes(e.association) && (kind === 'comment' || e.state === 'COMMENTED')
+  && (e.lines || []).some((l) => RECORD.test(String(l).replace(PY_STRIP, '')))
+// The reader's return judged against the window (since, "" for a backfill, under which every time is
+// at or after it): what was not read, the counts per discovery source, and the latest record to fetch
+// for each kept pull request whose latest record holds the table's header.
+const judgeDiscovery = (fr, since) => {
+  const unread = []
+  const counts = { open: 0, merged: 0, comments: 0, reviews: 0 }
+  const fetch = []
+  const L = fr.listing || {}
+  const rows = Array.isArray(L.rows) ? L.rows : []
+  if (L.error) unread.push(`the listing of pull requests into main: ${L.error}`)
+  else if (!(L.limit > 0) || rows.length >= L.limit) unread.push(`the listing of pull requests into main returned ${rows.length} at its limit of ${L.limit}, so it may be truncated`)
+  const C = fr.commentPrs || {}
+  if (since && C.error) unread.push(`the listing of issue comments since ${since}: ${C.error}`)
+  // What the reader was told to read, so one it passed over is named rather than read as nothing there.
+  const want = new Set()
+  const listed = new Set()
+  for (const r of rows) {
+    if (!r || !Number.isInteger(r.number)) { unread.push('a row of the listing with no number'); continue }
+    listed.add(r.number)
+    if (!PR_STATES.includes(r.state) || !isUtc(r.updatedAt) || !(r.state === 'MERGED' ? isUtc(r.mergedAt) : !r.mergedAt)) unread.push(`#${r.number} in the listing carries state ${JSON.stringify(r.state)}, mergedAt ${JSON.stringify(r.mergedAt)} and updatedAt ${JSON.stringify(r.updatedAt)}, which are not a state and UTC timestamps`)
+    else if (r.state === 'OPEN' || (r.mergedAt || '') >= since || r.updatedAt >= since) want.add(r.number)
+  }
+  for (const n of since ? C.numbers || [] : []) if (L.error || listed.has(n)) want.add(n)
+  const read = new Map((fr.prs || []).filter((p) => p && Number.isInteger(p.number)).map((p) => [p.number, p]))
+  for (const n of want) if (!read.has(n)) unread.push(`#${n} was not read`)
+  for (const p of read.values()) {
+    if (p.error) { unread.push(`#${p.number}: ${p.error}`); continue }
+    const merged = p.mergedAt || ''
+    if (!PR_STATES.includes(p.state)) { unread.push(`#${p.number} was read with no state (${JSON.stringify(p.state)})`); continue }
+    if (p.state === 'MERGED' ? !isUtc(merged) : merged !== '') { unread.push(`#${p.number} was read as ${p.state} with the merge time ${JSON.stringify(p.mergedAt)}`); continue }
+    const entries = [...(p.comments || []).map((e) => ({ e, kind: 'comment' })), ...(p.reviews || []).map((e) => ({ e, kind: 'review' }))]
+    const bad = entries.filter(({ e }) => !e || !isUtc(e.at))
+    if (bad.length) { unread.push(`#${p.number}: ${bad.map(({ e }) => `${(e && e.url) || 'an entry'} carries the time ${JSON.stringify(e && e.at)}`).join(', ')}, not a UTC timestamp`); continue }
+    // latestRecordOf's order: by time, a tie going to the later entry, comments before reviews.
+    let latest = null
+    for (const r of entries) {
+      if (!indexedRecord(r.e, r.kind)) continue
+      if (r.e.at >= since) counts[r.kind === 'comment' ? 'comments' : 'reviews']++
+      if (!latest || r.e.at >= latest.e.at) latest = r
+    }
+    if (p.state === 'OPEN') counts.open++
+    if (p.state === 'MERGED' && merged >= since) counts.merged++
+    const keep = p.state === 'OPEN' || (p.state === 'MERGED' && merged >= since) || (latest && latest.e.at >= since)
+    if (keep && latest && latest.e.hasTable) fetch.push({ pr: p.number, url: latest.e.url, kind: latest.kind, at: latest.e.at, bytes: latest.e.bytes || 0 })
+  }
+  return { unread, counts, fetch }
+}
+// The records to fetch, in batches of at most BATCH_BYTES (one larger is a batch of its own).
+const recordBatches = (fetch) => {
+  const out = []
+  let cur = null
+  for (const f of fetch) {
+    if (!cur || cur.bytes + f.bytes > BATCH_BYTES) { cur = { items: [], bytes: 0 }; out.push(cur) }
+    cur.items.push(f)
+    cur.bytes += f.bytes
+  }
+  return out
+}
+// The bodies the record readers returned, as the pull requests followUpsToFile reads: each the one
+// record its index named, verified again by latestRecordOf on its body, its time the index's.
+const judgeRecords = (batches, got) => {
+  const prs = []
+  const filed = []
+  const unread = []
+  batches.forEach((b, k) => {
+    const g = got[k]
+    const names = b.items.map((i) => `#${i.pr}`).join(', ')
+    if (!g) { unread.push(`the record reader for ${names} returned nothing`); return }
+    if (g.error) { unread.push(`the record reader for ${names}: ${g.error}`); return }
+    filed.push(...(g.filed || []))
+    for (const i of b.items) {
+      const r = (g.records || []).find((x) => x && x.url === i.url)
+      const entry = r && { body: r.body, author_association: r.association, html_url: r.url, ...(i.kind === 'comment' ? { created_at: r.at } : { submitted_at: r.at, state: r.state }) }
+      const pr = { number: i.pr, comments: entry && i.kind === 'comment' ? [entry] : [], reviews: entry && i.kind === 'review' ? [entry] : [] }
+      if (!entry || r.at !== i.at || !latestRecordOf(pr)) { unread.push(`#${i.pr}'s record ${i.url} was ${entry ? 'returned without the record its index named' : 'not returned'}`); continue }
+      prs.push(pr)
+    }
+  })
+  return { prs, filed, unread }
+}
+// The hand-over's window line (Q15): the checkpoint first, so the next morning reads it at the line's
+// start, then the window, its source, the discovery start, the coverage, the count from each discovery
+// source and the work left. One line: whitespace an agent's error carried is folded.
+const windowLineOf = (w) => (WINDOW_LINE + [
+  w.advanced ? `checkpoint advanced to ${w.startedAt}` : `checkpoint kept at ${w.since || 'none'}`,
+  `window since ${w.since || 'none, a backfill of every pull request into main'}`,
+  `checkpoint source ${w.source || 'none: no hand-over of Adam\'s records a completed boundary'}`,
+  `discovery started ${w.startedAt || 'not read'}`,
+  `coverage ${w.complete ? 'complete' : 'incomplete'}`,
+  w.counts ? `read ${w.counts.open} open, ${w.counts.merged} merged since, ${w.counts.comments} issue-comment records since, ${w.counts.reviews} COMMENTED-review records since` : 'read no pull request',
+  `unread or unprocessed: ${w.unprocessed.length ? w.unprocessed.join(' | ') : 'none'}`,
+].join('; ')).replace(/\s+/g, ' ')
 
 // ---------------------------------------------------------------- open Apply tickets (#481)
 // An answer the morning cannot state as an edit is filed as "Apply Q<n> of Overnight <date> to #<m>",
@@ -1255,20 +1435,58 @@ Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target'
 ${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
 }
 
-const followupsPrompt = (date) => {
+// The line split the jq programs below cut a body at: PY_LINE_BREAK's set, as a jq string.
+const JQ_LINES = '"\\r\\n|[\\n\\u000b\\f\\r\\u001c-\\u001e\\u0085\\u2028\\u2029]"'
+// A comment's or a review's index entry (#514), as INDEXED: the lines that look like a record line, a
+// pattern looser than RECORD, which the script applies, so the cut drops no record.
+const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
+
+const windowPrompt = (date) => {
   const p = paths(date)
-  return `Follow-ups: read every open pull request into main with its review records, and the follow-ups already filed (#292). Read and report; you file nothing, and the script decides what is filed.
+  return `Follow-ups window: read the moment discovery starts, and the checkpoints the earlier mornings' hand-overs recorded (#514). Read and report; you write nothing but the OUTPUT FILE, and the script decides the window.
+
+${HOUSE(p.mdir)}
+
+OUTPUT FILE: ${p.mdir}/followups-window.txt
+1. Before any other command: \`date -u +%Y-%m-%dT%H:%M:%SZ\`. startedAt is what it prints, exactly: the discovery start, which the hand-over records as the next checkpoint.
+2. The Overnight issues: \`cd ${REPO} && gh issue list --state all --limit 2000 --json number,title --jq '{count: length, numbers: [.[] | select(.title | test("^Overnight [0-9]{4}-[0-9]{2}-[0-9]{2}$")) | .number]}'\`. issues is {count, numbers} as it prints them, limit 2000, and error, "" or why it failed. It lists without --search, whose index can miss an issue filed minutes ago.
+3. For each of those numbers: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments | jq '[.[][] | select((.body // "") | startswith("## Morning ")) | {url: .html_url, author: .user.login, createdAt: .created_at, lines: [(.body // "") | splits(${JQ_LINES}) | select(startswith("${WINDOW_LINE}"))]}]'\`. Each entry it prints, with issue set to that number, is one of handovers, in the order printed; an issue whose read failed is one of unread, {issue, error}.
+4. If GitHub cannot be reached, error says so. error is "" when nothing stopped you.
+Write the whole result as JSON to the OUTPUT FILE, then return it.`
+}
+
+const followupsPrompt = (date, since) => {
+  const p = paths(date)
+  const window = since ? `the pull requests into main the window since ${since} reaches` : 'every pull request into main (no checkpoint is recorded, so this morning backfills)'
+  return `Follow-ups: read ${window}, each one's review records as an index, the open Apply tickets and OWNERSHIP.md (#292, #514). Read and report; you file nothing, and the script decides what is read further and filed.
 
 ${HOUSE(p.mdir)}
 
 OUTPUT FILE: ${p.mdir}/followups-read.txt
-1. \`cd ${REPO} && gh pr list --state open --base main --limit 500 --json number\`.
-2. For each pull request it lists: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served; reviews = the same for \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads the records and their follow-ups tables from them.
-3. filed: for each pull request, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
-4. applyTickets, the open Apply tickets of every night (#481): \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,url,state,author --jq '[.[] | select(.title | test("^(Apply|The rest of) Q[0-9]+ of Overnight "))]'\`, each issue as served, its body verbatim and its author as {login}. It lists without --search, whose index can miss an issue filed minutes ago.
-5. ownership: OWNERSHIP.md as the main checkout holds it, \`cat ${REPO}/OWNERSHIP.md\`, verbatim (#479): the script derives each follow-up's owner from it, and tools/ticket_shape.py checks the result against the same file. "" when it cannot be read, which files nothing.
-6. If GitHub cannot be reached, error says so and prs, filed and applyTickets are []. error is "" when nothing stopped you.
+WINDOW SINCE: ${since || 'none'}
+1. listing: \`cd ${REPO} && gh pr list --state all --base main --limit 1000 --json number,state,mergedAt,updatedAt --jq '[.[] | {number, state, mergedAt: (.mergedAt // ""), updatedAt}]'\`. listing is {rows: what it prints, verbatim, limit: 1000, error: "" or why it failed}.
+2. commentPrs: ${since ? `\`cd ${REPO} && gh api --paginate --slurp "repos/{owner}/{repo}/issues/comments?since=${since}&per_page=100" | jq '[.[][] | select(.html_url | test("/pull/[0-9]+#")) | select((.body // "") | test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)")) | .html_url | capture("/pull/(?<n>[0-9]+)#").n | tonumber] | unique'\`, the pull requests whose comments updated since the window hold a record line. commentPrs is {numbers: what it prints, error: "" or why it failed}.` : 'with no window there is no such listing: commentPrs is {numbers: [], error: ""}.'}
+3. The pull requests to read: ${since ? `every row of the listing whose state is OPEN, whose mergedAt is at or after ${since} or whose updatedAt is at or after ${since} (the timestamps compare as text), and every number of commentPrs the listing holds; every number of commentPrs, when the listing failed. A COMMENTED review bumps its pull request's updatedAt, and no listing serves reviews, so updatedAt is how a record submitted as a review is found.` : 'every row of the listing.'}
+4. For each of them: comments = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments | jq '${JQ_INDEX('created_at', '""')}'\`; reviews = \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews | jq '${JQ_INDEX('submitted_at', '.state')}'\`. Each is one of prs, {number, state and mergedAt as its listing row has them, comments, reviews, error: "" or why either read failed}. Copy what the jq prints exactly: no body is returned here; the script picks each one's latest record, and a record reader returns its body.
+5. applyTickets, the open Apply tickets of every night (#481): \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,url,state,author --jq '[.[] | select(.title | test("^(Apply|The rest of) Q[0-9]+ of Overnight "))]'\`, each issue as served, its body verbatim and its author as {login}. It lists without --search, whose index can miss an issue filed minutes ago.
+6. ownership: OWNERSHIP.md as the main checkout holds it, \`cat ${REPO}/OWNERSHIP.md\`, verbatim (#479): the script derives each follow-up's owner from it, and tools/ticket_shape.py checks the result against the same file. "" when it cannot be read, which files nothing.
+7. If GitHub cannot be reached, error says so and prs and applyTickets are []. error is "" when nothing stopped you; a listing or a pull request that failed says so in its own error, and the rest is still read.
 Write the whole result as JSON to the OUTPUT FILE, then return it. It is named .txt so that a later morning's Replay, which reads every .json file there as a phase file, passes over it.`
+}
+
+const recordsPrompt = (date, k, items) => {
+  const p = paths(date)
+  const prs = [...new Set(items.map((i) => i.pr))]
+  return `Follow-ups: return the review records below, each body byte for byte, and the issues already filed from their pull requests (#514). Read and report; you file nothing.
+
+${HOUSE(p.mdir)}
+
+OUTPUT FILE: ${p.mdir}/followups-records-${k}.txt
+RECORDS: ${JSON.stringify(items.map((i) => ({ pr: i.pr, url: i.url })))}
+1. records, one per RECORDS entry, in its order: a comment, its URL ending "#issuecomment-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/issues/comments/<id> --jq '{url: .html_url, at: .created_at, association: .author_association, state: "", body}'\`; a review, its URL ending "#pullrequestreview-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/pulls/<pr>/reviews/<id> --jq '{url: .html_url, at: .submitted_at, association: .author_association, state, body}'\`. Copy bodies byte for byte: the script reads the record and its follow-ups table from them.
+2. filed: for each of #${prs.join(', #')}, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
+3. If GitHub cannot be reached, or a record cannot be read, error says so. error is "" when nothing stopped you.
+Write the whole result as JSON to the OUTPUT FILE, then return it.`
 }
 
 const fileFollowUpsPrompt = (date, items) => {
@@ -1444,6 +1662,8 @@ const handoverText = (s) => {
   if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}: ${f.why}`))
   if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
+  // Last, so its line is the comment's last window line, the one the next morning reads (#514).
+  if (fu.window) L.push('', '### Follow-ups window', '', fu.window.line)
   return L.join('\n').replace(/`/g, "'")
 }
 
@@ -1864,26 +2084,47 @@ const { apply, skipped: applySkipped } = await applyAnswers({
 phase('Follow-ups')
 // Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
 const followUps = { filed: [], already: [], refused: [], forHuman: [] }
-const fr = await run(followupsPrompt(DATE), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
+// The window first (#514): the discovery start, then the checkpoint. A window reader that failed leaves
+// no checkpoint, so the read backfills: more read, nothing missed, and the checkpoint is kept.
+const win = judgeWindow(await run(windowPrompt(DATE), { label: 'followups-window', phase: 'Follow-ups', schema: WINDOW_READ }))
+const unprocessed = [...win.unread]
+let windowCounts = null
+const fr = await run(followupsPrompt(DATE, win.since), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
 // The open Apply tickets (#481), read whatever Verify or Apply did: a reader that failed leaves the
 // earlier nights' unread, which the hand-over says, never "none" (CODING_STANDARDS.md -> "A check fails closed").
 const applyTickets = {
   unread: !fr ? 'the follow-ups agent returned nothing' : fr.error ? `the follow-ups agent could not read them: ${fr.error}` : '',
   open: openApplyTickets(fr && !fr.error ? fr.applyTickets : [], apply.filed),
 }
-if (!fr) refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
-else if (fr.error) refusals.push(`the follow-ups agent could not read the open pull requests: ${fr.error}; none was filed`)
-else {
-  const { toFile, already } = followUpsToFile(fr, P.mdir)
+const named = (fs) => fs.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')
+if (!fr) {
+  refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
+  unprocessed.push('the follow-ups reader returned nothing')
+} else if (fr.error) {
+  refusals.push(`the follow-ups agent could not read the pull requests: ${fr.error}; none was filed`)
+  unprocessed.push(`the follow-ups reader: ${fr.error}`)
+} else {
+  const found = judgeDiscovery(fr, win.since)
+  windowCounts = found.counts
+  unprocessed.push(...found.unread)
+  const batches = recordBatches(found.fetch)
+  const got = await parallel(batches.map((b, k) => () => run(recordsPrompt(DATE, k + 1, b.items), { label: `followups-batch:${k + 1}`, phase: 'Follow-ups', schema: RECORDS_READ })))
+  const records = judgeRecords(batches, got)
+  unprocessed.push(...records.unread)
+  const { toFile, already } = followUpsToFile({ prs: records.prs, filed: records.filed, ownership: fr.ownership }, P.mdir)
   followUps.already.push(...already)
   // No rules, no owner: a follow-up is filed only with the owner its place derives (#479), so an
   // OWNERSHIP.md the reader could not return, or one with no block, files none (CODING_STANDARDS.md
   // -> "A check fails closed"), as .github/path-ownership.py refuses one.
-  if (toFile.length && !ownershipRules(fr.ownership).length) refusals.push(`the follow-ups agent returned no OWNERSHIP.md block, so no follow-up's owner could be derived and none was filed: ${toFile.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')}; relaunch to file them`)
-  else if (toFile.length) {
+  if (toFile.length && !ownershipRules(fr.ownership).length) {
+    refusals.push(`the follow-ups agent returned no OWNERSHIP.md block, so no follow-up's owner could be derived and none was filed: ${named(toFile)}; relaunch to file them`)
+    unprocessed.push(`not filed, with no OWNERSHIP.md block to derive an owner from: ${named(toFile)}`)
+  } else if (toFile.length) {
     const fd = await run(fileFollowUpsPrompt(DATE, toFile), { label: 'followups-file', phase: 'Follow-ups', schema: FILED })
-    if (!fd) refusals.push(`the follow-ups filer returned nothing: ${toFile.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} may be unfiled; relaunch to file them`)
-    else {
+    if (!fd) {
+      refusals.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled; relaunch to file them`)
+      unprocessed.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled`)
+    } else {
       followUps.filed.push(...fd.filed)
       followUps.already.push(...fd.skipped)
       followUps.refused.push(...fd.refused)
@@ -1898,11 +2139,20 @@ else {
       // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
       const told = [...fd.filed, ...fd.skipped, ...fd.refused]
       const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
-      if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${lost.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')} neither filed nor skipped; relaunch to file them`)
+      if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${named(lost)} neither filed nor skipped; relaunch to file them`)
       if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
+      // Filed or found already filed, or the checkpoint stays (Q12): a refused or unaccounted row is not.
+      if (fd.refused.length) unprocessed.push(`not filed, tools/ticket_shape.py failed them: ${named(fd.refused)}`)
+      if (lost.length) unprocessed.push(`not filed${fd.unreachable || fd.reason ? ` (the filer stopped: ${fd.reason || 'GitHub could not be reached'})` : ', the filer accounted for none of them'}: ${named(lost)}`)
     }
   }
 }
+// The coverage boundary (Q9, Q12): advanced to the discovery start only when nothing above went unread
+// or unprocessed; otherwise kept, so the next morning reads the same span again.
+const complete = unprocessed.length === 0 && !!win.startedAt
+followUps.window = { since: win.since, source: win.source, startedAt: win.startedAt, complete, advanced: complete, boundary: complete ? win.startedAt : win.since, counts: windowCounts, unprocessed }
+followUps.window.line = windowLineOf(followUps.window)
+if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the checkpoint stays at ${win.since || 'none'} and the next morning reads the span again; the Follow-ups window line names what was not read or not processed`)
 
 phase('Hand-over')
 const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
