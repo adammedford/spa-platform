@@ -100,8 +100,8 @@ locals {
     # names the value itself -- "The ALB subnets, in CIDR form"
     # (contracts/platform-config.schema.json -> ForwardedHeaders.TrustedNetworks) -- so it is the
     # subnets the load balancer sits in, which is where its addresses come from (alb.tf). The cell's
-    # whole VPC range would also trust every unallocated address in it, and only two subnets out of
-    # the range are allocated.
+    # whole VPC range would also trust every address outside those two: the unallocated ones and,
+    # under multi_task, the private subnets the tasks sit in.
     { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
     # Continuity (#338). Each is present only behind its input, so the default inputs add no key and

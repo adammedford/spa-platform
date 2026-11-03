@@ -109,7 +109,9 @@ Under `multi_task = true` (#347, #332 D6):
   route change on the tables that are already per zone. A regional one needs no
   public subnet ([AWS](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html)).
 - **The S3 and DynamoDB gateway endpoints** on both private tables, with AWS's
-  default policy, at no charge ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)). They are not a destination allowlist, which is P2-9's.
+  default policy, at no charge
+  ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)).
+  They are not a destination allowlist, which is P2-9's.
 - **The task's egress stays 443 alone**, and `ForwardedHeaders:TrustedNetworks` still
   names only the load balancer's public subnets, so no private subnet is trusted.
 - **About $70.50 a month** for the whole cell left running, $0.10 an hour applied

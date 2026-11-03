@@ -238,11 +238,11 @@ variables {
 # made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
-# It is also where "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01) is held
+# It holds one part of "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01)
 # statically rather than only against a deployed account: no instance or bastion type can be
-# declared, and the two gated exceptions, the session table and the two-task cell's NAT gateway, are
-# named below with the input that creates each; the platform root's tripwire holds both at no
-# instance on the default inputs.
+# declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
+# named below with the input that creates each, so this set cannot tell a gated one from an ungated
+# one; the platform root's tripwire holds both to their gates, at no instance on the default inputs.
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
@@ -302,7 +302,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
   # JSON-syntax file and calls no child module. Terraform loads *.tf.json beside *.tf
   # (https://developer.hashicorp.com/terraform/language/files), and a module block brings in
-  # resources of any type with no resource line here. Either would carry a NAT gateway past the
+  # resources of any type with no resource line here. Either would carry an instance past the
   # allowlist with every run green.
   assert {
     condition     = length(fileset(path.module, "*.tf.json")) == 0
@@ -2399,7 +2399,7 @@ run "under_multi_task_two_tasks_sit_in_two_private_subnets_in_two_zones_behind_o
       && { for zone, a in aws_route_table_association.private : zone => [a.subnet_id, a.route_table_id] }
       == { "us-east-1a" = ["subnet-1a", "rtb-1a"], "us-east-1b" = ["subnet-1b", "rtb-1b"] }
     )
-    error_message = "Under multi_task each private subnet has its own route table, whose default route is the one NAT gateway (#347 Q11): a second NAT gateway is then a route change."
+    error_message = "Under multi_task each private subnet has its own route table, whose default route is the one NAT gateway (#347 Q11): a second NAT gateway, or a regional one, is then a new gateway and a route change."
   }
 
   assert {
