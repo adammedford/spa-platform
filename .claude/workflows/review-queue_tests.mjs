@@ -1305,6 +1305,63 @@ try {
     if (!(env.prompts['verdict:511'] || '').includes('2026-10-22')) fail('PR 511: the verdict prompt does not carry the later-date finding it is to weigh')
   }
 
+  // A Closes line no commit names (#688). tools/land.sh refuses a description whose Closes #n names a
+  // ticket no non-merge commit since the fork point names as #n or issue-n (#566), and #683's record
+  // cleared a head it then refused. The script applies the same rule after the skip of a recorded head
+  // and before the range agent: a ticket only a merge names (a), one named only inside a URL (b), 35
+  // beside commits naming 352 and reissue-35 (d) and a commit with no parent count (h) stop the pull
+  // request at stage closes with no other agent run; issue-n in a one-parent commit (c), a lower-case closes line
+  // ending in a carriage return (e) and no Closes line (f) are reviewed; a recorded head is skipped (g).
+  // The numbers are built, not written: a literal hash-number here is a citation the steering check
+  // reads, and these name no issue of this repository.
+  checks++
+  {
+    const C1 = sha('e')
+    const one = (message, parents = 1) => ({ sha: C1, message, parents })
+    const h = (n) => '#' + n
+    const SERVED = {
+      // (a) named only by a merge.
+      601: pr(601, ['docs/z.md'], { description: `Lands it.\n\nCloses ${h(41)}\n`, commitMessages: [one('Task x: lands it', 1), one(`Merge task x\n\nTicket: ${h(41)}`, 2)] }),
+      // (b) named only inside a URL.
+      602: pr(602, ['docs/z.md'], { description: `Closes ${h(42)}`, commitMessages: [one(`Task x: lands it\n\nAuthority: https://github.com/o/r/issues/42${h('issuecomment-9')}`)] }),
+      // (c) named as issue-n by a one-parent commit.
+      603: pr(603, ['docs/z.md'], { description: `Closes ${h(43)}`, commitMessages: [one('Task issue-43: lands it')] }),
+      // (d) 35 is not found inside 352, nor issue-35 after a letter, digit or underscore.
+      604: pr(604, ['docs/z.md'], { description: `Closes ${h(35)}`, commitMessages: [one(`Task x: lands it (${h(352)})`), one('Task issue-352: and the rest'), one('Task x: reissue-35, 0issue-35 and _issue-35')] }),
+      // (e) the keyword in any case, and a carriage return after the number.
+      605: pr(605, ['docs/z.md'], { description: `Lands it.\r\n\r\n  closes ${h(45)}\r\nCLOSES ${h(46)}\r\n`, commitMessages: [one(`Task x: lands it\n\nTicket: ${h(45)}, ${h(46)}`)] }),
+      // (f) no Closes line.
+      606: pr(606, ['docs/z.md'], { description: `Advances ${h(47)}.`, commitMessages: [one('Task x: lands it', 2)] }),
+      // (g) a head that already carries a record is skipped, whatever its Closes line.
+      607: pr(607, ['docs/z.md'], { head: H76, forkPoint: B76, commits: [H76], reviews: [CLEARED_76], description: `Closes ${h(48)}` }),
+      // (h) a commit with no parent count does not count.
+      608: pr(608, ['docs/z.md'], { description: `Closes ${h(49)}`, commitMessages: [{ sha: C1, message: `Task x: lands it (${h(49)})` }] }),
+    }
+    const env = run({ prs: [601, 602, 603, 604, 605, 606, 607, 608] }, SERVED)
+    const result = await execute(env)
+    const stopped = { 601: [41], 602: [42], 604: [35], 608: [49] }
+    for (const [n, tickets] of Object.entries(stopped).map(([k, v]) => [Number(k), v])) {
+      const r = resultOf(n, result)
+      if (r.outcome !== 'failed') fail(`PR ${n}: outcome ${r.outcome}, expected failed for a Closes line no non-merge commit names`)
+      if (!String(r.stage).startsWith('closes')) fail(`PR ${n}: stage ${JSON.stringify(r.stage)}, expected one starting closes`)
+      for (const t of tickets) if (!new RegExp(`#${t}(?!\\d)`).test(String(r.stage))) fail(`PR ${n}: the stage ${JSON.stringify(r.stage)} does not name ${h(t)}`)
+      if (!/Ticket: #n/.test(String(r.stage))) fail(`PR ${n}: the stage ${JSON.stringify(r.stage)} does not give land.sh's remedy`)
+      const ran = env.calls.filter((c) => c.split(':')[1] === String(n) && !c.startsWith('inventory:'))
+      if (ran.length) fail(`PR ${n}: stopped at closes, but ${ran.join(', ')} ran`)
+      if (env.posted.some((p) => p.n === n)) fail(`PR ${n}: stopped at closes, but a comment was posted`)
+      if (r.verdict || r.recordUrl) fail(`PR ${n}: stopped at closes, but carries verdict ${JSON.stringify(r.verdict)} and record ${JSON.stringify(r.recordUrl)}`)
+    }
+    if (String(resultOf(604, result).stage).includes(h(352))) fail(`PR 604: the stage names ${h(352)}, which a commit names: ${JSON.stringify(resultOf(604, result).stage)}`)
+    for (const n of [603, 605, 606]) {
+      const r = resultOf(n, result)
+      if (r.outcome === 'failed' || r.verdict !== 'merge') fail(`PR ${n}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, verdict ${r.verdict}, expected a review that reaches its verdict`)
+      for (const k of ['standards', 'spec', 'verdict', 'post']) if (!env.calls.includes(`${k}:${n}`)) fail(`PR ${n}: no ${k} agent ran`)
+    }
+    const g = resultOf(607, result)
+    if (g.outcome !== 'skipped' || !g.skippedBecauseRecorded) fail(`PR 607: outcome ${g.outcome} at ${JSON.stringify(g.stage)}, expected a recorded head skipped, not stopped`)
+    if (!/parents/.test(env.prompts['inventory:601'] || '') || !/--format=%P/.test(env.prompts['inventory:601'] || '')) fail('the inventory prompt does not ask for each commit\'s parent count from git log --format=%P')
+  }
+
   // The return leads with one line per request (#294): the completion notice cuts the return short,
   // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
   // field, one line per pull request with its number, head, verdict, record URL, verified finding and
