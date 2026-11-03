@@ -32,9 +32,11 @@
 // runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
 // halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
 // and starts no agent after it (#710); one more checks that a re-run dying on the limit says the run branch may
-// hold its merge, and that a grill the limit stopped does not read as died. A last short run has the resume probe
+// hold its merge, and that a grill the limit stopped does not read as died. One more short run has the resume probe
 // find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
-// and checks that each skips implement and review, runs the gate once and integrates. No agent,
+// and checks that each skips implement and review, runs the gate once and integrates. A last short run has the live
+// read find tickets relabelled since collect (#721), #544's case relabelled ready-for-human among them, and checks
+// that none is implemented, that each takes its live status, and that a read that died fails closed. No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -130,6 +132,8 @@ const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [
   draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: id === REQUEST_DECIDED.id ? DECIDED_LINE : '', summary: 'companion' })
 // The resume probe's answer for a ticket whose work is not yet on the run branch (#712), the case of every run but 36.
 const NOT_MERGED = { merged: false, mergeSha: '', subject: '', notes: 'companion' }
+// The live read's answer for a ticket still labelled as collect read it (#721), the case of every run but 38.
+const LIVE_READY = { state: 'OPEN', labels: ['ready-for-agent', 'kind:ticket'], assignees: [], notes: '' }
 const reviewCalls = {}     // id -> review calls so far, so a ticket's first and second review can report apart
 // One more, added after the tickets above so none of their choices moves (#480): a tracker edit whose Touches line says
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
@@ -192,6 +196,7 @@ globalThis.agent = async (prompt, opts) => {
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
   if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+  if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
   if (kind === 'grill') {
     const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
       : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
@@ -1239,6 +1244,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
       const [kind, id] = opts.label.split(':')
       if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: RUN_BASE, shell: '3.2', shellCommand: '/bin/bash' }
       if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+      if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
       if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
       if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
@@ -1279,6 +1285,7 @@ const DOWNSTREAM_CASES = 5
       const [kind, id] = opts.label.split(':')
       if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
       if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+      if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
       if (kind === 'implement') { starts.push(id); return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] } }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
       if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
@@ -1368,6 +1375,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     started710.push(opts.label)
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set710.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
     if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+    if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
     await sleep(id === 'issue-1001' ? 40 : id === 'issue-1003' || id === 'issue-1004' ? 30 : 5)
@@ -1417,6 +1425,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     const [kind] = opts.label.split(':')
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
     if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+    if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
     await sleep(kind === 'grill' ? 60 : 5)
@@ -1464,6 +1473,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set712.map((t) => ({ ...t })), landed: [], base: BASE_712, shell: '3.2', shellCommand: '/bin/bash' }
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'live') return LIVE_READY
     if (kind === 'resume') {
       if (id === PROBE_DIED) return null
       if (!ON_BRANCH.includes(id)) return { merged: false, mergeSha: '', subject: '', notes: 'no commit of its own on the run branch' }
@@ -1542,6 +1552,111 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
       if (step && !step.includes(rule)) fail(`#714: the report prompt's main-checkout step does not ${what}`)
     }
   }
+}
+
+// 38. A resumed run reads each ticket's live labels before it dispatches implement (#721). On 2026-11-01 #544 and
+//     #562 were each dispatched for implement three times, because each resume replayed collect's cached answer,
+//     ready-for-agent, after an earlier launch's lane had relabelled them ready-for-human. One short run on synthetic
+//     tickets, collect reading every one ready-for-agent: AS_544 is live ready-for-human and assigned, as #544 was
+//     after its first lane's status note; TRIAGED_LIVE is live needs-triage; UNLABELLED carries no triage label;
+//     CLOSED_LIVE closed since collect; READY is still ready-for-agent; LIVE_DIED's read dies and LIVE_UNREAD's gh
+//     failed; and MERGED_LIVE's merge is already on the run branch while its labels read ready-for-human. AFTER_544
+//     waits on AS_544 and AFTER_CLOSED on CLOSED_LIVE. HUMAN_OVER_AGENT still carries ready-for-agent beside
+//     ready-for-human, and TRIAGE_OVER_AGENT beside needs-triage, so the precedence collect reads is held live too.
+{
+  const AS_544 = 'issue-1301', TRIAGED_LIVE = 'issue-1302', UNLABELLED = 'issue-1303', CLOSED_LIVE = 'issue-1304', READY = 'issue-1305'
+  const LIVE_DIED = 'issue-1306', LIVE_UNREAD = 'issue-1307', MERGED_LIVE = 'issue-1308', AFTER_544 = 'issue-1309', AFTER_CLOSED = 'issue-1310'
+  const HUMAN_OVER_AGENT = 'issue-1311', TRIAGE_OVER_AGENT = 'issue-1312'
+  const RELABELLED = [AS_544, TRIAGED_LIVE, UNLABELLED, HUMAN_OVER_AGENT, TRIAGE_OVER_AGENT]
+  const liveOf = {
+    [AS_544]: { state: 'OPEN', labels: ['ready-for-human', 'change-request'], assignees: ['adammedford'], notes: '' },
+    [TRIAGED_LIVE]: { state: 'OPEN', labels: ['needs-triage'], assignees: [], notes: '' },
+    [UNLABELLED]: { state: 'OPEN', labels: ['kind:ticket'], assignees: [], notes: '' },
+    [CLOSED_LIVE]: { state: 'CLOSED', labels: ['ready-for-agent'], assignees: [], notes: '' },
+    [LIVE_DIED]: null,
+    [LIVE_UNREAD]: { state: 'UNREAD', labels: [], assignees: [], notes: 'error connecting to api.github.com' },
+    [MERGED_LIVE]: { state: 'OPEN', labels: ['ready-for-human'], assignees: [], notes: '' },
+    [HUMAN_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'ready-for-human'], assignees: [], notes: '' },
+    [TRIAGE_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'needs-triage'], assignees: [], notes: '' },
+  }
+  const calls721 = []
+  const prompts721 = {}
+  let report721 = ''
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    calls721.push(opts.label)
+    prompts721[opts.label] = prompt
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set721.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') { report721 = prompt; return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' } }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'resume') return id === MERGED_LIVE ? { merged: true, mergeSha: '8'.repeat(40), subject: `Merge task ${id}: companion`, notes: '' } : NOT_MERGED
+    if (kind === 'live') return id in liveOf ? liveOf[id] : LIVE_READY
+    if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: CARRIED_GRILL_SUMMARY }
+    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), notes: '' }
+    if (kind === 'implement') return { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the live-label run`)
+  }
+  const CARRIED_GRILL_SUMMARY = 'carried from an earlier night, not re-grilled'
+  const lane721 = (n, blockedBy = []) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', blockedBy, 1), owner: 'integrator' })
+  const set721 = [lane721(1301), lane721(1302), lane721(1303), lane721(1304), lane721(1305), lane721(1306), lane721(1307), lane721(1308),
+    lane721(1309, [AS_544]), lane721(1310, [CLOSED_LIVE]), lane721(1311), lane721(1312)]
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#721: the live-label run threw: ${e && e.message ? e.message : e}`) }
+  const count = (label) => calls721.filter((l) => l === label).length
+  const reasonOf = (id) => ((res && res.reasons) || []).find((r) => r.id === id)
+  for (const id of [...RELABELLED, CLOSED_LIVE, LIVE_DIED, LIVE_UNREAD, AFTER_544]) {
+    if (count(`implement:${id}`)) fail(`#721: ${id}, whose live read did not say ready-for-agent, was implemented ${count(`implement:${id}`)} time(s)`)
+  }
+  for (const id of [READY, AFTER_CLOSED]) {
+    for (const kind of ['live', 'implement', 'review', 'integrate']) if (count(`${kind}:${id}`) !== 1) fail(`#721: ${id}, still ready-for-agent, ran its ${kind} ${count(`${kind}:${id}`)} time(s), not once`)
+    if (calls721.indexOf(`live:${id}`) > calls721.indexOf(`implement:${id}`)) fail(`#721: ${id}'s live read ran after its implement`)
+  }
+  // The probe comes first: a merge already on the run branch keeps its gate, whatever its labels say now.
+  if (count(`live:${MERGED_LIVE}`)) fail(`#721: ${MERGED_LIVE}'s merge was on the run branch, yet its live read ran`)
+  if (count(`gate:${MERGED_LIVE}`) !== 1) fail(`#721: ${MERGED_LIVE}'s merge was on the run branch, yet its gate ran ${count(`gate:${MERGED_LIVE}`)} time(s), not once`)
+  if (res) {
+    for (const id of [READY, AFTER_CLOSED, MERGED_LIVE]) if (!(res.integrated || []).includes(id)) fail(`#721: ${id} is not integrated: ${JSON.stringify(res.integrated)}`)
+    // #544's case: not built, reported as the human ticket it now is, its reason naming the live label, and its grill
+    // run with no context, so its STEP 0 carries the record an earlier launch wrote.
+    if (!(res.needsHuman || []).includes(AS_544)) fail(`#721: ${AS_544}, live ready-for-human, is not among needsHuman: ${JSON.stringify(res.needsHuman)}`)
+    const h = reasonOf(AS_544)
+    if (!h || h.outcome !== 'needs-human' || h.stage !== 'implement' || !h.reason.includes('ready-for-human') || !h.reason.includes('relabelled since collect')) fail(`#721: ${AS_544}'s reason does not say it was relabelled ready-for-human at implement: ${JSON.stringify(h)}`)
+    if (count(`grill:${AS_544}`) !== 1) fail(`#721: ${AS_544}'s grill ran ${count(`grill:${AS_544}`)} time(s), not once`)
+    if (/Context from tonight/.test(prompts721[`grill:${AS_544}`] || '')) fail(`#721: ${AS_544}'s grill was given context, so its STEP 0 would grill again rather than carry the earlier record`)
+    // ready-for-human outranks a ready-for-agent label left beside it, as in collect's precedence.
+    const ho = reasonOf(HUMAN_OVER_AGENT)
+    if (!(res.needsHuman || []).includes(HUMAN_OVER_AGENT) || !ho || ho.outcome !== 'needs-human' || ho.stage !== 'implement') fail(`#721: ${HUMAN_OVER_AGENT}, live ready-for-human beside ready-for-agent, is not a human ticket at implement: ${JSON.stringify(ho)}`)
+    for (const [id, label] of [[TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'kind:ticket'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
+      const r = reasonOf(id)
+      if (!(res.skipped || []).includes(id) || !r || r.stage !== 'implement' || !r.reason.includes(label)) fail(`#721: ${id}, live ${label}, is not skipped at implement naming its live labels: ${JSON.stringify(r)}`)
+      if (count(`grill:${id}`)) fail(`#721: ${id}, live ${label}, was grilled`)
+    }
+    // Nothing of a relabelled ticket landed, so a ticket waiting on it is not built; a closed one counts as met (#108).
+    if (!(res.skipped || []).includes(AFTER_544) || !/blocker not integrated/.test((reasonOf(AFTER_544) || {}).reason || '')) fail(`#721: ${AFTER_544}, waiting on the relabelled ${AS_544}, is not skipped for its blocker: ${JSON.stringify(reasonOf(AFTER_544))}`)
+    const c = reasonOf(CLOSED_LIVE)
+    if (!(res.skipped || []).includes(CLOSED_LIVE) || !c || !c.reason.includes('closed before the lane started')) fail(`#721: ${CLOSED_LIVE}, closed since collect, is not skipped as closed: ${JSON.stringify(c)}`)
+    // A read that died or gave no state fails closed, naming the read.
+    for (const id of [LIVE_DIED, LIVE_UNREAD]) {
+      const r = reasonOf(id)
+      if (!(res.failed || []).includes(id) || !r || !/live read of its labels/.test(r.reason)) fail(`#721: ${id}, whose live read ${id === LIVE_DIED ? 'died' : 'gave no state'}, does not fail naming the read: ${JSON.stringify(r)}`)
+    }
+    // The report reads each ticket's reconciled status, not the cached one.
+    const sum = JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report721) || [, 'null'])[1])
+    const st = (id) => ((sum && sum.tickets) || []).find((t) => t.id === id)
+    for (const [id, status] of [[AS_544, 'ready-for-human'], [TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'unlabelled'],
+      [HUMAN_OVER_AGENT, 'ready-for-human'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
+      if (!st(id) || st(id).status !== status) fail(`#721: the report reads ${id}'s status as ${JSON.stringify(st(id) && st(id).status)}, not its live ${status}`)
+    }
+  }
+  // The read is one gh read of the issue, and writes nothing.
+  const lp = prompts721[`live:${READY}`] || ''
+  for (const part of [`gh issue view ${READY.slice(6)} --json state,labels,assignees`, 'no gh write', 'write no file']) if (!lp.includes(part)) fail(`#721: the live read's prompt lacks ${JSON.stringify(part)}`)
+  if (/gh issue (edit|comment|create|close)/.test(lp)) fail('#721: the live read\'s prompt names a gh write')
 }
 
 if (failures.length) {

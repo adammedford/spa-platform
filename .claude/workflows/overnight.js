@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Collect', detail: 'open issues labelled ready-for-agent / ready-for-human become tonight\'s tickets; plan rows with no issue yet get one' },
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
-    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712)' },
+    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712); then a live read of the issue\'s labels, so a ticket relabelled since collect, ready-for-human above all, is not built again on a resume\'s cached snapshot (#721)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
@@ -282,6 +282,17 @@ const PROBE = {
   properties: { merged: { type: 'boolean' }, mergeSha: { type: 'string' }, subject: { type: 'string' }, notes: { type: 'string' } },
   required: ['merged', 'mergeSha', 'subject', 'notes'],
 }
+// The live read (#721), before a lane implements a ticket: the issue's state, label names and assignee logins as gh
+// prints them now, "UNREAD" for a state gh did not give. The script, not the agent, judges them (liveRule below).
+const LIVE = {
+  type: 'object',
+  properties: {
+    state: { type: 'string', enum: ['OPEN', 'CLOSED', 'UNREAD'] },
+    labels: { type: 'array', items: { type: 'string' } }, assignees: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+  required: ['state', 'labels', 'assignees', 'notes'],
+}
 // The gate alone (#712), for a ticket whose merge is already on the run branch: ran is false when the integrate log
 // already records a pass on a head holding the merge, true when the gate ran now; headSha the head it passed on.
 const GATED = {
@@ -508,6 +519,30 @@ const probePrompt = (t) => `Resume probe for ticket ${t.n} (task ${t.id}, issue 
 2. The work is on the run branch only when both hold: \`git -C ${REPO} merge-base --is-ancestor task/${t.id}-${t.slug} ${INT_BRANCH}\` succeeds, and \`git -C ${REPO} log ${BASE}..task/${t.id}-${t.slug} --format=%s\` prints a subject starting "Task ${t.id}:". So a branch forked from the run branch with no commit of its own yet, and an earlier night's branch already on main, are not merged. Otherwise return merged false.
 3. When both hold, mergeSha is ${MERGE_OF(`task/${t.id}-${t.slug}`, REPO, INT_BRANCH)}, and subject is \`git -C ${REPO} log -1 --format=%s <mergeSha>\`. When no merge holds the branch (it reached ${INT_BRANCH} some other way), return merged false and say so in notes.
 Return merged, mergeSha and subject ("" when not merged), and notes (what each command printed, in a line).`
+// The live read (#721). A resume (resumeFromRunId) replays collect's cached answer, so tonight's statuses are the
+// first launch's: on 2026-11-01 #544 and #562 were each dispatched for implement three times after an earlier launch's
+// lane had relabelled them ready-for-human, and each lane stopped on the same status note. So, after the resume probe
+// and just before its implement, a ticket's labels are read live, for the reason the probe is asked there (#712): a
+// read asked once at the start would itself be replayed from the first attempt. The script judges what it prints.
+const livePrompt = (t) => `Live labels for ticket ${t.n} (task ${t.id}, issue #${t.issue}), before its lane implements it (#721): collect read it ready-for-agent, and a resumed run replays that snapshot. Read only: this one gh call, no other command, no gh write, and write no file.
+  cd ${REPO} && gh issue view ${t.issue} --json state,labels,assignees --jq '{state, labels: [.labels[].name], assignees: [.assignees[].login]}'
+Return state, labels and assignees exactly as it prints them, and notes "". Judge nothing: the script decides from them. When gh fails, return state "UNREAD", labels [], assignees [], and notes its last line of error.`
+// The live verdict (#721): proceed only on an open issue labelled ready-for-agent and not ready-for-human, as collect's
+// own precedence reads the labels. A closed issue settles as met, as the implementer's closed case does (#108). An
+// assignee is reported, never judged: every session posts under one account, so a resumed lane's own claim reads as
+// anyone else's. A read that died or that the script cannot parse fails the ticket (CODING_STANDARDS.md, "A check
+// fails closed"). Returns {go}, {closed}, {status, why} for a ticket relabelled since collect, or {fail}.
+const liveRule = (live) => {
+  if (!live) return { fail: 'the live read of its labels died, so whether it is still ready-for-agent is unknown (#721)' }
+  const labels = Array.isArray(live.labels) ? live.labels : null
+  if (!labels || !Array.isArray(live.assignees) || !['OPEN', 'CLOSED'].includes(live.state)) return { fail: `the live read of its labels gave no state or label list: ${live.notes || 'no notes'} (#721)` }
+  if (live.state === 'CLOSED') return { closed: true }
+  const status = labels.includes('ready-for-human') ? 'ready-for-human' : labels.includes('needs-triage') ? 'needs-triage'
+    : labels.includes('ready-for-agent') ? 'ready-for-agent' : 'unlabelled'
+  if (status === 'ready-for-agent') return { go: true }
+  const who = live.assignees.length ? `, assigned to ${live.assignees.join(', ')}` : ''
+  return { status, why: `relabelled since collect: its live labels are ${labels.length ? labels.join(', ') : 'none'}${who}, so no lane builds it (#721)` }
+}
 // The gate alone (#712): the ticket's merge is already on the run branch, so nothing merges and nothing is fixed. A
 // pass already recorded on a head holding the merge stands, since each integrate judges its merge alone against its
 // first parent (#629); otherwise the gate runs once. A red gate resets the branch only when nothing has been built on
@@ -928,6 +963,21 @@ const implement = async (t) => {
       if (!SHA.test(probe.mergeSha || '')) return fail(t, 'implement', { why: `the resume probe found its branch on ${INT_BRANCH} but gave no merge sha: ${probe.notes}` })
       log(`${t.id}: its merge ${probe.mergeSha} is already on ${INT_BRANCH}; implement and review skipped, the gate alone (#712)`)
       return { resumed: probe }
+    }
+
+    // The live read (#721), after the probe, so a merge already on the run branch still has its gate whatever its labels
+    // now say. A ticket relabelled since collect takes its live status: ready-for-human joins the human tickets, whose
+    // grill may still run (with no context its STEP 0 carries an earlier record and writes nothing); any other is
+    // skipped. Neither counts as met for the tickets it blocks, since nothing of it landed.
+    const live = liveRule(await withSlot(() => ask(livePrompt(t), { label: `live:${t.id}`, phase: 'Implement', schema: LIVE, effort: 'low' })))
+    if (live.fail) return fail(t, 'implement', { why: live.fail })
+    if (live.closed) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: 'closed before the lane started' }; log(`${t.id}: skipped, closed before the lane started`); return true }
+    if (!live.go) {
+      log(`${t.id}: not implemented, ${live.why}`)
+      t.status = live.status
+      if (live.status === 'ready-for-human') { humanT.push(t); humanStage[t.id] = 'implement'; humanWhy[t.id] = live.why; grill(t, '') }
+      else results[t.id] = { stage: 'implement', outcome: 'skipped', why: live.why }
+      return false
     }
 
     const impl = await withSlot(() => ask(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
