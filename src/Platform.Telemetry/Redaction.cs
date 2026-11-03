@@ -63,14 +63,15 @@ internal static partial class Redaction
 
     // The hole pattern is a parameter for the same reason as WithoutQueryStrings's (#677). Here the
     // shipped pattern can run out: the budget covers the whole Replace, values rendered in the
-    // evaluator included, so a value slow to turn into text reaches the catch below. How slow it
-    // must be depends on where the engine checks its clock, which no test can pin. The documentation
-    // does not say so; the source does. Replace runs the evaluator inside RunAllMatchesWithCallback's
-    // callback, and that method sets one deadline, InitializeTimeout, before its loop over matches
-    // and never resets it, so every later CheckTimeout measures against it:
+    // evaluator included, so a value slow to turn into text reaches the catch below. The
+    // documentation does not say the budget covers the evaluator; the source does. Replace runs the
+    // evaluator inside RunAllMatchesWithCallback's callback, and that method sets one deadline,
+    // InitializeTimeout, before its loop over matches and never resets it, so every later
+    // CheckTimeout measures against it:
     // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.Replace.cs#L179-L184
     // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.cs#L526-L564
     // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/RegexRunner.cs#L339-L362
+    // How slow a value must be depends on where the engine checks its clock, which no test can pin.
     internal static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties, Regex hole)
     {
         if (properties is null)
