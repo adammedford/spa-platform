@@ -63,8 +63,15 @@ internal static partial class Redaction
 
     // The hole pattern is a parameter for the same reason as WithoutQueryStrings's (#677). Here the
     // shipped pattern can run out: the budget covers the whole Replace, values rendered in the
-    // evaluator included, so a value slow to turn into text reaches the catch below. How slow it
-    // must be depends on where the engine checks its clock, which no test can pin.
+    // evaluator included, so a value slow to turn into text reaches the catch below. The
+    // documentation does not say the budget covers the evaluator; the source does. Replace runs the
+    // evaluator inside RunAllMatchesWithCallback's callback, and that method sets one deadline,
+    // InitializeTimeout, before its loop over matches and never resets it, so every later
+    // CheckTimeout measures against it:
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.Replace.cs#L179-L184
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.cs#L526-L564
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/RegexRunner.cs#L339-L362
+    // How slow a value must be depends on where the engine checks its clock, which no test can pin.
     internal static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties, Regex hole)
     {
         if (properties is null)
@@ -146,7 +153,7 @@ internal static partial class Redaction
     // decision 4 requires at error in both analysis tiers). Both are linear, with no nested
     // quantifier, so no text on its own comes near it; it bounds a pattern a later edit makes
     // backtrack, and a timeout fails closed above. Render's budget also covers the values its
-    // evaluator renders, so a slow value can spend it (#677).
+    // evaluator renders, so a slow value can spend it (#677; the runtime source cited at Render).
     private const int MatchTimeoutMilliseconds = 100;
 
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.
