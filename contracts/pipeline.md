@@ -34,7 +34,7 @@ Called in this order, before the pipeline is built.
 | 4 | `UsePlatformHostResolution` | 2 | The request authority must equal a registry `host` exactly. The app and the snapshot are pinned for the request as `IAppFeature`. Any other host gets 404 before routing runs. |
 | 5 | `UsePlatformSecurityHeaders` | 4 | The app's content security policy and the fixed header set, on every response |
 | 6 | `UsePlatformRequestGate` | 4 | `contracts/request-gate.md`. It runs before authentication. |
-| 7 | `UseRouting`, then `UseAuthentication` | framework | The schemes come from workstream 3. The OpenID Connect callback is handled here. |
+| 7 | `UseRouting`, then `UseAuthentication` | framework | The schemes come from workstream 3. The OpenID Connect callback is handled here. A session store failure in this stage ends under `auth.store`: the callback's here, by workstream 3's OpenID Connect scheme, any other at stage 8 (`contracts/request-gate.md` -> Rule ids). |
 | 8 | `UsePlatformShellGate` | 3 | A session before any asset: an unauthenticated navigation is challenged, an unauthenticated fetch gets 401 |
 | 9 | `UsePlatformAntiforgery` | 4 | Unsafe methods on `/api` need a valid `X-CSRF-TOKEN`. The check runs after the request gate because it needs the user. |
 | 10 | `MapPlatformBff`, `MapPlatformProxy`, `MapPlatformAssets` | 3, 4, 2 | `/bff/*`; `/api/{name}/{rest}` through YARP; everything else from S3 |

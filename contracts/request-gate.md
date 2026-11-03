@@ -72,3 +72,16 @@ answers `401 unauthenticated`; the access-token step behind `MapPlatformProxy` a
 `401 unauthenticated`; and `UsePlatformShellGate`'s challenge answers a fetch with
 `401 unauthenticated` and a navigation with a redirect to the identity provider, which has no
 problem body. A refusal by an upstream API is the API's to log.
+
+`auth.store` is ended or noted by workstream 3 wherever a session store operation fails or runs
+out `StoreDeadline`, and wherever a refresh ends at the store's bound, and no cookie is cleared.
+A failure inside `UseAuthentication` (the cookie handler's read on any path, and the login
+callback's create) is ended by workstream 3's schemes and shell gate: the callback's create by the
+app's OpenID Connect scheme, with the problem body, not the static failure page; any other by
+`UsePlatformShellGate`, on every path, `/bff` and `/api` included, before the antiforgery check
+sees the request. A failure after that is ended by the writer that meets it: the `/bff/session`
+endpoint, `GET /bff/login`'s discard and `POST /bff/logout`'s read before the remove each answer
+`503 session_store_unavailable`, and behind `MapPlatformProxy` the access-token source notes the
+rule and returns `StoreUnavailable`, which the access-token step answers with that body. The
+session remove `POST /bff/logout` makes is the exception: unknown at `StoreDeadline`, it answers
+the usual logout (the `continuity` spec's F11).
