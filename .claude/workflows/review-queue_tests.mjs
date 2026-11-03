@@ -543,6 +543,9 @@ try {
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR ${n} with the ${kind} ${test} red only on ${SIBLING}: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
       if ((m.caughtBy || []).length || commentOf(env, n).includes('(caught by ')) fail(`PR ${n} with the ${kind} ${test} red only on another test: it has a caught cell`)
       if (!(m.why || '').includes(`the project went red only on ${SIBLING}, and a ${kind} mutation keeps its own test`)) fail(`PR ${n} with the ${kind} ${test} red only on another test: why ${JSON.stringify(m.why)}`)
+      // The fail-closed check runs before the counts are compared, so a stated row it turns
+      // did-not-fail carries no counts verdict (#689's Answer).
+      if (m.countsMatched !== null) fail(`PR ${n} with the ${kind} ${test} red only on another test: countsMatched ${m.countsMatched}, expected null on a did-not-fail row`)
       const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
       if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
     }
