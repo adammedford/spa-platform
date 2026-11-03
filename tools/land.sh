@@ -223,7 +223,8 @@ full_sha='^[0123456789abcdef]{40}$'
 # refusal's remedy applies.
 # A merge is left out because its message names what it joins, which a rebuild can keep after the
 # commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
-# not a description, which can change after it.
+# not a description, which can change after it. .claude/workflows/review-queue.js applies this same
+# rule before its review spends any agent on the head (#688), so a change to it here changes that copy.
 #
 # A Closes line is read in the form docs/agents/landing-work.md -> "Land it" gives it and
 # .claude/workflows/morning.js reads, one `Closes #n` to a line, with the keyword in any case, as

@@ -136,6 +136,18 @@ export const meta = {
 // low Spec finding quoting its sentence, which the comment carries beside the head comparison's and
 // the verdict weighs but does not re-take. It carries; it does not hold.
 //
+// A Closes line no commit names (#688). tools/land.sh refuses a description whose Closes #n names a
+// ticket no non-merge commit since the fork point names as #n or issue-n (#566), so a merge record on
+// such a head clears what the landing then refuses (#683's record on 3982a6f, which cost an empty
+// commit and a delta review). The inventory reports each commit's parent count beside its message,
+// and after the skip of a recorded head the script applies land.sh's rule to the description and the
+// messages: a ticket no commit with fewer than two parents names fails the pull request at stage
+// closes, before any range or axis agent runs, with each #n named and land.sh's remedy (name it in the
+// commit that did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n).
+// A missing parent count counts as a merge, so the check fails closed. Nothing is posted, and once the
+// head or description is fixed the review runs again on the final head. land.sh stays the gate, since
+// a description can change after a review.
+//
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
 // the run-level headMoved list) so the operator runs again. GitHub unreachable at posting time is
@@ -384,9 +396,10 @@ const INVENTORY = {
     // Every sha the description states as this pull request's head, as written, with its sentence (#294).
     statedHeads: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, quote: { type: 'string' } }, required: ['sha', 'quote'] } },
     // The description and every commit message since the fork point, as written, for the script's
-    // search for a date later than the run's (#525).
+    // search for a date later than the run's (#525), and each commit's parent count, for its check of
+    // the Closes lines (#688).
     description: { type: 'string' },
-    commitMessages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' } }, required: ['sha', 'message'] } },
+    commitMessages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' }, parents: { type: 'integer' } }, required: ['sha', 'message', 'parents'] } },
     statedMutations: { type: 'array', items: STATED },
     candidates: { type: 'array', items: CANDIDATE },
     comments: { type: 'array', items: ENTRY },
@@ -497,7 +510,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
-6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte. Do not look for dates in them: the script does.
+6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
@@ -907,6 +920,29 @@ const laterDateFindings = (inv) => {
   return found
 }
 
+// ---------------------------------------------------------------- a Closes line no commit names
+// The tickets a Closes line names that tools/land.sh would refuse (#688), by land.sh's rule (#566):
+// every line of the description that reads, after optional whitespace, the keyword in any case,
+// whitespace, # and digits, whatever follows them; and n is named only where #n, or issue-n with no
+// letter, digit or underscore before it, appears with no digit after it in the message of a commit
+// whose parent count is an integer below 2, as git log --no-merges keeps. A commit with no parent
+// count does not count, so the check fails closed. Each ticket is named once, in the order given.
+const CLOSES_LINE = /^\s*closes\s+#(\d+)/i
+const unnamedCloses = (inv) => {
+  const tickets = []
+  for (const line of String(inv.description || '').split('\n')) {
+    const m = CLOSES_LINE.exec(line)
+    if (m && !tickets.includes(m[1])) tickets.push(m[1])
+  }
+  const messages = (inv.commitMessages || [])
+    .filter((c) => c && Number.isInteger(c.parents) && c.parents < 2 && typeof c.message === 'string')
+    .map((c) => c.message)
+  return tickets.filter((n) => {
+    const named = new RegExp('(?:#' + n + '|(?<![A-Za-z0-9_])issue-' + n + ')(?!\\d)')
+    return !messages.some((msg) => named.test(msg))
+  })
+}
+
 // ---------------------------------------------------------------- a rebuilt head
 // The range agent's mapping judged against the inventory's commits (#293): null when it cannot be
 // trusted, so the review is full, as a range nobody could read is. It must name every commit of the
@@ -965,6 +1001,14 @@ const reviewOne = async (n, res, at) => {
     const latest = onHead.find((r) => r.at === last.at && r.verdict === 'hold') || last
     log(`#${n}: ${inv.head} already carries a record (${latest.verdict}): ${latest.url}; skipped`)
     return { ...res, outcome: 'skipped', stage: '', verdict: latest.verdict, recordUrl: latest.url, skippedBecauseRecorded: true }
+  }
+
+  // A Closes line land.sh would refuse stops the pull request before any other agent runs (#688).
+  const unnamed = unnamedCloses(inv)
+  if (unnamed.length) {
+    const list = unnamed.map((t) => '#' + t).join(', ')
+    log(`#${n}: the description closes ${list}, which no non-merge commit names; stopped before the review`)
+    return failed(res, `closes: the description closes ${list}, which no non-merge commit since the fork point names as #n or issue-n, so tools/land.sh would refuse it. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line in place of Closes #n`)
   }
 
   // A delta review when the latest record names another head and that head is an ancestor of this
