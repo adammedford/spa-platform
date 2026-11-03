@@ -588,6 +588,22 @@ try {
       const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
       if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "test_x (pkg.C.test_x)" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
     }
+    // Only the parenthesis that ends in the bare name names the whole test, spaces before it or not: a
+    // dotted qualifier such as '(Assert.Null)', and the pre-3.11 'test_x (pkg.C)', read as the bare name.
+    for (const [cell, want] of [['Nom (Assert.Null)', 'Nom'], ['test_x (pkg.C)', 'test_x'], ['test_x  (pkg.C.test_x)', 'pkg.C.test_x']]) {
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [want]: row('reproduced', 1, 10) } })
+      result = await execute(env)
+      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+      if (m.test !== want) fail(`PR 208 with the nomination "${cell}": row test ${m.test}, expected ${want}`)
+    }
+    // A candidate keyed by the bare name lends a dotted nomination what it guards and breaks.
+    {
+      const PYCAND = { 208: pr(208, ['tests/py/t.py'], { candidates: [cand('test_x', 'tests/py')] }) }
+      env = run({ prs: [208] }, PYCAND, { nominations: { 208: [{ test: 'test_x (pkg.C.test_x)', project: 'tests/py', why: 'asserts a constant' }] }, mutate: { 'pkg.C.test_x': row('reproduced', 1, 10) } })
+      result = await execute(env)
+      const prompt = (env.mutations.find((x) => x.test === 'pkg.C.test_x') || {}).prompt || ''
+      if (!/It guards: what test_x guards\. Break that in the source it guards \(src\/test_x\.cs\)/.test(prompt)) fail('PR 208: the candidate test_x did not lend the nomination pkg.C.test_x what it guards')
+    }
     // Reported reproduced with no failing names, a nominated row stays as reported: nothing names a catch.
     env = run({ prs: [208] }, NOM, { nominations, mutate: { Nom: row('reproduced', 1, 10) } })
     result = await execute(env)
