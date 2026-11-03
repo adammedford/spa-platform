@@ -177,7 +177,9 @@ A session that repairs what a review found works from the record, not from the P
   moves the head, so the record names an old one: the pull request needs a delta review of the
   commits since it (#85) before `tools/land.sh`.
 - **A description is not a commit.** Correct a false claim in it with `gh pr edit`; it moves no
-  head. An integration branch such as `overnight/<date>` takes no repair commit from here.
+  head. After a repair push, edit it in the same step: name the new head as the head, and each
+  evidence line of an older one as "the earlier head `<sha>`", which the review's head comparison
+  (#294) passes over. An integration branch such as `overnight/<date>` takes no repair commit from here.
 - **A brief for a repair agent states the finished result**: the changed lines, the sha and the
   `tools/check.sh --full` verdict, quoted, in its final message. Verify a value it reports against
   the branch or the tracker before relaying it.
