@@ -27,6 +27,8 @@ const top = path.resolve(here, '..', '..')
 
 const sha = (c) => c.repeat(40)
 const FORK = sha('b')
+// What the launch agent reports by default (#687): repo's script is origin/main's, on a clean main.
+const LAUNCH_OK = { baseTip: sha('c'), differs: false, branch: 'main', behind: 0, trackedChanges: false, scriptEdited: false, error: '' }
 
 // One open pull request into main, as the inventory agent reports it from gh and git.
 const pr = (number, changedFiles, extra = {}) => ({
@@ -140,6 +142,11 @@ function run(scriptArgs, served, behave = {}) {
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
+    }
+    if (kind === 'launch') {
+      // The launch agent's reading of repo against origin/main (#687): behave.launch, or a checkout
+      // whose script is origin/main's.
+      return behave.launch === 'null' ? null : (behave.launch || LAUNCH_OK)
     }
     if (kind === 'queue') {
       // gh pr list as the queue agent reports it: behave.queue, or no open pull request.
@@ -277,7 +284,7 @@ try {
   if (r76.skippedBecauseRecorded !== true) fail('PR 76: a record on the current head did not skip it')
   if (r76.outcome !== 'skipped') fail(`PR 76: outcome ${r76.outcome}, expected skipped`)
   if (r76.recordUrl !== CLEARED_76.html_url) fail(`PR 76: recordUrl ${r76.recordUrl}, expected the record's URL`)
-  const ran76 = env.calls.filter((c) => !c.startsWith('inventory:'))
+  const ran76 = env.calls.filter((c) => c !== 'launch' && !c.startsWith('inventory:'))
   if (ran76.length) fail(`PR 76: agents ran after the inventory of a recorded head: ${ran76.join(', ')}`)
   if (env.posted.length) fail(`PR 76: ${env.posted.length} comment(s) posted on a recorded head`)
 
@@ -1016,16 +1023,16 @@ try {
     else {
       if (JSON.stringify(result.prs) !== '[]') fail(`an empty queue: prs ${JSON.stringify(result.prs)}, expected []`)
       if (env.posted.length) fail(`an empty queue: ${env.posted.length} comment(s) posted`)
-      if (JSON.stringify(env.calls) !== '["queue"]') fail(`an empty queue: agents ${JSON.stringify(env.calls)}, expected the queue agent alone`)
-      if (result.agents !== 1) fail(`an empty queue: agents ${result.agents}, expected 1, the queue agent`)
+      if (JSON.stringify(env.calls) !== '["launch","queue"]') fail(`an empty queue: agents ${JSON.stringify(env.calls)}, expected the launch agent and the queue agent alone`)
+      if (result.agents !== 2) fail(`an empty queue: agents ${result.agents}, expected 2, the launch and queue agents`)
       if (result.date !== '2026-10-21' || result.baseTip !== sha('c') || result.logDir !== `${env.repo}/.scratch/review-queue/log/2026-10-21`) fail(`an empty queue: date ${result.date}, baseTip ${result.baseTip}, logDir ${result.logDir}`)
     }
   }
 
   // 19. The open queue, with pull requests in it: each one into main is reviewed and posted, a row of
-  //     another base is not, and the base tip reported is the one the queue read. With a named list
-  //     the base tip is the inventory's. A queue agent that returns nothing is not an empty queue: the
-  //     run halts saying so and posts nothing.
+  //     another base is not, and the base tip reported is the launch agent's reading (#687), not the
+  //     queue's, nor with a named list the inventory's. A queue agent that returns nothing is not an
+  //     empty queue: the run halts saying so and posts nothing.
   checks++
   {
     const TIP = sha('9')
@@ -1036,21 +1043,22 @@ try {
     if (JSON.stringify(got) !== '["101 recorded","102 recorded"]') fail(`a queue of 101, 102 and a develop-based 999: results ${JSON.stringify(got)}, expected 101 and 102 recorded`)
     if (env.calls.some((c) => c.endsWith(':999'))) fail('a queue row whose base is not main was reviewed')
     if (env.posted.map((p) => p.n).sort().join(',') !== '101,102') fail(`a queue of 101 and 102: comments on ${env.posted.map((p) => p.n).join(',')}`)
-    if (result.baseTip !== TIP) fail(`a queue: baseTip ${result.baseTip}, expected the queue's ${TIP}`)
-    env = run({ prs: [101] }, PRS)
+    if (result.baseTip !== sha('c')) fail(`a queue: baseTip ${result.baseTip}, expected the launch agent's ${sha('c')}, not the queue's ${TIP}`)
+    env = run({ prs: [101] }, { 101: { ...PRS[101], baseTip: TIP } })
     result = await execute(env)
-    if (result.baseTip !== sha('c')) fail(`a named list: baseTip ${result.baseTip}, expected the inventory's ${sha('c')}`)
+    if (result.baseTip !== sha('c')) fail(`a named list: baseTip ${result.baseTip}, expected the launch agent's ${sha('c')}, not the inventory's ${TIP}`)
     if (env.calls.includes('queue')) fail('a named list ran the queue agent')
     env = run({ prs: undefined }, PRS, { queue: 'null' })
     result = await execute(env)
-    if (!result || !result.halted || JSON.stringify(result.prs) !== '[]' || env.posted.length || env.calls.length !== 1) fail(`a queue agent that returned nothing: ${JSON.stringify(result)}, ${env.calls.length} agent(s), ${env.posted.length} comment(s); expected a halt naming the queue, no review and no post`)
+    if (!result || !result.halted || JSON.stringify(result.prs) !== '[]' || env.posted.length || env.calls.length !== 2) fail(`a queue agent that returned nothing: ${JSON.stringify(result)}, ${env.calls.length} agent(s), ${env.posted.length} comment(s); expected a halt naming the queue, no review and no post`)
   }
 
   // 20. The agent budget (#86). Three pull requests with four candidates each, a mutation cap of 2 and
   //     agents that take different times, so the pipelines overlap. Per pull request that is one
-  //     inventory, two axes, two mutations, one verdict and one post: 7, so 21 named and 22 with the
-  //     queue. The return reports exactly the agents that ran, and no more than the slot count are ever
-  //     in flight at once. One pull request's mutations start while another is still under review.
+  //     inventory, two axes, two mutations, one verdict and one post: 7, so 21, 22 with the launch
+  //     agent (#687) and 23 with the queue too. The return reports exactly the agents that ran, and no
+  //     more than the slot count are ever in flight at once. One pull request's mutations start while
+  //     another is still under review.
   checks++
   {
     const four = (n) => pr(n, ['tests/q.cs'], { candidates: [cand(`Q${n}a`), cand(`Q${n}b`), cand(`Q${n}c`), cand(`Q${n}d`)] })
@@ -1061,7 +1069,7 @@ try {
       if (kind === 'standards' || kind === 'spec') return { 301: 2, 302: 40, 303: 15 }[n] || 1
       return kind === 'mutate' ? 5 + Number(label.split(':')[2]) : 3
     }
-    for (const [slots, queued, want] of [[2, false, 21], [1, false, 21], [3, true, 22], [5, false, 21]]) {
+    for (const [slots, queued, want] of [[2, false, 22], [1, false, 22], [3, true, 23], [5, false, 22]]) {
       env = run({ prs: queued ? undefined : [301, 302, 303], maxParallel: slots, maxMutationsPerPr: 2 }, WIDE3,
         { delay, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
       result = await execute(env)
@@ -1323,8 +1331,9 @@ try {
     const r = await execute(dead)
     const line = (r.summary || [])[0] || ''
     if (!/^#306 6{40} - \(failed: verdict: the verdict agent returned nothing\) \(no record\): 0 verified finding\(s\), 2 mutation\(s\), did-not-fail: none$/.test(line)) fail(`a failed pull request's summary line is ${JSON.stringify(line)}`)
-    // A halted run, a bad launch or a queue nobody could read, leads with an empty summary.
-    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }]]) {
+    // A halted run, a bad launch, a queue nobody could read or a script that is not origin/main's
+    // (#687), leads with an empty summary.
+    for (const [why, a, b] of [['a bad launch', { prs: [] }, {}], ['an unread queue', {}, { queue: 'null' }], ['a script that is not origin/main\'s', {}, { launch: { ...LAUNCH_OK, differs: true, behind: 1 } }]]) {
       const h = await execute(run(a, SERVED, b))
       if (Object.keys(h || {})[0] !== 'summary' || !Array.isArray(h.summary) || h.summary.length) fail(`${why} returns ${JSON.stringify(h)}, expected summary [] first`)
     }
@@ -1400,6 +1409,79 @@ try {
     if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allPrompts) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
+
+  // A script that is not origin/main's (#687; ADR-0026 decision 3: no launch runs a scriptPath from an
+  // unlanded copy). The launch agent runs first and alone, and when repo's copy of the script differs
+  // from origin/main's, or it cannot tell, the run halts before any other agent: summary [] first,
+  // prs [], nothing posted, and a halted line starting `launch:` that names the fix the checkout's
+  // state allows. Only a clean main behind origin/main is given the fast-forward.
+  {
+    const FF = 'merge --ff-only origin/main'
+    const halts = [
+      ['a clean main 84 behind', { differs: true, behind: 84 }, (h) => h.includes(FF) ? '' : `does not give the fast-forward ${FF}`],
+      // Behind as well, so the edit's remedy must come first of the four, as the accepted draft orders them.
+      ['an uncommitted edit of the script', { differs: true, scriptEdited: true, trackedChanges: true, behind: 5 },(h) => /uncommitted edit/.test(h) && !h.includes(FF) ? '' : 'does not name the uncommitted edit, or gives a fast-forward'],
+      ['a checkout on task/x', { differs: true, branch: 'task/x', behind: 3 }, (h) => h.includes('task/x') && !h.includes(FF) ? '' : 'does not name task/x, or gives a fast-forward'],
+      ['a main with tracked changes', { differs: true, trackedChanges: true, behind: 2 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward over tracked changes'],
+      ['a main with a commit origin/main lacks', { differs: true, behind: 0 }, (h) => !h.includes(FF) ? '' : 'gives a fast-forward that cannot apply'],
+      ['a launch agent that returns nothing', 'null', (h) => h.startsWith('launch: could not tell') ? '' : 'does not start "launch: could not tell"'],
+      ['a launch agent that reports an error', { error: 'git fetch origin --tags: could not reach origin' }, (h) => h.startsWith('launch: could not tell') && h.includes('could not reach origin') ? '' : 'does not start "launch: could not tell" with the error'],
+      ['a launch agent whose differs is no boolean', { differs: 'yes' }, (h) => h.startsWith('launch: could not tell') ? '' : 'does not start "launch: could not tell"'],
+    ]
+    for (const [what, launch, judge] of halts) {
+      for (const a of [{}, { prs: [101, 102] }]) {
+        checks++
+        const env = run(a, PRS, { launch: launch === 'null' ? 'null' : { ...LAUNCH_OK, ...launch }, queue: { baseTip: sha('c'), prs: [{ number: 101, head: sha('1'), baseRef: 'main' }], error: '' } })
+        const result = await execute(env)
+        const how = `${what}${a.prs ? ', with a list' : ', from the queue'}`
+        if (!result || Object.keys(result)[0] !== 'summary' || !Array.isArray(result.summary) || result.summary.length) { fail(`${how}: returns ${JSON.stringify(result)}, expected summary [] first`); continue }
+        if (JSON.stringify(result.prs) !== '[]' || env.posted.length) fail(`${how}: prs ${JSON.stringify(result.prs)}, ${env.posted.length} comment(s); expected none`)
+        if (JSON.stringify(env.calls) !== '["launch"]' || result.agents !== 1) fail(`${how}: agents ${JSON.stringify(env.calls)} (${result.agents} reported), expected the launch agent alone`)
+        const h = String(result.halted || '')
+        if (!h.startsWith('launch: ') || !h.endsWith('nothing was reviewed and nothing was posted')) fail(`${how}: halted ${JSON.stringify(h)}, expected a launch: line ending "nothing was reviewed and nothing was posted"`)
+        if (h.includes('bad launch')) fail(`${how}: halted ${JSON.stringify(h)} says bad launch, which is an argument halt that started no agent`)
+        if (!h.startsWith('launch: could not tell') && !h.includes(`${env.repo}/.claude/workflows/review-queue.js`)) fail(`${how}: halted ${JSON.stringify(h)} does not name repo's script`)
+        const wrong = judge(h)
+        if (wrong) fail(`${how}: halted ${JSON.stringify(h)} ${wrong}`)
+        if (result.date !== '2026-10-21' || result.logDir !== `${env.repo}/.scratch/review-queue/log/2026-10-21` || JSON.stringify(result.headMoved) !== '[]') fail(`${how}: date ${result.date}, logDir ${result.logDir}, headMoved ${JSON.stringify(result.headMoved)}`)
+      }
+    }
+    // The launch agent's reading is the run's base tip, whatever the queue or an inventory read
+    // after it. A halted run returns the tip the launch agent read, and "" for an unread one.
+    checks++
+    {
+      const env = run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7') } })
+      const result = await execute(env)
+      if (result.baseTip !== sha('7')) fail(`a launch agent that read origin/main at ${sha('7')}: baseTip ${result.baseTip}, expected the launch agent's`)
+      const read = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: sha('7'), differs: true, behind: 1 } }))
+      if (read.baseTip !== sha('7')) fail(`a halted run whose launch agent read origin/main at ${sha('7')}: baseTip ${JSON.stringify(read.baseTip)}, expected the launch agent's`)
+      const halted = await execute(run({ prs: [101] }, PRS, { launch: { ...LAUNCH_OK, baseTip: 'not a sha', error: 'rev-parse failed' } }))
+      if (halted.baseTip !== '') fail(`a launch agent that read no sha: baseTip ${JSON.stringify(halted.baseTip)}, expected ""`)
+    }
+    // With a list, every pipeline starts at once, so only an agent run before them all can stop the
+    // axes: the launch agent is the first call, and every inventory comes after it ends.
+    checks++
+    {
+      const WIDE3 = { 301: pr(301, ['docs/a.md']), 302: pr(302, ['docs/b.md']), 303: pr(303, ['docs/c.md']) }
+      const env = run({ prs: [301, 302, 303], maxParallel: 5 }, WIDE3)
+      await execute(env)
+      const ended = env.events.indexOf('end launch')
+      if (env.calls[0] !== 'launch') fail(`three pull requests: the first agent is ${env.calls[0]}, expected launch`)
+      if (ended < 0 || env.events.some((e, i) => e.startsWith('start inventory:') && i < ended)) fail(`three pull requests: an inventory started before the launch agent ended: ${env.events.join(', ')}`)
+    }
+    // The launch prompt reads and reports: it compares repo's script with origin/main's, reads the
+    // checkout's state, carries the house rules, and moves nothing.
+    checks++
+    {
+      const env = run({ prs: [101] }, PRS)
+      await execute(env)
+      const p = env.prompts.launch || ''
+      // The fetch is held to step 1, before origin/main is read: HOUSE names the same command, so a
+      // bare search for it would pass with the step's fetch gone (#687, Q7: an unfetched tip proves nothing).
+      for (const want of [`1. \`git -C ${env.repo} fetch origin --tags\`, then baseTip = \`git -C ${env.repo} rev-parse origin/main\``,`git -C ${env.repo} diff --quiet origin/main -- .claude/workflows/review-queue.js`, `git -C ${env.repo} symbolic-ref --short -q HEAD`, `git -C ${env.repo} rev-list --count HEAD..origin/main`, `git -C ${env.repo} status --porcelain --untracked-files=no`, `git -C ${env.repo} diff --quiet HEAD -- .claude/workflows/review-queue.js`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/launch.json`, 'House rules (']) if (!p.includes(want)) fail(`the launch prompt lacks ${JSON.stringify(want)}`)
+      if (/merge --ff-only|git -C \S+ (checkout|switch|reset|pull)\b/.test(p)) fail('the launch prompt moves the checkout')
+    }
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a

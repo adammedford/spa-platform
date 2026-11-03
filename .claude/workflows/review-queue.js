@@ -24,6 +24,11 @@ export const meta = {
 //   args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-22",
 //           "wt": "/Users/adammedford/.worktrees/review-queue-2026-10-22", "prs": [<pull request number>] }
 // Leave prs out to review the open queue: every open pull request into main (#86).
+// The file must be origin/main's, since no launch runs an unlanded copy (ADR-0026 decision 3, #687):
+// the launch agent compares repo's copy with origin/main's, and the run halts before any other agent
+// when they differ or it cannot tell, its halted line naming the fix. The check reads repo's copy, so
+// scriptPath is always repo's own .claude/workflows/review-queue.js. An unlanded change of this script
+// is tried in review-queue_tests.mjs, never by a launch.
 // Arguments. Every required one is required because the script can derive none of them: it has no
 // clock, environment or filesystem.
 //   repo          required  the main checkout, an absolute path. Read-only apart from the run's log.
@@ -44,12 +49,12 @@ export const meta = {
 //
 // The agent budget (#86). Every agent runs through one set of maxParallel slots, so the pull
 // requests' pipelines (inventory, axes, mutations, verdict, post) overlap and one pull request's
-// mutations start while another is still under review. A run starts at most one queue agent (none
-// with a list), then per pull request one inventory, one range agent when an earlier head carries a
-// record, two axes, up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap each,
-// 9 with the defaults. The return's agents is the count that ran, beside the date, the base tip the
-// run saw and the log directory. A wide queue is kept under a session's guideline by naming pull
-// requests or lowering the cap.
+// mutations start while another is still under review. A run starts one launch agent (#687), then at
+// most one queue agent (none with a list), then per pull request one inventory, one range agent when
+// an earlier head carries a record, two axes, up to maxMutationsPerPr mutations, one verdict and one
+// post: 6 + the cap each, 9 with the defaults, beside the run's launch and queue agents. The return's
+// agents is the count that ran, beside the date, the base tip the run saw and the log directory. A
+// wide queue is kept under a session's guideline by naming pull requests or lowering the cap.
 //
 // A delta review (#85): when the latest record names an ancestor of the head, the axes review the
 // commits since that head with the whole diff for context, each merge in the range audited on its
@@ -470,8 +475,35 @@ const QUEUE = {
   },
   required: ['baseTip', 'prs', 'error'],
 }
+// What the launch agent reads of repo against origin/main (#687): whether repo's copy of this script
+// differs from origin/main's, and the checkout's state, from which launchHalt names the fix.
+const LAUNCH = {
+  type: 'object',
+  properties: {
+    baseTip: { type: 'string' }, differs: { type: 'boolean' }, branch: { type: 'string' },
+    behind: { type: 'integer' }, trackedChanges: { type: 'boolean' }, scriptEdited: { type: 'boolean' },
+    error: { type: 'string' },
+  },
+  required: ['baseTip', 'differs', 'branch', 'behind', 'trackedChanges', 'scriptEdited', 'error'],
+}
 
 // ---------------------------------------------------------------- prompts
+const launchPrompt = () => `Check, before a review run starts, that the review-queue script in the main checkout is origin/main's. Read and report; judge nothing.
+
+${HOUSE}
+
+OUTPUT FILE: ${LOG}/launch.json
+
+1. \`git -C ${REPO} fetch origin --tags\`, then baseTip = \`git -C ${REPO} rev-parse origin/main\`.
+2. \`git -C ${REPO} diff --quiet origin/main -- .claude/workflows/review-queue.js\`: differs is false on exit 0 and true on exit 1. Any other exit is an error.
+3. branch = \`git -C ${REPO} symbolic-ref --short -q HEAD\` ("" when HEAD is detached).
+4. behind = \`git -C ${REPO} rev-list --count HEAD..origin/main\`, an integer.
+5. trackedChanges = whether \`git -C ${REPO} status --porcelain --untracked-files=no\` prints anything.
+6. scriptEdited = whether \`git -C ${REPO} diff --quiet HEAD -- .claude/workflows/review-queue.js\` exits 1.
+7. error: which command failed, a failed fetch included, else "".
+Never move the checkout to make the two agree: you only read.
+8. Write the whole result as JSON to the OUTPUT FILE, then return it.`
+
 const queuePrompt = () => `List the open queue for a review run: every open pull request whose base is main. Read and report; judge nothing.
 
 ${HOUSE}
@@ -1077,10 +1109,40 @@ const summaryLine = (r) => {
   return `#${r.number} ${r.head || '(unread)'} ${r.verdict || '-'} (${r.outcome}${r.stage ? ': ' + r.stage : ''}) ${r.recordUrl || '(no record)'}: ${((r.findings || {}).verified || []).length} verified finding(s), ${(r.mutations || []).length} mutation(s), did-not-fail: ${didNotFail.join(', ') || 'none'}`
 }
 
+// ---------------------------------------------------------------- the launch check
+// No launch runs a scriptPath from an unlanded copy (ADR-0026 decision 3, #687). The script has no
+// filesystem, so the launch agent reads repo against origin/main, and this judges it: "" when the run
+// may go on, otherwise the halted line, naming the fix the checkout's state allows. A reading it
+// cannot trust halts too (a check fails closed). Its own wording, never "bad launch", which is an
+// argument halt that started no agent.
+const launchHalt = (L) => {
+  const file = `\`${REPO}/.claude/workflows/review-queue.js\``
+  const end = '; nothing was reviewed and nothing was posted'
+  if (!L || L.error || typeof L.differs !== 'boolean') {
+    return `launch: could not tell whether ${file} is origin/main's: ${!L ? 'the launch agent returned nothing' : L.error || 'the launch agent reported no comparison'}${end}`
+  }
+  if (!L.differs) return ''
+  const fix = L.scriptEdited
+    ? 'the file carries an uncommitted edit, an unlanded copy: land it, or restore it, then relaunch'
+    : L.branch === 'main' && !L.trackedChanges && L.behind > 0
+      ? `fast-forward and relaunch: \`git -C ${REPO} merge --ff-only origin/main\``
+      : L.branch !== 'main'
+        ? `the checkout is on ${L.branch ? `\`${L.branch}\`` : 'a detached HEAD'}, not main, and only the human moves it (docs/agents/landing-work.md -> "The main checkout is shared")`
+        : 'the checkout\'s main has tracked changes or a commit origin/main lacks, so no fast-forward is given'
+  return `launch: the script is not origin/main's: ${file} differs from origin/main (${L.baseTip ? `\`${L.baseTip}\`` : 'unread'}), so this run ran another copy (ADR-0026 decision 3); ${fix}${end}`
+}
+
 // ---------------------------------------------------------------- run
 phase('Inventory')
-// The base tip the run saw: the queue agent's reading, or with a named list the first inventory's.
+// The base tip the run saw: the launch agent's reading of origin/main.
 let baseTip = ''
+const L = await run(launchPrompt(), { label: 'launch', phase: 'Inventory', schema: LAUNCH })
+const launchStop = launchHalt(L)
+if (launchStop) {
+  log(`review-queue ${DATE}: ${launchStop}`)
+  return { summary: [], date: DATE, baseTip: L && /^[0-9a-f]{40}$/.test(L.baseTip || '') ? L.baseTip : '', logDir: LOG, agents: agentsRun, halted: launchStop, headMoved: [], prs: [] }
+}
+baseTip = /^[0-9a-f]{40}$/.test(L.baseTip || '') ? L.baseTip : ''
 let PRS = NAMED
 if (!PRS) {
   const q = await run(queuePrompt(), { label: 'queue', phase: 'Inventory', schema: QUEUE })
@@ -1089,7 +1151,7 @@ if (!PRS) {
     log(`review-queue ${DATE}: ${why}`)
     return { summary: [], date: DATE, baseTip: '', logDir: LOG, agents: agentsRun, halted: why, headMoved: [], prs: [] }
   }
-  baseTip = /^[0-9a-f]{40}$/.test(q.baseTip || '') ? q.baseTip : ''
+  if (!baseTip) baseTip = /^[0-9a-f]{40}$/.test(q.baseTip || '') ? q.baseTip : ''
   // gh was asked for base main; a row of another base, or a number that is not one, is dropped.
   PRS = [...new Set((q.prs || []).filter((p) => p && p.baseRef === 'main' && Number.isInteger(p.number) && p.number > 0).map((p) => p.number))]
 }
