@@ -34,7 +34,7 @@ public sealed class RuleIdLiteralTests : IDisposable
     public void A_quoted_problem_code_is_one_violation_at_its_line_and_the_constant_and_the_prose_are_none()
     {
         // The same three shapes for a code of contracts/http-contract.md -> Errors (#158): the rule
-        // takes the thirteen codes as well as the thirteen rule ids.
+        // takes the codes as well as the rule ids.
         Write(
             "Answers.cs",
             [
