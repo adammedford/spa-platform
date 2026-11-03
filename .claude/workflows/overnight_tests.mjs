@@ -1524,6 +1524,26 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   if (!integ.includes('THE GATE ALONE')) fail('#712: the integrate step\'s STEP 0 does not hand a merge already in to the gate alone')
 }
 
+// 37. The report's main-checkout step tells a foreground session's scratch from a file the run left (#714). On
+//     2026-11-01 it listed 331 untracked files absent from untracked-at-start.txt as a finding, all under
+//     .scratch/ready-human-advance-2026-11-01/ and .scratch/ready-human-recheck-2026-11-01/, which foreground
+//     sessions wrote during the run, where no lane writes. The step reads a new untracked path under .scratch/ but
+//     outside .scratch/overnight/ as a note naming its directories, and any other new untracked path as a finding.
+{
+  const NOTE_RULE = 'a new untracked path under .scratch/ but outside .scratch/overnight/ is a note, not a finding'
+  const DIRS_RULE = 'list it as a note naming its directories'
+  const FINDING_RULE = 'any other untracked path untracked-at-start.txt does not list is a finding: list it'
+  if (!reportPrompt) fail('#714: no report prompt was rendered, so the untracked-files check read nothing')
+  else {
+    const step = (/^2\. Check .*$/m.exec(reportPrompt) || [''])[0]
+    if (!step) fail('#714: the report prompt has no main-checkout step 2')
+    for (const [rule, what] of [[NOTE_RULE, 'read a foreground session\'s scratch under .scratch/, outside .scratch/overnight/, as a note'],
+      [DIRS_RULE, 'name the directories of the noted scratch files'], [FINDING_RULE, 'keep every other new untracked path a finding']]) {
+      if (step && !step.includes(rule)) fail(`#714: the report prompt's main-checkout step does not ${what}`)
+    }
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
