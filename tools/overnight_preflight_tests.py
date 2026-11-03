@@ -1518,6 +1518,26 @@ class FixtureTests(PreflightTestCase):
                          "mock route of the harness does; on the night a route to a human leaves it out",
                          expect["note"])
 
+    def test_a_needs_triage_ticket_waiting_on_a_ticket_no_lane_runs_skips_on_the_blocker(self):
+        # #711 review: overnight.js's implement counts a blocker collect lists as met only when a lane
+        # integrates it or it is close-in-morning. Collect makes a ready-for-agent ticket with any
+        # other blocker "blocked", but a needs-triage one keeps its status, so 6.9 (waiting on the
+        # blocked issue-13) and 6.7 (on the claimed issue-15) skip on the blocker, and 6.8 (on the
+        # close-in-morning issue-16) integrates.
+        tickets = [ticket("issue-10", 10, "integrator", "ready-for-agent"),
+                   ticket("issue-13", 13, "ws1-infra", "blocked"),
+                   ticket("issue-15", 15, "integrator", "claimed"),
+                   ticket("issue-16", 16, "integrator", "close-in-morning", open_boxes=0),
+                   ticket("6.9", 358, "ws6-verification", "needs-triage", blocked_by=("issue-13",)),
+                   ticket("6.7", 356, "ws6-verification", "needs-triage", blocked_by=("issue-15",)),
+                   ticket("6.8", 357, "ws6-verification", "needs-triage", blocked_by=("issue-16",))]
+        case = Case(self, tickets=tickets)
+        fixture = case.dir / "fixture.json"
+        case.run("--fixture", str(fixture), DATE)
+        expect = json.loads(fixture.read_text())["expect"]
+        self.assertEqual(["issue-10", "6.8"], expect["integrated"])
+        self.assertEqual(["6.9", "6.7"], expect["skippedForBlocker"])
+
     def test_without_the_flag_no_fixture_is_written(self):
         case = Case(self)
         # The directory it runs in, besides the call records its doubles keep there, and the checkout.

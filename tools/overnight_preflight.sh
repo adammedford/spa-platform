@@ -19,8 +19,9 @@
 # expected because the harness's mock route sends every one to an agent (#711), and expect.note,
 # written when there is one, says it integrates only if Route sends it to an agent; one with a
 # ready-for-human blocker is not expected, since overnight.js routes it to a human whatever its route
-# agent returns (#379), and it stops the ready ones it blocks as a skipped ticket does. A held ticket is in the fixture's skip and not
-# the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
+# agent returns (#379), and it stops the ready ones it blocks as a skipped ticket does, as does a
+# blocker collect lists with no lane (blocked, claimed, foreground, ready-for-human). A held ticket
+# is in the fixture's skip and not the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
 # before launch frees it for the run (#484). expect.startsBefore is written empty, as is
 # standingAnswer left out of args: the harness reads both, and they are the human's to fill. A
 # failed forecast writes no fixture: one with no tickets would pass the harness and prove nothing.
@@ -893,8 +894,12 @@ if fixture:
              and t["id"] not in skip and t["id"] not in human]
     # overnight.js gives a skipped ticket no lane, so a ready ticket it blocks, directly or through
     # another such ticket, settles as skipped on the blocker and never integrates (#485 review); a
-    # ticket routed to a human gets none either.
-    stopped = set(skip) | human
+    # ticket routed to a human gets none either. Nor does a ticket collect lists as blocked, claimed,
+    # foreground or ready-for-human, and the implement stage of overnight.js counts a listed blocker as met only
+    # when a lane integrates it or it is close-in-morning. Collect gives no ready-for-agent ticket
+    # such a blocker, but a needs-triage one keeps its label whatever it waits on (#711 review).
+    lane = ("ready-for-agent", "needs-triage", "close-in-morning")
+    stopped = set(skip) | human | {t["id"] for t in tickets if t["status"] not in lane}
     grew = True
     while grew:
         grew = False
