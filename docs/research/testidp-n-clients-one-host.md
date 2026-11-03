@@ -9,9 +9,9 @@
   `tests/Gateway.TestHarness`, the composed suites under `tests/`, `src/Platform.Identity` (read only,
   for what the gateway sends; A-01 holds and nothing here changes it), `infra/envs/poc/apps/main.tf`,
   `docs/plan/04-tests.md`, `contracts/test-ids.md`, `contracts/upstream-contract.md`, `GLOSSARY.md`,
-  ADR-0001, ADR-0011, ADR-0017 and the G0 Cognito run (`spikes/g0/cognito/`). Three pages of the
+  ADR-0001, ADR-0011, ADR-0017 and the G0 Cognito run (`spikes/g0/cognito/`). Four pages of the
   Amazon Cognito developer guide were fetched on 2026-11-03 (authorize endpoint, access token,
-  resource servers, logout endpoint); the "user pool sign-out" page returned only its title, so the
+  resource servers, logout endpoint), and RFC 7009; the "user pool sign-out" page returned only its title, so the
   Cognito logout facts rest on the logout-endpoint page and on ADR-0017's C-2.14 and C-2.15. Section
   8 lists what I executed against what I read. SDK 10.0.401 (`global.json` pins 10.0.100 with
   `rollForward: latestFeature`). No container engine on this machine; no AWS credential or API was
@@ -281,9 +281,11 @@ scope=openid profile https://orders.spa-poc.test/read, token_use=access ... app2
   (`src/Platform.Identity/SessionEnd.cs:83-104`). Under the map's one session record holding N token
   sets, one `POST /bff/logout` is therefore N revocations, each authenticated as the fragment whose
   refresh token it presents; a revocation sent under the shell's credentials for a fragment's token is
-  a 200 that revokes nothing, at the fixture and, by RFC 7009's "the client ... must be authorized to
-  revoke the token", at a real provider. `Revocations[].ClientId` and `.Known` let a test assert each
-  one landed under the right client.
+  a 200 that revokes nothing, at the fixture and at any provider that follows RFC 7009, whose
+  section 2.1 has the server "first validate[] the client credentials (in case of a confidential
+  client) and then verif[y] whether the token was issued to the client making the revocation request",
+  and whose section 2.2 answers 200 "if the client submitted an invalid token" ([RFC 7009][rfc7009]).
+  `Revocations[].ClientId` and `.Known` let a test assert each one landed under the right client.
 
 **Logout** (`/endsession` `:447-477`, `/logout` `:480-499`):
 
@@ -412,8 +414,8 @@ check in `OnTokenValidated` or `Guard` are the library's and the API owner's par
   `spikes/g0/cognito/output-cognito.txt:48-53,72-75,106-107`.
 - Amazon Cognito developer guide, fetched 2026-11-03: [the authorize endpoint][cog-authz],
   [understanding the access token][cog-at], [scopes, M2M and resource servers][cog-rs],
-  [the logout endpoint][cog-logout]. The "user pool sign-out" page returned only its title and is not
-  relied on.
+  [the logout endpoint][cog-logout]; [RFC 7009][rfc7009] sections 2.1 and 2.2. The "user pool
+  sign-out" page returned only its title and is not relied on.
 
 **Not verified:** Cognito's behaviour for two app clients sharing one callback URL under one host was
 not exercised (G0 ran two hosts), and whether Cognito restricts `resource` per app client beyond "a
@@ -423,3 +425,4 @@ URL" was read from the developer guide, not probed. Both belong to the deployed 
 [cog-at]: https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html
 [cog-rs]: https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-define-resource-servers.html
 [cog-logout]: https://docs.aws.amazon.com/cognito/latest/developerguide/logout-endpoint.html
+[rfc7009]: https://www.rfc-editor.org/rfc/rfc7009#section-2.1
