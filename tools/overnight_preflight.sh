@@ -63,7 +63,16 @@
 #             or origin/main's subjects, or collect's answer could not be read for open boxes. A
 #             branch on origin alone is not listed: the rename moves a local one. Collect reads
 #             origin's task branches too, so a held entry whose id origin also has a `task/<id>-`
-#             branch for says so: the rename alone does not free that ticket.
+#             branch for says so: the rename alone does not free that ticket. Each held ticket names
+#             its open blockers, and gets its rename only when every one is met tonight: a forecast
+#             ticket collect makes ready-for-agent or close-in-morning. One that is not, of any kind
+#             of issue, prints "leave held" and no rename, and stays in the fixture's skip as every
+#             held ticket does (#663). claims reads edges only: the waits are collect's blockedBy,
+#             the open blocked-by edges, which docs/agents/tracker-policy.md makes the one record of
+#             a wait, never prose and never a box, since GitHub has no box-level edge. So it cannot
+#             see a joint delivery no edge records, as #347's ws1 commit delivers #583's four edits
+#             under #583's decision with the edge withdrawn on purpose; the line neither adds an
+#             edge nor tells the reader to.
 #   shape     Every ready-for-agent and needs-triage ticket of the forecast, judged by origin/main's
 #             tools/ticket_shape.py under the label it will carry after Route, ready-for-agent
 #             (#483). The ticket-shape Action judges a ticket once it carries that label, so a
@@ -75,13 +84,54 @@
 #             named with its rules. The line fails when the forecast failed, origin/main has no
 #             ticket_shape.py, or a ticket could not be read or judged (the check's exit 2): a
 #             ticket left unjudged would read as one that passed.
+#   adr       Each ticket the shape line read whose Touches line, read by origin/main's
+#             ticket_shape.touches(), names a path under docs/adr/: a bare docs/adr/, an existing
+#             ADR file, docs/adr/README.md, or such a path among others, the evidence saying whether
+#             every path is under docs/adr/. A scripted session only drafts an ADR (ADR-0021
+#             decision 4), and #500 and #639 edited accepted ADRs' bodies, so any such path is a
+#             skip candidate, not only a new ADR (#663). The one exemption is the specifically
+#             authorised edit, failing closed: a change request whose latest decision the decision
+#             line passes, and whose every Touches path is an existing file under docs/adr/ in
+#             origin/main's tree. The evidence names its path and decision URL and says the
+#             exemption covers that authorised edit only, which the lane validates. A change request
+#             the decision line flags is named there, not twice.
+#   decision  Each change request (the change-request label) among the tickets the shape line read,
+#             its comments read every page with `gh api --paginate --slurp` as demoted reads
+#             timelines, and judged by origin/main's decision_citation.judge(), imported unchanged:
+#             its command line cannot serve, since its exit 1 covers no decision, a decline and
+#             ADR: yes alike. Every outcome but one is a skip candidate, named with the reason
+#             judge() gives: the one that passes is a latest decision by the human's account that
+#             accepts with ADR: no. It is decision-form screening, not a test of every reason a lane
+#             may stop: the screen reads the decision's form and author only, and leaves the draft's
+#             identity and freshness, the frozen-contract restrictions and the edit authority to the
+#             lane, so an `accept as drafted` whose draft was edited after the decision passes here,
+#             and so does #562, which needs foreground delivery (#663).
+#   unblocks  The five open blockers with the most downstream tickets, each counted once however
+#             many paths reach it, transitively over the forecast's known blockedBy edges in
+#             collect's answer, not over every issue in the repository, so no GraphQL walk is made;
+#             ties go to the lower issue number, and fewer are named when fewer exist. Each is
+#             labelled by its forecast status, or, outside the forecast, by its labels from one
+#             `gh issue view <n> --json labels`. It is informational and adds no skip candidate
+#             (#663).
+#
+# Each of adr, decision and unblocks passes when it judged everything and fails only when it could
+# not judge: the forecast failed, origin/main's decision_citation.py or ticket_shape.py could not be
+# loaded, gh could not read a ticket, its comments or a blocker's labels, or judge() raised
+# Unreadable. A candidate is never a failure, and a pass means the screen completed its stated
+# checks, not that it authorised implementation (#663).
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
 # line, `overnight_preflight: pass: ...` or `overnight_preflight: fail: ...`, and last the Workflow
-# `args` JSON for the date: repo, date, wt, maxParallel (the number of owners with ready-for-agent
-# tickets, at least 1; left out when the forecast failed, so the workflow's default applies) and
-# skip (the skip candidates of the demoted and shape lines, then --skip's ids, each once). It leaves out standingAnswer, which the workflow requires: the grant
+# `args` JSON for the date: repo, date, wt, maxParallel and skip (the skip candidates of the
+# demoted, shape, adr and decision lines, then --skip's ids, each once). maxParallel is
+# min(2 x lanes, 7), lanes the number of owners with ready-for-agent tickets, at least 1, and is
+# left out when the forecast failed, so the workflow's default applies (#663). It is a launch
+# recommendation and a heuristic, which the verdict line says too, and no measured optimum: slots
+# cap implement, review, the serialised merge and resolve (withSlot in
+# .claude/workflows/overnight.js), a lane wants one implement and one review slot at once, and 7
+# bounds the slot-counted work and not every agent, since grill and route agents take no slot; 7 is
+# the most any launch has used. The human can raise or lower it at launch. It leaves out standingAnswer, which the workflow requires: the grant
 # is the human's, per launch (ADR-0021 decision 3), so the arguments do not run until they set it.
 # The JSON is printed on a fail as well, so the evidence and the arguments are read together.
 #
@@ -417,19 +467,30 @@ for subject in open(subjects):
 tips = [line.split() for line in open(branches) if line.strip()]
 # Collect reads origin/task/ as well (overnight_collect.branches), so a same-id branch there still claims.
 on_origin = [line.strip() for line in open(remote) if line.strip()]
+tickets = json.load(open(collect))["tickets"]
+# A wait is an open blocked-by edge, the blockedBy of collect, and nothing else: not prose, not a box
+# (#663). It is met tonight when the blocker is a forecast ticket collect makes ready-for-agent or
+# close-in-morning, the MET_TONIGHT of tools/overnight_collect.py.
+status = {t["id"]: t["status"] for t in tickets}
 held = []
 ids = []
-for ticket in sorted(json.load(open(collect))["tickets"], key=lambda t: t["issue"]):
+for ticket in sorted(tickets, key=lambda t: t["issue"]):
     tid, number, boxes = ticket["id"], ticket["issue"], ticket["openBoxes"]
     if boxes <= 0 or tid not in merged:
         continue
+    unmet = [b for b in ticket["blockedBy"] if status.get(b) not in ("ready-for-agent", "close-in-morning")]
+    waits = ", ".join(b + (", not met tonight" if b in unmet else ", met tonight") for b in ticket["blockedBy"])
+    waits = f"open blockers: {waits}" if waits else "no open blocker"
     for name, sha in tips:
         if name.startswith(f"task/{tid}-"):
-            entry = (f"{tid} (#{number}, {boxes} open boxes): "
-                     f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
-            also = [other for other in on_origin if other.startswith(f"task/{tid}-")]
-            if also:
-                entry += f" (origin/{also[0]} claims it too, which the rename does not free)"
+            if unmet:
+                entry = f"{tid} (#{number}, {boxes} open boxes; {waits}): leave held"
+            else:
+                entry = (f"{tid} (#{number}, {boxes} open boxes; {waits}): "
+                         f"git -C {repo} branch -m {name} hold/{tid}-{sha[:7]}")
+                also = [other for other in on_origin if other.startswith(f"task/{tid}-")]
+                if also:
+                    entry += f" (origin/{also[0]} claims it too, which the rename does not free)"
             held.append(entry)
             if tid not in ids:
                 ids.append(tid)
@@ -441,7 +502,7 @@ print("; ".join(held))
   if [ -z "$held" ]; then
     row pass claims "no ticket with an open box is held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names"
   else
-    row pass claims "these tickets have open boxes and are held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names, so collect reads them as claimed; free each by renaming its branch: $held"
+    row pass claims "these tickets have open boxes and are held by a local task branch whose id a \`Merge part of task <id>\` subject on origin/main names, so collect reads them as claimed; free each whose open blockers are all met tonight by renaming its branch, and leave held each with an open blocker that is not (#663): $held"
   fi
 else
   row fail claims "collect's answer could not be read for open boxes, so no claim was judged"
@@ -452,6 +513,7 @@ fi
 # --- shape ------------------------------------------------------------------------------------------
 # The fields are tools/ticket_shape.py's FIELDS, the JSON its `-` reads.
 : > "$scratch/shaped"
+: > "$scratch/unread-issues"
 mkdir "$scratch/issues"
 if ! $forecast_ok; then
   row fail shape "the forecast failed, so no ticket was judged"
@@ -482,6 +544,7 @@ issue["labels"].append({"name": "ready-for-agent"})
 print(json.dumps(issue))
 ' "$issue.json" > "$issue.ready.json" 2>/dev/null; then
       unread="$unread #$number"
+      echo "$number" >> "$scratch/unread-issues"
       continue
     fi
     (cd "$repo" && python3 -I "$copy/tools/ticket_shape.py" - < "$issue.ready.json") > "$issue.out" 2>&1
@@ -529,20 +592,281 @@ pathlib.Path(out).write_text("".join(lines))
 fi
 [ -f "$scratch/shape-candidates" ] || : > "$scratch/shape-candidates"
 
-# --- verdict and arguments --------------------------------------------------------------------------
-if [ -z "$failed" ]; then
-  echo "overnight_preflight: pass: every precondition holds. The arguments follow; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
+# --- adr and decision -------------------------------------------------------------------------------
+# Both read the issues the shape line read, and are judged in one pass, because the adr line's
+# exemption and its "named there, not twice" rule need the decision line's verdict on a change
+# request (#663). The comments of each change request are read as the demoted line reads timelines;
+# judge() is origin/main's tools/decision_citation.py's, and touches() origin/main's
+# tools/ticket_shape.py's, both imported unchanged, so the screen uses the rules the run will use.
+mkdir "$scratch/comments"
+: > "$scratch/unread-comments"
+: > "$scratch/adr-candidates"
+: > "$scratch/decision-candidates"
+unloaded="origin/main's tools/decision_citation.py or tools/ticket_shape.py could not be loaded, so no ticket was judged"
+if ! $forecast_ok; then
+  row fail adr "the forecast failed, so no ticket's Touches line was read"
+  row fail decision "the forecast failed, so no change request's decision was read"
+elif [ ! -f "$copy/tools/ticket_shape.py" ] || [ ! -f "$copy/tools/decision_citation.py" ]; then
+  row fail adr "$unloaded"
+  row fail decision "$unloaded"
+elif ! requests="$(python3 -I -c '
+import json, pathlib, sys
+collect, issues, unread = sys.argv[1:]
+skipped = set(open(unread).read().split())
+for t in json.load(open(collect))["tickets"]:
+    number = str(int(t["issue"]))
+    if t["status"] in ("ready-for-agent", "needs-triage") and number not in skipped:
+        issue = json.loads(pathlib.Path(issues, number + ".json").read_text())
+        if "change-request" in [label["name"] for label in issue["labels"]]:
+            print(number)
+' "$scratch/collect.json" "$scratch/issues" "$scratch/unread-issues" 2>/dev/null)"; then
+  row fail adr "the issues the shape line read could not be read for their labels, so no ticket was judged"
+  row fail decision "the issues the shape line read could not be read for their labels, so no ticket was judged"
 else
-  echo "overnight_preflight: fail:$failed. The arguments follow, for when those lines pass; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
+  for number in $requests; do
+    (cd "$repo" && gh api --paginate --slurp "repos/{owner}/{repo}/issues/$number/comments?per_page=100") \
+      > "$scratch/comments/$number.json" 2>/dev/null || echo "$number" >> "$scratch/unread-comments"
+  done
+  python3 -I -c '
+import importlib.util, json, pathlib, sys
+copy, collect, issues, comments, unread_issues, unread_comments, adr_out, decision_out = sys.argv[1:]
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+try:
+    shape = load("ticket_shape", pathlib.Path(copy, "tools", "ticket_shape.py"))
+    citation = load("decision_citation", pathlib.Path(copy, "tools", "decision_citation.py"))
+    parsed = shape.ownership().rules()
+except Exception:
+    sys.exit(3)
+
+def one_line(text):
+    return " ".join(str(text).split())
+
+tickets = json.load(open(collect))["tickets"]
+ids = {t["issue"]: t["id"] for t in tickets}
+judged = [int(t["issue"]) for t in tickets if t["status"] in ("ready-for-agent", "needs-triage")]
+unread = [int(n) for n in open(unread_issues).read().split()]
+no_comments = {int(n) for n in open(unread_comments).read().split()}
+read = {n: json.loads(pathlib.Path(issues, f"{n}.json").read_text()) for n in judged if n not in unread}
+requests = [n for n in judged if n in read
+            and "change-request" in [label["name"] for label in read[n]["labels"]]]
+
+# decision: every outcome but an accept with ADR: no by the human account is flagged.
+problems, unjudged, flagged, passed, accepted = [], set(), [], [], {}
+login = None
+try:
+    login = citation.named_account(citation.DEFAULT_GUIDE)
+except citation.Unreadable as problem:
+    problems.append(one_line(problem))
+    unjudged.update(requests)
+for n in unread:
+    problems.append(f"gh could not read #{n}, so whether it is a change request is unjudged")
+for n in requests:
+    if login is None:
+        continue
+    if n in no_comments:
+        problems.append(f"gh could not read the comments of #{n}, so its decision is unjudged")
+        unjudged.add(n)
+        continue
+    try:
+        url, reasons = citation.judge(str(n), read[n], json.loads(pathlib.Path(comments, f"{n}.json").read_text()), login)
+    except (citation.Unreadable, ValueError) as problem:
+        problems.append(f"judge() could not read #{n} ({one_line(problem)})")
+        unjudged.add(n)
+        continue
+    if url:
+        accepted[n] = url
+        passed.append(f"{ids[n]} (#{n}: accepts with ADR: no at {url})")
+    else:
+        flagged.append((n, "; ".join(one_line(reason) for reason in reasons)))
+found = ("these are flagged and are skip candidates: "
+         + "; ".join(f"{ids[n]} (#{n}: {why})" for n, why in flagged)) if flagged else "none is flagged"
+if passed:
+    found += "; these pass: " + "; ".join(passed)
+head = f"{len(requests)} change requests among the {len(judged)} ready-for-agent and needs-triage tickets"
+caveat = ("the screen reads the latest decision\x27s form and author only: the accepted draft\x27s identity "
+          "and freshness (an `accept as drafted` whose draft was edited after the decision passes here), "
+          "the frozen-contract restrictions and the edit authority are the lane\x27s to validate, so a "
+          "pass does not authorise implementation")
+if problems:
+    decision = ("fail", f"{head}; " + "; ".join(problems) + f"; of the rest, {found}; {caveat}")
+else:
+    decision = ("pass", f"{head}; {found}; {caveat}")
+pathlib.Path(decision_out).write_text("".join(f"{ids[n]}\t#{n}\n" for n, _ in flagged))
+
+# adr: a Touches path under docs/adr/ flags the ticket, unless it is a change request accepted with
+# ADR: no whose every Touches path is an existing file under docs/adr/ at origin/main.
+adr_root = pathlib.Path(copy, "docs", "adr").resolve()
+
+def under(path):
+    bare = path.strip().lstrip("/")
+    return bare.rstrip("/") == "docs/adr" or bare.startswith("docs/adr/")
+
+def existing(path):
+    bare = path.strip().lstrip("/")
+    if bare.endswith("/") or "*" in bare:
+        return False
+    target = pathlib.Path(copy, bare).resolve()
+    return adr_root in target.parents and target.is_file()
+
+problems = [f"gh could not read #{n}, so its Touches line is unjudged" for n in unread]
+candidates, exempt = [], []
+for n in judged:
+    if n not in read:
+        continue
+    paths = shape.touches(read[n].get("body") or "", parsed) or []
+    if not any(under(path) for path in paths):
+        continue
+    listed = ", ".join(paths)
+    if n in requests:
+        if n in unjudged:
+            problems.append(f"the decision of #{n}, a change request naming a path under docs/adr/, could "
+                            "not be read, so its exemption is unjudged")
+            continue
+        if n not in accepted:
+            continue  # the decision line flags it, and names it there
+        if all(existing(path) for path in paths):
+            exempt.append(f"{ids[n]} (#{n}: {listed}, decided at {accepted[n]}; the exemption "
+                          "covers that authorised edit only, which the lane validates)")
+            continue
+    every = ("every path is under docs/adr/" if all(under(path) for path in paths)
+             else "not every path is under docs/adr/")
+    candidates.append((n, f"{listed}; {every}"))
+parts = []
+if candidates:
+    parts.append("these name a path under docs/adr/, which a lane only drafts (ADR-0021 decision 4), and are "
+                 "skip candidates: " + "; ".join(f"{ids[n]} (#{n}: {what})" for n, what in candidates))
+if exempt:
+    parts.append("exempt: " + "; ".join(exempt))
+found = "; ".join(parts) or "none names a path under docs/adr/ on its Touches line"
+if problems:
+    adr = ("fail", f"{len(judged)} ready-for-agent and needs-triage tickets; " + "; ".join(problems)
+           + f"; of the rest, {found}")
+else:
+    adr = ("pass", f"{len(judged)} ready-for-agent and needs-triage tickets read; {found}. A pass means "
+           "the screen completed its checks, not that it authorised implementation")
+pathlib.Path(adr_out).write_text("".join(f"{ids[n]}\t#{n}\n" for n, _ in candidates))
+for name, (verdict, evidence) in (("adr", adr), ("decision", decision)):
+    print(f"{verdict}\t{name}\t{one_line(evidence)}")
+' "$copy" "$scratch/collect.json" "$scratch/issues" "$scratch/comments" "$scratch/unread-issues" \
+    "$scratch/unread-comments" "$scratch/adr-candidates" "$scratch/decision-candidates" \
+    > "$scratch/judged-rows" 2> "$scratch/judged.err"
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    while IFS=$'\t' read -r verdict name evidence; do row "$verdict" "$name" "$evidence"; done < "$scratch/judged-rows"
+  else
+    : > "$scratch/adr-candidates"
+    : > "$scratch/decision-candidates"
+    if [ "$status" -eq 3 ]; then
+      row fail adr "$unloaded"
+      row fail decision "$unloaded"
+    else
+      last=""
+      while IFS= read -r line; do [ -n "$line" ] && last="$line"; done < "$scratch/judged.err"
+      row fail adr "the screen stopped before it judged every ticket (${last:-no output}), so none was judged"
+      row fail decision "the screen stopped before it judged every change request (${last:-no output}), so none was judged"
+    fi
+  fi
+fi
+
+# --- unblocks ---------------------------------------------------------------------------------------
+# Informational: the open blockers holding the most work, counted over collect's blockedBy edges, so
+# no GraphQL walk over the repository's issues is made (#663).
+mkdir "$scratch/blockers"
+scope="counted over the forecast's known blockedBy edges in collect's answer, not over every issue in the repository"
+if ! $forecast_ok; then
+  row fail unblocks "the forecast failed, so no blocker was counted"
+elif ! python3 -I -c '
+import json, re, sys
+tickets = json.load(open(sys.argv[1]))["tickets"]
+by_id = {t["id"]: t for t in tickets}
+held = {}
+for t in tickets:
+    for blocker in t["blockedBy"]:
+        held.setdefault(blocker, []).append(t["id"])
+
+def number(blocker):
+    if blocker in by_id:
+        return int(by_id[blocker]["issue"])
+    # Collect names a blocker outside the forecast issue-<n> (overnight_collect.blocker_id).
+    return int(re.fullmatch(r"issue-([1-9][0-9]*)", blocker).group(1))
+
+ranked = []
+for blocker, direct in held.items():
+    seen, todo = set(), list(direct)
+    while todo:
+        tid = todo.pop()
+        if tid in seen or tid == blocker:
+            continue
+        seen.add(tid)
+        todo.extend(held.get(tid, []))
+    ranked.append((-len(seen), number(blocker), blocker))
+for count, n, blocker in sorted(ranked)[:5]:
+    status = by_id[blocker]["status"] if blocker in by_id else "-"
+    print(f"{blocker}\t{n}\t{-count}\t{status}")
+' "$scratch/collect.json" > "$scratch/ranked" 2>/dev/null; then
+  row fail unblocks "collect's answer could not be read for blockedBy edges, so no blocker was counted"
+else
+  unread=""
+  while IFS=$'\t' read -r blocker number count status; do
+    if [ "$status" = "-" ]; then
+      (cd "$repo" && gh issue view "$number" --json labels) > "$scratch/blockers/$number.json" 2>/dev/null ||
+        unread="$unread #$number"
+    fi
+  done < "$scratch/ranked"
+  if [ -n "$unread" ]; then
+    row fail unblocks "$scope; gh could not read the labels of$unread, outside the forecast, so it is unnamed"
+  elif evidence="$(python3 -I -c '
+import json, pathlib, sys
+ranked, blockers, scope = sys.argv[1:]
+named = []
+for line in open(ranked):
+    blocker, n, count, status = line.rstrip("\n").split("\t")
+    if status == "-":
+        labels = [label["name"] for label in json.loads(pathlib.Path(blockers, f"{n}.json").read_text())["labels"]]
+        status = "outside the forecast; labels: " + (", ".join(labels) or "none")
+    named.append(f"{blocker} (#{n}, {status}): {count} downstream")
+found = ("the open blockers with the most downstream tickets: " + "; ".join(named)) if named \
+    else "no forecast ticket has an open blocker"
+print(f"{scope}; {found}. It is informational and adds no skip candidate")
+' "$scratch/ranked" "$scratch/blockers" "$scope" 2>/dev/null)"; then
+    row pass unblocks "$evidence"
+  else
+    row fail unblocks "$scope; the labels gh gave for a blocker outside the forecast could not be read"
+  fi
+fi
+
+# --- verdict and arguments --------------------------------------------------------------------------
+# maxParallel is min(2 x lanes, 7), lanes the owners with ready-for-agent tickets, at least 1 (#663).
+parallel=""
+if $forecast_ok; then
+  parallel="$(python3 -I -c '
+import json, sys
+owners = {t["owner"] for t in json.load(open(sys.argv[1]))["tickets"] if t["status"] == "ready-for-agent"}
+print(min(2 * max(1, len(owners)), 7))
+' "$scratch/collect.json" 2>/dev/null)" || parallel=""
+fi
+advice=""
+if [ -n "$parallel" ]; then
+  advice=" maxParallel is $parallel, min(2 x lanes, 7), a launch heuristic and no measured optimum: lanes are the owners with ready-for-agent tickets, a lane wants one implement and one review slot at once, and 7 bounds the slot-counted work (implement, review, the serialised merge and resolve), not every agent, since grill and route agents take no slot; raise or lower it at launch."
+fi
+if [ -z "$failed" ]; then
+  echo "overnight_preflight: pass: every precondition holds.$advice The arguments follow; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
+else
+  echo "overnight_preflight: fail:$failed.$advice The arguments follow, for when those lines pass; add \"standingAnswer\": true or false, yours to grant for this launch (ADR-0021 decision 3)."
 fi
 python3 -I -c '
 import json, os, sys
-repo, date, wt, collect, candidates, shaped, held, given, ok, fixture = sys.argv[1:]
+repo, date, wt, collect, candidates, shaped, adr, decision, held, given, ok, parallel, fixture = sys.argv[1:]
 args = {"repo": repo, "date": date, "wt": wt}
-if ok == "true":
-    owners = {t["owner"] for t in json.load(open(collect))["tickets"] if t["status"] == "ready-for-agent"}
-    args["maxParallel"] = max(1, len(owners))
-named = [line.split("\t")[0] for path in (candidates, shaped) for line in open(path) if line.strip()]
+if ok == "true" and parallel:
+    args["maxParallel"] = int(parallel)
+named = [line.split("\t")[0] for path in (candidates, shaped, adr, decision) for line in open(path) if line.strip()]
 given = [tid for tid in given.split(",") if tid]
 args["skip"] = list(dict.fromkeys(named + given))
 print(json.dumps(args))
@@ -577,7 +901,8 @@ if fixture:
           "the harness runs it",
           file=sys.stderr)
 ' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
-  "$scratch/held" "$given_skip" "$forecast_ok" "$fixture" ||
+  "$scratch/adr-candidates" "$scratch/decision-candidates" "$scratch/held" "$given_skip" "$forecast_ok" \
+  "$parallel" "$fixture" ||
   { echo "overnight_preflight: fail: the arguments could not be written"; exit 1; }
 
 [ -z "$failed" ]
