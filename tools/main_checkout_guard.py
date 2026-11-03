@@ -3,7 +3,8 @@
 Owner: integrator.
 
 A Claude Code PreToolUse hook (#114, #200). The entry in the tracked `.claude/settings.json` runs it
-before each Bash call of a session started in a checkout that holds both files. The main checkout is
+before each Bash call of a session started in a checkout that holds that file, as this file stands on
+origin/main (#298), or as the checkout holds it, under "Its answer" below. The main checkout is
 the clone's own working tree, the worktree whose git directory is the common directory, and the sessions
 running at once share it: its branch is whichever one a session last left it on. On 2026-10-18 a
 session ran `git rebase origin/main` there, taking it for its own branch, after another had switched
@@ -66,18 +67,32 @@ git alias -- a directory only the running shell knows, such as `"$(pwd)"`, and a
 checkout's HEAD and tracked files when the hook runs, with no lock, so they can change before the
 fast-forward or the restore does: another session can switch the checkout, or the same call can edit
 a file before its merge or restore (#226 Q21). `--ff-only` still refuses a branch that has diverged and a change it would
-overwrite, so the merge cannot take a commit. It binds Claude Code sessions, a sub-agent's Bash calls
-included, and never a person's terminal.
+overwrite, so the merge cannot take a commit. Which guard runs is whatever the clone's
+`refs/remotes/origin/main` holds, so a session that moves that ref locally, with `git update-ref` or
+a fetch from another URL, picks the guard; that opens nothing an edit to the checkout's own copy
+does not (#298 Q5). It binds Claude Code sessions, a sub-agent's Bash calls included, and never a
+person's terminal.
 
 **Its answer** is Claude Code's PreToolUse contract: exit 2 blocks the call and hands standard error
 to the session as the reason, and exit 0 lets it run. Any other exit, a crash or a missing git, also
 lets the call run, which is Claude Code's default for a failing hook, so a broken guard never stops
-a session's work. The settings entry runs this file only when it exists, for the same reason:
-python3 exits 2 on a missing script, which Claude Code would read as a refusal of every Bash call.
-That also makes a mistyped path in the entry silent, which is why the test companion runs the entry
-as written.
+a session's work.
 
-Written to run on Python 3.9, the python3 Apple's command line tools install on a Mac.
+**Which copy runs** (#298). The settings entry reads this file from `refs/remotes/origin/main` with
+`git show`, which writes nothing to the checkout and fetches nothing, and runs that text with
+`compile` and `exec`, `__file__` set to the checkout's own path, so trunk's rules guard the checkout
+the session started in and a copy that trails trunk cannot refuse the fast-forward that would replace
+it. Only when that ref does not resolve or holds no guard does it run the checkout's own copy, and
+that only when the file exists, for the reason above: python3 exits 2 on a missing script, which
+Claude Code would read as a refusal of every Bash call. A trunk guard that crashes lets the call
+run, with no fallback (#298 Q4). Those reads make a mistyped path in the entry silent, which is why
+the test companion runs the entry as written. A checkout whose own `.claude/settings.json` predates
+#298 still runs its own copy (Q7).
+
+**One file, standard library only** (#298 Q6). Run from trunk with the checkout's `__file__`, this
+file would import a sibling module from the checkout, which can trail trunk, so it stays one
+self-contained file at this path that imports only the standard library. Written to run on Python
+3.9, the python3 Apple's command line tools install on a Mac.
 
 Test companion: tools/main_checkout_guard_tests.py.
 """
