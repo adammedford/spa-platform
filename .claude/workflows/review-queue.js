@@ -1129,7 +1129,7 @@ const launchHalt = (L) => {
       : L.branch !== 'main'
         ? `the checkout is on ${L.branch ? `\`${L.branch}\`` : 'a detached HEAD'}, not main, and only the human moves it (docs/agents/landing-work.md -> "The main checkout is shared")`
         : 'the checkout\'s main has tracked changes or a commit origin/main lacks, so no fast-forward is given'
-  return `launch: the script is not origin/main's: ${file} differs from origin/main (${L.baseTip || 'unread'}), so this run ran another copy (ADR-0026 decision 3); ${fix}${end}`
+  return `launch: the script is not origin/main's: ${file} differs from origin/main (${L.baseTip ? `\`${L.baseTip}\`` : 'unread'}), so this run ran another copy (ADR-0026 decision 3); ${fix}${end}`
 }
 
 // ---------------------------------------------------------------- run
