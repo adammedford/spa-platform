@@ -41,7 +41,7 @@ contracts rows naming it, cited by path. In practice:
 | The interfaces and the stage order | `contracts/`, `docs/plan/02-contracts.md` |
 | A test id the row names (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, `contracts/test-ids.md` |
 | An evidence id (`S-`, `R-`, `T-`) | `docs/plan/07-evidence.md` |
-| A decision the task was handed | the change requests blocking the ticket, with their decision comments; an archived request under `contracts/changes/`; `docs/adr/` |
+| A decision the task was handed | the change requests blocking the ticket, with their decision comments; a decision given in a session, posted on the ticket under `docs/agents/tracker-policy.md` → "A decision Adam gives in a session"; an archived request under `contracts/changes/`; `docs/adr/` |
 
 The pull request body is the author's claim, not the spec. Check it against the diff and say which
 claims you verified and how. When it closes a change request whose decision comment says

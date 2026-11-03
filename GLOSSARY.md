@@ -358,6 +358,15 @@ landing the change request cites. A draft an agent posts is not one until the hu
 drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's decision could be
 meant, and "decision" for a draft.
 
+**Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
+a foreground session and posted by that session on the issue the question belongs to, ending with
+the line that says so. On a change request it is the decision comment; on any other issue it is a
+confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
+acceptance criteria do not ask for. Its form and what it covers:
+`docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
+for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
+be read.
+
 **Draft decision** — a scripted session's recommendation on a change request, posted as a comment
 headed `## Draft decision`. It decides nothing. Its form and how the human adopts it:
 `docs/agents/tracker-policy.md` → "Change requests" → "Deciding". _Avoid_: "proposed decision" as
