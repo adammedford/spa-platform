@@ -2252,6 +2252,8 @@ try {
     ['a head the morning did not verify', {}, { verifiedHead: OLDER }, {}],
     ['a head that is not the merged pull request\'s', {}, { landed: [{ ...LANDED_PR, headRefOid: OLDER }] }, {}],
     ['a head origin/main does not contain', {}, { contained: false }, {}],
+    // A pull request other than the one that merged: judgeMerged's pr-number check (review of #661).
+    ['a pull request that is not the merged one', {}, { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, {}],
   ]) {
     const r = await mergedRun(served, landing, verify)
     const text = r.result.handover.text
@@ -2262,7 +2264,7 @@ try {
     noCommands(label, text)
   }
   // The refusals name what was wrong.
-  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, /d{40}/], ['contained', { contained: false }, /does not contain/]]) {
+  for (const [label, landing, want] of [['two', { landed: [LANDED_PR, { ...LANDED_PR, number: 401 }] }, /2 merged pull requests/], ['verified', { verifiedHead: OLDER }, new RegExp(`the morning verified ${OLDER}`)], ['contained', { contained: false }, /does not contain/], ['another pull request', { pr: { number: 401, url: LANDED_PR.url.replace('400', '401') } }, /#401 is not #400, the one that merged/]]) {
     const r = await mergedRun({}, landing)
     if (!r.result.refusals.some((x) => want.test(x))) fail(`#661 Q26, ${label}: the refusal does not say why: ${JSON.stringify(r.result.refusals)}`)
   }
