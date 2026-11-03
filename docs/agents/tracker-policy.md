@@ -245,7 +245,8 @@ explains.
 is a pending-writes verb: `comment`, `create`, `edit` or `close`. A create carries `title:`,
 `labels:` (comma-separated) and, when it blocks one, `blocking:`; an edit carries `flags:`, its
 `gh issue edit` flags, such as `--add-blocked-by 533`; a close carries `reason:`, `completed` or
-`not planned`. `decide: yes` marks a write that waits on Adam.
+`not planned`. `decide: yes` marks a write that waits on Adam. A file with a repeated key, or a
+key not named here, is not posted.
 
 **The body.** Everything after the closing `---` line is posted byte for byte: the poster
 substitutes, strips and parses nothing in it, and a `---` there is body. It holds no placeholder.
@@ -267,8 +268,9 @@ puts each marked write to Adam, and posts it only on his words in that session.
 **Posting.** First search each create's title and list the issues and pull requests opened since
 the drafts were made, dropping any write another session has made. Then post each unmarked file
 with one `gh` call, in name order, appending its name to `writes/posted` as it posts, so a second
-pass skips it. A loop of many writes is a bulk tracker write, which auto mode refuses: run it in
-manual mode.
+pass skips it. On a second pass, a file not in `writes/posted` whose create or comment is already
+on the issue counts as posted: it is appended, not posted again. A loop of many writes is a bulk
+tracker write, which auto mode refuses: run it in manual mode.
 
 ## The archive: tickets filed before ADR-0020
 
