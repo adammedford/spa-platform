@@ -57,7 +57,7 @@
 # GitHub's form for another repository's ticket, is refused outright, because the check cannot tell
 # whether it names a ticket here; the remedy is `Closes #n`.
 #
-# It merges only a body that cites each decision it owes (#530). A `Closes #n` line that names a
+# It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
 # docs/agents/tracker-policy.md -> "Landing" has that body state the why and cite the decision
 # comment (#413). The citation half is mechanical: tools/decision_citation.py, beside this script,
@@ -210,12 +210,13 @@ head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
 full_sha='^[0123456789abcdef]{40}$'
 [[ $head =~ $full_sha ]] || die "gh reported '$head' as the head of #$pr, which is not a full commit sha."
 
-# A `Closes #n` line in the description closes ticket n when this merges into the default branch:
+# A closing reference in the description, such as `Closes #n`, closes ticket n when this merges into
+# the default branch:
 # https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue.
 # So each n has to be a ticket the branch did work for (#566). On 2026-10-29 #536's branch was
 # rebuilt without e2fc266, the one commit naming #352, and its description still closed #352, whose
-# work change request #551 still carried; only a sub-agent's reading caught it. Every n a Closes
-# line names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
+# work change request #551 still carried; only a sub-agent's reading caught it. Every n a closing
+# reference names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
 # trailer) of a non-merge commit between the base and the pinned head. `issue-n` is how an
 # overnight lane's task commit names a ticket with no plan row, `Task issue-<n>: ...` in
 # .claude/workflows/overnight.js, where only the lane's merge carries `Ticket: #n`; without it the
@@ -284,7 +285,7 @@ fi
 # it may be a named pipe or an inherited descriptor, which gives its bytes once (#72). $(<)
 # dropped the file's trailing newlines, which is what the trailer's gap below rests on.
 
-# Each ticket a Closes line names, against the decision it may owe a citation (#530). The reader
+# Each ticket a closing reference names, against the decision it may owe a citation (#530). The reader
 # beside this script judges one issue a run, with its own gh calls, and answers on its status: 0
 # and the decision comment's URL on standard output, which the body has to carry; 1 when nothing is
 # owed; 2 when it could not read the issue. Its output is held and shown only when it could not
