@@ -40,11 +40,15 @@ with the row ids read up to the first `;` or `)`; any other `none` line declares
 --subject-for asks the same question before a merge is written, for overnight.js's integrate step,
 whose lane is complete: given the id the lane landed and its issue, it prints the subject's head,
 judged on HEAD's history. A plan row with an open part ticket gets "Merge part of task <id>", and
-each open part is named on an `open part:` line, for the merge body's Outstanding line. A part ticket
+each open part is named on an `open part:` line, for the merge body's Outstanding line. The ticket's
+own open boxes make the subject a part too, as the range check would hold a full landing over them
+(#660): each is named on an `open box: <place> <its first line>` line, for the same Outstanding
+line, and a ticket whose every box is ticked answers as it did. A part ticket with no open box
 names, beside its own id, each row it declares that HEAD's history has landed in part and never
 whole, when no other part of it is open: the merge of a row's last open part names the row too
 (#388 Q6), "Merge tasks issue-417 and P2-1". A row already landed whole is never named again, so the
-rule runs forward only. Anything else gets "Merge task <id>", as before.
+rule runs forward only. Anything else gets "Merge task <id>", as before. When the ticket cannot be
+read, its boxes are reported unchecked and the answer is the one its rows alone give.
 
 When gh is missing, not signed in, cannot reach GitHub or has no issue under the number, the
 commit is reported unchecked with gh's own reason and nothing fails, as the steering check's issue
@@ -328,12 +332,16 @@ def subject_for(id_: str, number: int) -> int:
     landed = states(history("HEAD"))
     parts = Parts()
     named = [own]
-    if TICKET_ID.match(own):
+    body, why = issue_body(number)
+    if body is None:
+        unnamed = ", and no row it is part of is named" if TICKET_ID.match(own) else ""
+        say(f"unchecked: #{number} could not be read, so its open boxes are not counted{unnamed}: {why}")
+    # The ticket's own open boxes make the merge a part, as the range check holds a full landing
+    # over them (#660); a part, it names no row, since the row is owed until its last part is whole.
+    boxes = open_boxes(body or "")
+    if TICKET_ID.match(own) and not boxes:
         # A part ticket names each row it declares that is landed in part, never whole, once no
         # other part of it is open (#388 Q6).
-        body, why = issue_body(number)
-        if body is None:
-            say(f"unchecked: #{number} could not be read, so no row it is part of is named: {why}")
         for row in declared(body or ""):
             if landed.get(row) != "part":
                 continue
@@ -350,10 +358,12 @@ def subject_for(id_: str, number: int) -> int:
             say(f"unchecked: the open part tickets of {row} could not be listed: {parts.why}")
         elif owed:
             owed_by[row] = owed
-    if owed_by:
+    if owed_by or boxes:
         for row, owed in owed_by.items():
             for part in owed:
                 say(f"open part: #{part} declares itself part of {row}")
+        for place, text in boxes:
+            say(f"open box: {place} {text}")
         say(f"subject: Merge part of task {own}")
         return 0
     if len(named) == 1:

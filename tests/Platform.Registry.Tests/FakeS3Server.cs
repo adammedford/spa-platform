@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
@@ -140,6 +141,9 @@ internal sealed class FakeS3Server : IAsyncDisposable
         await context.Response.Body.WriteAsync(stored.Body, context.RequestAborted);
     }
 
+    [SuppressMessage("Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
+        Justification = "S3's ETag is MD5 (#589-Q5, ADR-0035): the ETag imitates S3's, the MD5 of a " +
+            "single-part object's body, as a change marker in a test double that protects nothing.")]
     private async Task PutAsync(HttpContext context, string path)
     {
         using MemoryStream buffer = new();

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Gateway.TestHarness;
 
 namespace Gateway.E2ETests.Stack;
 
@@ -78,10 +79,10 @@ public static partial class TerraformPlan
         return [.. addresses.Order(StringComparer.Ordinal)];
     }
 
-    [GeneratedRegex(@"^resource\s+""(?<type>[\w-]+)""\s+""(?<name>[\w-]+)""\s*\{(?<body>.*?)^\}", RegexOptions.Multiline | RegexOptions.Singleline)]
+    [GeneratedRegex(@"^resource\s+""(?<type>[\w-]+)""\s+""(?<name>[\w-]+)""\s*\{(?<body>.*?)^\}", RegexOptions.Multiline | RegexOptions.Singleline, RegexTimeout.Milliseconds)]
     private static partial Regex ResourceBlock();
 
-    [GeneratedRegex(@"^\s*for_each\s*=\s*local\.apps\s*$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\s*for_each\s*=\s*local\.apps\s*$", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
     private static partial Regex PerApp();
 }
 

@@ -34,7 +34,7 @@ public sealed partial class StaticSpaFixtureTests
         // F-01 tells two shells apart by what they show, so the marker is text, not an attribute.
         SpaRelease release = SpaRelease.Of(appId);
 
-        Match marker = Regex.Match(release.IndexHtml, "<h1 id=\"marker\">([^<]*)</h1>");
+        Match marker = Regex.Match(release.IndexHtml, "<h1 id=\"marker\">([^<]*)</h1>", RegexOptions.None, RegexTimeout.Value);
 
         Assert.True(marker.Success, $"{appId}'s index.html has no <h1 id=\"marker\">.");
         Assert.Contains(AppIdOf(appId), marker.Groups[1].Value, StringComparison.Ordinal);
@@ -50,7 +50,7 @@ public sealed partial class StaticSpaFixtureTests
         SpaRelease release = SpaRelease.Of(appId);
 
         string asset = Assert.Single(release.Assets);
-        Match name = Regex.Match(asset, "^assets/[a-z]+\\.(?<hash>[0-9a-f]{8})\\.js$");
+        Match name = Regex.Match(asset, "^assets/[a-z]+\\.(?<hash>[0-9a-f]{8})\\.js$", RegexOptions.None, RegexTimeout.Value);
         Assert.True(name.Success, $"{asset} is not named <name>.<8 hex digits>.js.");
         Assert.Equal(release.ContentHash(asset), name.Groups["hash"].Value);
 
@@ -157,7 +157,7 @@ public sealed partial class StaticSpaFixtureTests
 
         foreach (string call in calls)
         {
-            bool unsafeMethod = Regex.IsMatch(call, "method:\\s*\"(?!GET\"|HEAD\"|OPTIONS\")");
+            bool unsafeMethod = Regex.IsMatch(call, "method:\\s*\"(?!GET\"|HEAD\"|OPTIONS\")", RegexOptions.None, RegexTimeout.Value);
             Assert.Equal(unsafeMethod, call.Contains(header, StringComparison.Ordinal));
         }
     }
@@ -268,7 +268,7 @@ public sealed partial class StaticSpaFixtureTests
     private static string CsrfHeaderName()
     {
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
-        Match row = Regex.Match(contract, "^\\| `([A-Za-z-]+)` \\| Every unsafe method", RegexOptions.Multiline);
+        Match row = Regex.Match(contract, "^\\| `([A-Za-z-]+)` \\| Every unsafe method", RegexOptions.Multiline, RegexTimeout.Value);
         Assert.True(row.Success, "contracts/http-contract.md names no CSRF header.");
         return row.Groups[1].Value;
     }
@@ -276,9 +276,9 @@ public sealed partial class StaticSpaFixtureTests
     private static IEnumerable<string> ReservedPrefixes()
     {
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
-        Match sentence = Regex.Match(contract, "An SPA cannot serve content under (.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline);
+        Match sentence = Regex.Match(contract, "An SPA cannot serve content under (.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline, RegexTimeout.Value);
         Assert.True(sentence.Success, "contracts/http-contract.md lists no reserved paths.");
-        List<string> prefixes = [.. Regex.Matches(sentence.Groups[1].Value, "`(/[^`]+?)/?`").Select(m => m.Groups[1].Value)];
+        List<string> prefixes = [.. Regex.Matches(sentence.Groups[1].Value, "`(/[^`]+?)/?`", RegexOptions.None, RegexTimeout.Value).Select(m => m.Groups[1].Value)];
         Assert.NotEmpty(prefixes);
         return prefixes;
     }
@@ -291,7 +291,7 @@ public sealed partial class StaticSpaFixtureTests
     {
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
         Match row = Assert.Single(
-            Regex.Matches(contract, "^\\| `(?<method>[A-Z]+) (?<path>/bff/[^`?]*)[^`]*` \\| (?<as>[^|]+?) \\|", RegexOptions.Multiline),
+            Regex.Matches(contract, "^\\| `(?<method>[A-Z]+) (?<path>/bff/[^`?]*)[^`]*` \\| (?<as>[^|]+?) \\|", RegexOptions.Multiline, RegexTimeout.Value),
             match => match.Groups["as"].Value == madeAs);
         return (row.Groups["method"].Value, row.Groups["path"].Value);
     }

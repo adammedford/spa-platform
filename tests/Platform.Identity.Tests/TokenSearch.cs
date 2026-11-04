@@ -11,7 +11,7 @@ namespace Platform.Identity.Tests;
 /// </summary>
 internal static partial class TokenSearch
 {
-    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")]
+    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex Jwt();
 
     public static void AssertNoTokens(TestIdentityProvider idp, string text)

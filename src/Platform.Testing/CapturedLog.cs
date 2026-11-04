@@ -17,12 +17,18 @@ namespace Platform.Testing;
 /// that is each placeholder's value and <c>{OriginalFormat}</c>. Empty for a state that is not such a
 /// list.
 /// </param>
+/// <param name="EventId">
+/// The event id the line was logged with. A <c>[LoggerMessage]</c> template's line carries one named
+/// after its method; an ad hoc <c>Log*</c> call's carries none, though its <see cref="State"/> is the
+/// same, so this is what tells the two apart (#540).
+/// </param>
 public sealed record CapturedLine(
     string Category,
     LogLevel Level,
     string Message,
     Exception? Exception,
-    IReadOnlyList<KeyValuePair<string, object?>> State)
+    IReadOnlyList<KeyValuePair<string, object?>> State,
+    EventId EventId)
 {
     /// <summary>The message and the exception's full text, joined by a space.</summary>
     public string Text => Exception is null ? Message : Message + " " + Exception;
@@ -207,7 +213,7 @@ public sealed class CapturedLog
 
                 IReadOnlyList<KeyValuePair<string, object?>> pairs =
                     state is IReadOnlyList<KeyValuePair<string, object?>> list ? [.. list] : [];
-                CapturedLine line = new(category, logLevel, render(state, exception), exception, pairs);
+                CapturedLine line = new(category, logLevel, render(state, exception), exception, pairs, eventId);
 
                 List<string> output = [];
                 if (provider.resolved.Value is { } formatter)

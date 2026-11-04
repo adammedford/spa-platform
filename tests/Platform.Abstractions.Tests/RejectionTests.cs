@@ -26,6 +26,7 @@ public sealed class RejectionTests
     [InlineData("csrf.token", 403, "csrf_failed")]
     [InlineData("auth.session", 401, "unauthenticated")]
     [InlineData("api.unknown", 404, "unknown_api")]
+    [InlineData("auth.store", 503, "session_store_unavailable")]
     public async Task Ending_with_a_feature_notes_the_rule_and_writes_its_problem_body(string rule, int status, string code)
     {
         // Mutation: add a "detail" property to the body, or skip the feature write.
