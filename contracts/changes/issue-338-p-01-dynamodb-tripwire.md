@@ -185,7 +185,7 @@ combination does not plan: `var.session_store`'s validation refuses `dynamodb` w
 
 | Case | Inputs | The task role's statements | The run that holds the set |
 | --- | --- | --- | --- |
-| Default | `memory`, no prefix | `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages`: P-03's sentence | `under_memory_the_cell_is_phase_1_s_unchanged`; the sentence itself is held by the P-03 runs, `the_task_role_reads_this_cell_s_bucket_prefixes_and_no_others`, `the_task_role_reads_this_cell_s_client_secret_path_and_no_wider_path`, `the_task_role_holds_exactly_the_four_ssmmessages_permissions` and `the_task_role_holds_no_unrecognised_statement` |
+| Default | `memory`, no prefix | `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages`: P-03's sentence | `under_memory_the_cell_is_phase_1_s_unchanged`; the sentence itself is held by the P-03 runs, `the_task_role_reads_this_cell_s_bucket_prefixes_and_no_others`, `the_task_role_reads_this_cell_s_client_secret_path_and_no_wider_path`, `the_task_role_holds_exactly_the_four_ssmmessages_permissions`, `the_task_role_holds_no_unrecognised_statement` and `the_bucket_policy_allows_nothing_so_the_task_role_s_own_policy_is_its_whole_grant`, which holds its "nothing else" against the bucket policy |
 | Memory plus ring | `memory`, the cell's prefix | the default's three, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `a_ring_under_memory_carries_the_ring_and_no_table` |
 | DynamoDB plus ring | `dynamodb`, the cell's prefix | the default's three, `ReadWriteSessions`, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants` |
 
