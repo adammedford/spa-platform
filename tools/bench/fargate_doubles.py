@@ -113,6 +113,7 @@ def world(plans=None, **changes) -> dict:
         "initially_stable": True,
         "service_gone_after": None,              # describe-services names no service from this restart on
         "list_tasks_fail_at_poll": None,         # this list-tasks call (1-based) fails ThrottlingException
+        "list_tasks_garbage_at_poll": None,      # this list-tasks call (1-based) exits 0 with no JSON
     }
     document.update(changes)
     return document
@@ -275,6 +276,10 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         if document["list_tasks_fail_at_poll"] == document["list_polls"]:
             save(case, document)
             return fail("ThrottlingException")
+        if document["list_tasks_garbage_at_poll"] == document["list_polls"]:
+            save(case, document)
+            sys.stdout.write("<html>not json</html>")
+            return 0
         listed = []
         for task in document["tasks"].values():
             if task["desired"] != "RUNNING":

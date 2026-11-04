@@ -63,9 +63,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
 
 **Endings** (#286 Q148; Q8):
   0  ten clean restarts
-  2  a usage error, a refusal or a failed AWS call before restart 1's update-service (no Region,
-     no outputs document for it, no credentials, a missing tool, the service not stable on
-     gatewayImage); nothing is written
+  2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
+     update-service (no Region, no outputs document for it, no credentials, a missing tool, the
+     service not stable on gatewayImage); nothing is written
   3  a breach: the scheduler stopped the new task for health, past the T0 + 60 s hard bound. No
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
@@ -132,14 +132,15 @@ class AwsError(Exception):
 
 _ARN = re.compile(r"arn:aws[a-zA-Z-]*:[^\s\"',)]*")
 _REPOSITORY = re.compile(r"(?<![0-9])[0-9]{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/[^\s\"',)@:]*")
-_TWELVE = re.compile(r"(?<![0-9])[0-9]{12}(?![0-9])")
+_TWELVE = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 
 
 def redact(text: str, account: Optional[str] = None) -> str:
     """Every ECR repository URI becomes <repository> (an image keeps its @digest), every ARN <arn>
-    and every twelve-digit run <account id>, which an account id always is (the rule tunnel.sh's
-    session filter keeps), so an account other than the caller's, or one redacted before the
-    caller's is known, is still masked. The repository goes first, while its host still starts
+    and every twelve-digit run standing alone <account id>, which an account id always is (the
+    rule tunnel.sh's session filter keeps), so an account other than the caller's, or one redacted
+    before the caller's is known, is still masked. A run inside a longer run of digits or letters,
+    as in a sha256 digest or a task id, is no account id and is kept. The repository goes first, while its host still starts
     with the account; then the account itself, in case it sits inside a longer run of digits."""
     text = _REPOSITORY.sub("<repository>", text)
     if account:
@@ -414,6 +415,7 @@ class Bench:
         self.service = names["ecsService"]
         self.digest = names["gatewayImage"].split("@", 1)[1]
         self.restarts: List[dict] = []
+        self.updates_issued = 0
         self.facts: dict = {}
         self.forward: Optional[subprocess.Popen] = None
         self.forward_errors = None
@@ -542,6 +544,8 @@ class Bench:
             raise (Refused if index == 1 else Incomplete)(f"{self.service} runs {len(outgoing)} tasks before restart {index}, not one.")
         record["hop_task"] = self.open_forward(outgoing[0], refuse=index == 1)
         try:
+            # Counted before the call: once it is sent, the service may have changed (Endings: 4).
+            self.updates_issued += 1
             answer = self.aws("ecs", "update-service", "--cluster", self.cluster, "--service", self.service,
                               "--force-new-deployment")
             primary = next((d for d in answer.get("service", {}).get("deployments", []) if d.get("status") == "PRIMARY"), None)
@@ -925,6 +929,11 @@ def main(argv: List[str]) -> int:
     except AwsError as error:
         err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
         return EXIT_USAGE
+    except Exception as error:
+        # Endings: 2, nothing written. Only the type is kept: its message can carry what the AWS
+        # side answered (Q7).
+        err(f"an unexpected {type(error).__name__} before restart 1.", bench.account)
+        return EXIT_USAGE
 
     ending, reason, code = "clean", "", EXIT_CLEAN
     try:
@@ -945,6 +954,16 @@ def main(argv: List[str]) -> int:
                 if index == 1 and "deployment" not in bench.restarts[-1]:
                     bench.restarts.pop()
                     err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
+                    return EXIT_USAGE
+                raise
+            except (Breach, Incomplete):
+                raise
+            except Exception as error:
+                # Any other failure before restart 1's update-service was sent: nothing has changed
+                # on the service either, so the same ending (Endings: 2, nothing written).
+                if index == 1 and bench.updates_issued == 0:
+                    bench.restarts.pop()
+                    err(f"an unexpected {type(error).__name__} before restart 1.", bench.account)
                     return EXIT_USAGE
                 raise
     except Breach as breach:

@@ -2,7 +2,7 @@
 """Test companion for tools/bench/fargate.py (#305). Owner: the owner OWNERSHIP.md names for
 tools/bench/.
 
-The run itself needs the applied cell and an hour, and is #178's. What runs here is everything the
+The run itself needs the applied cell and about half an hour, and is #178's. What runs here is everything the
 script decides without AWS: the order of its calls, which task it measures, which hop it takes,
 which clocks it reads and how it labels them, when it stops and what it writes, and that nothing it
 writes holds a secret.
@@ -44,6 +44,7 @@ import http.server
 import importlib.util
 import json
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -55,6 +56,16 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "tools" / "bench" / "fargate.py"
 OUTPUTS = pathlib.Path("infra") / "envs" / "poc" / "outputs.json"
+ALB_TF = ROOT / "infra" / "modules" / "cell" / "alb.tf"
+
+
+def deregistration_delay() -> str:
+    """The target group's drain, read from the Terraform that sets it (CODING_STANDARDS.md, "A guard
+    reads the thing it guards"), so the line the script prints turns red when alb.tf changes."""
+    match = re.search(r"^\s*deregistration_delay\s*=\s*(\d+)\s*$", ALB_TF.read_text(), re.MULTILINE)
+    if match is None:
+        raise AssertionError("alb.tf sets no deregistration_delay")
+    return match[1]
 
 spec = importlib.util.spec_from_file_location("fargate", SCRIPT)
 fargate = importlib.util.module_from_spec(spec)
@@ -220,7 +231,7 @@ class TenCleanRestarts(CaseBase):
     def test_prints_the_expected_length_before_restart_1(self):
         first_update = self.result.stdout.index("restart 1/10")
         self.assertIn("ten restarts, about half an hour", self.result.stdout[:first_update])
-        self.assertIn("drains for 30 s and stops", self.result.stdout[:first_update])
+        self.assertIn(f"drains for {deregistration_delay()} s and stops", self.result.stdout[:first_update])
 
     def test_the_new_task_is_the_primary_deployments_while_two_deployments_overlap(self):
         # The world lists a decoy task of another deployment first, and the old task beside the new
@@ -432,6 +443,29 @@ class Endings(CaseBase):
         self.assertIn("an AWS call failed before restart 1 (ThrottlingException)", run.stderr)
         self.assertNoSecrets(run)
 
+    def test_any_other_failure_on_restart_1_before_its_update_service_exits_2_and_writes_nothing(self):
+        # Preflight's list-tasks is the first; restart 1's, before its update-service, the second.
+        run = run_case(world(list_tasks_garbage_at_poll=2))
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertEqual(2, len(run.aws("ecs", "list-tasks")))
+        self.assertIn("an unexpected JSONDecodeError before restart 1.", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
+    def test_any_other_failure_in_preflight_exits_2_and_writes_nothing(self):
+        run = run_case(world(list_tasks_garbage_at_poll=1))
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertEqual(1, len(run.aws("ecs", "list-tasks")))
+        self.assertIn("an unexpected JSONDecodeError before restart 1.", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
     def test_refusals_before_restart_1_exit_2_and_write_nothing(self):
         cases = {
             "no Region": dict(region=None),
@@ -574,6 +608,17 @@ class Arithmetic(unittest.TestCase):
                 self.assertEqual("role in <account id>, trusted by <account id>.", text)
         self.assertEqual("ecs-svc/2000000000000000001 <account id>",
                          fargate.redact(f"ecs-svc/2000000000000000001 {other}"))
+
+    def test_redact_keeps_a_twelve_digit_run_inside_a_hex_id(self):
+        # A sha256 digest (and a task id) can hold twelve digits in a row; that is no account id.
+        digest = "sha256:" + "f" + "123456789012" + "e" * 51
+        self.assertEqual(71, len(digest))
+        other = "999988887777"
+        for account in (None, ACCOUNT):
+            with self.subTest(account=account):
+                self.assertEqual(f"image @{digest} in task 9ab123456789012cd",
+                                 fargate.redact(f"image @{digest} in task 9ab123456789012cd", account))
+                self.assertEqual(f"@{digest} in <account id>", fargate.redact(f"@{digest} in {other}", account))
 
     def test_redact_replaces_a_repository_uri_and_keeps_the_digest(self):
         for account in (None, ACCOUNT):
