@@ -33,7 +33,9 @@
 // predecessor releases its waiter, no readable path waits on its lane, a cycle with a blocked-by edge is dropped, and
 // each wait is reported with its paths and clocked minutes (#665); one more, where the lane's downstream-first order is
 // not n's, proves that a ticket with no readable path waits on the tickets ahead of it in that order, and that a wait
-// whose clock dies is reported unmeasured, never zero (#706 Q1 (b)). Five more short runs on synthetic tickets check that
+// whose clock dies is reported unmeasured, never zero (#706 Q1 (b)). One more has a ticket both blocked by
+// one ticket and path-waiting on another, and proves that its wait is clocked and logged only once its blocker has
+// settled, and that it starts with that wait logged and reported (#665). Five more short runs on synthetic tickets check that
 // a lane runs first the ready ticket with the most of tonight's tickets downstream, counted transitively, across lanes,
 // once per ticket and only over tickets a lane runs, ties by n (#662). One more short run has an agent die on the
 // account's usage limit, and checks that the run halts naming the reset, counts that death as no failure, lists the
@@ -1994,6 +1996,70 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
     const sw = sum && (sum.pathWaits || []).find((w) => w.id === id(1))
     if (p && (!sw || sw.minutes !== null)) fail(`#659 Q10: the report's results do not carry ${id(1)}'s unmeasured wait as minutes null: ${JSON.stringify(sw)}`)
+  }
+}
+
+// 44. A path wait starts only once the ticket's blocked-by edges have settled (#665; #659 Q10, Q11). The lane is not
+//     free to take a ticket that a blocker still holds, so a wait clocked then would hold time the blocker cost, not
+//     the path. Three lanes: B (n 1) is quick; P (n 2) is slow and touches w/a.txt; W (n 3) needs B and touches
+//     w/a.txt, so it path-waits on P, the earlier ticket by n. W sits alone in its lane, so it is its lane's first
+//     ticket from the start. Its wait must be logged and clocked to start after B has settled, while P still holds it,
+//     and W must start after P has settled, with its wait reported behind P alone.
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${3000 + n}`, slug: `w${n}`, issue: 3000 + n, url: `https://example.invalid/${3000 + n}`,
+    title: `Blocked wait ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${3000 + n}`
+  const set = [
+    T(1, 'ws1-infra', ['b/b.txt']),                    // B: quick, W's blocker
+    T(2, 'ws2-hosting', ['w/a.txt']),                  // P: slow, earlier than W by n, the same path
+    T(3, 'integrator', ['w/a.txt'], [id(1)]),          // W: needs B, path-waits on P
+  ]
+  const ev = [], logged = [], prompts = [], clockSeq = {}
+  let seq = 0   // orders the agent calls and log lines, where two in one tick tie
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, seq: ++seq, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'clock') { clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    ev.push({ kind, id: tid, edge: 'start', seq: ++seq })
+    await sleep(kind === 'implement' && tid === id(2) ? 150 : 15)
+    ev.push({ kind, id: tid, edge: 'end', seq: ++seq })
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the blocked path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const blockedTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(blockedTick)
+  if (r === STALLED) fail('#665: the blocked path-wait run did not finish: a wait never released')
+  else {
+    const settledSeq = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.seq))
+    const startSeq = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).seq
+    for (const x of [1, 2, 3].map(id)) if (!(r.integrated || []).includes(x)) fail(`#665: ${x} did not integrate in the blocked path-wait run: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    const line = `${id(3)}: waiting to start behind ${id(2)} (w/a.txt)`
+    const said = logged.filter((l) => l.text.startsWith(`${id(3)}: waiting to start behind `))
+    if (!said.some((l) => l.text === line)) fail(`#665: ${id(3)} started with no "${line}" line: ` + JSON.stringify(said.map((l) => l.text)))
+    for (const l of said) if (l.seq < settledSeq(id(1))) fail(`#665: ${id(3)}'s path wait was logged ("${l.text}") while its blocker ${id(1)} still held it`)
+    const s = clockSeq[`${id(3)}:start`], e = clockSeq[`${id(3)}:end`]
+    if (s === undefined || e === undefined) fail(`#665: ${id(3)}'s path wait was not clocked at its start and end`)
+    else {
+      if (s < settledSeq(id(1))) fail(`#665: ${id(3)}'s path wait was clocked to start while its blocker ${id(1)} still held it, so its minutes hold time the blocker cost`)
+      if (s > settledSeq(id(2))) fail(`#665: ${id(3)}'s path wait was clocked to start after ${id(2)}, the predecessor it waited on, had settled`)
+      if (e < settledSeq(id(2))) fail(`#665: ${id(3)}'s path wait was clocked to end before ${id(2)} settled`)
+    }
+    if (!(startSeq(id(3)) > settledSeq(id(2)))) fail(`#665: ${id(3)} started its implement before ${id(2)}, the predecessor its paths overlap, settled`)
+    const w = (r.pathWaits || []).find((x) => x.id === id(3))
+    if (!w || w.behind.map((b) => b.id).join(',') !== id(2) || typeof w.minutes !== 'number') fail(`#665: the run does not report ${id(3)}'s wait behind ${id(2)} alone, with its minutes: ${JSON.stringify(w)}`)
   }
 }
 
