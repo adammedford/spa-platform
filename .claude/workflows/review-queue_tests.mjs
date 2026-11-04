@@ -754,7 +754,19 @@ try {
       const m = (c.mutations || []).find((x) => x.test === 'Said') || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row Said on a .NET project red only on Other.Test, accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
-    if (!(env.prompts['verdict:212'] || '').includes('(#905)')) fail('PR 212: the verdict prompt does not say how to judge a Node companion row by its checks\' fail() messages')
+    for (const phrase of ["when every message the row went red on is one of those checks' own fail() messages", 'A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted']) {
+      if (!(env.prompts['verdict:212'] || '').includes(phrase)) fail(`PR 212: the verdict prompt does not say how to judge a Node companion row by its checks' fail() messages: it lacks ${JSON.stringify(phrase)}`)
+    }
+    // Red on another check's message as well as its own, a stated .mjs row the verdict does not accept
+    // holds: the script reads it did-not-fail, whatever its counts.
+    {
+      const SHAPE = { 212: pr(212, [MJS, '.claude/workflows/overnight.js'], { statedMutations: [stated('overnight_tests.mjs check 39', 3, -1, MJS)] }) }
+      env = run({ prs: [212] }, SHAPE, { mutate: { 'overnight_tests.mjs check 39': { ...row('reproduced', 3, 3), failingNames: [...MSGS, '#628: the integrate prompt does not name the base'] } } })
+      result = await execute(env)
+      const c = resultOf(212, result)
+      const m = (c.mutations || []).find((x) => x.test === 'overnight_tests.mjs check 39') || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row "overnight_tests.mjs check 39" red on another check's message too, not accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
   }
 
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
