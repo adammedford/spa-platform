@@ -254,9 +254,10 @@ account.
   allowlist says, save the gated session table and the two-task cell's gated NAT
   gateway (#583), which it holds at no instance on the default inputs, the table at
   one under `dynamodb` and the gateway at one under `multi_task`. This module's own
-  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, and names the
-  session table and the two-task cell's three egress types, so it cannot tell their
-  gated forms from ungated ones: P-01 is what holds them to their gates.
+  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, a bastion or any
+  database type but the session table, and names the session table and the two-task
+  cell's three egress types, so it cannot tell their gated forms from ungated ones:
+  P-01 is what holds them to their gates.
 - **P-03, the task role policy,** is the task role's runs above.
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an
