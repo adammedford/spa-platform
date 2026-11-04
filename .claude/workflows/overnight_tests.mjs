@@ -35,7 +35,9 @@
 // not n's, proves that a ticket with no readable path waits on the tickets ahead of it in that order, and that a wait
 // whose clock dies is reported unmeasured, never zero (#706 Q1 (b)). One more has a ticket both blocked by
 // one ticket and path-waiting on another, and proves that its wait is clocked and logged only once its blocker has
-// settled, and that it starts with that wait logged and reported (#665). Five more short runs on synthetic tickets check that
+// settled, and that it starts with that wait logged and reported (#665). Two more close a cycle through a path wait
+// that points forwards in n, and prove that the cycle guard drops the closing wait whether it points forwards or
+// backwards, following path waits as well as blocked-by edges (#916). Five more short runs on synthetic tickets check that
 // a lane runs first the ready ticket with the most of tonight's tickets downstream, counted transitively, across lanes,
 // once per ticket and only over tickets a lane runs, ties by n (#662). One more short run has an agent die on the
 // account's usage limit, and checks that the run halts naming the reset, counts that death as no failure, lists the
@@ -151,7 +153,7 @@ const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), titl
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 // Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
 // above keep their meaning: a ticket with no readable path would wait on every ticket ahead of it in its lane. Checks
-// 42 and 43 run ticket sets of their own whose paths overlap.
+// 42 to 45 run ticket sets of their own whose paths overlap.
 for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
@@ -2060,6 +2062,76 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!(startSeq(id(3)) > settledSeq(id(2)))) fail(`#665: ${id(3)} started its implement before ${id(2)}, the predecessor its paths overlap, settled`)
     const w = (r.pathWaits || []).find((x) => x.id === id(3))
     if (!w || w.behind.map((b) => b.id).join(',') !== id(2) || typeof w.minutes !== 'number') fail(`#665: the run does not report ${id(3)}'s wait behind ${id(2)} alone, with its minutes: ${JSON.stringify(w)}`)
+  }
+}
+
+// 45. The cycle guard on a path wait that points forwards in n (#916; #706 Q1 (b)). A ticket with no readable Touches
+//     path is ahead by its lane's run order, so its waits may point forwards in n, and the guard must follow them, and
+//     path waits as well as blocked-by edges, whichever way the closing wait points. Two runs, each with one cycle the
+//     guard must break, or the run stalls. Run A, one lane: X (n 1) and Y (n 3) touch w/x.txt; A (n 2) has no
+//     readable path; Y has two tickets downstream and A one, so the lane runs Y, A, X. X waits on A and A on Y, both
+//     forwards in n, so Y's wait on X, earlier by n with the same path, would close a cycle of path waits alone and is
+//     dropped. Run B: P (n 3) has a path and M (n 4) none in one lane, M ahead with two downstream to P's one; M needs
+//     A (n 2), A path-waits on B (n 1) by x/a.txt, and B needs P. P's wait on M, forwards in n, would close the cycle
+//     M, A, B, P, through a path wait, and is dropped. Each run asserts the dropped wait and that every ticket
+//     integrates; that the other waits hold their tickets is checks 42 and 43's to prove.
+{
+  const run = async (set, label) => {
+    const ev = [], logged = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+    globalThis.log = (text) => logged.push({ at: tick, text })
+    globalThis.agent = async (prompt, opts) => {
+      const [kind, tid] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED
+      if (kind === 'live') return LIVE_READY
+      if (kind === 'clock') return { epoch: tick * 6 }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      ev.push({ at: tick, kind, id: tid, edge: 'start' })
+      await sleep(15)
+      ev.push({ at: tick, kind, id: tid, edge: 'end' })
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the forward cycle run ${label}`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const cycleTick = setInterval(() => { tick++ }, 1)
+    let stop
+    const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+    clearTimeout(stop)
+    clearInterval(cycleTick)
+    return { r, ev, logged }
+  }
+  const T = (base, n, owner, touches, blockedBy = []) => ({ n, id: `issue-${base + n}`, slug: `c${base + n}`, issue: base + n, url: `https://example.invalid/${base + n}`,
+    title: `Forward cycle ${base + n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const noPath = (x) => `every path: ${x} has no readable Touches path (no Touches line, or one naming no path)`
+  const dropLine = (w, b, paths) => `${w}: no path wait behind ${b} (${paths}): ${b} already waits on ${w}, so the wait would close a cycle`
+  const cases = [
+    { label: 'A', base: 4000, set: (id) => [
+      T(4000, 1, 'integrator', ['w/x.txt']),                       // X: earlier by n, last in its lane
+      T(4000, 2, 'integrator', []),                                // A: no readable path, one downstream
+      T(4000, 3, 'integrator', ['w/x.txt']),                       // Y: two downstream, first in its lane
+      T(4000, 4, 'ws6-verification', ['e/e.txt'], [id(2)]),        // E: needs A
+      T(4000, 5, 'ws1-infra', ['d/1.txt'], [id(3)]),               // D1: needs Y
+      T(4000, 6, 'ws1-infra', ['d/2.txt'], [id(3)]),               // D2: needs Y
+    ], drop: (id) => dropLine(id(3), id(1), 'w/x.txt') },
+    { label: 'B', base: 5000, set: (id) => [
+      T(5000, 1, 'ws1-infra', ['x/a.txt'], [id(3)]),               // B: needs P
+      T(5000, 2, 'ws2-hosting', ['x/a.txt']),                      // A: path-waits on B
+      T(5000, 3, 'integrator', ['p/p.txt']),                       // P: a path, one downstream (B)
+      T(5000, 4, 'integrator', [], [id(2)]),                       // M: no readable path, needs A, two downstream
+      T(5000, 5, 'ws6-verification', ['d/1.txt'], [id(4)]),        // D1: needs M
+      T(5000, 6, 'ws6-verification', ['d/2.txt'], [id(4)]),        // D2: needs M
+    ], drop: (id) => dropLine(id(3), id(4), noPath(id(4))) },
+  ]
+  for (const c of cases) {
+    const id = (n) => `issue-${c.base + n}`
+    const { r, logged } = await run(c.set(id), c.label)
+    if (r === STALLED) { fail(`#916: forward cycle run ${c.label} did not finish: the cycle guard let a path wait close a cycle through a wait that points forwards in n`); continue }
+    for (const x of [1, 2, 3, 4, 5, 6].map(id)) if (!(r.integrated || []).includes(x)) fail(`#916: ${x} did not integrate in forward cycle run ${c.label}: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    if (!logged.some((l) => l.text === c.drop(id))) fail(`#916: forward cycle run ${c.label} did not log "${c.drop(id)}": ` + JSON.stringify(logged.filter((l) => l.text.includes('no path wait behind')).map((l) => l.text)))
   }
 }
 

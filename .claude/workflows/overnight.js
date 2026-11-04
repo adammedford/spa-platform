@@ -192,7 +192,8 @@ const TICKET = {
     }, required: ['rule', 'reason'] } },
     // tools/overnight_collect.py's Touches paths (#665), as tools/ticket_shape.py's touches() reads them, [] when the
     // tool printed null (no Touches line), listed none, or did not run. The path waits read it; [] waits on every
-    // earlier ticket of the lane.
+    // ticket ahead of it in its lane's run order, downstream first and then by n, not by n alone, and a later ticket
+    // of the lane in that order waits on it (#706 Q1 (b)).
     touches: { type: 'array', items: { type: 'string' } },
   },
   required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'changeRequest', 'willEndPartial', 'touches'],
