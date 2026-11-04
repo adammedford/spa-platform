@@ -134,6 +134,45 @@ override_resource {
   values          = { id = "sg-task" }
 }
 
+# The two-task shape's private subnets and route tables (#347), known at plan so a run can check that
+# the service sits in the one and the endpoints sit on the other. On the default inputs neither
+# instance exists, and an override of an instance the plan does not hold changes nothing.
+override_resource {
+  target          = aws_subnet.private["us-east-1a"]
+  override_during = plan
+  values          = { id = "subnet-1a" }
+}
+
+override_resource {
+  target          = aws_subnet.private["us-east-1b"]
+  override_during = plan
+  values          = { id = "subnet-1b" }
+}
+
+override_resource {
+  target          = aws_route_table.private["us-east-1a"]
+  override_during = plan
+  values          = { id = "rtb-1a" }
+}
+
+override_resource {
+  target          = aws_route_table.private["us-east-1b"]
+  override_during = plan
+  values          = { id = "rtb-1b" }
+}
+
+override_resource {
+  target          = aws_eip.nat[0]
+  override_during = plan
+  values          = { id = "eipalloc-0" }
+}
+
+override_resource {
+  target          = aws_nat_gateway.egress[0]
+  override_during = plan
+  values          = { id = "nat-0" }
+}
+
 # The log group and the two repositories, which the execution role's two grants are scoped to.
 override_resource {
   target          = aws_cloudwatch_log_group.gateway
@@ -199,8 +238,11 @@ variables {
 # made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
-# It is also where "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01) is held
-# statically rather than only against a deployed account.
+# It holds one part of "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01)
+# statically rather than only against a deployed account: no instance or bastion type can be
+# declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
+# named below with the input that creates each, so this set cannot tell a gated one from an ungated
+# one; the platform root's tripwire holds both to their gates, at no instance on the default inputs.
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
@@ -242,14 +284,25 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_cloudwatch_log_group",
       "aws_iam_role",
       "aws_iam_role_policy",
+      # Continuity (#338, #417), sessions.tf: the session table, planned only under
+      # session_store = "dynamodb". P-01 admits this one gated declaration and no other database
+      # (change request issue-338-p-01-dynamodb-tripwire, decision 1).
+      "aws_dynamodb_table",
+      # Continuity (#347, #332 D6), network.tf: the two-task cell's egress, planned only under
+      # multi_task. The Elastic IP is the NAT gateway's address, not the task's; the NAT gateway
+      # carries what has no gateway endpoint; the two gateway endpoints carry S3 and DynamoDB past
+      # it. P-01 admits the one gated NAT gateway (change request #583).
+      "aws_eip",
+      "aws_nat_gateway",
+      "aws_vpc_endpoint",
     ])
-    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; the platform root's tests count the rest (P-01)."
+    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a bastion, and a NAT gateway and a database but the two gated ones (#583, issue-338); the platform root's tests count the rest (P-01)."
   }
 
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
   # JSON-syntax file and calls no child module. Terraform loads *.tf.json beside *.tf
   # (https://developer.hashicorp.com/terraform/language/files), and a module block brings in
-  # resources of any type with no resource line here. Either would carry a NAT gateway past the
+  # resources of any type with no resource line here. Either would carry an instance past the
   # allowlist with every run green.
   assert {
     condition     = length(fileset(path.module, "*.tf.json")) == 0
@@ -592,6 +645,55 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
   }
 }
 
+# Continuity (#347, #332 F1). A roll replaces a task in three steps, in this order: ECS deregisters
+# the target and waits out the target group's deregistration delay, then sends SIGTERM, then after
+# the container's stopTimeout sends SIGKILL. The two numbers are F1's, 30 and 30, pinned exactly:
+# requests drain from the target for 30 s before SIGTERM, a drain that promises no refresh's
+# completion, and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363), which F1 sets above
+# the refresh holder's 20 s durable-write deadline (#332 F1; P2-3's second amendment, decision 2).
+# Mutations that turn this run red: deregistration_delay left to the provider's default, or 300;
+# stopTimeout 25 or absent; stopTimeout on the mock API too; minimum healthy 50.
+run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_task_always_serving" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    mock_api_app1_client_id = "app1client"
+    mock_api_app2_client_id = "app2client"
+  }
+
+  # A string in the provider's schema (`terraform providers schema -json`, read for #347), so the
+  # comparison is to "30": an integer here would error rather than fail.
+  assert {
+    condition     = aws_lb_target_group.gateway.deregistration_delay == "30"
+    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, during which requests in flight drain from the task; it promises no refresh's completion. The provider's default is 300 s, which only slows a roll."
+  }
+
+  assert {
+    condition = one([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+    ]).stopTimeout == 30
+    error_message = "The gateway container's stopTimeout is exactly 30 s (#332 F1): at least the gateway's 25 s ShutdownTimeout (#363), so the process finishes its shutdown before SIGKILL."
+  }
+
+  # The gateway alone: the mock API holds no session and no lease, and a second number would be a
+  # second thing to keep in step with F1 for nothing.
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : !can(c.stopTimeout) if c.name != "gateway"
+    ])
+    error_message = "stopTimeout goes on the gateway container only (#347 Q6): the mock API keeps Fargate's default."
+  }
+
+  # One task always serves during a roll: the new task is started and healthy before the old one is
+  # deregistered. Explicit rather than left to ECS's defaults, which are these two numbers, because
+  # F1 rests on them.
+  assert {
+    condition     = aws_ecs_service.gateway.deployment_minimum_healthy_percent == 100 && aws_ecs_service.gateway.deployment_maximum_percent == 200
+    error_message = "Minimum healthy 100% and maximum 200% (#347): a roll starts the replacement before it stops a task, so one task always serves."
+  }
+}
+
 run "ecs_exec_is_on_and_the_task_s_root_filesystem_stays_writable" {
   command = plan
 
@@ -892,7 +994,7 @@ run "the_task_role_reads_this_cell_s_bucket_prefixes_and_no_others" {
       one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadRegistryAndReleases"]).resources,
       aws_s3_bucket.platform.arn
     )
-    error_message = "The bucket's own ARN is not granted: the gateway never lists the bucket, it GETs keys the registry names."
+    error_message = "The bucket's own ARN is not granted: the gateway never lists the bucket, it GETs keys under prefixes the registry names, and a missing one answers 403 under this GetObject-only grant, which S3ObjectStore reads as a refused read, not as a missing key."
   }
 }
 
@@ -1413,6 +1515,110 @@ run "each_container_image_is_the_variable_it_was_given_with_no_tag_naming_defaul
   }
 }
 
+# #470: each image is <repository>@sha256:<64 lowercase hex> or the plan stops. The empty digest is
+# what a rewrite of terraform.tfvars wrote on 2026-10-27 when ECR Public answered its lookup with a
+# 429 (#242); the tag is the sample image's own name before it is pinned; the short digest is the
+# 8-character form the contract's example abbreviates to, which its gatewayImage pattern admits.
+run "a_gateway_image_with_an_empty_digest_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+run "a_gateway_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+run "a_gateway_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123abcd"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+# A full digest with no repository in front of it: the 64-hex rule alone would pass it, so this is
+# the run that holds the repository half, the contract's gatewayImage pattern, in place.
+run "a_gateway_image_with_no_repository_is_refused" {
+  command = plan
+
+  variables {
+    gateway_image = "@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  }
+
+  expect_failures = [var.gateway_image]
+}
+
+# The client ids are given, so the image's own rule is the only one that can stop these plans.
+run "a_mock_api_image_with_an_empty_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api:latest"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef01"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+# And the full form passes for both, in the two registries the cell pulls from: ECR Public for the
+# sample image, the cell's own repositories afterwards.
+run "full_digest_references_pass_for_both_images" {
+  command = plan
+
+  variables {
+    gateway_image           = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    mock_api_app1_client_id = "1example23456789"
+    mock_api_app2_client_id = "2example23456789"
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.image])
+      == toset([var.gateway_image, var.mock_api_image])
+    )
+    error_message = "A full digest reference for each image passes the plan, and each container runs the reference it was given."
+  }
+}
+
 # --- Outputs and names -----------------------------------------------------------------------
 
 run "the_new_outputs_match_the_infrastructure_outputs_contract" {
@@ -1616,4 +1822,686 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
     error_message = "The platform bucket's policy must select its checked policy document, the one P-04's configuration half reads."
   }
 
+}
+
+# --- Continuity (#338): the durable store's grants and the shared ring, behind inputs that default to
+# Phase 1 -----------------------------------------------------------------------------------------
+#
+# P2-2 decision 16: Session:Store = dynamodb with no DataProtection section fails the gateway's start,
+# because a durable session protected under a per-task ring is one no other task can read. The cell
+# refuses the same pairing at plan, so the cell never deploys a gateway that would refuse to start.
+run "dynamodb_with_no_ring_prefix_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    session_store = "dynamodb"
+  }
+
+  expect_failures = [var.session_store]
+}
+
+# The refusal names both inputs, so the operator reading it learns which one to set. terraform test
+# cannot read a validation's message, so the message is read from the source: the session_store
+# variable's block, which holds the one validation that names the ring prefix.
+run "the_dynamodb_refusal_names_both_inputs" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for m in regexall("(?s)error_message\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", one(regexall("(?ms)^variable \"session_store\" \\{.*?^\\}", file("${path.module}/variables.tf")))) :
+      strcontains(m[0], "session_store") && strcontains(m[0], "data_protection_parameter_prefix")
+    ])
+    error_message = "The refusal of session_store = \"dynamodb\" with no ring prefix names both session_store and data_protection_parameter_prefix."
+  }
+}
+
+run "dynamodb_with_the_cell_s_ring_prefix_plans" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+}
+
+# The session table under dynamodb (#338; change request issue-338-p-01-dynamodb-tripwire, decision
+# 2): one table, keyed on pk, with the appId index the store's RemoveAppAsync queries, time to live
+# on expiresAt and on-demand billing. Expected values come from change request P2-1's item 5 and
+# Decision 7, which name the key, the index and the TTL attribute the store writes. Encryption is
+# DynamoDB's default (#332 D6), so no server_side_encryption block is set; and there is no subject
+# index, which is G7's (ADR-0028).
+#
+# Mutations that turn this run red: hash_key = "appId"; the index renamed "app"; its key_schema on
+# pk; its projection ALL; the ttl block's attribute "expires", or enabled = false; billing_mode =
+# "PROVISIONED"; a server_side_encryption block naming a key. The table's count made 0 fails the
+# plan of the run before this one, since the grant then reads a table that is not there.
+run "under_dynamodb_the_session_table_is_keyed_on_pk_indexed_on_appid_expired_on_expiresat_and_on_demand" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  # The table is read through one instance's attributes, never as the whole resource. The provider
+  # marks the index's deprecated hash_key and range_key, and when an assertion fails, Terraform 1.16
+  # panics printing the value of any reference in it that holds the mark ("value has marks, so it
+  # cannot be serialized as JSON"). Every reference here but the index's own set carries no mark, so
+  # a failure reads as its message. The index has no unmarked path, so its assertion, when it fails,
+  # fails as that panic, after the line naming this run as failed; the exit is non-zero either way.
+  # Terraform 1.11.0, the floor tools/check.sh and CI run, does not panic: it prints the message.
+  assert {
+    condition     = can(aws_dynamodb_table.sessions[0].name) && !can(aws_dynamodb_table.sessions[1].name)
+    error_message = "Under dynamodb the cell plans exactly one session table."
+  }
+
+  assert {
+    condition = (
+      aws_dynamodb_table.sessions[0].name == "spa-platform-poc-sessions"
+      && aws_dynamodb_table.sessions[0].hash_key == "pk"
+      && aws_dynamodb_table.sessions[0].range_key == null
+      && toset([for a in aws_dynamodb_table.sessions[0].attribute : { name = a.name, type = a.type }])
+      == toset([{ name = "pk", type = "S" }, { name = "appId", type = "S" }])
+    )
+    error_message = "The session table is spa-platform-{cell}-sessions, hashed on pk (S) with no range key, and declares pk and appId as strings and nothing else (change request P2-1)."
+  }
+
+  assert {
+    condition = (
+      [
+        for g in aws_dynamodb_table.sessions[0].global_secondary_index : {
+          name       = g.name
+          projection = g.projection_type
+          key_schema = [for k in g.key_schema : { attribute_name = k.attribute_name, key_type = k.key_type }]
+        }
+      ] == [{ name = "appId", projection = "KEYS_ONLY", key_schema = [{ attribute_name = "appId", key_type = "HASH" }] }]
+    )
+    error_message = "The session table has one global secondary index, appId, hashed on appId and projecting keys only: the subject index is G7's (ADR-0028)."
+  }
+
+  assert {
+    condition     = length(aws_dynamodb_table.sessions[0].local_secondary_index) == 0
+    error_message = "The session table has no local secondary index."
+  }
+
+  assert {
+    condition = (
+      [for t in aws_dynamodb_table.sessions[0].ttl : { attribute_name = t.attribute_name, enabled = t.enabled }]
+      == [{ attribute_name = "expiresAt", enabled = true }]
+    )
+    error_message = "The session table expires items on expiresAt, the attribute the store writes (change request P2-1)."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.sessions[0].billing_mode == "PAY_PER_REQUEST"
+    error_message = "The session table bills on demand, so an idle cell pays for no provisioned capacity."
+  }
+
+  assert {
+    condition     = length([for e in aws_dynamodb_table.sessions[0].server_side_encryption : e.enabled]) == 0
+    error_message = "The session table keeps DynamoDB's default encryption: no customer-managed key at G6 (#332 D6)."
+  }
+}
+
+# Another cell's prefix, and a wider one, are refused: the grant and teardown both follow the cell's
+# own convention (P2-2 decision 8).
+run "another_cell_s_ring_prefix_is_refused" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/other/data-protection/"
+  }
+
+  expect_failures = [var.data_protection_parameter_prefix]
+}
+
+run "a_ring_prefix_wider_than_the_cell_s_is_refused" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/"
+  }
+
+  expect_failures = [var.data_protection_parameter_prefix]
+}
+
+run "a_kms_key_with_no_ring_is_refused" {
+  command = plan
+
+  variables {
+    data_protection_kms_key_id = "alias/spa-platform-poc"
+  }
+
+  expect_failures = [var.data_protection_kms_key_id]
+}
+
+# The task role under the durable store and the ring: exactly the grants #338 names, and the three of
+# Phase 1 unchanged beside them. The expected ARNs are written out for this file's account, Region
+# and cell, so a grant assembled from anything wider fails.
+#
+# Mutations that turn this run red: a sixth DynamoDB action (dynamodb:Scan) or one of the five
+# dropped; the index named index/* rather than index/appId; the grant built from the table's name
+# rather than read from the table; a fourth ssm action on the ring (ssm:GetParameter); the ring's own
+# path dropped from its resources; the tag grant's ManagedBy value changed, its aws:TagKeys condition
+# dropped, or a fourth tag key added; ssm:DeleteParameter added to the ring grant; a ring statement
+# with effect Deny or an action wildcard.
+run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  # The table's ARN, deliberately not the one its name would give, as the bucket's is above: the
+  # grant reads the table it is on (change request issue-338-p-01-dynamodb-tripwire, decision 2), so
+  # a grant assembled from the name fails the resource assertion below.
+  override_resource {
+    target          = aws_dynamodb_table.sessions[0]
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns" }
+  }
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages", "ReadWriteSessions", "ReadWriteKeyRing", "TagKeyRingOnCreate"])
+    )
+    error_message = "Under dynamodb the task role holds Phase 1's three grants and three more: the session table, the key ring, and the ring's tags on create (#338)."
+  }
+
+  # The five the store sends (change request P2-1, item 5's operations table and Decision 7), and
+  # nothing else of DynamoDB: no Scan, no UpdateItem, no table administration.
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).actions
+      == toset(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"])
+    )
+    error_message = "The session grant is GetItem, PutItem, DeleteItem, Query and BatchWriteItem, the operations the DynamoDB store sends (P2-1), and no other DynamoDB action."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources
+      == toset([
+        "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns",
+        "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns/index/appId",
+      ])
+    )
+    error_message = "The session grant names the session table's own ARN and its appId index, and nothing wider: no other table, no index wildcard, and not an ARN built from the table's name."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.task.statement :
+      alltrue([for action in s.actions : !startswith(action, "dynamodb:")]) if s.sid != "ReadWriteSessions"
+    ])
+    error_message = "Only the session grant carries a DynamoDB action."
+  }
+
+  # P2-2 decision 12: PutParameter and GetParametersByPath, the second authorised against the path's
+  # own ARN as well as its children.
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteKeyRing"]).actions
+      == toset(["ssm:PutParameter", "ssm:GetParametersByPath"])
+    )
+    error_message = "The ring grant is PutParameter and GetParametersByPath (P2-2 decision 12), and no read by name, no history and no delete."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteKeyRing"]).resources
+      == toset([
+        "arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection",
+        "arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection/*",
+      ])
+    )
+    error_message = "The ring grant names the prefix's own ARN and its children, under this cell (P2-2 decisions 8 and 12)."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).actions
+      == toset(["ssm:AddTagsToResource"])
+      && one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).resources
+      == toset(["arn:aws:ssm:us-east-1:111122223333:parameter/spa-platform/poc/data-protection/*"])
+    )
+    error_message = "The tag grant is AddTagsToResource on the ring's parameters alone (#274)."
+  }
+
+  # #274: StringEquals on each of the three tags' values, because ForAllValues on aws:TagKeys alone
+  # passes a call that carries no tags at all; and aws:TagKeys, so that no fourth tag rides along.
+  # The platform tag's value is read from contracts/resource-tags.md; ManagedBy = gateway is #274's.
+  assert {
+    condition = (
+      toset([
+        for c in one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "TagKeyRingOnCreate"]).condition :
+        { test = c.test, variable = c.variable, values = toset(c.values) }
+      ])
+      == toset([
+        { test = "StringEquals", variable = "aws:RequestTag/Platform", values = toset([regex("\\| `Platform` \\| `([^`]+)` \\| Every resource", file("../../../contracts/resource-tags.md"))[0]]) },
+        { test = "StringEquals", variable = "aws:RequestTag/Cell", values = toset(["poc"]) },
+        { test = "StringEquals", variable = "aws:RequestTag/ManagedBy", values = toset(["gateway"]) },
+        { test = "ForAllValues:StringEquals", variable = "aws:TagKeys", values = toset(["Platform", "Cell", "ManagedBy"]) },
+      ])
+    )
+    error_message = "The tag grant is conditioned on exactly Platform = spa-platform, Cell = the cell and ManagedBy = gateway, by aws:RequestTag for each and aws:TagKeys for the set (#274)."
+  }
+
+  # P2-2 decision 12: nothing in the platform deletes a key, so no statement grants a delete.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.task.statement :
+      !contains(s.actions, "ssm:DeleteParameter") && !contains(s.actions, "ssm:DeleteParameters")
+    ])
+    error_message = "No statement grants ssm:DeleteParameter or ssm:DeleteParameters: a role that cannot delete a key cannot lose the ring by accident (P2-2 decision 12)."
+  }
+
+  # The closures of the Phase 1 run hold here too: every grant an Allow, no wildcard action, only the
+  # tunnel's grant on "*", and no NotAction or NotResource.
+  assert {
+    condition = (
+      alltrue([for s in data.aws_iam_policy_document.task.statement : s.effect == "Allow"])
+      && alltrue([for s in data.aws_iam_policy_document.task.statement : !anytrue([for action in s.actions : strcontains(action, "*")])])
+      && toset([for s in data.aws_iam_policy_document.task.statement : s.sid if contains(s.resources, "*")]) == toset(["SessionManagerMessages"])
+      && alltrue([
+        for s in data.aws_iam_policy_document.task.statement :
+        length(coalesce(s.not_actions, toset([]))) == 0 && length(coalesce(s.not_resources, toset([]))) == 0
+      ])
+    )
+    error_message = "The new grants keep the task role's closures: Allow only, no wildcard action, nothing new on \"*\", no NotAction or NotResource."
+  }
+}
+
+# Mutations that turn this run red: any one of the four keys dropped from ecs.tf's
+# platform_configuration, or renamed (Session__Table); Session__TableName set to a name other than
+# the table's; the key id read from the prefix variable.
+run "under_dynamodb_the_task_environment_names_the_table_the_ring_and_its_key" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+    data_protection_kms_key_id       = "alias/spa-platform-poc"
+  }
+
+  override_resource {
+    target          = aws_dynamodb_table.sessions[0]
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:111122223333:table/the-arn-aws-returns" }
+  }
+
+  assert {
+    condition = alltrue([
+      for key, expected in {
+        "Session__Store"                  = "dynamodb"
+        "Session__TableName"              = "spa-platform-poc-sessions"
+        "DataProtection__ParameterPrefix" = "/spa-platform/poc/data-protection/"
+        "DataProtection__KmsKeyId"        = "alias/spa-platform-poc"
+        } : one([
+          for e in one([
+            for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+          ]).environment : e if e.name == key
+      ]).value == expected
+    ])
+    error_message = "Under dynamodb the gateway's environment carries Session__Store, Session__TableName, DataProtection__ParameterPrefix and DataProtection__KmsKeyId from the inputs (#338)."
+  }
+
+  # The table the environment names is the one the module creates and the task role may reach: the
+  # name the gateway is given is the table's, and the grant is on that table's ARN.
+  assert {
+    condition = (
+      one([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e if e.name == "Session__TableName"
+      ]).value == aws_dynamodb_table.sessions[0].name
+      && contains(
+        one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadWriteSessions"]).resources,
+        aws_dynamodb_table.sessions[0].arn
+      )
+    )
+    error_message = "Session__TableName names the session table the module creates, and the task role's session grant is on that table's ARN."
+  }
+}
+
+# With no key id the account's aws/ssm key holds, and the gateway reads an absent key, never an empty
+# one: the package would read an empty string as no key (P2-2 decision 15).
+run "with_no_kms_key_the_environment_carries_no_key_id" {
+  command = plan
+
+  variables {
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = !contains([
+      for e in one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).environment : e.name
+    ], "DataProtection__KmsKeyId")
+    error_message = "DataProtection__KmsKeyId is set only when data_protection_kms_key_id is."
+  }
+}
+
+# Phase 1, on the default inputs: no table grant, no ring grant and no new environment variable. The
+# environment's key set is written out as Phase 1's literal, so any key this ticket's inputs add on
+# the default fails here, and so does any key they remove. The next run holds the table's absence and
+# the two objects byte for byte.
+#
+# Mutations that turn this run red: the ring statements' condition made true; Session__TableName or
+# DataProtection__ParameterPrefix set unconditionally in ecs.tf. Two others never reach it: the
+# ReadWriteSessions statement's for_each made [1] (the grant then reads a table that is not there)
+# and session_store's default changed to dynamodb (its validation then refuses the default inputs)
+# each fail the plan of this file's first run, and every run after it is skipped.
+run "under_memory_the_cell_is_phase_1_s_unchanged" {
+  command = plan
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages"])
+    )
+    error_message = "On the default inputs the task role holds Phase 1's three grants: no table grant and no ring grant."
+  }
+
+  assert {
+    condition = (
+      toset([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ])
+      == toset([
+        "ASPNETCORE_HTTP_PORTS",
+        "Assets__Bucket",
+        "ForwardedHeaders__TrustedNetworks__0",
+        "ForwardedHeaders__TrustedNetworks__1",
+        "Issuers__cognito-poc__Authority",
+        "Issuers__cognito-poc__BrowserOrigin",
+        "Issuers__cognito-poc__Profile",
+        "Platform__Cell",
+        "Policy__AllowedHostSuffixes__0",
+        "Policy__AllowedUpstreams__0",
+        "Policy__AllowedUpstreams__1",
+        "Registry__Bucket",
+        "Registry__Key",
+        "Registry__PollSeconds",
+        "Session__MaxSessions",
+        "Session__Store",
+      ])
+    )
+    error_message = "On the default inputs the gateway's environment is Phase 1's, key for key: no Session__TableName and no DataProtection__ setting."
+  }
+
+  assert {
+    condition = one([
+      for e in one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).environment : e if e.name == "Session__Store"
+    ]).value == "memory"
+    error_message = "On the default inputs Session__Store is memory."
+  }
+}
+
+# Under memory the plan is Phase 1's byte for byte (#417). The continuity inputs reach three things:
+# the session table, the task role's statements and the gateway container's definition. On the
+# default inputs, which are memory with no ring, the first plans no instance, and the other two are
+# pinned by SHA-256 to the values the module planned before #338 added the inputs (cb8dafd) and
+# still planned at 83c3055, where #417 forked: both commits give the same two digests. The statements
+# are hashed as configured rather than as rendered JSON, because the mock provider renders no policy
+# (see the mock_data block at the top). Every other resource is untouched by the inputs, and the
+# runs above already hold each of them.
+#
+# A digest is a literal, so a Phase 1 change that is meant to alter either object fails here too.
+# That is the point: the author then says, in the same change, that the Phase 1 plan moved. The
+# failing assertion prints the new digest as its "actual" value. It moved once: #347 put
+# stopTimeout = 30 on the gateway container, whichever the inputs, because F1's shutdown relations
+# hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
+# so a task behaves as before, but the definition's bytes changed, the next apply registers a new
+# revision and rolls the service once; the digest below is the definition with that one key.
+#
+# Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
+# any environment value on the default changed, or one added or removed (Session__MaxSessions to
+# 20000; Session__TableName set unconditionally); a statement's action, resource or order changed
+# (ReadClientSecrets gaining ssm:GetParameterHistory); the ring's statements made unconditional.
+run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
+  command = plan
+
+  assert {
+    condition     = var.session_store == "memory" && var.data_protection_parameter_prefix == "" && var.data_protection_kms_key_id == ""
+    error_message = "The default inputs are Phase 1's: session_store memory, no ring prefix and no key id."
+  }
+
+  assert {
+    condition     = !can(aws_dynamodb_table.sessions[0].name)
+    error_message = "Under memory the cell plans no session table, and so no appId index."
+  }
+
+  assert {
+    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "c5e7e8285b7e7ca075c6d778a906442971f31a8a29b1a8bcee288e8b4e5a1144"
+    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout, byte for byte."
+  }
+
+  assert {
+    condition     = sha256(jsonencode(data.aws_iam_policy_document.task.statement)) == "9c678a246fdb4fa68a7d732d9ba4716b7536181615a141b5ec0c34032f6264dc"
+    error_message = "Under memory the task role's statements are the ones Phase 1 planned before #338, byte for byte."
+  }
+}
+
+# The ring is independent of the store, as in the gateway (P2-2 decision 5): a memory cell may share a
+# ring, and then carries the ring's grants and settings but no table.
+run "a_ring_under_memory_carries_the_ring_and_no_table" {
+  command = plan
+
+  variables {
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
+      == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "SessionManagerMessages", "ReadWriteKeyRing", "TagKeyRingOnCreate"])
+    )
+    error_message = "A ring with the memory store grants the ring and not the table."
+  }
+
+  assert {
+    condition = (
+      contains([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ], "DataProtection__ParameterPrefix")
+      && !contains([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.name
+      ], "Session__TableName")
+    )
+    error_message = "A ring with the memory store sets DataProtection__ParameterPrefix and no Session__TableName."
+  }
+}
+
+# --- Continuity (#347, #332 D6): the two-task shape, behind multi_task --------------------------
+#
+# One switch sets the whole shape (#347 Q4), so these runs hold both of its sides: on the default
+# inputs the cell is Phase 1's one public task with none of the private half, and under the switch it
+# is two tasks over two private subnets in two zones with no public address, one NAT gateway with its
+# Elastic IP in the first zone's public subnet, a private route table per zone routing out through
+# it, and the S3 and DynamoDB gateway endpoints on both tables. The expected subnets are worked by
+# hand from vpc_cidr 10.20.0.0/16: /24s at cidrsubnet indices 2 and 3 (#347 Q11), after the public
+# subnets' 0 and 1.
+
+# Mutations that turn this run red: any gated declaration's count or for_each left unconditional;
+# desired_count 2 unconditionally; assign_public_ip = false unconditionally; rebalancing set on the
+# defaults.
+run "on_the_default_inputs_the_cell_is_one_public_task_with_no_private_half" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_subnet.private) == 0 && length(aws_eip.nat) == 0 && length(aws_nat_gateway.egress) == 0
+      && length(aws_route_table.private) == 0 && length(aws_route.private_egress) == 0
+      && length(aws_route_table_association.private) == 0 && length(aws_vpc_endpoint.gateway) == 0
+    )
+    error_message = "On the default inputs the cell plans no private subnet, Elastic IP, NAT gateway, private route table, route, association or gateway endpoint (#347): Phase 1's network is unchanged."
+  }
+
+  assert {
+    condition     = aws_ecs_service.gateway.desired_count == 1 && aws_ecs_service.gateway.network_configuration[0].assign_public_ip && aws_ecs_service.gateway.availability_zone_rebalancing != "ENABLED"
+    error_message = "On the default inputs the service runs one task with a public address and leaves rebalancing to ECS (#347): Phase 1's compute is unchanged."
+  }
+}
+
+# Mutations that turn this run red: the private subnets at indices 0 and 1, or in one zone, or with
+# map_public_ip_on_launch true; a NAT gateway per zone, or in a private subnet; a route to the
+# internet gateway; an association left off; an endpoint on one table, or of the Interface type, or a
+# third endpoint; the NAT gateway given no allocation_id; desired_count 1; the service left in the public subnets, or with a public address;
+# rebalancing off; the task's egress opened beyond 443.
+run "under_multi_task_two_tasks_sit_in_two_private_subnets_in_two_zones_behind_one_nat_gateway_and_two_gateway_endpoints" {
+  command = plan
+
+  variables {
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      { for zone, s in aws_subnet.private : zone => s.cidr_block }
+      == { "us-east-1a" = "10.20.2.0/24", "us-east-1b" = "10.20.3.0/24" }
+      && alltrue([for zone, s in aws_subnet.private : s.availability_zone == zone && !s.map_public_ip_on_launch])
+    )
+    error_message = "Under multi_task the cell has two private subnets, 10.20.2.0/24 in us-east-1a and 10.20.3.0/24 in us-east-1b, neither giving a public address on launch (#347 Q11)."
+  }
+
+  assert {
+    condition = (
+      length(aws_eip.nat) == 1 && aws_eip.nat[0].domain == "vpc"
+      && length(aws_nat_gateway.egress) == 1
+      && aws_nat_gateway.egress[0].subnet_id == "subnet-0a"
+      && aws_nat_gateway.egress[0].allocation_id == "eipalloc-0"
+    )
+    error_message = "Under multi_task the cell has one NAT gateway, with its own Elastic IP, in the first zone's public subnet (#347 Q2): zone failure is out of G6's scope (#332 F15)."
+  }
+
+  assert {
+    condition = (
+      length(aws_route_table.private) == 2
+      && { for zone, r in aws_route.private_egress : zone => [r.route_table_id, r.destination_cidr_block, r.nat_gateway_id] }
+      == { "us-east-1a" = ["rtb-1a", "0.0.0.0/0", "nat-0"], "us-east-1b" = ["rtb-1b", "0.0.0.0/0", "nat-0"] }
+      && { for zone, a in aws_route_table_association.private : zone => [a.subnet_id, a.route_table_id] }
+      == { "us-east-1a" = ["subnet-1a", "rtb-1a"], "us-east-1b" = ["subnet-1b", "rtb-1b"] }
+    )
+    error_message = "Under multi_task each private subnet has its own route table, whose default route is the one NAT gateway (#347 Q11): a second NAT gateway, or a regional one, is then a new gateway and a route change."
+  }
+
+  assert {
+    condition = (
+      { for name, e in aws_vpc_endpoint.gateway : name => [e.service_name, e.vpc_endpoint_type, e.route_table_ids] }
+      == {
+        "s3"       = ["com.amazonaws.us-east-1.s3", "Gateway", toset(["rtb-1a", "rtb-1b"])]
+        "dynamodb" = ["com.amazonaws.us-east-1.dynamodb", "Gateway", toset(["rtb-1a", "rtb-1b"])]
+      }
+    )
+    error_message = "Under multi_task the S3 and DynamoDB gateway endpoints sit on both private route tables (#347 Q15), and there is no other endpoint."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.gateway.desired_count == 2
+      && aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-1a", "subnet-1b"])
+      && !aws_ecs_service.gateway.network_configuration[0].assign_public_ip
+      && aws_ecs_service.gateway.availability_zone_rebalancing == "ENABLED"
+    )
+    error_message = "Under multi_task the service runs two tasks over the two private subnets with no public address, with availability-zone rebalancing on (#347 Q14)."
+  }
+
+  assert {
+    condition     = aws_lb.cell.subnets == toset(["subnet-0a", "subnet-0b"])
+    error_message = "Under multi_task the load balancer stays in the public subnets."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.task_https_out.from_port == 443
+      && aws_vpc_security_group_egress_rule.task_https_out.to_port == 443
+      && aws_vpc_security_group_egress_rule.task_https_out.ip_protocol == "tcp"
+    )
+    error_message = "Under multi_task the task's egress stays 443 alone: the NAT gateway changes the route out, not what the task may send."
+  }
+}
+
+# Q13: the gateway trusts X-Forwarded-For from the load balancer's subnets alone, so no private
+# subnet, where the tasks now sit, is a trusted network. Mutations that turn this run red: the trusted
+# networks built from every subnet, or from the service's subnets.
+run "under_multi_task_no_private_subnet_is_a_trusted_network" {
+  command = plan
+
+  variables {
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      toset([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
+      ])
+      == toset(["10.20.0.0/24", "10.20.1.0/24"])
+    )
+    error_message = "Under multi_task ForwardedHeaders:TrustedNetworks is still the two public subnets the load balancer sits in, and names no private subnet (#347 Q13)."
+  }
+}
+
+# Two tasks on the memory store hold two session sets, so the switch needs the durable store (#347
+# Q12). Both of multi_task's validations sit on the one variable, so this run keeps vpc_cidr at /16,
+# which the other passes. Mutations that turn this run red: the store validation removed, or its
+# condition made !var.multi_task || var.session_store != "nope".
+run "multi_task_without_dynamodb_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    multi_task = true
+  }
+
+  expect_failures = [var.multi_task]
+}
+
+# Four /24 subnets under the switch need /22 (#583): a /23 holds Phase 1's two and is refused with the
+# switch on, the durable store set so that only the range can be what fails. Mutations that turn this
+# run red: the range validation removed, or its floor made <= 23.
+run "multi_task_with_a_23_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    vpc_cidr                         = "10.20.0.0/23"
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  expect_failures = [var.multi_task]
+}
+
+# The refusal names both inputs, read from the source as the session_store refusal's is above.
+run "the_multi_task_refusal_names_both_inputs" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for m in regexall("(?s)error_message\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", one(regexall("(?ms)^variable \"multi_task\" \\{.*?^\\}", file("${path.module}/variables.tf")))) :
+      strcontains(m[0], "multi_task") && strcontains(m[0], "session_store")
+    ])
+    error_message = "The refusal of multi_task = true without the durable store names both multi_task and session_store (#347 Q12)."
+  }
 }

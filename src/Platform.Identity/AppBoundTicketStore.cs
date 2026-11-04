@@ -78,10 +78,11 @@ internal sealed class AppBoundTicketStore(AppDefinition app) : ITicketStore
 
     /// <summary>
     /// Removes a session this app owns; another app's key is left alone, and a key already removed is a
-    /// no-op. The cookie handler calls this from its sign-out and when it finds a ticket it read expired.
+    /// no-op, as is a key logout's end has already ended on this request (#386 Q192). The cookie handler
+    /// calls this from its sign-out and when it finds a ticket it read expired.
     /// </summary>
     public Task RemoveAsync(string key, HttpContext httpContext, CancellationToken cancellationToken) =>
-        Sessions(httpContext).RemoveAsync(app, key, cancellationToken);
+        Sessions(httpContext).RemoveAsync(httpContext, app, key, cancellationToken);
 
     private SessionRecord Record(AuthenticationTicket ticket, DateTimeOffset createdAt) => new(
         AppId: app.AppId,

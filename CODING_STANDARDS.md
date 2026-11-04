@@ -97,7 +97,7 @@ other file.
 ## An authorisation is read from its author
 
 A comment, a label or a file that unlocks an action counts only when the account the rule names
-wrote it. A `Confirm` comment is the human's act (`docs/agents/issue-tracker.md`), so code that
+wrote it. A `Confirm` comment is the human's act (`docs/agents/tracker-policy.md`), so code that
 matches its first word and not its author lets anyone who can comment on the repository take an
 action out of its dry run. #271's morning script read every comment beginning `Confirm`, and an
 outsider's `Confirm Q1` dispatched a commit applier (fixed in 58f5858).
@@ -139,6 +139,18 @@ the table, and a copy is wrong one reorder after it is written.
 
 The relation is still worth stating — "runs after host resolution, which pins the app" — and the
 name carries it. A reviewer reads a bare number as a copy to be replaced.
+
+## A suppression answers to its citation
+
+An analyzer suppression, a `[SuppressMessage]` or a `#pragma warning disable`, turns a finding off
+at one site, so it must say why the finding is wrong there: its `Justification`, or the pragma's
+trailing comment, cites the evidence id, test id, issue or ADR that makes the code right as it
+stands. The local check, `tools/check.sh`, refuses a suppression with no citation and any
+`GlobalSuppressions.cs` (#606); what it cannot decide is whether the citation actually answers the
+finding. A suppression whose citation does not, such as a jitter site's CA5394 citing a ticket about
+something else, or one that quiets a finding the code should fix, is a Standards-axis finding. A
+security rule is never relaxed for a tier, so its suppressions are where this matters most. See
+[ADR-0035](docs/adr/0035-analyze-every-build-in-two-tiers-ramped-to-error-with-codeql-required.md).
 
 ## A universal names its exceptions by the writer
 

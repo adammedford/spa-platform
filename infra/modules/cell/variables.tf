@@ -22,9 +22,12 @@ variable "cell" {
 
 variable "vpc_cidr" {
   description = <<-EOT
-    The cell's address range. Two /24 subnets are carved out of it, one per zone.
-    Platform configuration's ForwardedHeaders:TrustedNetworks names this range, so
-    the gateway trusts X-Forwarded-For from the load balancer and from nowhere else.
+    The cell's address range. Two /24 subnets are carved out of it, one per zone, and
+    two more under multi_task, which then needs /22 or larger.
+    Platform configuration's ForwardedHeaders:TrustedNetworks names the two public
+    subnets the load balancer sits in, not this whole range, so the gateway trusts
+    X-Forwarded-For from the load balancer and from nowhere else; under multi_task
+    the private subnets stay untrusted.
 
     No default: the root decides the range, and this module is called by each cell's
     root. The poc root's default is 10.20.0.0/16.
@@ -140,9 +143,21 @@ variable "gateway_image" {
   EOT
   type        = string
 
+  # A digest reference and nothing else: <repository>@sha256:<64 lowercase hex>. The repository half
+  # is the contract's own gatewayImage pattern, read rather than copied; the digest half is held to
+  # its full 64 characters here because that pattern admits 8, for its abbreviated example
+  # (contracts/infra-outputs.schema.json -> gatewayImage). A SHA-256 digest is 64 lowercase hex:
+  # https://github.com/opencontainers/image-spec/blob/v1.1.1/descriptor.md#sha-256
+  #
+  # #470: on 2026-10-27 a rewrite of the platform root's terraform.tfvars, its digest lookup answered
+  # 429 by ECR Public, wrote gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@", and the
+  # length check this replaces would have passed it to the plan (#242).
   validation {
-    condition     = length(var.gateway_image) > 0
-    error_message = "gateway_image is the image the task runs. Pass the sample image on the first apply, and a digest afterwards."
+    condition = (
+      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.gateway_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.gateway_image))
+    )
+    error_message = "gateway_image is a digest reference, <repository>@sha256:<64 lowercase hex>, such as public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest> for the sample image on the first apply. A tag, an empty digest or a short one is refused."
   }
 }
 
@@ -157,6 +172,15 @@ variable "mock_api_image" {
   EOT
   type        = string
   default     = ""
+
+  # gateway_image's rule, when there is an image at all (#470).
+  validation {
+    condition = var.mock_api_image == "" || (
+      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.mock_api_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.mock_api_image))
+    )
+    error_message = "mock_api_image is empty, or a digest reference, <repository>@sha256:<64 lowercase hex>. A tag, an empty digest or a short one is refused."
+  }
 }
 
 variable "mock_api_app1_client_id" {
@@ -318,6 +342,61 @@ variable "session_store" {
     )
     error_message = "session_store must be one of the values contracts/platform-config.schema.json lists for Session:Store."
   }
+
+  # The gateway's own start-up rule, held at plan so that the cell never deploys a gateway that would
+  # refuse to start (P2-2 decision 16): the DynamoDB store protects its tickets under the key ring
+  # (P2-1 item 6), so durable sessions under a per-task ring are sessions no other task can read.
+  validation {
+    condition     = var.session_store != "dynamodb" || var.data_protection_parameter_prefix != ""
+    error_message = "session_store = \"dynamodb\" needs data_protection_parameter_prefix: the DynamoDB store protects its tickets under the shared key ring, and the gateway refuses Session:Store = dynamodb with no DataProtection:ParameterPrefix at start (P2-2 decision 16)."
+  }
+}
+
+# --- Continuity (#338): the durable store's table and the shared key ring --------------------------
+
+variable "data_protection_parameter_prefix" {
+  description = <<-EOT
+    The Parameter Store prefix the cell's data-protection key ring lives under, or empty for none.
+    Empty is Phase 1: the gateway registers no ring and keeps the framework's default, per task
+    (P2-2 decision 5), and nothing below is granted or set. Set, it is exactly
+    /spa-platform/{cell}/data-protection/, the per-cell convention that keeps two cells from sharing
+    a ring (P2-2 decision 8). The task role may write and read under it and may tag what it writes;
+    it may not delete there. tools/scripts/teardown.sh deletes that prefix by the same convention.
+  EOT
+  type        = string
+  default     = ""
+
+  # The convention and nothing else, because three things read the prefix from the cell name rather
+  # than from this value: teardown's deletion, the grant's scope and the invariant that two cells
+  # never share one ring. A free-form value could put the ring where teardown never looks, or widen
+  # the grant to another cell's ring.
+  validation {
+    condition     = var.data_protection_parameter_prefix == "" || var.data_protection_parameter_prefix == "/spa-platform/${var.cell}/data-protection/"
+    error_message = "data_protection_parameter_prefix is empty or exactly /spa-platform/{cell}/data-protection/, this cell's own ring prefix (P2-2 decision 8): teardown.sh deletes that path, and the task role's grant is scoped to it."
+  }
+}
+
+variable "data_protection_kms_key_id" {
+  description = <<-EOT
+    The KMS key the ring's SecureString parameters are encrypted under, or empty for the account's
+    aws/ssm key. Empty at G6 (#332 D6: no customer-managed key). A customer-managed key needs its
+    kms:Encrypt and kms:Decrypt granted to the task role, which this module does not hold; see the
+    comment beside the client secrets' grant in iam.tf.
+  EOT
+  type        = string
+  default     = ""
+
+  # The API's own KeyId pattern (P2-2 decision 15), which admits a key id, a key ARN, an alias and
+  # an alias ARN.
+  validation {
+    condition     = var.data_protection_kms_key_id == "" || can(regex("^[a-zA-Z0-9:/_-]{1,256}$", var.data_protection_kms_key_id))
+    error_message = "data_protection_kms_key_id is empty, or a KMS key id, key ARN, alias or alias ARN (^[a-zA-Z0-9:/_-]{1,256}$)."
+  }
+
+  validation {
+    condition     = var.data_protection_kms_key_id == "" || var.data_protection_parameter_prefix != ""
+    error_message = "data_protection_kms_key_id encrypts the key ring, so it needs data_protection_parameter_prefix: with no prefix there is no ring for it to encrypt."
+  }
 }
 
 variable "session_max_sessions" {
@@ -349,5 +428,34 @@ variable "log_retention_days" {
       var.log_retention_days,
     )
     error_message = "log_retention_days must be one of the retention periods CloudWatch Logs accepts, and not 0, which means never expire."
+  }
+}
+
+# --- Continuity (#347): the two-task shape ----------------------------------------------------------
+
+variable "multi_task" {
+  description = <<-EOT
+    The two-task shape of #332 D6, or Phase 1's one public task (false). True sets the whole shape
+    at once (#347 Q4): desired_count 2 over two private subnets in two zones with no public
+    address, availability-zone rebalancing on, one NAT gateway with its Elastic IP in the first
+    zone's public subnet, a private route table per zone routing out through it, and the S3 and
+    DynamoDB gateway endpoints on both. The load balancer stays in the public subnets.
+  EOT
+  type        = bool
+  default     = false
+
+  # Two tasks on in-memory sessions and per-task key rings would sign users out at random (#347
+  # Q12), so the switch needs the durable store, which needs the shared ring (session_store's rule).
+  validation {
+    condition     = !var.multi_task || var.session_store == "dynamodb"
+    error_message = "multi_task = true needs session_store = \"dynamodb\": two tasks on the memory store hold two session sets, and a request that lands on the other task is signed out (#347 Q12)."
+  }
+
+  # Four /24 subnets under the switch, so the range is /22 or larger; vpc_cidr's own rule holds /23
+  # for Phase 1's two. Inside try() for the reason vpc_cidr's rule is inside can(): a value with no
+  # "/" would raise an evaluation error instead of showing error_message.
+  validation {
+    condition     = !var.multi_task || try(tonumber(split("/", var.vpc_cidr)[1]) <= 22, false)
+    error_message = "multi_task = true carves four /24 subnets out of vpc_cidr, two public and two private, so the range is /22 or larger."
   }
 }

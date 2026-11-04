@@ -62,7 +62,7 @@ public sealed class TraceTests
         Assert.Equal(traceId, traceparent.Split('-')[1]);
     }
 
-    private static List<(long Count, Dictionary<string, object?> Tags)> PointsOf(TelemetryHost host, string name)
+    internal static List<(long Count, Dictionary<string, object?> Tags)> PointsOf(TelemetryHost host, string name)
     {
         host.Flush();
         List<(long Count, Dictionary<string, object?> Tags)> points = [];

@@ -14,14 +14,16 @@ public sealed class PublicSurfaceTests
 {
     /// <summary>
     /// Every public type the contract names, from docs/plan/02-contracts.md -> Interfaces. Adding a
-    /// line here is a contract change: the integrator decides it, and a workstream asks for it with
-    /// contracts/changes/&lt;task-id&gt;-&lt;slug&gt;.md.
+    /// line here is a contract change: a workstream asks for it with a change request, an issue
+    /// labelled change-request that the human decides in a decision comment and the integrator
+    /// lands (docs/agents/tracker-policy.md, "Change requests").
     /// </summary>
     private static readonly string[] Contracted =
     [
         "AccessTokenResult",
         "AccessTokenResult+ProviderUnavailable",
         "AccessTokenResult+SessionEnded",
+        "AccessTokenResult+StoreUnavailable",
         "AccessTokenResult+Token",
         "AccessTokenResult+Unauthenticated",
         "ApiDefinition",
@@ -34,13 +36,16 @@ public sealed class PublicSurfaceTests
         "ICsrfTokens",
         "IIdpProfile",
         "IObjectStore",
+        "IRefreshLeases",
         "IRegistry",
         "IRequestTelemetryFeature",
         "ISessionStore",
         "IssuerDefinition",
         "OAuthDefinition",
+        "ObjectReadRefusedException",
         "PlatformPolicy",
         "Problems",
+        "RefreshLease",
         "RegistrySnapshot",
         "Rejection",
         "RuleIds",
@@ -60,6 +65,8 @@ public sealed class PublicSurfaceTests
     public void The_public_surface_is_exactly_what_the_contract_names()
     {
         // Mutation (#160): drop "Problems" or "Rejection" from Contracted, and this fails, 1 of 108 each.
+        // Mutation (#337): drop "IRefreshLeases" or "RefreshLease" from Contracted, and this fails.
+        // Mutation (#427): drop "ObjectReadRefusedException" from Contracted, and this fails.
         Assert.Equal(Contracted, PublicTypes().Select(Name).Order().ToArray());
     }
 

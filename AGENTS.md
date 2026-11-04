@@ -14,23 +14,24 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | Architecture, gates, decisions, assumptions | `docs/plan/01-plan.md` |
 | Interfaces, schemas, the request pipeline order | `docs/plan/02-contracts.md`, and `contracts/` once task I-2 has landed |
 | Your task: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
-| Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md` |
+| Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, and `contracts/test-ids.md` for ids named after the export |
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |
+| Tickets and specs on the tracker: their shape, body and comments, closing, citing, the human's account, a decision Adam gives in a foreground session, lifecycle | `docs/agents/tracker-policy.md` |
+| Launching the review-queue workflow, repairing what a review found | `docs/agents/landing-work.md` -> "Launching the review", `docs/agents/review.md` -> "Repairing findings" |
 | AWS work: the Region, IAM and spend-limit rules of the new AWS experience, before any apply or credential step | `docs/agents/aws-rules.md` |
 
 ## Rules for every task
 
 - **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
-- **The integrator's paths are off limits**, even for a one-line fix. The one exception is adding a change request.
-- **Need a contract changed?** Add `contracts/changes/<task-id>-<slug>.md` describing the change, and stop. The integrator decides and edits.
-- **Need a new project, a new package or a different version?** Same route. `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
+- **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
+- **A commit that changes a steering document names its authority** in an `Authority:` trailer: `#<n>` for the ticket that asks for the change, or the URL of the comment holding a confirmed answer. `.githooks/pre-push` and CI hold a commit that names none; `docs/agents/landing-work.md` has the forms.
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
 - **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
-- **A task is done** when its tests pass in CI, it touched only its own paths, and it left no change request open.
+- **A task is done** as `GLOSSARY.md` → "Done" defines it.
 
 ## Who owns what
 
@@ -55,7 +56,7 @@ dotnet test --solution SpaPlatform.slnx --ignore-exit-code 8   # every test proj
 dotnet test --project tests/Platform.Registry.Tests
 tools/smoke.sh Debug 5180                       # G1a's exit test, after a build
 tools/check.sh                                  # the pre-push hook's checks, by hand
-tools/check.sh --full --port 5180               # and the tests, the smoke test and terraform test
+tools/check.sh --full --port 5180               # and the tests, the smoke test, terraform test and the touched scripts' test companions
 ```
 
 - **`tools/check.sh` is the local check.** The pre-push hook runs it, and every overnight lane runs
@@ -68,6 +69,14 @@ tools/check.sh --full --port 5180               # and the tests, the smoke test 
 - **A project named `*Tests` is a test project.** `Directory.Build.props` makes it an executable and adds xUnit v3. Do not add xUnit yourself.
 - **Packages:** add `<PackageReference Include="Name" />` with no version to your own project file. The version comes from `Directory.Packages.props`.
 - **Warnings are errors.** Package advisories are the exception: they warn.
+- **Analyzers run in every build**, `dotnet build`, `tools/check.sh` and CI alike, at
+  `AnalysisLevel` `10-all` (ADR-0035). A diagnostic id names its analyzer by prefix: `CA` is the
+  SDK's code-quality rules, `IDE` its code-style rules, `MA` Meziantou, `VSTHRD` VS Threading,
+  `RS0030` the banned-API list; `dotnet build` prints the id and a link to its page. A rule still
+  being made clean is a pending rule, held at `suggestion` in the root `.globalconfig` with a
+  comment naming its batch's promotion ticket: `grep pending .globalconfig` lists them. A finding
+  is fixed, or suppressed at its site with a citation (`CODING_STANDARDS.md` → "A suppression
+  answers to its citation"); never in a `GlobalSuppressions.cs`.
 - **`spikes/` is outside the solution** and does not inherit the solution's build settings.
 - **Reach the gateway over a raw socket when the `Host` header matters.** In an agent sandbox, HTTP
   through `curl` is proxied and answered on the `Host` header, so a spoofed host never reaches the
@@ -97,8 +106,8 @@ using an older snapshot to choose work.
 - **What has landed:** `git log --oneline origin/main`, where each task's merge names its id.
 - **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read from
   origin/main against those tags.
-- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, read from origin/main against
-  those tags.
+- **Which gate is open:** the gates table in `docs/plan/01-plan.md`, or for a gate defined after
+  the export the gate register `contracts/gates.md`, read from origin/main against those tags.
 - **All three at once, per gateway capability:** read `docs/roadmap.md` from origin/main with
   `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; after
   landing a row, run that script in the landing checkout.

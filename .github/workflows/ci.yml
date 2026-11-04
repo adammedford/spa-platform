@@ -1,6 +1,6 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Four jobs. The documents job runs on every pull request and costs a few minutes: the documents a
+# Five jobs. The documents job runs on every pull request and costs a few minutes: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
 # the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
@@ -15,9 +15,11 @@
 # for changes to its workflow, the classifier, tools/smoke.sh or tools/image-check.sh, or when the
 # base cannot be resolved.
 #
-# A job skipped that way still satisfies main's protection, which requires `Build and test` and
-# `Terraform` by name: GitHub reports a job skipped by its `if` as a success, where a workflow
-# skipped by an `on.paths` filter leaves the required check pending and the pull request stuck --
+# A job skipped that way still satisfies main's protection, which requires `Documents`, `Build and
+# test` and `Terraform` by name -- every check the protection listed as required when this sentence
+# was last written (#552; `gh api repos/adammedford/spa-platform/branches/main/protection` lists
+# them): GitHub reports a job skipped by its `if` as a success, where a workflow skipped by an
+# `on.paths` filter leaves the required check pending and the pull request stuck --
 # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
 # -- which is why the filter is an `if` on each job and not a `paths` on the workflow. Each `if`
 # says `!cancelled()` rather than the implied success(): if the documents job failed before it could
@@ -33,6 +35,15 @@
 # parse check again on macOS, under the bash 3.2 the scripts target, and the main-checkout guard's
 # companion on macOS, where the sessions here run the hook, on every push and pull request; the
 # steps that run them say why.
+#
+# The fifth job, `CodeQL`, is the advanced-setup CodeQL scan of the solution's C# (ADR-0035
+# decision 11, #609). It runs under the Build job's `if`, so it skips with it, and builds the
+# solution again under CodeQL's tracer, with the `security-extended` suite and the category
+# `/language:csharp`. Its alerts are advisory, read in the Security tab: the job fails only when the
+# analysis does not run. A weekly rescan under the same category lives in codeql-weekly.yml, a
+# schedule-only file of its own, because a schedule here would run every job. Main's protection
+# names this job, `CodeQL`, when it requires the scan, never the generated `Code scanning results /
+# CodeQL` check, which stays pending on a pull request with no upload (ADR-0035 decision 11).
 #
 # Plan policy (P-01 to P-03 and P-07) is mock-provider assertions that the Terraform job's test step
 # runs (ADR-0016); CI holds no AWS credential, and plan generation stays disabled.
@@ -205,7 +216,9 @@ jobs:
         # and the commits this change adds, each of which, if it changes a steering document, must
         # name what authorised it in an `Authority:` trailer (ADR-0023, #102). Those are judged from
         # the base the decision step resolved, or over every commit HEAD reaches when it resolved
-        # none, so a push GitHub has no `before` for is judged rather than skipped.
+        # none, so a push GitHub has no `before` for is judged rather than skipped. An ADR that
+        # existed at the merge-base of that base and HEAD may change only its Status item, so a
+        # body edit, delete or rename fails whatever the trailer says (ADR-0032 decision 7, #634).
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         env:
@@ -226,8 +239,9 @@ jobs:
         # carries every generated test-user password and the apps root's carries the OAuth client
         # secrets. Change request 1.1's first half put *.tfplan in .gitignore; this is its second
         # half, and it is a check rather than a sentence because the sentence is what the author of
-        # any future plan pipeline would read last. It starts green: nothing here uploads an
-        # artifact or writes a plan yet.
+        # any future plan pipeline would read last. Nothing writes a plan, and the one artifact
+        # upload it admits is the startup benchmark's own files in .github/workflows/startup-bench.yml
+        # (#576), pinned there to that file and that path.
         run: |
           python3 -I .github/plan-secrecy-tests.py
           python3 -I .github/plan-secrecy.py
@@ -241,6 +255,16 @@ jobs:
         run: |
           python3 -I tools/roadmap_tests.py
           python3 -I tools/roadmap.py --check
+
+      - name: The analyzer configs and every suppression keep ADR-0035's rules
+        # The build enforces each analyzer severity but not the shape of the files that set them: a
+        # security rule relaxed in any section of any analyzer config (#671), a later .editorconfig
+        # section overriding the relaxed tier's, a category line or a suppression citing nothing all
+        # build green (#606). tools/check.sh runs the guard before every push; here it runs on what
+        # reaches main, after its companion.
+        run: |
+          python3 -I tools/analysis_guard_tests.py
+          python3 -I tools/analysis_guard.py
 
       - name: A-05's two rules hold
         # The ownership check is the one guard with no CI job of its own: it runs in the pre-push
@@ -258,6 +282,15 @@ jobs:
         # guard nobody has seen refuse is a decoration, and the land.sh companion below runs only one
         # case of each.
         run: python3 -I tools/review_record_tests.py
+
+      - name: The decision reader names the decision a merge body owes a citation to
+        # tools/land.sh refuses a merge whose body closes a change request decided `ADR: no` without
+        # citing its decision comment (#530), and this is the code that decides which decision that
+        # is. Its companion feeds it GitHub's shapes of an issue and its comments built to trip each
+        # rule -- an issue without the label, ADR: yes, a decline, a later decision, a comment in
+        # the form from another account, lines close to the form, a decision on a later page -- and
+        # the land.sh companion below runs only one case of each.
+        run: python3 -I tools/decision_citation_tests.py
 
       - name: The retro's record reader reads each record line the way its rules say
         # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line
@@ -348,6 +381,15 @@ jobs:
         # worktree, and runs the settings entry as written.
         run: python3 -I tools/main_checkout_guard_tests.py
 
+      - name: The nightly startup benchmark job re-runs once on no verdict, never on a fail, and stays informational until promoted
+        # .github/workflows/startup-bench.yml runs tools/bench/startup.py's local tier on an ARM64
+        # runner nightly, through .github/startup-bench.sh (#576; ADR-0033 -> Decision, the cadence).
+        # That job never runs on a workstation and nothing here is ARM64, so the script's rules are
+        # proved with the benchmark doubled: the three local budgets, exactly one re-run on exit 2 and
+        # none on exit 1, both runs' files kept, the verdict as the last line, and the exit code
+        # read only once STARTUP_BENCH_ASSERTS is true. A step of its own, as every companion here.
+        run: python3 -I .github/startup_bench_tests.py
+
       - name: The overnight collect resolves tickets by its rules, lists specs apart and refuses a shared id
         # The overnight run's lanes are built from what tools/overnight_collect.py resolves (#187):
         # ids, owners, open blockers, status, open boxes and order, with a spec listed as a parent
@@ -357,13 +399,43 @@ jobs:
         # reads the task branches, local and on origin, from real git in a throwaway clone.
         run: python3 -I tools/overnight_collect_tests.py
 
+      - name: The overnight preflight gives one verdict per launch precondition, then arguments the workflow accepts
+        # tools/overnight_preflight.sh is what a launch reads before it starts the overnight run
+        # (#378), so a line that passes on a stale main, a dirty checkout, an existing run branch or
+        # a shell that is not bash sends a night at the wrong tree. Its companion runs the real
+        # script against real git in a throwaway origin and main checkout, with origin/main's own
+        # collect stub and a strict gh double, so no case reaches GitHub; it checks the checkout,
+        # its refs and the tracker are left as they were, and runs the printed arguments through
+        # the workflow's own launch validation under node. Under bash 5 here; the job below runs it
+        # under 3.2.
+        run: python3 -I tools/overnight_preflight_tests.py
+
+      - name: The integrate step's reach tool names which failed test projects a change could reach
+        # A red overnight integration gate re-runs a failed test project alone only when
+        # tools/test_reach.py finds no changed file that reaches it (#375). A rule that reaches too
+        # little keeps a merge whose change broke the project under a re-run that happened to pass.
+        # Its companion builds a throwaway repository in this one's project shape, replays #305's
+        # Spactl.Tests failure, and checks this repository's test sources name no top-level path the
+        # tool does not cover.
+        run: python3 -I tools/test_reach_tests.py
+
       - name: The wiz skill's redaction leaves no account id, code or secret in a post, and stops on AccessDenied
         # Every post the wiz skill makes to a ticket goes through tools/wiz_redact.py (#259), and a rule
         # that stops matching would leak into a public comment without a word. Its companion starts the
         # real script on hand-written input: an account id inside an ARN, a code in a URL, a client id
         # in JSON, the keep-last-four option, text with nothing to redact, and an Access Denied body,
-        # which must write nothing and exit 3 so the sitting stops and names the cause.
+        # which must write nothing and exit 3 so the sitting stops and names the cause; P-04's own
+        # passing case lines are the one shape let through, and the terminal's --stream mode masks
+        # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
+
+      - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
+        # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
+        # retires the unused default labels, the one write it cannot take back. Its companion runs the
+        # real script against a gh double: the derivation, the routes written, a short listing that
+        # must not read a label as unused, a failed write's verdict and the workflow's invocations.
+        # One case reads this checkout's tracked files, so a path the table does not cover fails here.
+        run: python3 -I tools/issue_labels_tests.py
 
       - name: A session's tail prints its last text turns and leaves out tool output and task notifications
         # A review or a morning reads what another session meant from the end of its transcript
@@ -479,6 +551,12 @@ jobs:
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/prune_branches_tests.py
+
+      - name: tools/overnight_preflight.sh, under the bash 3.2 macOS ships
+        # The launch runs it on this Mac, from the session that starts the run, under 3.2.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/overnight_preflight_tests.py
 
       - name: tunnel.sh and verify-tunnel.sh, under the bash 3.2 macOS ships
         # A sitting runs the tunnel from this Mac, under 3.2 (change request 1.6b).
@@ -629,9 +707,10 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          # The S3 backend's native lock file, which is why no DynamoDB table exists anywhere in
-          # this platform, first shipped in 1.10.0 and became generally available in 1.11.0, which
-          # is the floor: https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
+          # The S3 backend's native lock file, which is why Terraform state locking needs no DynamoDB
+          # lock table (the cell's session table holds sessions, not locks), first shipped in 1.10.0
+          # and became generally available in 1.11.0, which is the floor:
+          # https://github.com/hashicorp/terraform/blob/v1.11.0/CHANGELOG.md
           terraform_version: ${{ steps.terraform-floor.outputs.version }}
           terraform_wrapper: false
 
@@ -680,3 +759,45 @@ jobs:
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" test
           done <<< "$dirs"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    needs: documents
+    # The Build job's own `if`, so a change with no .NET input skips this job, which GitHub reports
+    # as a success, and the job can be required by its name without sticking (ADR-0035 decision 11;
+    # the header says why it is an `if` and why it says `!cancelled()`).
+    if: ${{ !cancelled() && needs.documents.outputs.build != 'false' }}
+    # The analysis is uploaded to code scanning, which needs `security-events: write`; the workflow's
+    # own `contents: read` is all the checkout needs.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: github/codeql-action/init@v4
+        with:
+          # C# only (ADR-0035 decision 11). `manual`: CodeQL extracts what the build step below
+          # compiles, so the scan covers what the solution builds, sees the source generators'
+          # output and leaves `spikes/` out, which is outside the solution. The test projects stay
+          # in, under code scanning's `Test` label (#587, sections 3 and 6).
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        # CI's own build of the solution, on the SDK setup-dotnet resolved from global.json. CodeQL's
+        # tracer adds its own properties to it (#587, section 3).
+        run: dotnet build SpaPlatform.slnx -c Release
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # The category the weekly rescan in codeql-weekly.yml names too, so the two runs update one
+          # analysis rather than two. Alerts are advisory: the step fails only when the analysis or
+          # its upload does not happen, never on what it finds (ADR-0035 decision 11).
+          category: /language:csharp

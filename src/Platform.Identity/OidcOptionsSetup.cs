@@ -48,8 +48,10 @@ public sealed class OidcOptionsSetup(
         options.ClientId = app.OAuth.ClientId;
         options.ClientSecret = secrets.Get(app.OAuth.ClientSecretRef);
 
-        // Discovery and keys through the issuer's shared manager, never a per-app one (R-A7).
+        // Discovery and keys through the issuer's shared manager, never a per-app one (R-A7). The
+        // handler's timeout reads what the shared client's is, the provider deadline (#332 F1).
         options.Backchannel = shared.Backchannel;
+        options.BackchannelTimeout = shared.Backchannel.Timeout;
         options.ConfigurationManager = shared.Metadata;
 
         // Code flow with PKCE (R-A1). Query, not the framework's form_post default: the cross-site POST

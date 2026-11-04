@@ -5,9 +5,12 @@
 the platform tag (#118, #232 Q3): IAM's own listings of roles and customer managed policies, read by
 their tags; the roles the cell declares, confirmed absent by name; and the tagging query in the
 selected Region, which drops ECS records whose describe says INACTIVE and confirms each EC2 id with a
-describe. The cases are #118 step 2's records, read on the platform project after the platform root's
-destroy (2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and
-four rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name.
+describe, the session table with DynamoDB's (#338) and the user pool with Cognito's (#466). The
+cases are #118 step 2's records, read on the platform project after the platform root's destroy
+(2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and four
+rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name. The
+user pool's are #242's, read after the teardown of 2026-10-27: the index went on listing the
+identity root's pool while DescribeUserPool answered ResourceNotFoundException.
 
 The doubles, the world they share and the universal every run holds (no output names the account id)
 are tools/scripts/cell_doubles.py's.
@@ -48,7 +51,21 @@ EC2 = f"arn:aws:ec2:{REGION}:{ACCOUNT}"
 CLUSTER_ARN = f"{ECS}:cluster/{cell.CLUSTER}"
 SERVICE_ARN = f"{ECS}:service/{cell.CLUSTER}/{cell.SERVICE}"
 GROUP = "sg-0123456789abcdef0"
+# The cell's session table under session_store = "dynamodb", by the name infra/modules/cell/iam.tf
+# builds: ${local.name_prefix}-sessions, read from the module rather than typed.
+TABLE = re.search(r'session_table_name\s*=\s*"([^"]+)"', _IAM)[1].replace("${local.name_prefix}", cell.FAMILY)
+TABLE_ARN = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{TABLE}"
 RULES = [f"sgr-0123456789abcde{n}" for n in "0123"]
+# The two-task cell's three egress types (#347): the NAT gateway, its Elastic IP by allocation id,
+# and the S3 and DynamoDB gateway endpoints, as the tagging index names them.
+NAT = "nat-0123456789abcdef0"
+NAT_ARN = f"{EC2}:natgateway/{NAT}"
+EIP = "eipalloc-0123456789abcdef0"
+EIP_ARN = f"{EC2}:elastic-ip/{EIP}"
+ENDPOINTS = ["vpce-0123456789abcdef0", "vpce-0123456789abcdef1"]
+ENDPOINT_ARNS = [f"{EC2}:vpc-endpoint/{endpoint}" for endpoint in ENDPOINTS]
+# The identity root's user pool, as the doubles' destroy of that root names it.
+_, POOL_ARN, POOL = cell.DESTROYED["idp"]
 
 
 def tagged(arn: str, kind: str, value: str = PLATFORM_VALUE, **state) -> dict:
@@ -179,12 +196,100 @@ class ATornDownCellPasses(Verify):
         case, _ = self.verify(world)
         self.assertEqual(1, len(case.aws("iam list-roles")))
 
+    def test_a_table_dynamodb_no_longer_knows_passes_and_is_counted(self):
+        # The index lags a DeleteTable as it lags every deletion: a table DescribeTable answers
+        # ResourceNotFoundException for is gone, and the summary says so.
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([TABLE], [call["options"]["table-name"] for call in case.aws("dynamodb describe-table")])
+        self.assertIn("1 DynamoDB tables DynamoDB does not know", result.stdout)
+
+    def test_a_deleting_table_passes_once_it_is_gone(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="DELETING", describe_knows=2))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(case.aws("dynamodb describe-table")))
+
+    def test_a_user_pool_cognito_no_longer_knows_passes_and_is_counted(self):
+        # #466, read after #242's teardown: the index went on listing the identity root's pool past
+        # the wait while DescribeUserPool answered ResourceNotFoundException for it.
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([POOL], [call["options"]["user-pool-id"] for call in case.aws("cognito-idp describe-user-pool")])
+        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+
+    def test_a_retried_tag_query_counts_each_dropped_record_once(self):
+        # #473: a security group EC2 lets go of on the third describe keeps the tag query retrying,
+        # and the summary is that last poll's, not the sum of all three.
+        world = torn_down_world()
+        world["tagged"][4]["describe_knows"] = 2
+        world["tagged"] += [tagged(TABLE_ARN, "dynamodb:table", describe_knows=0),
+                            tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0)]
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(self.index_queries(case)))
+        self.assertIn("1 DynamoDB tables DynamoDB does not know", result.stdout)
+        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+
     def test_the_tagging_index_s_own_lag_is_retried(self):
         world = torn_down_world()
         world["tag_lag"] = 2
         case, result = self.verify(world)
         self.assertEqual(0, result.status, result.output)
         self.assertEqual(3, len(self.index_queries(case)))
+
+    # The three types the two-task cell adds (#347 Q8): the NAT gateway, its Elastic IP and the two
+    # gateway endpoints. EC2 goes on describing a deleted NAT gateway and a deleted endpoint for a
+    # while, in the state "deleted", and only later answers that it does not know the id; a released
+    # Elastic IP is unknown at once. Without these cases each type would stand under the catch-all,
+    # and P-05 would fail after a correct destroy; a leaked NAT gateway is the cell's costliest leak.
+
+    def test_a_nat_gateway_ec2_says_deleted_passes_and_is_counted(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleted"))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([[NAT]], [call["options"]["nat-gateway-ids"] for call in case.aws("ec2 describe-nat-gateways")])
+        self.assertIn("1 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
+
+    def test_a_nat_gateway_ec2_does_not_know_passes(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", describe_knows=0))
+        _, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("1 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
+
+    def test_a_deleting_nat_gateway_passes_once_it_is_deleted(self):
+        # Deleting takes EC2 a minute or two, and the state says so: it stands, and is asked again
+        # within the wait.
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleting", describe_knows=2))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(3, len(case.aws("ec2 describe-nat-gateways")))
+
+    def test_an_elastic_ip_ec2_does_not_know_passes_and_is_counted_with_the_other_ids(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(EIP_ARN, "ec2:elastic-ip", describe_knows=0))
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([[EIP]], [call["options"]["allocation-ids"] for call in case.aws("ec2 describe-addresses")])
+        self.assertIn("6 EC2 ids describe does not know", result.stdout)
+
+    def test_a_vpc_endpoint_ec2_says_deleted_or_does_not_know_passes_and_both_are_counted(self):
+        world = torn_down_world()
+        world["tagged"] += [tagged(ENDPOINT_ARNS[0], "ec2:vpc-endpoint", state="deleted"),
+                            tagged(ENDPOINT_ARNS[1], "ec2:vpc-endpoint", describe_knows=0)]
+        case, result = self.verify(world)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(sorted([[e] for e in ENDPOINTS]),
+                         sorted(call["options"]["vpc-endpoint-ids"] for call in case.aws("ec2 describe-vpc-endpoints")))
+        self.assertIn("2 NAT gateways or VPC endpoints EC2 says deleted or does not know", result.stdout)
 
 
 class AStandingResourceFails(Verify):
@@ -241,6 +346,69 @@ class AStandingResourceFails(Verify):
         world["tagged"].append(tagged(f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:/spa-platform/poc/stray", "logs:log-group"))
         _, result = self.failed(world, f"the tag query in {REGION}")
         self.assertIn(f"arn:aws:logs:{REGION}:<account>:log-group:/spa-platform/poc/stray", result.stderr)
+
+    def test_a_surviving_session_table(self):
+        # #338: the table goes with the platform root, and one that survives it fails the verdict by
+        # name, whatever DynamoDB says of its status.
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="ACTIVE"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:dynamodb:{REGION}:<account>:table/{TABLE} (DynamoDB says ACTIVE)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_standing_nat_gateway_names_its_state(self):
+        # The cell's costliest leak (#347 Q8): one EC2 still says available fails by name.
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:natgateway/{NAT} (EC2 says available)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_standing_elastic_ip(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(EIP_ARN, "ec2:elastic-ip"))
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:elastic-ip/{EIP} (EC2 still describes it)", result.stderr)
+
+    def test_a_standing_vpc_endpoint_names_its_state(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(ENDPOINT_ARNS[0], "ec2:vpc-endpoint", state="available"))
+        _, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:ec2:{REGION}:<account>:vpc-endpoint/{ENDPOINTS[0]} (EC2 says available)", result.stderr)
+
+    def test_a_nat_gateway_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(NAT_ARN, "ec2:natgateway", state="deleted"))
+        world["faults"]["ec2 describe-nat-gateways"] = ["UnauthorizedOperation", "DescribeNatGateways"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("UnauthorizedOperation", result.stderr)
+        self.assertNotIn(ACCOUNT, result.output)
+
+    def test_a_table_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(TABLE_ARN, "dynamodb:table", status="ACTIVE"))
+        world["faults"]["dynamodb describe-table"] = ["AccessDeniedException", "DescribeTable"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("AccessDeniedException", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
+
+    def test_a_user_pool_cognito_still_describes(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool"))
+        case, result = self.failed(world, f"the tag query in {REGION}")
+        self.assertIn(f"arn:aws:cognito-idp:{REGION}:<account>:userpool/{POOL} (Cognito still describes it)", result.stderr)
+        self.assertGreater(len(self.index_queries(case)), 1)
+
+    def test_a_user_pool_describe_refused(self):
+        world = torn_down_world()
+        world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0))
+        world["faults"]["cognito-idp describe-user-pool"] = ["AccessDeniedException", "DescribeUserPool"]
+        _, result = self.verify(world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("AccessDeniedException", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
 
     def test_a_role_carrying_the_platform_tag_under_a_name_the_cell_does_not_declare(self):
         # An orphan from an interrupted apply, or a role added later: the name list cannot see it.

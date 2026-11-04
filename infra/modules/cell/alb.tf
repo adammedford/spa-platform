@@ -101,6 +101,20 @@ resource "aws_lb_target_group" "gateway" {
     matcher  = "200"
   }
 
+  # Continuity (#347, #332 F1). The drain: once a task is deregistered, the load balancer sends it no
+  # new request and waits this long for the ones in flight before ECS sends the task SIGTERM. 30 s
+  # is F1's number: requests drain from the stopping task during it. The drain promises no
+  # refresh's completion and no request's; the refresh holder's durable write, which is what F1's
+  # shutdown bound promises, rests on the gateway's ShutdownTimeout. The order a roll follows is
+  # drain, then the gateway's own ShutdownTimeout, then the container's stopTimeout; the relations
+  # between the three are stated at the gateway's stopTimeout in ecs.tf. An /api call whose
+  # entry's timeoutSeconds runs past this window can be cut by a roll; F1 accepts that. The
+  # provider's default is 300 s, which only slows a roll. Not MR-2's 120, which #332 F1 supersedes
+  # (#359). That ECS waits for the load balancer to report the target drained before it sends the
+  # stop signal is the vendor's:
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/load-balancer-connection-draining.html
+  deregistration_delay = 30
+
   tags = { Name = local.lb_name }
 }
 

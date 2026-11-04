@@ -91,7 +91,12 @@ TEARDOWN_TOKEN = "teardownsessiontoken/xyz=="
 # credentials, as verify_release_immutability_tests.py lists them. teardown.sh and cell-common.sh say
 # the credentials go only to one call's environment, never into a file or the output (#191).
 CREDENTIALS = (PASSWORD, TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN)
-SECRETS = (ACCOUNT, *CREDENTIALS)
+# The key ring's parameter names under the cell's prefix, /spa-platform/{cell}/data-protection/,
+# which teardown.sh lists and deletes (#338). A name is not a key, but GetParametersByPath is a call
+# that can answer with values, so cell_doubles_tests.py counts whatever it prints as handed out, and
+# the scripts print none of them: teardown.sh says how many it deleted, never which.
+RING_KEYS = tuple(f"/spa-platform/{CELL}/data-protection/key-{n:08d}-aaaa-bbbb-cccc-ddddeeeeffff" for n in range(1, 24))
+SECRETS = (ACCOUNT, *CREDENTIALS, *RING_KEYS)
 
 
 def digest_of(text: str) -> str:
@@ -184,6 +189,9 @@ def default_world() -> dict:
             "AWSServiceRoleForECS": {"tags": {}},
         },
         "policies": {},
+        # Parameter Store names that no root's state holds: the key ring the gateway writes under
+        # /spa-platform/{cell}/data-protection/ (P2-2 decision 17), which teardown.sh deletes.
+        "parameters": [],
         # The log group's events, as [stream, message] pairs, for logs.sh. A stream is named
         # <awslogs-stream-prefix>/<container>/<task id>, and ecs.tf sets each container's prefix to
         # its own name: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html
@@ -217,6 +225,20 @@ EC2_DESCRIBES = {
     "describe-internet-gateways": ("internet-gateway-ids", "internet-gateway", "InvalidInternetGatewayID.NotFound",
                                    "InternetGateways[].InternetGatewayId"),
     "describe-route-tables": ("route-table-ids", "route-table", "InvalidRouteTableID.NotFound", "RouteTables[].RouteTableId"),
+    # The NAT gateway's Elastic IP (#347): released, EC2 answers InvalidAllocationID.NotFound for its
+    # allocation id, with nothing to describe in between.
+    "describe-addresses": ("allocation-ids", "elastic-ip", "InvalidAllocationID.NotFound", "Addresses[].AllocationId"),
+}
+
+# The two EC2 types verify-teardown.sh reads a state from rather than an id (#347): a NAT gateway and a
+# VPC endpoint are described for a while after their deletion, in the state "deleted", and only later
+# not at all. The entry's "state" is what the describe answers, "available" unless the world says
+# otherwise; "describe_knows" counts the describes that still find it, as above.
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeNatGateways.html
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_VpcEndpoint.html
+EC2_STATE_DESCRIBES = {
+    "describe-nat-gateways": ("nat-gateway-ids", "natgateway", "NatGatewayNotFound", "NatGateways[].State"),
+    "describe-vpc-endpoints": ("vpc-endpoint-ids", "vpc-endpoint", "InvalidVpcEndpointId.NotFound", "VpcEndpoints[].State"),
 }
 
 
@@ -233,7 +255,8 @@ def text(value) -> str:
 
 
 MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
-                "clusters", *(entry[0] for entry in EC2_DESCRIBES.values())}
+                "clusters", "names", *(entry[0] for entry in EC2_DESCRIBES.values()),
+                *(entry[0] for entry in EC2_STATE_DESCRIBES.values())}
 
 
 def parse_aws(argv: list[str]) -> tuple[list[str], dict]:
@@ -359,6 +382,14 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             return [td_arn(service["taskDefinition"]), TARGET_GROUP_ARN]
         if query == ("services[0].[taskDefinition, deployments[?status==`PRIMARY`] | [0].rolloutState, "
                      "length(deployments), loadBalancers[0].targetGroupArn]"):
+            # A rollout still in progress: the primary reads IN_PROGRESS for as many reads as are
+            # left, then settles (#467). These reads also list two deployments, as the "deployments"
+            # fault does, so a case shows that the later checks use the settled read and not the
+            # first. That is a test device, not what #242 saw: the real waiter succeeds only on one
+            # deployment, and this double's waiter does not model that condition.
+            if service.get("inProgressReads", 0) > 0:
+                service["inProgressReads"] -= 1
+                return [td_arn(service["taskDefinition"]), "IN_PROGRESS", 2, TARGET_GROUP_ARN]
             return [td_arn(service["taskDefinition"]), service["rolloutState"], service["deployments"], TARGET_GROUP_ARN]
         raise Unexpected(f"describe-services --query {query!r}")
     if command == "ecs describe-task-definition" and query == "taskDefinition.status":
@@ -511,6 +542,17 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         if "describe_knows" in entry:
             entry["describe_knows"] -= 1
         return [ident]
+    if words[:1] == ["ec2"] and words[1:2] and words[1] in EC2_STATE_DESCRIBES:
+        option, kind, missing, expected = EC2_STATE_DESCRIBES[words[1]]
+        if query != expected or len(options.get(option, [])) != 1:
+            raise Unexpected(f"ec2 {words[1]} {options}")
+        ident = options[option][0]
+        entry = next((entry for entry in world["tagged"] if entry["arn"].endswith(f":{kind}/{ident}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError(missing, words[1])
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return [entry.get("state", "available")]
     if command == "acm delete-certificate":
         arn = options["certificate-arn"]
         # ACM counts a certificate in use for a while after the listener that held it is deleted:
@@ -540,6 +582,55 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             world["task_definitions"][name]["status"] = "DELETE_IN_PROGRESS"
             world["tagged"] = [entry for entry in world["tagged"] if entry["arn"] != td_arn(name)]
         return None
+    if command == "dynamodb describe-table":
+        # A table DynamoDB does not know is ResourceNotFoundException; one being deleted answers
+        # DELETING until it goes. "describe_knows" counts the describes that still find it, as for EC2.
+        # https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html
+        if query != "Table.TableStatus":
+            raise Unexpected(f"describe-table --query {query!r}")
+        name = options.get("table-name", "")
+        entry = next((entry for entry in world["tagged"]
+                      if entry["type"] == "dynamodb:table" and entry["arn"].endswith(f":table/{name}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError("ResourceNotFoundException", "DescribeTable")
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return entry.get("status", "ACTIVE")
+    if command == "cognito-idp describe-user-pool":
+        # A pool Cognito does not know is ResourceNotFoundException (#466). "describe_knows" counts the
+        # describes that still find it, as for EC2.
+        # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html
+        if query != "UserPool.Id":
+            raise Unexpected(f"describe-user-pool --query {query!r}")
+        ident = options.get("user-pool-id", "")
+        entry = next((entry for entry in world["tagged"]
+                      if entry["type"] == "cognito-idp:userpool" and entry["arn"].endswith(f":userpool/{ident}")), None)
+        if entry is None or entry.get("describe_knows", 1) <= 0:
+            raise ServiceError("ResourceNotFoundException", "DescribeUserPool")
+        if "describe_knows" in entry:
+            entry["describe_knows"] -= 1
+        return ident
+    if command == "ssm get-parameters-by-path":
+        # The path is a hierarchy and takes no trailing slash; --recursive reads below its first
+        # level. The CLI pages on its own and --query applies to the whole answer.
+        # https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParametersByPath.html
+        path = options.get("path", "")
+        if query != "Parameters[].Name" or options.get("recursive") is not True or path.endswith("/"):
+            raise Unexpected(f"get-parameters-by-path {options}")
+        return [name for name in world["parameters"] if name.startswith(path + "/")]
+    if command == "ssm delete-parameters":
+        # At most ten names a call; a name that is not there comes back under InvalidParameters, not
+        # as an error. https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DeleteParameters.html
+        names = options.get("names", [])
+        if query != "length(DeletedParameters)" or not names:
+            raise Unexpected(f"delete-parameters {options}")
+        if len(names) > 10:
+            raise ServiceError("ValidationException", "DeleteParameters")
+        deleted = [name for name in names if name in world["parameters"]]
+        world["parameters"] = [name for name in world["parameters"] if name not in names]
+        world["tagged"] = [entry for entry in world["tagged"]
+                           if not (entry["type"] == "ssm:parameter" and entry["arn"].split(":parameter", 1)[-1] in names)]
+        return len(deleted)
     raise Unexpected(f"aws {command} is not a call these scripts make")
 
 
@@ -728,8 +819,12 @@ def apply_platform(world: dict, variables: dict):
         world["service"] = {"taskDefinition": previous, "rolloutState": "COMPLETED", "deployments": 1}
         return
     # "deployments": the previous deployment not yet drained, so the service lists two.
+    # "rollout_in_progress": the waiter returns while the primary deployment is still IN_PROGRESS,
+    # and it reads so for that many reads before it settles on "rollout" (#467). The waiter does not
+    # wait on rolloutState: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html
     world["service"] = {"taskDefinition": name, "rolloutState": world["faults"].get("rollout", "COMPLETED"),
-                        "deployments": world["faults"].get("deployments", 1)}
+                        "deployments": world["faults"].get("deployments", 1),
+                        "inProgressReads": world["faults"].get("rollout_in_progress", 0)}
     world["next_task"] += 1
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
     # "running_definition": a task running the applied digest under another revision, as one started
@@ -814,6 +909,33 @@ def destroy_root(world: dict, root: str, stdout):
         stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
+def imagetools_inspect(world: dict, args: list[str], record: dict) -> int:
+    """`docker buildx imagetools inspect --format '{{json .Manifest}}' <reference>`, which
+    platform-tfvars.sh reads the sample image's current digest with (#470). The format prints the
+    reference's top-level descriptor as JSON, whose digest is the index's for a multi-platform image:
+    https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/
+
+    world["public_images"] maps a reference to the digest the registry answers, which a case may set
+    to an empty or a short one. faults["imagetools"] is the status the registry answers instead: 429
+    is what ECR Public answered twice on 2026-10-27 (#242)."""
+    if len(args) != 3 or args[0] != "--format" or args[1] != "{{json .Manifest}}":
+        raise Unexpected(f"docker buildx imagetools inspect {args}")
+    reference = args[2]
+    record["reference"] = reference
+    refused = world["faults"].get("imagetools")
+    if refused:
+        sys.stderr.write(f"ERROR: unexpected status from HEAD request to https://public.ecr.aws/v2/"
+                         f"{reference.split('/', 1)[1].replace(':', '/manifests/')}: {refused} Too Many Requests\n")
+        return 1
+    images = world.get("public_images", {})
+    if reference not in images:
+        sys.stderr.write(f"ERROR: {reference}: not found\n")
+        return 1
+    sys.stdout.write(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                                 "digest": images[reference], "size": 10229}, indent=2) + "\n")
+    return 0
+
+
 def docker_double(argv: list[str], case: pathlib.Path) -> int:
     world = json.loads((case / "world.json").read_text())
     record = {"tool": "docker", "argv": argv}
@@ -847,6 +969,13 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
         else:
             world["repositories"][name][image_tag] = digest_of(tag)
             sys.stdout.write(f"#12 pushing {tag} with docker\n#12 DONE 4.2s\n")
+    elif argv[:3] == ["buildx", "imagetools", "inspect"]:
+        try:
+            status = imagetools_inspect(world, argv[3:], record)
+        except Unexpected as error:
+            record["unexpected"] = str(error)
+            sys.stderr.write(f"docker double: unexpected call: {error}\n")
+            status = 97
     else:
         record["unexpected"] = True
         sys.stderr.write(f"docker double: unexpected call: {argv}\n")
@@ -1043,6 +1172,18 @@ class Case:
 
     def remove(self, name: str):
         (self.bin / name).unlink()
+
+    def stub_sleep(self):
+        """Replaces the real sleep with one that records its arguments in sleeps.log and returns at
+        once, so a case can run a script's polling loop to its bound without the wall time (#467).
+        Only the cases that call this lose the real sleep."""
+        log_path = shlex.quote(str(self.dir / "sleeps.log"))
+        self.write_executable("sleep", f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> {log_path}\n')
+
+    def sleeps(self) -> list[list[str]]:
+        """Each call to the stubbed sleep, as its arguments, in order."""
+        path = self.dir / "sleeps.log"
+        return [line.split() for line in path.read_text().splitlines()] if path.exists() else []
 
     def save(self):
         save_world(self.dir, self.world)

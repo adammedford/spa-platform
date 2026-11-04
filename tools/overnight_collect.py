@@ -15,6 +15,15 @@ A pre-launch audit is the same command.
 
     python3 -I tools/overnight_collect.py --json               read GitHub, git and the roadmap
     python3 -I tools/overnight_collect.py --json --from DIR    read saved listings instead of GitHub
+    python3 -I COPY/tools/overnight_collect.py --json --repo CHECKOUT
+                                                               forecast with another copy's rules
+
+--repo names the checkout whose git, gh repository (every gh call runs in it), tools/roadmap.py and
+docs/agents/tracker-policy.md are read, from any directory in it; without it, the checkout this
+script is in. It is for a forecast by origin/main's rules before the main checkout has moved (#377):
+a copy of the tool kept outside any checkout, read against the main checkout. The rules themselves,
+tools/ticket_shape.py, .github/path-ownership.py and OWNERSHIP.md, are the copy's own, read beside
+it. A --repo that is not a git checkout exits 1 naming it.
 
 The rules, as the collect step states them:
 - A ticket is an open issue carrying `ready-for-agent`, `ready-for-human` or `needs-triage`. An issue
@@ -24,17 +33,22 @@ The rules, as the collect step states them:
   OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
   they land in their own pull requests.
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
-- status, in this order: ready-for-human; needs-triage; needs-triage again for a ready-for-agent
+- status, in this order: foreground (#480) for a `**Touches:** none` line under any of the three
+  labels, a tracker edit no lane can make and a grill adds nothing to, so it gets no lane, no
+  Route and no grill, and a ticket waiting on it is blocked; ready-for-human; needs-triage;
+  needs-triage again for a ready-for-agent
   label some other account applied (#316); claimed (an assignee, or a `task/<id>-` branch on a row
-  not landed); ready-for-agent when every open blocker is itself a ready-for-agent ticket tonight;
-  blocked otherwise. The last two depend on each other, so they are settled by repeating until
-  nothing changes. An issue carrying two of the labels is one ticket, under the label this order
+  not landed); close-in-morning (#379) when every acceptance box is ticked (openBoxes 0), so the
+  ticket gets no lane and the report lists it with the issues to close, whatever it waits on;
+  ready-for-agent when every open blocker is itself a ready-for-agent or close-in-morning ticket
+  tonight; blocked otherwise. The last two depend on each other, so they are settled by repeating
+  until nothing changes. An issue carrying two of the labels is one ticket, under the label this order
   puts first.
 - Who labelled it (#316): `ready-for-agent` is a lane's promise (docs/agents/triage-labels.md), and
   CODING_STANDARDS.md -> "An authorisation is read from its author" says it counts only when the
   account the rule names applied it. So each ticket listed under it has its timeline read, and the
   actor of the last `labeled` event that applied `ready-for-agent` must be the account
-  docs/agents/issue-tracker.md names in its "The human's account is `@<login>`." line, or the
+  docs/agents/tracker-policy.md names in its "The human's account is `@<login>`." line, or the
   repository's owner (from the issue's own URL) while the guide names none. Any other actor, a
   deleted one, or no such event, and the ticket is needs-triage with the actor in "why": whoever
   can label an issue cannot send a lane at it.
@@ -91,11 +105,11 @@ PLAN_ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
 PLAN_ROW = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*(?P<value>[^\n]*)$")
 OWNER = re.compile(r"(?m)^\*\*Owner:\*\*[ \t]*(?P<value>[^\n]*)$")
-# Who may apply `ready-for-agent` (#316): the account the tracker guide names on a line of this
+# Who may apply `ready-for-agent` (#316): the account the tracker policy names on a line of this
 # shape, matched narrowly so that prose about accounts is not read as naming one.
 # .github/steering.py reads the same line for who may write a `Confirm`, and
 # overnight_collect_tests.py holds the two equal.
-GUIDE = "docs/agents/issue-tracker.md"
+GUIDE = "docs/agents/tracker-policy.md"
 ACCOUNT_LINE = re.compile(
     r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
 )
@@ -109,6 +123,17 @@ GH_TIMELINE = (
     "gh", "api", "--paginate", "repos/{owner}/{repo}/issues/{number}/timeline?per_page=100",
     "--jq", '.[] | select(.event == "labeled") | tojson',
 )
+
+# Why a ticket with every acceptance box ticked gets no lane (#379). overnight.js's report prompt
+# finds those tickets by this sentence, so the two say it alike.
+CLOSE_IN_MORNING = "every acceptance box is ticked; close it in the morning"
+# Why a ticket whose Touches line says `none` gets no lane, no Route and no grill (#480): it is a
+# tracker edit, such as "Apply Qn of Overnight <date> to #m", whose answer is already confirmed.
+# overnight.js says it alike, and its report lists the ticket under "## Foreground".
+FOREGROUND = "**Touches:** none, a tracker edit no lane can make; work it in the foreground"
+# The statuses a dependant may wait on and still be ready: a ticket a lane runs first tonight, and
+# one with nothing left to build, which the workflow settles as met before any lane starts.
+MET_TONIGHT = ("ready-for-agent", "close-in-morning")
 
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
 ANY_BOX = re.compile(r"(?m)^\s*- \[[ xX]\]")
@@ -203,8 +228,24 @@ def roadmap(root: pathlib.Path) -> dict:
     return json.loads(run([sys.executable, "-I", script, "--json"], root))
 
 
+def checkout(given: str) -> pathlib.Path:
+    """The top of the git checkout --repo names (#377), from any directory in it, as git finds it.
+    Anything else is refused naming it: read as no branches, no roadmap and no guide, it would
+    forecast every row unclaimed."""
+    where = pathlib.Path(given)
+    if not where.is_dir():
+        raise Refused(f"--repo {given} is not a git checkout: not a directory")
+    try:
+        top = run(["git", "rev-parse", "--show-toplevel"], where).strip()
+    except Refused as refusal:
+        raise Refused(f"--repo {given} is not a git checkout: {refusal}") from refusal
+    if not top:
+        raise Refused(f"--repo {given} is not a git checkout: git names no working tree")
+    return pathlib.Path(top)
+
+
 def tracker_guide(root: pathlib.Path) -> str | None:
-    """docs/agents/issue-tracker.md, which names the account that may apply ready-for-agent, or None
+    """docs/agents/tracker-policy.md, which names the account that may apply ready-for-agent, or None
     when the checkout has no guide."""
     path = root / GUIDE
     return path.read_text() if path.exists() else None
@@ -247,7 +288,7 @@ def labelled_for_agent(listings: dict[str, list[dict]]) -> list[int]:
 
 
 def named_account(guide: str | None) -> str | None:
-    """The account the tracker guide names on its "The human's account is `@<login>`." line, or
+    """The account the tracker policy names on its "The human's account is `@<login>`." line, or
     None when it names none (or there is no guide)."""
     found = ACCOUNT_LINE.search(guide or "")
     return found.group("login") if found else None
@@ -352,10 +393,12 @@ def judged_issue(issue: Issue):
 
 
 def prose_states(listed: list[Issue], tickets: list[Issue],
-                 known: dict[int, str] | None = None) -> dict[int, str]:
+                 known: dict[int, str] | None = None,
+                 root: pathlib.Path = ROOT) -> dict[int, str]:
     """What each number the tickets' prose waits for is (ticket_shape.KINDS), so that a closed
     issue or a pull request named in prose is stale prose and not a forecast partial (#284). A
-    listed issue is open; known gives others; the rest are asked of GitHub in one query."""
+    listed issue is open; known gives others; the rest are asked of GitHub in one query, run in
+    root so that gh resolves the checkout's repository."""
     try:
         shape = ticket_shape()
         states = {issue.number: "OPEN" for issue in listed}
@@ -364,7 +407,7 @@ def prose_states(listed: list[Issue], tickets: list[Issue],
                           if n not in issue.blockers and n not in issue.closed_blockers
                           and n not in states})
         if missing:
-            states.update(shape.look_up(missing))
+            states.update(shape.look_up(missing, cwd=root))
         return states
     except (Exception, SystemExit) as error:
         raise Refused(f"the ticket-shape check could not read the issues the prose names: "
@@ -406,13 +449,14 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             rules: list[tuple[str, str]] | None = None,
             states: dict[int, str] | None = None,
             timelines: dict[int, list[dict]] | None = None,
-            guide: str | None = None) -> dict:
+            guide: str | None = None, root: pathlib.Path = ROOT) -> dict:
     """The answer, from what was read. Raises Refused when two tickets share an id, or when the
     ticket-shape check cannot judge. rules is OWNERSHIP.md as A-05 parses it, which main() reads
     with the rest of the input; None reads it here. states gives what a number the prose names is,
     beyond the listed issues; prose_states() asks GitHub for the rest. timelines gives each
     ready-for-agent ticket's timeline events, and timeline() asks GitHub for any it lacks; guide is
-    the text of docs/agents/issue-tracker.md, which names the account that may apply the label."""
+    the text of docs/agents/tracker-policy.md, which names the account that may apply the label.
+    root is the checkout those two asks of GitHub run in."""
     landed = landed_ids(road)
     plan_order = list((road.get("rows") or {}).keys())
     parents, tickets = [], []
@@ -435,7 +479,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             "own **Plan row:** (none, for an issue that is not a plan row) and run again.")
 
     rules = ownership_rules() if rules is None else rules
-    states = prose_states(issues_of(listings), tickets, states)
+    states = prose_states(issues_of(listings), tickets, states, root)
     by_number = {issue.number: issue for issue in tickets}
     id_of = {issue.number: ticket_id(issue) for issue in tickets}
 
@@ -450,10 +494,12 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         tid = id_of[issue.number]
         claim = next((name for name in branch_names if name.startswith(f"task/{tid}-")), None)
         if issue.label == "ready-for-agent" and issue.number not in timelines:
-            timelines[issue.number] = timeline(ROOT, issue.number)
+            timelines[issue.number] = timeline(root, issue.number)
         unlabelled = (unauthorised_label(issue, timelines[issue.number], named)
                       if issue.label == "ready-for-agent" else None)
-        if issue.label == "ready-for-human":
+        if ticket_shape().writes_nothing(issue.body):
+            status[issue.number], why[issue.number] = "foreground", FOREGROUND
+        elif issue.label == "ready-for-human":
             status[issue.number], why[issue.number] = "ready-for-human", "labelled ready-for-human"
         elif issue.label == "needs-triage":
             status[issue.number], why[issue.number] = "needs-triage", "labelled needs-triage"
@@ -464,11 +510,14 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
         elif claim and tid not in landed:
             status[issue.number] = "claimed"
             why[issue.number] = f"its row is claimed by the branch {claim}, not landed"
+        elif open_boxes(issue.body) == 0:
+            status[issue.number], why[issue.number] = "close-in-morning", CLOSE_IN_MORNING
         else:
             status[issue.number] = "ready-for-agent"
 
-    # A ready-for-agent ticket stays ready only while every open blocker is a ready-for-agent
-    # ticket tonight; demoting one can demote another, so repeat until nothing moves.
+    # A ready-for-agent ticket stays ready only while every open blocker is a ready-for-agent or a
+    # close-in-morning ticket tonight; demoting one can demote another, so repeat until nothing
+    # moves.
     moved = True
     while moved:
         moved = False
@@ -476,7 +525,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
             if status[issue.number] != "ready-for-agent":
                 continue
             waits = [n for n in issue.blockers
-                     if n not in by_number or status[n] != "ready-for-agent"]
+                     if n not in by_number or status[n] not in MET_TONIGHT]
             if waits:
                 status[issue.number] = "blocked"
                 why[issue.number] = ("ready-for-agent, but waits on "
@@ -527,6 +576,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="read saved gh listings, timelines/<n>.json for each ready-for-agent "
                              "ticket, and optionally branches.txt and roadmap.json from DIR "
                              "instead of asking GitHub")
+    parser.add_argument("--repo", metavar="DIR",
+                        help="the checkout whose git, gh repository, roadmap and tracker policy "
+                             "are read, for a copy of this tool kept outside it; default: the "
+                             "checkout this script is in")
     arguments = parser.parse_args(argv)
     root = ROOT
     saved = pathlib.Path(arguments.saved) if arguments.saved else None
@@ -538,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
         return (saved / name).read_text()
 
     try:
+        if arguments.repo is not None:
+            root = checkout(arguments.repo)
         listings = {}
         for label in LABELS:
             text = kept(f"{label}.json")
@@ -558,7 +613,7 @@ def main(argv: list[str] | None = None) -> int:
                                   f"applied ready-for-agent to #{number} is unread")
                 timelines[number] = json.loads(text)
         answer = resolve(listings, branch_names, road, ownership_rules(), timelines=timelines,
-                         guide=tracker_guide(root))
+                         guide=tracker_guide(root), root=root)
     except Refused as refusal:
         print(f"overnight_collect: no tickets printed: {refusal}", file=sys.stderr)
         return 1

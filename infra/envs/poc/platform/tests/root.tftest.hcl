@@ -457,6 +457,69 @@ run "the_policy_bounds_this_root_defaults_are_the_contract_s_own_example" {
   }
 }
 
+# Continuity (#347 Q7). The three inputs #338 gave the cell, and #347's multi_task switch, reach it
+# through root variables that default to Phase 1's values, so a tfvars with none of them plans the
+# cell G3 ran, and the G6 sitting (#348) sets them in its untracked terraform.tfvars. Read from
+# main.tf's source, because a root test cannot address the module's resources: what this root holds
+# is that each variable is passed, under its own name, to the one module call.
+#
+# Mutations that turn this run red: a root default of "dynamodb", or multi_task true; a variable
+# declared but not passed; the prefix passed as a literal rather than the variable.
+run "the_continuity_inputs_pass_through_the_root_and_default_to_phase_1" {
+  command = plan
+
+  assert {
+    condition     = !var.multi_task && var.session_store == "memory" && var.data_protection_parameter_prefix == "" && var.data_protection_kms_key_id == ""
+    error_message = "The root's continuity inputs default to Phase 1's: one public task, session_store memory, no ring prefix and no key id, so a terraform.tfvars that names none of them plans the one-task cell unchanged."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["multi_task", "session_store", "data_protection_parameter_prefix", "data_protection_kms_key_id"] :
+      length(regexall("(?m)^  ${name}\\s*=\\s*var\\.${name}$",
+        one([for m in regexall("(?ms)^module\\s+\"cell\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) : m[0]])
+      )) == 1
+    ])
+    error_message = "The module call passes multi_task, session_store, data_protection_parameter_prefix and data_protection_kms_key_id through from the root variable of the same name, each on its own line."
+  }
+}
+
+# The G6 values plan at this root, and reach the cell: the two-task switch, the store, the cell's own
+# ring prefix and no key id (#332 D6). The switch's shape is held in the module's suite and P-01's
+# run under it; here it is that the switch with the G6 pair plans at this root, on the example's /16
+# (the file's variables block). The module's
+# validation, which refuses dynamodb with no prefix, is held in its own suite; this run holds that
+# the root accepts the pair it documents in terraform.tfvars.example and that the gateway's task
+# environment carries it, read through the module's
+# continuity_environment output, which the run before this one cannot see. The output reads the
+# gateway container's environment out of the task definition's container_definitions, not the
+# platform_configuration local that environment is built from, so a cut between the two reaches
+# this run (#642).
+#
+# Mutations that turn this run red: the module call given session_store = "memory" or
+# data_protection_parameter_prefix = "" in place of the variable; either one dropped from the call;
+# in the module's ecs.tf, the Session__ or DataProtection__ keys filtered out of gateway_environment
+# between platform_configuration and the container's environment.
+run "the_g6_continuity_inputs_plan_at_this_root" {
+  command = plan
+
+  variables {
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition     = module.cell.continuity_environment["Session__Store"] == "dynamodb" && module.cell.continuity_environment["Session__TableName"] != null
+    error_message = "With session_store = \"dynamodb\" at the root, the gateway's task environment carries Session:Store dynamodb and a session table."
+  }
+
+  assert {
+    condition     = module.cell.continuity_environment["DataProtection__ParameterPrefix"] == "/spa-platform/poc/data-protection/" && module.cell.continuity_environment["DataProtection__KmsKeyId"] == null
+    error_message = "With the G6 prefix at the root, the gateway's task environment carries this cell's ring prefix and no key id."
+  }
+}
+
 run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
   command = plan
 
@@ -708,7 +771,9 @@ run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_el
 # private, versioned and TLS only, as its public access block, ownership controls, versioning and
 # policy, with the module's default encryption beside them; and two image repositories. Row 1.4: one
 # cluster, one task definition, one service and a log group, with a role for the agent and a role
-# for the task, each with its one policy.
+# for the task, each with its one policy. Row P2-4 (#347): behind multi_task, two private subnets
+# with a route table, a default route and an association each, one Elastic IP, one NAT gateway and
+# two gateway endpoints, all of which plan no instance here.
 #
 # A run against the module rather than the root, because only that can address the module's
 # resources, and three of them are for_each: their instance counts are in the plan, not the source.
@@ -735,30 +800,58 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
     cell_source = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
   }
 
-  # Only the three declarations whose instances the next assertion counts may carry count or
+  # Only the four declarations whose instances the next assertion counts may carry count or
   # for_each. Two spaces is the canonical indent of a block's own argument, which `fmt -check` keeps,
   # and is what tells a meta-argument from a dynamic block's for_each further in.
+  #
+  # The session table is read through single instances' names, never as the whole resource, here
+  # and below: the provider marks its index's deprecated hash_key, and when an assertion fails,
+  # Terraform 1.16 panics printing any reference in it that holds the mark ("value has marks, so it
+  # cannot be serialized as JSON"). A name carries no mark, so the failure reads as its message. No
+  # reference names [1]: one that names an instance which does not exist beside one that does makes
+  # the panic print the whole resource. So the table counts as can() on [0], one or none, which is
+  # its whole range: the next run admits its declaration only with count = ... ? 1 : 0, and fails a
+  # count of two there.
   assert {
     condition = toset([
       for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", var.cell_source) :
       "${m[0]}.${m[1]}" if length(regexall("(?m)^  (count|for_each)\\s*=", m[2])) > 0
       ]) == toset(keys({
-        "aws_subnet.public"                  = aws_subnet.public
-        "aws_route_table_association.public" = aws_route_table_association.public
-        "aws_ecr_repository.repository"      = aws_ecr_repository.repository
+        "aws_subnet.public"                   = aws_subnet.public
+        "aws_route_table_association.public"  = aws_route_table_association.public
+        "aws_ecr_repository.repository"       = aws_ecr_repository.repository
+        "aws_dynamodb_table.sessions"         = try(aws_dynamodb_table.sessions[0].name, null)
+        "aws_subnet.private"                  = aws_subnet.private
+        "aws_eip.nat"                         = aws_eip.nat
+        "aws_nat_gateway.egress"              = aws_nat_gateway.egress
+        "aws_route_table.private"             = aws_route_table.private
+        "aws_route.private_egress"            = aws_route.private_egress
+        "aws_route_table_association.private" = aws_route_table_association.private
+        "aws_vpc_endpoint.gateway"            = aws_vpc_endpoint.gateway
     }))
-    error_message = "Only the subnets, their route table associations and the image repositories may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
+    error_message = "Only the subnets, their route table associations, the image repositories, the session table and the two-task cell's gated egress (#347) may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
   }
 
+  # The session table is counted at its planned instances, which on these inputs, Phase 1's, is none
+  # (change request issue-338-p-01-dynamodb-tripwire, decision 1). The run after the next one holds
+  # it at one under session_store = "dynamodb".
   assert {
     condition = {
       for type in distinct([for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]]) :
       type => sum([
         for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) :
         lookup({
-          "aws_subnet.public"                  = length(aws_subnet.public)
-          "aws_route_table_association.public" = length(aws_route_table_association.public)
-          "aws_ecr_repository.repository"      = length(aws_ecr_repository.repository)
+          "aws_subnet.public"                   = length(aws_subnet.public)
+          "aws_route_table_association.public"  = length(aws_route_table_association.public)
+          "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
+          "aws_subnet.private"                  = length(aws_subnet.private)
+          "aws_eip.nat"                         = length(aws_eip.nat)
+          "aws_nat_gateway.egress"              = length(aws_nat_gateway.egress)
+          "aws_route_table.private"             = length(aws_route_table.private)
+          "aws_route.private_egress"            = length(aws_route.private_egress)
+          "aws_route_table_association.private" = length(aws_route_table_association.private)
+          "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
         }, "${m[0]}.${m[1]}", 1)
         if m[0] == type
       ])
@@ -769,6 +862,9 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
       aws_route_table                                    = 1
       aws_route                                          = 1
       aws_route_table_association                        = 2
+      aws_eip                                            = 0
+      aws_nat_gateway                                    = 0
+      aws_vpc_endpoint                                   = 0
       aws_security_group                                 = 2
       aws_vpc_security_group_ingress_rule                = 2
       aws_vpc_security_group_egress_rule                 = 2
@@ -789,6 +885,7 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
       aws_cloudwatch_log_group                           = 1
       aws_iam_role                                       = 2
       aws_iam_role_policy                                = 2
+      aws_dynamodb_table                                 = 0
     }
     error_message = "The platform plan holds a type the allowlist does not name, or a different number of one it does (plan row 1.9, P-01). Name the type and its count in this map, in the same change, and say what it is for."
   }
@@ -797,8 +894,8 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
 # P-01's own sentence, held apart from the allowlist: an edit that adds a NAT gateway to the map
 # above, or a second load balancer, still fails here, because P-01 forbids them and the allowlist's
 # author does not get to decide otherwise. The five types are counted from the declarations, which
-# the run before this one shows are single instances unless they are the three for_each ones; none
-# of the five is.
+# the run before this one shows are single instances unless they are the four with count or
+# for_each; none of the five is.
 #
 # The forbidden types are P-01's three words made specific. A NAT gateway. An EC2 instance, or the
 # capacity that launches one: a launch template or configuration, an Auto Scaling group, a fleet or
@@ -808,6 +905,20 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
 # Session.Store admits dynamodb only in Phase 2 (Q81 in
 # .scratch/overnight/questions-2026-10-15-answered.md, answered yes). The list is a floor, not a
 # closure: the allowlist above is the closure, and this is what an edit to it cannot lower.
+#
+# One declaration is exempt, the session table (#338), and only in the form that plans no instance
+# on Phase 1's inputs: aws_dynamodb_table "sessions", whose count is exactly
+# local.session_store_is_dynamodb ? 1 : 0. The plan assertion after the tripwire holds that it is
+# none here. Mutations that turn this run red: the count made ? 2 : 0, or written as
+# var.session_store == "dynamodb" ? 1 : 0; a second DynamoDB declaration with the same count line;
+# the condition inverted, so the default inputs plan one table. So what this run stops proving is
+# that the module's source names no DynamoDB table; what it goes on proving is P-01's sentence, that
+# the Phase 1 plan holds no database (change request issue-338-p-01-dynamodb-tripwire, decision 1).
+#
+# The second exemption is the NAT gateway (#347), in the same form: aws_nat_gateway "egress", whose
+# count is exactly var.multi_task ? 1 : 0, and a plan assertion that the default inputs plan none.
+# Mutations that turn this run red: the count made ? 2 : 0, or written as local.multi_task ? 1 : 0;
+# a second NAT gateway with the same count line; the condition inverted.
 run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_and_no_nat_gateway_instance_or_database" {
   command = plan
 
@@ -832,11 +943,187 @@ run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_an
     error_message = "P-01: exactly one ALB, one listener, one target group, one ECS service and one bucket. Each is one declaration with no count or for_each."
   }
 
+  # The exemption reads the declaration's body, so it is matched against whole blocks; the first run
+  # holds that every block opens on its own lines, so the block pattern finds each declaration the
+  # header pattern would. The count line is matched at the two-space indent `fmt -check` keeps, so a
+  # dynamic block's for_each further in cannot stand in for it.
   assert {
     condition = [
-      for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]
+      for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", var.cell_source) : m[0]
       if can(regex("^aws_(nat_gateway|instance|spot_instance_request|spot_fleet_request|ec2_fleet|ec2_host|launch_template|launch_configuration|autoscaling_group|ecs_capacity_provider|eks_node_group|emr_cluster|lightsail_instance|db_.+|rds_.+|dynamodb_.+|docdb.*|neptune_.+|elasticache_.+|memorydb_.+|redshift.*|dsql_.+|keyspaces_.+|timestreamwrite_.+|opensearch_domain|elasticsearch_domain)$", m[0]))
+      && !(m[0] == "aws_dynamodb_table" && m[1] == "sessions"
+      && length(regexall("(?m)^  count\\s*=\\s*local\\.session_store_is_dynamodb \\? 1 : 0$", m[2])) == 1)
+      && !(m[0] == "aws_nat_gateway" && m[1] == "egress"
+      && length(regexall("(?m)^  count\\s*=\\s*var\\.multi_task \\? 1 : 0$", m[2])) == 1)
     ] == []
-    error_message = "P-01: no NAT gateway, database or EC2 instance in the platform plan. The cell sends 443 out from the task's public address (plan row 1.2), runs on Fargate (plan row 1.4) and keeps its state in S3 (contracts/s3-layout.md)."
+    error_message = "P-01: no NAT gateway, database or EC2 instance in the platform plan. The cell sends 443 out from the task's public address (plan row 1.2), runs on Fargate (plan row 1.4) and keeps its state in S3 (contracts/s3-layout.md). The two exemptions are aws_dynamodb_table \"sessions\" with exactly count = local.session_store_is_dynamodb ? 1 : 0, and aws_nat_gateway \"egress\" with exactly count = var.multi_task ? 1 : 0 (#347)."
+  }
+
+  # And on the default inputs, which are Phase 1's, the exempted table plans no instance.
+  assert {
+    condition     = !can(aws_dynamodb_table.sessions[0].name)
+    error_message = "P-01: on the default inputs the platform plan holds no session table. Only session_store = \"dynamodb\" creates one."
+  }
+
+  # And on the default inputs, which are Phase 1's, the exempted NAT gateway plans no instance.
+  assert {
+    condition     = length(aws_nat_gateway.egress) == 0
+    error_message = "P-01: on the default inputs the platform plan holds no NAT gateway. Only multi_task = true creates one (#347)."
+  }
+}
+
+# The gate opens to one table and nothing else: under session_store = "dynamodb", with the cell's
+# ring prefix its validation requires, the plan holds exactly one session table and every other
+# count is the Phase 1 run's (change request issue-338-p-01-dynamodb-tripwire, decision 1).
+#
+# Mutations that turn this run red: the table's condition inverted (count =
+# local.session_store_is_dynamodb ? 0 : 1); a second aws_dynamodb_table declaration with the same
+# count line. A count of two fails the tripwire's exemption in the run before this one.
+run "under_dynamodb_the_platform_plan_holds_one_session_table_and_every_other_count_unchanged" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes            = [".spa-poc.test:8443"]
+    allowed_upstreams                = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+    cell_source                      = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  assert {
+    condition = {
+      for type in distinct([for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]]) :
+      type => sum([
+        for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) :
+        lookup({
+          "aws_subnet.public"                   = length(aws_subnet.public)
+          "aws_route_table_association.public"  = length(aws_route_table_association.public)
+          "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
+          "aws_subnet.private"                  = length(aws_subnet.private)
+          "aws_eip.nat"                         = length(aws_eip.nat)
+          "aws_nat_gateway.egress"              = length(aws_nat_gateway.egress)
+          "aws_route_table.private"             = length(aws_route_table.private)
+          "aws_route.private_egress"            = length(aws_route.private_egress)
+          "aws_route_table_association.private" = length(aws_route_table_association.private)
+          "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+        }, "${m[0]}.${m[1]}", 1)
+        if m[0] == type
+      ])
+      } == {
+      aws_vpc                                            = 1
+      aws_internet_gateway                               = 1
+      aws_subnet                                         = 2
+      aws_route_table                                    = 1
+      aws_route                                          = 1
+      aws_route_table_association                        = 2
+      aws_eip                                            = 0
+      aws_nat_gateway                                    = 0
+      aws_vpc_endpoint                                   = 0
+      aws_security_group                                 = 2
+      aws_vpc_security_group_ingress_rule                = 2
+      aws_vpc_security_group_egress_rule                 = 2
+      aws_default_security_group                         = 1
+      aws_lb                                             = 1
+      aws_lb_listener                                    = 1
+      aws_lb_target_group                                = 1
+      aws_s3_bucket                                      = 1
+      aws_s3_bucket_versioning                           = 1
+      aws_s3_bucket_public_access_block                  = 1
+      aws_s3_bucket_ownership_controls                   = 1
+      aws_s3_bucket_server_side_encryption_configuration = 1
+      aws_s3_bucket_policy                               = 1
+      aws_ecr_repository                                 = 2
+      aws_ecs_cluster                                    = 1
+      aws_ecs_task_definition                            = 1
+      aws_ecs_service                                    = 1
+      aws_cloudwatch_log_group                           = 1
+      aws_iam_role                                       = 2
+      aws_iam_role_policy                                = 2
+      aws_dynamodb_table                                 = 1
+    }
+    error_message = "Under session_store = \"dynamodb\" the platform plan holds exactly one session table, and every other type at its Phase 1 count."
+  }
+}
+
+# Under the switch the plan is D6's (#347): two more subnets, a route table, a route and an
+# association for each, one Elastic IP, one NAT gateway and two gateway endpoints, with the session
+# table the switch requires, and every other type at its Phase 1 count. Mutations that turn this run
+# red: a NAT gateway per zone (aws_nat_gateway 2); the endpoints on one table only does not change a
+# count here and is held by the module's own suite; the switch left out of desired_count is held
+# there too.
+run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_unchanged" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes            = [".spa-poc.test:8443"]
+    allowed_upstreams                = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+    cell_source                      = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  assert {
+    condition = {
+      for type in distinct([for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]]) :
+      type => sum([
+        for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) :
+        lookup({
+          "aws_subnet.public"                   = length(aws_subnet.public)
+          "aws_route_table_association.public"  = length(aws_route_table_association.public)
+          "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
+          "aws_subnet.private"                  = length(aws_subnet.private)
+          "aws_eip.nat"                         = length(aws_eip.nat)
+          "aws_nat_gateway.egress"              = length(aws_nat_gateway.egress)
+          "aws_route_table.private"             = length(aws_route_table.private)
+          "aws_route.private_egress"            = length(aws_route.private_egress)
+          "aws_route_table_association.private" = length(aws_route_table_association.private)
+          "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+        }, "${m[0]}.${m[1]}", 1)
+        if m[0] == type
+      ])
+      } == {
+      aws_vpc                                            = 1
+      aws_internet_gateway                               = 1
+      aws_subnet                                         = 4
+      aws_route_table                                    = 3
+      aws_route                                          = 3
+      aws_route_table_association                        = 4
+      aws_eip                                            = 1
+      aws_nat_gateway                                    = 1
+      aws_vpc_endpoint                                   = 2
+      aws_security_group                                 = 2
+      aws_vpc_security_group_ingress_rule                = 2
+      aws_vpc_security_group_egress_rule                 = 2
+      aws_default_security_group                         = 1
+      aws_lb                                             = 1
+      aws_lb_listener                                    = 1
+      aws_lb_target_group                                = 1
+      aws_s3_bucket                                      = 1
+      aws_s3_bucket_versioning                           = 1
+      aws_s3_bucket_public_access_block                  = 1
+      aws_s3_bucket_ownership_controls                   = 1
+      aws_s3_bucket_server_side_encryption_configuration = 1
+      aws_s3_bucket_policy                               = 1
+      aws_ecr_repository                                 = 2
+      aws_ecs_cluster                                    = 1
+      aws_ecs_task_definition                            = 1
+      aws_ecs_service                                    = 1
+      aws_cloudwatch_log_group                           = 1
+      aws_iam_role                                       = 2
+      aws_iam_role_policy                                = 2
+      aws_dynamodb_table                                 = 1
+    }
+    error_message = "Under multi_task = true the platform plan holds D6's egress, one NAT gateway with its Elastic IP, two private subnets with their tables, routes and associations, and the two gateway endpoints, with the session table, and every other type at its Phase 1 count (#347)."
   }
 }

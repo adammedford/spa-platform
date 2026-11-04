@@ -11,7 +11,7 @@ a throwaway directory. The clone's first commit holds copies of the five files t
 (itself, the two documents it writes and the two plan files), so `roadmap.py --json` derives the row
 states from that case's own merge subjects, which the case writes. gh is the one call that leaves the
 machine, so each case's bin holds a strict gh double: it answers the pull request listing the cleanup
-makes for an overnight branch, and the three `pr view` reads and the merge tools/land.sh makes, and
+makes for an overnight branch, and the four `pr view` reads and the merge tools/land.sh makes, and
 any other call is recorded and exits 97.
 
 **A constructed environment, inheriting nothing**, for land_tests.py's reasons: PATH is the case's
@@ -112,6 +112,8 @@ case "$1 $2" in
       "state .state") echo OPEN ;;
       "baseRefName .baseRefName") echo main ;;
       "headRefOid .headRefOid") /bin/cat -- "$fixtures/head" ;;
+      # A description with no Closes line, so land.sh checks no ticket against the branch (#566).
+      "body .body") echo ;;
       *) unexpected ;;
     esac
     exit 0 ;;
@@ -323,7 +325,7 @@ class ARowsStateDecidesItsClaim(Case):
         self.commit("task/3.1-scheme", "scheme.txt")
         self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -424,7 +426,7 @@ class ATipsWorkMustBeOnMain(Case):
         self.land("Merge task 2.1: the registry", "task/2.1-registry")
         self.commit("task/2.1-registry", "afterwards.txt")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -495,7 +497,7 @@ class AMergesOwnChangesMustBeOnMainToo(Case):
     def test_a_merge_with_changes_of_its_own_keeps_the_branch(self):
         tip = self.build("made only in the merge\n")
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         verdicts = self.verdicts(out)
@@ -520,7 +522,7 @@ class AMergesOwnChangesMustBeOnMainToo(Case):
         )
         (self.bin / "git").chmod(0o755)
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         for where in ("local", "origin"):
@@ -637,7 +639,7 @@ class AnOvernightBranchGoesAfterItsPullRequestMerges(Case):
         self.git("branch", self.NIGHT, "main")
         self.git("push", "-q", "origin", self.NIGHT)
 
-        code, out, err = self.prune("--delete")
+        code, out, err = self.prune("--delete", "--verbose")
 
         self.assertEqual(0, code, err)
         for where in ("local", "origin"):
@@ -664,7 +666,7 @@ class AnOvernightBranchGoesAfterItsPullRequestMerges(Case):
                 else:
                     (self.fixtures / "gh-fails").write_text("")
 
-                code, out, err = self.prune("--delete")
+                code, out, err = self.prune("--delete", "--verbose")
 
                 self.assertEqual(0, code, err)
                 for where in ("local", "origin"):
@@ -766,7 +768,7 @@ class AWorktreeKeepsItsBranch(Case):
         tree = self.scratch / "spa-2.1"
         self.git("worktree", "add", "-q", str(tree), "task/2.1-registry")
 
-        for args, word in (((), "keep"), (("--delete",), "kept")):
+        for args, word in (((), "keep"), (("--delete", "--verbose"), "kept")):
             with self.subTest(args=args):
                 code, out, err = self.prune(*args)
                 self.assertEqual(0, code, err)
@@ -807,6 +809,112 @@ class AWorktreeKeepsItsBranch(Case):
         self.assertIn("task/2.1-registry", self.local())
         self.assertIn("task/2.1-registry", self.remote())
         self.assertIn("prune_branches: deleted 0 and kept 2.", out)
+
+
+class ADeletingRunCountsWhatItKeeps(Case):
+    """With --delete, a branch it keeps is counted under its reason, not listed (#524): the landing
+    of #507 printed 48 kept lines and deleted nothing. --verbose lists each one again, and a dry run
+    always does. What it deletes, or fails to, is listed as before."""
+
+    def build(self):
+        """Two finished branches checked out in worktrees, a part-landed row's claim, and a landed
+        row's claim to delete. Returns the deleted claim's tip."""
+        for branch, row in (("task/2.1-registry", "2.1"), ("task/2.2-hosting", "2.2")):
+            self.commit(branch, f"{row}.txt")
+            self.land(f"Merge task {row}: {branch}", branch)
+            self.git("worktree", "add", "-q", str(self.scratch / f"spa-{row}"), branch)
+        self.commit("task/3.1-scheme", "scheme.txt")
+        self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
+        tip = self.commit("task/1.8-first", "first.txt")
+        self.land("Merge task 1.8: the first", "task/1.8-first")
+        return tip
+
+    KEPT = ("task/2.1-registry", "task/2.2-hosting", "task/3.1-scheme")
+    # The commonest reason first.
+    COUNTS = [
+        "prune_branches: kept 4 because it is checked out in a worktree; --verbose names each.",
+        "prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+        "--verbose names each.",
+    ]
+
+    def count_lines(self, out):
+        return [line for line in out.splitlines() if line.startswith("prune_branches: kept ")]
+
+    def test_a_deleting_run_prints_one_count_per_reason_and_no_kept_branch(self):
+        tip = self.build()
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual(self.COUNTS, self.count_lines(out), out)
+        verdicts = self.verdicts(out)
+        for branch in self.KEPT:
+            for where in ("local", "origin"):
+                self.assertNotIn((branch, where), verdicts, out)
+                self.assertNotIn(branch, out)
+        # What it deleted is listed, then the counts, the totals and the restore lines as before.
+        for where in ("local", "origin"):
+            self.assertEqual("deleted", verdicts[("task/1.8-first", where)][0], out)
+        lines = out.splitlines()
+        totals = lines.index("prune_branches: deleted 2 and kept 6.")
+        self.assertEqual(self.COUNTS, lines[totals - 2:totals], out)
+        self.assertEqual([f"git branch task/1.8-first {tip}",
+                          f"git push origin {tip}:refs/heads/task/1.8-first"],
+                         self.restore_lines(out))
+        self.assertEqual(self.restore_files()[0], self.named_file(out))
+
+    def test_verbose_lists_every_kept_branch_and_a_dry_run_always_does(self):
+        self.build()
+
+        for args, word in ((("--delete", "--verbose"), "kept"), ((), "keep")):
+            with self.subTest(args=args):
+                code, out, err = self.prune(*args)
+                self.assertEqual(0, code, err)
+                self.assertEqual([], self.count_lines(out), out)
+                verdicts = self.verdicts(out)
+                for branch in self.KEPT:
+                    for where in ("local", "origin"):
+                        self.assertEqual(word, verdicts[(branch, where)][0], out)
+                self.assertIn("3.1 is part-landed, so the branch is its claim",
+                              verdicts[("task/3.1-scheme", "local")][1])
+
+    def test_the_commonest_reason_comes_first_even_when_met_last(self):
+        # The worktree's branch sorts first, so its group is met first; the two part-landed claims
+        # outnumber it. Without the sort the worktree's count would lead (#524's review).
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.git("worktree", "add", "-q", str(self.scratch / "spa-2.1"), "task/2.1-registry")
+        for branch, row in (("task/3.1-scheme", "3.1"), ("task/3.2-sessions", "3.2")):
+            self.commit(branch, f"{row}.txt")
+            self.land(f"Merge part of task {row}: the first half", branch)
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual([
+            "prune_branches: kept 4 because it is the claim of a part-landed row, split or ticket; "
+            "--verbose names each.",
+            "prune_branches: kept 2 because it is checked out in a worktree; --verbose names each.",
+        ], self.count_lines(out), out)
+
+    def test_a_refused_deletion_is_still_listed(self):
+        # The mid-rebase worktree of AWorktreeKeepsItsBranch, which only git's own refusal sees.
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        tree = self.scratch / "spa-2.1"
+        self.git("worktree", "add", "-q", str(tree), "task/2.1-registry")
+        subprocess.run(["git", "rebase", "-q", "--exec", "false", "HEAD~1"], cwd=tree,
+                       env=self.env, capture_output=True, text=True, check=False)
+
+        code, out, err = self.prune("--delete")
+
+        self.assertEqual(0, code, err)
+        verdicts = self.verdicts(out)
+        self.assertEqual("kept", verdicts[("task/2.1-registry", "local")][0], out)
+        self.assertIn("used by worktree", verdicts[("task/2.1-registry", "local")][1])
+        self.assertEqual(("kept", "the copy here was not deleted, so origin's is kept with it"),
+                         verdicts[("task/2.1-registry", "origin")])
+        self.assertEqual([], self.count_lines(out), out)
 
 
 class ADeletionLeavesItsRestoreCommandsInAFile(Case):
@@ -969,6 +1077,115 @@ class ADeletionLeavesItsRestoreCommandsInAFile(Case):
         self.assertEqual(before, self.tips())
 
 
+class OnlyLimitsADeletionToTheBranchesItNames(Case):
+    """`--delete --only <branch>...` deletes the named branches and no other (#574). A --delete
+    whose command line says nothing of what goes was refused by an auto-mode classifier on
+    2026-10-29 as a deletion of unverifiable scope, and the session fell back to `git branch -d`,
+    which writes no restore line. A named branch the listing keeps, or does not list, refuses the
+    whole run with the listing's reason, and nothing is deleted: the names are a claim about what
+    the listing marks, and one wrong name means the claim is wrong.
+    """
+
+    def test_only_deletes_the_named_branch_and_leaves_another_marked_one(self):
+        registry = self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/2.2-hosting", "hosting.txt")
+        self.land("Merge task 2.2: hosting", "task/2.2-hosting")
+        self.assertEqual({"delete"}, {verdict for verdict, _ in self.verdicts(self.prune()[1]).values()},
+                         "the premise: both branches are marked for deletion")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry")
+
+        self.assertEqual(0, code, err)
+        verdicts = self.verdicts(out)
+        self.assertEqual("deleted", verdicts[("task/2.1-registry", "local")][0], out)
+        self.assertEqual("deleted", verdicts[("task/2.1-registry", "origin")][0], out)
+        self.assertNotIn("task/2.1-registry", self.local())
+        self.assertNotIn("task/2.1-registry", self.remote())
+        self.assertIn("task/2.2-hosting", self.local())
+        self.assertIn("task/2.2-hosting", self.remote())
+        self.assertEqual([("local", "task/2.1-registry"), ("origin", "task/2.1-registry")],
+                         sorted(set(before) - set(self.tips())))
+        self.assertIn("prune_branches: deleted 2 and kept 2.", out)
+        self.assertIn("prune_branches: kept 2 because it is not named by --only; --verbose names each.",
+                      out)
+        lines = [f"git branch task/2.1-registry {registry}",
+                 f"git push origin {registry}:refs/heads/task/2.1-registry"]
+        self.assertEqual(lines, self.restore_lines(out))
+        files = self.restore_files()
+        self.assertEqual(1, len(files), out)
+        self.assertEqual("".join(f"{line}\n" for line in lines), files[0].read_text())
+
+    def test_only_naming_a_kept_branch_deletes_nothing_and_names_the_reason(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/3.1-scheme", "scheme.txt")
+        self.land("Merge part of task 3.1: the scheme, first half", "task/3.1-scheme")
+        before = self.tips()
+
+        # The marked branch is named too: one kept name refuses the whole run.
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry", "task/3.1-scheme")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/3.1-scheme is kept local: 3.1 is part-landed, so the branch is its claim",
+                      err)
+        self.assertIn("task/3.1-scheme is kept origin: 3.1 is part-landed, so the branch is its claim",
+                      err)
+        self.assertIn("nothing was deleted", err)
+        self.assertEqual({}, self.verdicts(out), "nothing is listed as deleted")
+        self.assertEqual(before, self.tips())
+        self.assertEqual([], self.restore_files())
+
+    def test_only_naming_a_branch_with_one_copy_kept_deletes_neither_copy(self):
+        # Every copy of a named branch must be marked: a local commit made after the merge and not
+        # pushed keeps the local copy while origin's is marked, and naming the branch refuses the
+        # run rather than deleting origin's copy alone.
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        self.commit("task/2.1-registry", "late.txt", push=False)
+        dry = self.verdicts(self.prune()[1])
+        self.assertEqual(("keep", "delete"), (dry[("task/2.1-registry", "local")][0],
+                                              dry[("task/2.1-registry", "origin")][0]),
+                         "the premise: the local copy is kept and origin's is marked")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/2.1-registry is kept local: ", err)
+        self.assertIn("1 commit on it has no equivalent on origin/main", err)
+        self.assertNotIn("task/2.1-registry is kept origin", err)
+        self.assertEqual({}, self.verdicts(out), "nothing is listed as deleted")
+        self.assertEqual(before, self.tips())
+        self.assertIn("task/2.1-registry", self.remote())
+        self.assertEqual([], self.restore_files())
+
+    def test_only_naming_a_branch_the_listing_lacks_deletes_nothing(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+        before = self.tips()
+
+        code, out, err = self.prune("--delete", "--only", "task/2.1-registry", "task/9.9-gone")
+
+        self.assertEqual(1, code, out)
+        self.assertIn("task/9.9-gone is not listed", err)
+        self.assertEqual(before, self.tips())
+        self.assertEqual([], self.restore_files())
+
+    def test_only_without_delete_is_an_argument_error(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        self.land("Merge task 2.1: the registry", "task/2.1-registry")
+
+        code, out, err = self.prune("--only", "task/2.1-registry")
+
+        self.assertEqual(2, code, out)
+        self.assertEqual("", out)
+        self.assertIn("--only needs --delete", err)
+        self.assertIn("task/2.1-registry", self.local())
+        self.assertIn("task/2.1-registry", self.remote())
+
+
 class LandingCase(Case):
     """tools/land.sh, once its merge is in and the roadmap refreshed, runs the cleanup.
 
@@ -976,35 +1193,55 @@ class LandingCase(Case):
     merges, into the case's origin from a clone standing in for GitHub's side. tools/land_tests.py
     covers the steps between that merge and the cleanup, and answers the cleanup with a double;
     these cases run the real one. --unreviewed spares the review records, which tools/land_tests.py
-    covers.
+    covers. land.sh refuses a landing with no --body-file (#552), so each run passes one, written
+    among the fixtures, outside the trees whose status the cases read.
     """
 
-    def land_pull_request(self, branch, subject, cwd=None):
-        """Lands `branch` through land.sh, run from `cwd`, which is sat at origin/main detached; by
-        default the clone, and a case that puts the clone somewhere of its own passes a linked
-        worktree, as land.sh's header asks."""
+    def body_file(self):
+        body = self.fixtures / "body.md"
+        body.write_text("Verified by tools/prune_branches_tests.py.\n")
+        return str(body)
+
+    def land_tree(self, *how):
+        """A linked worktree at origin/main, detached unless `how` says otherwise (`-b <name>`),
+        as land.sh's header asks for one."""
+        tree = self.scratch / "spa-land"
+        self.git("worktree", "add", "-q", *(how or ("--detach",)), str(tree), "origin/main")
+        return tree
+
+    def run_land(self, branch, subject, cwd=None, detach=True):
+        """Runs land.sh on `branch` from `cwd`, by default the clone, first detaching it at
+        origin/main unless `detach` is false; returns the finished process."""
         (self.fixtures / "head").write_text(self.git("rev-parse", branch) + "\n")
         (self.fixtures / "head-name").write_text(branch)
         (self.fixtures / "number").write_text("5\n")
         cwd = cwd or self.work
-        self.git("checkout", "-q", "--detach", "origin/main", cwd=cwd)
-        done = subprocess.run(
-            [BASH, str(LAND), "5", "--subject", subject,
+        if detach:
+            self.git("checkout", "-q", "--detach", "origin/main", cwd=cwd)
+        # One stream, in the order a terminal shows it, so its last line is the one a session
+        # reading `tools/land.sh ... 2>&1 | tail -1` would see.
+        return subprocess.run(
+            [BASH, str(LAND), "5", "--subject", subject, "--body-file", self.body_file(),
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
             cwd=cwd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False,
         )
-        # One stream, in the order a terminal shows it, so its last line is the one a session
-        # reading `tools/land.sh ... 2>&1 | tail -1` would see.
+
+    def land_pull_request(self, branch, subject, cwd=None, detach=True):
+        """Lands `branch` through land.sh, run from `cwd`, which is sat at origin/main, detached
+        unless `detach` is false; by default the clone, and a case that puts the clone somewhere of
+        its own passes a linked worktree, as land.sh's header asks."""
+        done = self.run_land(branch, subject, cwd=cwd, detach=detach)
         self.assertEqual(0, done.returncode, done.stdout)
         self.assertIn(subject, self.git("log", "-3", "--format=%s", "origin/main"))
         return done.stdout
 
-    def assert_the_last_line_names_the_restore_file(self, out, cwd=None):
+    def assert_the_last_line_names_the_restore_file(self, out):
         """land.sh's own last line names the file of the cleanup's restore lines (#115)."""
         files = self.restore_files()
         self.assertEqual(1, len(files), out)
-        head = self.git("rev-parse", "HEAD", cwd=cwd)
+        # The landing ends sat at origin/main, in a worktree it may since have removed (#490).
+        head = self.git("rev-parse", "origin/main")
         self.assertTrue(files[0].name.endswith(f"-{head[:12]}.txt"),
                         files[0].name)
         self.assertEqual(self.restore_lines(out), files[0].read_text().splitlines())
@@ -1026,7 +1263,9 @@ class LandingDeletesWhatItFinished(LandingCase):
         self.assertNotIn("task/2.1-registry", self.remote(), out)
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
-        self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        # land.sh runs --delete, which counts what it keeps (#524).
+        self.assertIn("prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+                      "--verbose names each.", out)
         self.assert_the_last_line_names_the_restore_file(out)
 
     def test_a_part_landed_rows_claim_survives_its_own_landing(self):
@@ -1036,7 +1275,9 @@ class LandingDeletesWhatItFinished(LandingCase):
 
         self.assertIn("task/3.1-scheme", self.local(), out)
         self.assertIn("task/3.1-scheme", self.remote(), out)
-        self.assertIn("3.1 is part-landed, so the branch is its claim", out)
+        # land.sh runs --delete, which counts what it keeps (#524).
+        self.assertIn("prune_branches: kept 2 because it is the claim of a part-landed row, split or ticket; "
+                      "--verbose names each.", out)
         # A landing whose cleanup deleted nothing writes no file and names none.
         self.assertEqual([], self.restore_files(), out)
         self.assertNotIn("pruned-branches", out)
@@ -1097,11 +1338,6 @@ class LandingNamesTheMainCheckout(LandingCase):
 
     FAST_FORWARD = "merge --ff-only origin/main"
 
-    def land_tree(self):
-        tree = self.scratch / "spa-land"
-        self.git("worktree", "add", "-q", "--detach", str(tree), "origin/main")
-        return tree
-
     def checkout_lines(self, out):
         """The lines between the roadmap and the cleanup that speak of the main checkout."""
         return [line for line in out.splitlines() if "main checkout" in line]
@@ -1138,7 +1374,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         self.assertEqual("main", self.git("branch", "--show-current"))
         # The cleanup still has the last line.
         self.assertNotIn("task/2.1-registry", self.remote(), "the premise: the cleanup deleted")
-        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+        self.assert_the_last_line_names_the_restore_file(out)
 
     def assert_named_with_no_command(self, out, says):
         named = self.checkout_lines(out)
@@ -1183,7 +1419,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         self.assert_named_with_no_command(out, "behind origin/main and has changes to tracked files")
         self.assertEqual(index, (self.work / ".git" / "index").read_bytes(),
                          "reading the checkout's status wrote its index")
-        self.assert_the_last_line_names_the_restore_file(out, cwd=tree)
+        self.assert_the_last_line_names_the_restore_file(out)
 
     def test_a_main_checkout_already_at_the_merge_is_given_no_command(self):
         # Landed from the main checkout itself, on main: the script's own fast-forward moves it.
@@ -1194,6 +1430,7 @@ class LandingNamesTheMainCheckout(LandingCase):
         (self.fixtures / "number").write_text("5\n")
         done = subprocess.run(
             [BASH, str(LAND), "5", "--subject", "Merge task 2.1: the registry",
+             "--body-file", self.body_file(),
              "--unreviewed", "a case of tools/prune_branches_tests.py"],
             cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, check=False)
@@ -1223,6 +1460,138 @@ class LandingNamesTheMainCheckout(LandingCase):
         out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
 
         self.assertEqual(f"git -C {holder} {self.FAST_FORWARD}", self.command_line(out))
+
+
+class LandingRemovesItsWorktree(LandingCase):
+    """A landing that merged, refreshed the roadmap and pushed, run from a linked worktree that is
+    detached and has nothing uncommitted, removes that worktree as its last act and names it; from
+    any other linked worktree it leaves it and prints the command that removes it; a landing that
+    fails leaves it for inspection (#490). Before the last act, so the restore file's line stays
+    last (#115).
+    """
+
+    def listed(self):
+        """The paths `git worktree list` names, read from the clone."""
+        return [line[len("worktree "):] for line in
+                self.git("worktree", "list", "--porcelain").splitlines()
+                if line.startswith("worktree ")]
+
+    def test_a_clean_detached_worktree_is_removed_once_the_landing_has_pushed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertIn("land: #5 is in and the roadmap says so.", out, "the premise: it pushed")
+        self.assertFalse(tree.exists(), out)
+        self.assertNotIn(str(tree), self.listed(), out)
+        self.assertIn(f"land: removed the worktree this landing ran in, {tree}", out)
+        self.assertNotIn("worktree remove", out)
+        self.assertNotIn("task/2.1-registry", self.remote(), "the premise: the cleanup ran")
+        self.assert_the_last_line_names_the_restore_file(out)
+
+    def test_a_landing_with_no_refresh_to_push_removes_it_too(self):
+        # land.sh's other way out: the blocks are current before the merge, so nothing is pushed.
+        self.git("checkout", "-q", "main")
+        subprocess.run([sys.executable, "-I", "tools/roadmap.py"], cwd=self.work, env=self.env,
+                       capture_output=True, check=True)
+        self.git("commit", "-q", "-am", "Refresh the generated roadmap blocks")
+        self.git("push", "-q", "origin", "main")
+        self.git("checkout", "-q", "--detach", "main")
+        self.commit("overnight/2026-10-17", "lane.txt")
+        tree = self.land_tree()
+
+        out = self.land_pull_request("overnight/2026-10-17",
+                                     "Merge the 2026-10-17 overnight run: one lane", cwd=tree)
+
+        self.assertIn("land: the generated blocks did not move", out, "the premise: no refresh")
+        self.assertFalse(tree.exists(), out)
+        self.assertNotIn(str(tree), self.listed(), out)
+        self.assert_the_last_line_names_the_restore_file(out)
+
+    def assert_kept_with_its_command(self, out, tree, says):
+        """The tree is still there, and the lines before the restore file's say why and give the
+        command, which, once the tree is clean, removes it."""
+        self.assertTrue(tree.exists(), out)
+        self.assertIn(str(tree), self.listed(), out)
+        lines = out.splitlines()
+        said = [n for n, line in enumerate(lines)
+                if line.startswith(f"land: the worktree this landing ran in, {tree}, stays: ")]
+        self.assertEqual(1, len(said), out)
+        self.assertIn(says, lines[said[0]])
+        command = lines[said[0] + 1].strip()
+        self.assertEqual(f"git -C {self.work} worktree remove {tree}", command)
+        # Nothing but the restore file's line comes after them.
+        self.assertEqual(len(lines) - 3, said[0], out)
+        self.assert_the_last_line_names_the_restore_file(out)
+        return command
+
+    def test_a_worktree_on_a_branch_stays_and_its_remove_command_is_printed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree("-b", "landing")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree,
+                                     detach=False)
+
+        command = self.assert_kept_with_its_command(out, tree, "it is on the branch landing")
+        ran = subprocess.run(["/bin/sh", "-c", command], cwd=self.scratch, env=self.env,
+                             capture_output=True, text=True, check=False)
+        self.assertEqual(0, ran.returncode, ran.stderr)
+        self.assertFalse(tree.exists())
+
+    def test_a_worktree_with_an_untracked_file_stays_and_its_remove_command_is_printed(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        tree = self.land_tree()
+        # The body file a caller often leaves beside the landing, which land.sh's own check of
+        # uncommitted changes does not see.
+        (tree / "body.md").write_text("What was verified.\n")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assert_kept_with_its_command(out, tree, "it has uncommitted or untracked files")
+        self.assertEqual("What was verified.\n", (tree / "body.md").read_text())
+
+    def test_a_merge_that_fails_leaves_the_worktree(self):
+        # The head never reached origin, so the merge on GitHub's side has nothing to merge.
+        self.commit("task/2.1-registry", "registry.txt", push=False)
+        tree = self.land_tree()
+
+        done = self.run_land("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertNotEqual(0, done.returncode, done.stdout)
+        self.assertNotIn("Merge task 2.1", self.git("log", "-3", "--format=%s", "origin/main"),
+                         "the premise: nothing merged")
+        self.assertTrue(tree.exists(), done.stdout)
+        self.assertIn(str(tree), self.listed(), done.stdout)
+        self.assertNotIn("removed the worktree", done.stdout)
+
+    def test_a_push_the_hook_refuses_leaves_the_worktree(self):
+        self.commit("task/2.1-registry", "registry.txt")
+        hooks = self.scratch / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-push").write_text("#!/bin/sh\necho 'pre-push: refused' >&2\nexit 1\n")
+        (hooks / "pre-push").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        tree = self.land_tree()
+
+        done = self.run_land("task/2.1-registry", "Merge task 2.1: the registry", cwd=tree)
+
+        self.assertNotEqual(0, done.returncode, done.stdout)
+        self.assertIn("pre-push: refused", done.stdout, "the premise: the hook refused the push")
+        self.assertIn("Merge task 2.1", self.git("log", "-3", "--format=%s", "origin/main"),
+                      "the premise: the merge happened")
+        self.assertTrue(tree.exists(), done.stdout)
+        self.assertIn(str(tree), self.listed(), done.stdout)
+        self.assertNotIn("removed the worktree", done.stdout)
+
+    def test_the_repositorys_own_working_tree_is_left_and_given_no_command(self):
+        self.commit("task/2.1-registry", "registry.txt")
+
+        out = self.land_pull_request("task/2.1-registry", "Merge task 2.1: the registry")
+
+        self.assertTrue(self.work.exists())
+        self.assertNotIn("worktree this landing ran in", out)
+        self.assertNotIn("worktree remove", out)
 
 
 def require_bash():

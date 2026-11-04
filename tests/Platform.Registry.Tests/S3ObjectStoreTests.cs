@@ -25,6 +25,34 @@ public sealed class S3ObjectStoreContractTests : ObjectStoreContract, IAsyncLife
         new S3ObjectStore(server.Client(), $"bucket-{Interlocked.Increment(ref buckets)}");
 }
 
+/// <summary>
+/// The same suite over the S3 store as the gateway's deployed role meets it: <c>s3:GetObject</c> and no
+/// <c>s3:ListBucket</c> (P-03), so S3 answers a missing key with 403 <c>AccessDenied</c> and the store
+/// declares <see cref="MissingKeyAnswer.AmbiguousRefusal"/> (change request
+/// contracts/changes/issue-381-object-read-refusal.md, item 2).
+///
+/// Mutation: drop the store's <c>AccessDenied</c> catch, and both missing-key cases fail here with an
+/// <c>AmazonS3Exception</c> where the refusal was declared.
+/// </summary>
+public sealed class S3ObjectStoreGetObjectOnlyContractTests : ObjectStoreContract, IAsyncLifetime
+{
+    private FakeS3Server server = null!;
+    private int buckets;
+
+    public async ValueTask InitializeAsync()
+    {
+        server = await FakeS3Server.StartAsync(TestContext.Current.CancellationToken);
+        server.ListBucketGranted = false;
+    }
+
+    public ValueTask DisposeAsync() => server.DisposeAsync();
+
+    protected override MissingKeyAnswer MissingKeys => MissingKeyAnswer.AmbiguousRefusal;
+
+    protected override IObjectStore CreateStore() =>
+        new S3ObjectStore(server.Client(), $"bucket-{Interlocked.Increment(ref buckets)}");
+}
+
 /// <summary>What the S3 store sends, and how it reads S3's answers, beyond the shared contract.</summary>
 public sealed class S3ObjectStoreTests : IAsyncLifetime
 {
@@ -101,25 +129,81 @@ public sealed class S3ObjectStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Access_denied_on_a_read_is_an_error_not_a_missing_key()
+    public async Task Access_denied_on_a_read_is_a_refusal_not_a_missing_key()
     {
         // Without s3:ListBucket, S3 answers a missing key with 403 rather than 404. Reading that as
-        // "no registry" would hide a permissions fault behind a not-ready gateway.
+        // "no registry" would hide a permissions fault behind a not-ready gateway, so the store names it
+        // a refusal and leaves the meaning to the caller (change request issue-381, item 1).
+        // Mutation: catch AccessDenied and return null, and this fails on the null.
         S3ObjectStore store = new(server.Client(), "bucket");
         server.FailWith = (HttpStatusCode.Forbidden, "AccessDenied");
 
-        AmazonS3Exception thrown = await Assert.ThrowsAsync<AmazonS3Exception>(
+        ObjectReadRefusedException refused = await Assert.ThrowsAsync<ObjectReadRefusedException>(
             () => store.GetAsync("registry/registry.json", null, Ct));
-        Assert.Equal(HttpStatusCode.Forbidden, thrown.StatusCode);
+        Assert.Equal("registry/registry.json", refused.Key);
+        AmazonS3Exception inner = Assert.IsType<AmazonS3Exception>(refused.InnerException);
+        Assert.Equal(HttpStatusCode.Forbidden, inner.StatusCode);
+        Assert.Equal("AccessDenied", inner.ErrorCode);
     }
 
     [Fact]
-    public async Task A_missing_bucket_is_an_error_not_a_missing_key()
+    public async Task An_existing_key_the_role_may_not_read_is_a_refusal()
+    {
+        // The other half of what a 403 AccessDenied can mean: the key is there and the role may not read
+        // it. The store cannot tell the two apart and does not try.
+        // Mutation: drop the store's AccessDenied catch, and this fails with the AmazonS3Exception.
+        S3ObjectStore store = new(server.Client(), "bucket");
+        await Put(store, "apps/app1/releases/r1/assets/app.js", "console.log(1)", ifMatch: null);
+        server.DenyRead("bucket", "apps/app1/releases/r1/assets/app.js");
+
+        ObjectReadRefusedException refused = await Assert.ThrowsAsync<ObjectReadRefusedException>(
+            () => store.GetAsync("apps/app1/releases/r1/assets/app.js", null, Ct));
+        Assert.Equal("apps/app1/releases/r1/assets/app.js", refused.Key);
+    }
+
+    /// <summary>
+    /// Only 403 <c>AccessDenied</c> is a refusal. Every other failure propagates as the SDK raised it,
+    /// never as null and never as <see cref="ObjectReadRefusedException"/>: another 403 code is a
+    /// signature, credential, clock or storage-class fault; <c>NoSuchBucket</c> is configuration; 5xx
+    /// is S3 itself (https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html, "List of
+    /// error codes").
+    ///
+    /// Mutation: classify on the status alone (any 403 is a refusal), and the five 403 rows fail.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "InvalidObjectState")]
+    [InlineData(HttpStatusCode.Forbidden, "SignatureDoesNotMatch")]
+    [InlineData(HttpStatusCode.Forbidden, "InvalidAccessKeyId")]
+    [InlineData(HttpStatusCode.Forbidden, "AllAccessDisabled")]
+    [InlineData(HttpStatusCode.Forbidden, "RequestTimeTooSkewed")]
+    [InlineData(HttpStatusCode.NotFound, "NoSuchBucket")]
+    [InlineData(HttpStatusCode.InternalServerError, "InternalError")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "SlowDown")]
+    public async Task Any_other_failure_propagates_as_the_sdk_raised_it(HttpStatusCode status, string code)
     {
         S3ObjectStore store = new(server.Client(), "bucket");
-        server.FailWith = (HttpStatusCode.NotFound, "NoSuchBucket");
+        server.FailWith = (status, code);
 
-        await Assert.ThrowsAsync<AmazonS3Exception>(() => store.GetAsync("registry/registry.json", null, Ct));
+        // Any: the SDK raises some codes as a modelled subclass (InvalidObjectState is
+        // InvalidObjectStateException), and that is still the SDK's own exception, unwrapped.
+        AmazonS3Exception thrown = await Assert.ThrowsAnyAsync<AmazonS3Exception>(
+            () => store.GetAsync("registry/registry.json", null, Ct));
+        Assert.Equal(status, thrown.StatusCode);
+        Assert.Equal(code, thrown.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_cancelled_read_surfaces_as_cancellation()
+    {
+        // Mutation: catch the read's OperationCanceledException and wrap it as a refusal, and this
+        // fails on the ObjectReadRefusedException.
+        S3ObjectStore store = new(server.Client(), "bucket");
+        server.ListBucketGranted = false;
+        using CancellationTokenSource cancelled = new();
+        await cancelled.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => store.GetAsync("registry/registry.json", null, cancelled.Token));
     }
 
     private static async Task<bool> Put(S3ObjectStore store, string key, string body, string? ifMatch)

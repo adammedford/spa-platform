@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Whether an issue has the shape of a ticket a lane can finish. Owner: integrator.
 
-docs/agents/issue-tracker.md states five rules a ticket keeps, confirmed on #227. Until #247 nothing
+docs/agents/tracker-policy.md states five rules a ticket keeps, confirmed on #227. Until #247 nothing
 held them where a ticket is written: A-05 (.github/path-ownership.py) catches a two-owner ticket at
 the push, after a lane has built half of it, which is why seven of the 22 tickets of #226 ended
 partial instead of never starting. This reads one issue and fails it, naming the rule, on:
@@ -22,8 +22,9 @@ partial instead of never starting. This reads one issue and fails it, naming the
   must name exactly one; the tickets filed before #227 have none, and they are judged by what they
   have rather than failed wholesale;
 - sitting-or-landing: under `ready-for-agent`, an open `- [ ]` box using a word of SITTING_OR_LANDING
-  (rules 2 and 3). A word list misfires; the escape is to reword the box, or to move it to a
-  ready-for-human ticket blocked by the one that builds what it runs;
+  (rules 2 and 3), as a word of prose only: not in a code span, a file name, a path or a
+  hyphenated compound (#482). A word list still misfires on prose; the escape is to reword the box,
+  or to move it to a ready-for-human ticket blocked by the one that builds what it runs;
 - shared-commit: under `ready-for-agent`, an open `- [ ]` box that requires another ticket's commit
   on this ticket's branch or in its pull request, by SHARED_COMMIT (#295). A lane integrates its
   ticket alone, so such a box cannot go green: on 2026-10-22 #145 failed the build that only #146's
@@ -33,7 +34,9 @@ partial instead of never starting. This reads one issue and fails it, naming the
 - blocker-edge: a "Blocked by #N", "after #N" or "once #N lands" where #N is an open issue with no
   native blocked-by edge, so the scheduler cannot see the wait the prose states (ADR-0020). A #N
   that is a closed issue, a pull request or no issue at all states no wait any more (#284): each is
-  printed as a note, `ticket-shape: note: stale-prose: <what>`, and fails nothing. The state of a
+  printed as a note, `ticket-shape: note: stale-prose: <what>`, and fails nothing. A "Blocked by"
+  list that names the body's own ticket ("blocked by #177 and this ticket", or its own #N) describes
+  another ticket's wait, since no ticket waits on itself, and is not read (#371). The state of a
   #N with no edge is asked of GitHub in one GraphQL query; a #N with an edge has its state in it;
 - foreground: under `ready-for-agent`, a `**Session:** foreground` line, which no lane can honour;
 - spec: under `ready-for-agent`, any sub-issue, since an issue with sub-issues is a spec and never a
@@ -50,9 +53,33 @@ judged: the issue, or the state of a #N its prose names, could not be read, or t
 broke (a script it reuses or OWNERSHIP.md missing, or any other error). Python's own exit for an
 uncaught error is 1, the code of a failed rule, so main() lets no error escape, and
 .github/workflows/ticket-shape.yml relabels only a ticket that was judged.
+
+The --since mode (#636) judges no issue. It searches, just before `gh issue create`, for a possible
+duplicate of the title about to be filed, since another session on the same account can file the
+same ticket in between: #558 duplicated #547, filed two and a half hours earlier.
+
+    python3 -I tools/ticket_shape.py --since <time> --title "<title>" [--not-duplicate-of N[,N...]]
+
+<time> is when the session last searched the tracker for the subject, in UTC as `date -u +%FT%TZ`
+writes it, and no later than now. The mode lists every issue, open or closed, created at or after
+<time>, by `gh issue list --state all --search "created:>=<time>"`, and calls one a possible
+duplicate when its title shares SHARED_WORDS content words or more with the title about to be
+filed, by content_words(). Each is a line `ticket-shape: possible-duplicate: #N (<state>, created
+<time>): <title>, sharing <words>`. --not-duplicate-of, which may repeat, names each match a reader
+judged no duplicate, the session's own earlier filings included: a named match is printed as a note
+instead, and a named issue that is no match is a note, `ticket-shape: note: not-duplicate-of: ...`,
+which excuses no other. The verdict is `ticket-shape: pass: ...` with exit 0 when no match is left
+unnamed, `ticket-shape: fail: ...` with exit 1 when one is, and `ticket-shape: fail: nothing
+searched: ...` with exit 2, on which nothing is filed: an argument missing, repeated, malformed or
+given beside an issue number, or a listing gh failed, answered in a shape not read, or returned at
+its limit of SEARCH_LIMIT issues, which may be cut short with no error. A shared title is a
+candidate, not a finding: #510 and #497 share three words and are different tickets. Titles are all
+it reads, so a ticket that collides with an answer a decision sheet is drafting (#550, #551) is not
+found.
 """
 from __future__ import annotations
 
+import datetime
 import functools
 import importlib.util
 import json
@@ -97,7 +124,15 @@ READY = "ready-for-agent"
 # (#284): each task merge is its ticket's merge body, written by the lane's own integrate step
 # (#226), so a box asking for a count in it is a lane's; "landing" and "pushed" still catch a box
 # that needs the landing.
-SITTING_OR_LANDING = tuple((word, re.compile(pattern, flags)) for word, pattern, flags in (
+#
+# A word counts only as a word of prose (#482): not joined to its neighbour by a hyphen, a slash
+# or a dot inside a name, so "full-landing", `landing-work.md` and tests/e2e/Deployed say nothing,
+# and not starting inside a code span, which spans_of() reads. A sentence's closing dot is no
+# join: "needs the cell." still counts. "on `main`" counts, since it starts outside its span.
+JOINED_BEFORE = r"(?<![-/])(?<!\w\.)"
+JOINED_AFTER = r"(?![-/])(?!\.\w)"
+SITTING_OR_LANDING = tuple((word, re.compile(JOINED_BEFORE + pattern + JOINED_AFTER, flags))
+                           for word, pattern, flags in (
     ("deployed", r"\bdeployed\b", re.IGNORECASE),
     ("the cell", r"\bthe cell\b", re.IGNORECASE),
     ("against the applied", r"\bagainst the applied\b", re.IGNORECASE),
@@ -127,12 +162,31 @@ SHARED_COMMIT = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     r"(?:branch|pull[ \t]+requests?|PR)\b",
 ))
 OPEN_BOX = re.compile(r"(?m)^[ \t]*- \[ \][ \t]*(?P<text>[^\n]*)$")
+CODE_SPAN = re.compile(r"`[^`\n]+`")
+
+
+def spans_of(text: str) -> list[range]:
+    """The offsets of each code span in a line, its backticks included."""
+    return [range(*span.span()) for span in CODE_SPAN.finditer(text)]
+
+
+def prose_words(text: str) -> list[str]:
+    """The SITTING_OR_LANDING words a box says as words of prose, in the list's order: a match that
+    starts inside a code span is no word of prose, and the patterns refuse a joined one."""
+    spans = spans_of(text)
+    return [word for word, pattern in SITTING_OR_LANDING
+            if any(not any(found.start() in span for span in spans)
+                   for found in pattern.finditer(text))]
 
 # The three ways a body states a wait, each giving the issue numbers it waits for. "Blocked by"
-# takes a list, as the tracker guide's fallback line `Blocked by: #<n>, #<n>` writes one.
+# takes a list, as the tracker guide's fallback line `Blocked by: #<n>, #<n>` writes one. An item of
+# the list may also be the body's own ticket, as SELF names it: "a follow-up ticket blocked by #177
+# and this ticket" (#178) describes another ticket's wait, since no ticket waits on itself (#371).
+SELF = re.compile(r"this[ \t]+(?:ticket|issue|one)\b(?!['\u2019]s)", re.IGNORECASE)
+_ITEM = r"(?:#\d+|" + SELF.pattern + r")"
 BLOCKER_PHRASES = (
-    re.compile(r"\bblocked by:?[ \t]*(?P<numbers>#\d+(?:(?:[ \t]*,[ \t]*|[ \t]+and[ \t]+)#\d+)*)",
-               re.IGNORECASE),
+    re.compile(r"\bblocked by:?[ \t]*(?P<numbers>" + _ITEM
+               + r"(?:(?:[ \t]*,[ \t]*|[ \t]+and[ \t]+)" + _ITEM + r")*)", re.IGNORECASE),
     re.compile(r"\bafter (?P<numbers>#\d+)", re.IGNORECASE),
     re.compile(r"\bonce (?P<numbers>#\d+) lands\b", re.IGNORECASE),
 )
@@ -259,11 +313,17 @@ def writes_nothing(body: str) -> bool:
     return bool(line and WRITES_NOTHING.match(line.group("value")))
 
 
-def stated(body: str) -> list[int]:
-    """The numbers the body's prose waits for, by BLOCKER_PHRASES, ascending."""
-    return sorted({int(number) for phrase in BLOCKER_PHRASES
-                   for found in phrase.finditer(body)
-                   for number in NUMBER.findall(found.group("numbers"))})
+def stated(body: str, number: int | None = None) -> list[int]:
+    """The numbers the body's prose waits for, by BLOCKER_PHRASES, ascending. A list naming the
+    body's own ticket, by SELF or as #number, is another ticket's wait and gives none (#371)."""
+    found_numbers: set[int] = set()
+    for phrase in BLOCKER_PHRASES:
+        for found in phrase.finditer(body):
+            listed = {int(n) for n in NUMBER.findall(found.group("numbers"))}
+            if SELF.search(found.group("numbers")) or number in listed:
+                continue
+            found_numbers |= listed
+    return sorted(found_numbers)
 
 
 def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> dict[int, str]:
@@ -271,20 +331,23 @@ def states_of(issue: Issue, known: typing.Mapping[int, str] | None = None) -> di
     edge says it is a closed issue; known gives others; the rest are asked of GitHub at once."""
     states = {number: "CLOSED" for number in issue.closed_blockers}
     states.update(known or {})
-    missing = [n for n in stated(issue.body) if n not in issue.blockers and n not in states]
+    missing = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and n not in states]
     if missing:
         states.update(look_up(missing))
     return states
 
 
-def look_up(numbers: list[int]) -> dict[int, str]:
+def look_up(numbers: list[int], cwd: str | os.PathLike | None = None) -> dict[int, str]:
     """Each number's kind, from one GraphQL query of the repository gh resolves (GH_REPO in the
     Action, the checkout's remote elsewhere). gh exits 1 when a number is no issue or pull request
     and still prints the data with a NOT_FOUND error for it, so the answer is read whatever the
     exit; any other error, or an answer that does not parse, is Unreadable. gh fills the
     `{owner}` and `{repo}` field values from that repository (https://cli.github.com/manual/gh_api),
     and `issueOrPullRequest` is the repository field that answers for either kind
-    (https://docs.github.com/en/graphql/reference/objects#repository)."""
+    (https://docs.github.com/en/graphql/reference/objects#repository). cwd is the checkout gh
+    resolves from, this process's directory when None; tools/overnight_collect.py names its
+    --repo checkout there (#377)."""
     fields = " ".join(f"n{n}: issueOrPullRequest(number: {n}) "
                       "{ __typename ... on Issue { state } ... on PullRequest { state } }"
                       for n in numbers)
@@ -293,7 +356,7 @@ def look_up(numbers: list[int]) -> dict[int, str]:
     try:
         done = subprocess.run(["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                                "-f", f"query={query}"],
-                              capture_output=True, text=True, check=False)
+                              cwd=cwd, capture_output=True, text=True, check=False)
     except OSError as error:
         raise Unreadable(f"gh could not run: {error}") from error
     why = f"gh api graphql exited {done.returncode}: {done.stderr.strip()}"
@@ -327,7 +390,7 @@ def stale_prose(issue: Issue, states: typing.Mapping[int, str] | None = None) ->
     or no issue. The scheduler has nothing to see; the prose is to be reworded, not edged."""
     states = states_of(issue, states)
     return [f"the body waits for #{n}, which is {STALE[states[n]]}, so no wait is left to edge; "
-            "the line is stale prose" for n in stated(issue.body)
+            "the line is stale prose" for n in stated(issue.body, issue.number)
             if n not in issue.blockers and states[n] in STALE]
 
 
@@ -365,7 +428,7 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
     if READY in issue.labels:
         for box in OPEN_BOX.finditer(issue.body):
             text = box.group("text")
-            words = [word for word, pattern in SITTING_OR_LANDING if pattern.search(text)]
+            words = prose_words(text)
             if words:
                 failures.append(Failure("sitting-or-landing", f"an open box says {said(words)}: "
                                         f"{text[:120]}"))
@@ -381,7 +444,8 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
                                         f"integrates this ticket alone cannot have: {text[:160]}"))
 
     states = states_of(issue, states)
-    unedged = [n for n in stated(issue.body) if n not in issue.blockers and states[n] == "OPEN"]
+    unedged = [n for n in stated(issue.body, issue.number)
+               if n not in issue.blockers and states[n] == "OPEN"]
     if unedged:
         failures.append(Failure("blocker-edge", "the body waits for " + ", ".join(
             f"#{number}" for number in unedged) + " with no blocked-by edge to it open"))
@@ -416,6 +480,207 @@ def said(roles: list[str]) -> str:
     return roles[0] if len(roles) == 1 else f"{', '.join(roles[:-1])} and {roles[-1]}"
 
 
+# The --since mode (#636). An issue created since the time named is a possible duplicate of the
+# title about to be filed when the two titles share SHARED_WORDS content words or more. Two shared
+# words matched 22 pairs filed by different sessions within four hours of each other over the two
+# days before 2026-10-30, three matched five, and the two known duplicates (#558 of #547, #546 of
+# #538) share four and five (#636's grilling record, Q4).
+SHARED_WORDS = 3
+# The words a title says that are no content: articles, prepositions, conjunctions, and the filler
+# verbs these titles use. A word of one or two letters is no content either, so none is listed.
+STOPWORDS = frozenset((
+    "the",
+    "about", "above", "across", "after", "against", "along", "among", "around", "before",
+    "behind", "below", "beneath", "beside", "besides", "between", "beyond", "despite", "down",
+    "during", "except", "for", "from", "inside", "into", "like", "near", "off", "onto", "out",
+    "outside", "over", "past", "per", "since", "through", "throughout", "till", "toward",
+    "towards", "under", "underneath", "unlike", "until", "upon", "via", "with", "within",
+    "without",
+    "and", "but", "nor", "yet", "because", "although", "though", "unless", "while", "whether",
+    "than", "then", "when", "where", "once",
+    "says", "names", "gives",
+))
+# A word: a run of letters, digits, `_`, `-`, `#` and `'`, so `landing-work`, `#244`, `ADR-0024`
+# and `F-07` stay whole and every other mark splits.
+TITLE_WORD = re.compile(r"[\w#'-]+")
+APOSTROPHE = str.maketrans({"’": "'"})
+
+
+class Candidate(typing.NamedTuple):
+    """An issue whose title shares SHARED_WORDS content words or more with the title about to be
+    filed: a possible duplicate, which only a reader can say is one."""
+    number: int
+    state: str
+    created: str
+    title: str
+    shared: list[str]   # in the order the title about to be filed says them
+
+
+def content_words(title: str) -> list[str]:
+    """A title's content words, each once, in its order: lower-cased, split by TITLE_WORD, with a
+    possessive `'s` dropped (`#244's` is `#244`), and no word of fewer than three characters, none
+    in STOPWORDS and none without a letter or a digit. No word is stemmed: "runbook" is not
+    "runbooks"."""
+    words: list[str] = []
+    for token in TITLE_WORD.findall(title.lower().translate(APOSTROPHE)):
+        token = token.strip("-'")
+        if token.endswith("'s"):
+            token = token[:-2].rstrip("-'")
+        if len(token) >= 3 and token not in STOPWORDS and re.search(r"[^\W_]", token):
+            words.append(token)
+    return list(dict.fromkeys(words))
+
+
+def possible_duplicates(title: str, listing: list[dict]) -> list[Candidate]:
+    """Each issue of the listing, as search() reads it, whose title shares SHARED_WORDS content
+    words or more with the title about to be filed, by number."""
+    words = content_words(title)
+    found = []
+    for issue in listing:
+        theirs = set(content_words(issue["title"]))
+        shared = [word for word in words if word in theirs]
+        if len(shared) >= SHARED_WORDS:
+            found.append(Candidate(issue["number"], issue["state"], issue["createdAt"],
+                                   issue["title"], shared))
+    return sorted(found, key=lambda candidate: candidate.number)
+
+
+SEARCH_LIMIT = 500
+SEARCH_FIELDS = "number,title,createdAt,state"
+OPTIONS = ("--since", "--title", "--not-duplicate-of")
+SINCE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+NUMBER_LIST = re.compile(r"\d+(?:,\d+)*")
+
+
+class BadArguments(Exception):
+    """The --since mode's arguments do not name one search."""
+
+
+class Search(typing.NamedTuple):
+    since: str
+    title: str
+    excused: frozenset[int]   # what --not-duplicate-of names
+
+
+def search_arguments(argv: list[str],
+                     now: datetime.datetime | None = None) -> Search:
+    """The search the arguments name, or BadArguments: each option once, --not-duplicate-of
+    excepted, each with its value, and nothing else."""
+    values: dict[str, str] = {}
+    excused: set[int] = set()
+    at = 0
+    while at < len(argv):
+        option = argv[at]
+        if option not in OPTIONS:
+            raise BadArguments(f"{option!r} is no argument of the --since mode, which names no "
+                               "issue")
+        if at + 1 == len(argv):
+            raise BadArguments(f"{option} takes a value")
+        value = argv[at + 1]
+        at += 2
+        if option == "--not-duplicate-of":
+            if not NUMBER_LIST.fullmatch(value):
+                raise BadArguments(f"--not-duplicate-of takes N[,N...], issue numbers, not "
+                                   f"{value!r}")
+            excused |= {int(number) for number in value.split(",")}
+        elif option in values:
+            raise BadArguments(f"{option} is given twice")
+        else:
+            values[option] = value
+    if "--since" not in values:
+        raise BadArguments("--title and --not-duplicate-of are the --since mode's, and --since is "
+                           "missing")
+    if not values.get("--title", "").strip():
+        raise BadArguments("--since needs a nonempty --title, the title about to be filed")
+    since = values["--since"]
+    try:
+        if not SINCE_FORMAT.fullmatch(since):
+            raise ValueError("not of the form")
+        when = datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError as error:
+        raise BadArguments(f"--since {since!r} is no UTC time as `date -u +%FT%TZ` writes it "
+                           f"({error})") from error
+    if when > (now or datetime.datetime.now(datetime.timezone.utc)):
+        raise BadArguments(f"--since {since} is later than now, so no search was made then")
+    return Search(since, values["--title"], frozenset(excused))
+
+
+def search(since: str) -> list[dict]:
+    """Every issue, open or closed, created at or after since, from gh's listing of the repository
+    it resolves. Unreadable when gh fails, when its answer is not a list of issues each with a
+    number, a title, a creation time and a state, or when the listing reaches SEARCH_LIMIT: gh can
+    return a short page with exit 0, and a listing at its limit may have been cut short.
+
+    GitHub's search does the filtering, and no createdAt is compared here: `created:>=` with a
+    time is inclusive (https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax#query-for-dates),
+    and `gh issue list` lists issues, never pull requests
+    (https://cli.github.com/manual/gh_issue_list). A probe on 2026-11-01 listed #558 for
+    `created:>=2026-10-29T21:03:09Z`, its own creation second, and no pull request (#636)."""
+    try:
+        done = subprocess.run(["gh", "issue", "list", "--state", "all", "--search",
+                               f"created:>={since}", "--limit", str(SEARCH_LIMIT),
+                               "--json", SEARCH_FIELDS],
+                              capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise Unreadable(f"gh could not run: {error}") from error
+    if done.returncode != 0:
+        raise Unreadable(f"gh issue list exited {done.returncode}: {done.stderr.strip()}")
+    try:
+        listing = json.loads(done.stdout)
+    except json.JSONDecodeError as error:
+        raise Unreadable(f"the listing's JSON does not parse: {error}") from error
+    if not isinstance(listing, list):
+        raise Unreadable("the listing is not a list of issues")
+    for issue in listing:
+        if not (isinstance(issue, dict) and type(issue.get("number")) is int
+                and all(isinstance(issue.get(field), str)
+                        for field in ("title", "createdAt", "state"))):
+            raise Unreadable(f"the listing has an issue with no readable number, title, creation "
+                             f"time or state: {json.dumps(issue)[:200]}")
+    if len(listing) >= SEARCH_LIMIT:
+        raise Unreadable(f"the listing came back with {len(listing)} issues, gh's limit of "
+                         f"{SEARCH_LIMIT}, so it may be cut short")
+    return listing
+
+
+def search_main(argv: list[str]) -> int:
+    """The --since mode, as the docstring gives it."""
+    try:
+        asked = search_arguments(argv)
+        found = possible_duplicates(asked.title, search(asked.since))
+    except (Exception, SystemExit) as error:
+        # A bad argument, a listing that could not be read, or the check broken: nothing was
+        # searched, which is exit 2 on its verdict line, as main() does for an issue (CODING_
+        # STANDARDS.md, "A check fails closed").
+        print(f"ticket-shape: fail: nothing searched: {type(error).__name__}: {error}")
+        return 2
+    for candidate in found:
+        line = (f"possible-duplicate: #{candidate.number} ({candidate.state.lower()}, created "
+                f"{candidate.created}): {candidate.title}, sharing {', '.join(candidate.shared)}")
+        if candidate.number in asked.excused:
+            print(f"ticket-shape: note: {line}; named by --not-duplicate-of")
+        else:
+            print(f"ticket-shape: {line}")
+    for number in sorted(asked.excused - {candidate.number for candidate in found}):
+        print(f"ticket-shape: note: not-duplicate-of: #{number} is no possible duplicate of the "
+              "title, so naming it excuses nothing")
+    unnamed = [f"#{candidate.number}" for candidate in found
+               if candidate.number not in asked.excused]
+    if unnamed:
+        print(f"ticket-shape: fail: {len(unnamed)} possible duplicate(s) created since "
+              f"{asked.since} not named by --not-duplicate-of: {', '.join(unnamed)}; fold a true "
+              "duplicate into the issue already filed, and name each that is not one")
+        return 1
+    if found:
+        print(f"ticket-shape: pass: each of the {len(found)} possible duplicate(s) created since "
+              f"{asked.since} is named by --not-duplicate-of")
+    else:
+        print(f"ticket-shape: pass: no issue created since {asked.since} shares {SHARED_WORDS} "
+              "content words with the title")
+    return 0
+
+
 def read(argument: str) -> Issue:
     """The issue an argument names: `-` for gh's JSON on stdin, or a number gh is asked for."""
     if argument == "-":
@@ -439,9 +704,13 @@ def read(argument: str) -> Issue:
 
 
 def main(argv: list[str]) -> int:
+    # Any option is the --since mode's, which names no issue; the one-argument form takes none.
+    if any(argument.startswith("--") for argument in argv):
+        return search_main(argv)
     if len(argv) != 1:
         print(__doc__.split("\n\n")[0])
-        print("ticket-shape: fail: name one issue number, or - for JSON on stdin")
+        print("ticket-shape: fail: name one issue number, or - for JSON on stdin, or search with "
+              '--since <time> --title "<title>"')
         return 2
     try:
         issue = read(argv[0])
@@ -461,8 +730,8 @@ def main(argv: list[str]) -> int:
         print(f"ticket-shape: {failure.rule}: {failure.detail}")
     if failures:
         broken = list(dict.fromkeys(failure.rule for failure in failures))
-        print(f"ticket-shape: fail: #{issue.number} breaks {len(broken)} rule(s) of the tracker "
-              f"guide's ticket shape: {', '.join(broken)}")
+        print(f"ticket-shape: fail: #{issue.number} breaks {len(broken)} rule(s) of the ticket "
+              f"shape in docs/agents/tracker-policy.md: {', '.join(broken)}")
         return 1
     print(f"ticket-shape: pass: #{issue.number} has the shape of a ticket a lane can finish")
     return 0

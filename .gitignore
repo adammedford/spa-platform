@@ -64,11 +64,11 @@ spikes/g0/real-handler/vendor/idm/
 spikes/g0/real-handler/vendor/lib/
 spikes/g0/real-handler/vendor/ref/
 
-# Agent issue tracker (docs/agents/issue-tracker.md), tracked rather than ignored: it holds the spec
-# every review's spec axis is held to, and the tickets that merge bodies, ADRs and contracts cite by
-# path. While it was ignored those citations resolved on one machine and nowhere else -- ADR-0015
-# promised three adoption tickets no second session could open. Only the session logs stay out, a
-# transcript rather than a spec.
+# Agent issue tracker archive (docs/agents/tracker-policy.md, "The archive: tickets filed before
+# ADR-0020"), tracked rather than ignored: it holds the tickets filed before ADR-0020 and their specs,
+# which merge bodies, ADRs and contracts cite by path. While the tracker was ignored those citations
+# resolved on one machine and nowhere else -- ADR-0015 promised three adoption tickets no second
+# session could open. Only the session logs stay out, a transcript rather than a spec.
 .scratch/*/log/
 
 # Agent session scratch: worktrees and anything else a session leaves behind. Three exceptions:
@@ -79,11 +79,13 @@ spikes/g0/real-handler/vendor/ref/
 # other integrator change (ADR-0026, ADR-0027). The companions are the overnight script's (#213),
 # the review-queue script's (#83), the retro script's (#260), the morning script's (#263), the
 # truth-audit script's (#267), the pins-sweep script's (#269) and the gate-evidence script's (#265).
-# The user-level skills under ~/.agents/skills are not in this repository.
+# The user-level skills under ~/.agents/skills are not in this repository. One command sits beside
+# the scripts: confirm_draft.mjs, which runs the morning script's draft check from the command line
+# (#491).
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
-# for the scripts, their companions and the fixtures alone; anything else there, a .bak or the old
-# overnight_harness.mjs, stays ignored.
+# for the scripts, their companions, that command and the fixtures alone; anything else there, a
+# .bak or the old overnight_harness.mjs, stays ignored.
 .claude/*
 !.claude/settings.json
 !.claude/workflows/
@@ -96,6 +98,8 @@ spikes/g0/real-handler/vendor/ref/
 !.claude/workflows/truth-audit_tests.mjs
 !.claude/workflows/pins-sweep_tests.mjs
 !.claude/workflows/gate-evidence_tests.mjs
+!.claude/workflows/confirm_draft.mjs
+!.claude/workflows/follow_up_body.mjs
 !.claude/workflows/fixtures/
 !.claude/skills/
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
@@ -23,11 +24,20 @@ namespace Platform.Registry.Tests;
 /// (https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html); PUT with
 /// <c>If-None-Match: *</c> on an existing key, or <c>If-Match</c> with another ETag, is 412, and
 /// <c>If-Match</c> on a missing key is 404 (https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+///
+/// <para>It answers a missing key as the caller's grant decides, in one of two modes. With
+/// <see cref="ListBucketGranted"/>, as by default, a missing key is 404 <c>NoSuchKey</c>. Without it
+/// the caller holds <c>s3:GetObject</c> alone, the gateway's deployed role (P-03), and S3 answers a
+/// missing key with 403 <c>AccessDenied</c> where a caller with it gets 404 <c>NoSuchKey</c>
+/// (API_GetObject.html, "Permissions").
+/// <see cref="DenyRead"/> refuses an existing key with the same 403, the other half of what that
+/// answer can mean (change request contracts/changes/issue-381-object-read-refusal.md, item 1).</para>
 /// </summary>
 internal sealed class FakeS3Server : IAsyncDisposable
 {
     private readonly WebApplication app;
     private readonly ConcurrentDictionary<string, (byte[] Body, string ETag)> objects = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool> denied = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<SeenRequest> requests = new();
     private readonly object writes = new();
 
@@ -40,6 +50,15 @@ internal sealed class FakeS3Server : IAsyncDisposable
 
     /// <summary>When set, answers every request with this status and S3 error code instead.</summary>
     public (HttpStatusCode Status, string Code)? FailWith { get; set; }
+
+    /// <summary>
+    /// Whether the caller may list the bucket. True: a GET of a missing key is 404 <c>NoSuchKey</c>.
+    /// False: it is 403 <c>AccessDenied</c>, as S3 answers a GetObject-only role.
+    /// </summary>
+    public bool ListBucketGranted { get; set; } = true;
+
+    /// <summary>Refuses every GET of <paramref name="key"/> in <paramref name="bucket"/> with 403 <c>AccessDenied</c>, present or not.</summary>
+    public void DenyRead(string bucket, string key) => denied[$"/{bucket}/{key}"] = true;
 
     public static async Task<FakeS3Server> StartAsync(CancellationToken ct)
     {
@@ -97,9 +116,17 @@ internal sealed class FakeS3Server : IAsyncDisposable
 
     private async Task GetAsync(HttpContext context, string path)
     {
+        if (denied.ContainsKey(path))
+        {
+            await ErrorAsync(context, HttpStatusCode.Forbidden, "AccessDenied");
+            return;
+        }
+
         if (!objects.TryGetValue(path, out (byte[] Body, string ETag) stored))
         {
-            await ErrorAsync(context, HttpStatusCode.NotFound, "NoSuchKey");
+            await (ListBucketGranted
+                ? ErrorAsync(context, HttpStatusCode.NotFound, "NoSuchKey")
+                : ErrorAsync(context, HttpStatusCode.Forbidden, "AccessDenied"));
             return;
         }
 
@@ -114,6 +141,9 @@ internal sealed class FakeS3Server : IAsyncDisposable
         await context.Response.Body.WriteAsync(stored.Body, context.RequestAborted);
     }
 
+    [SuppressMessage("Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
+        Justification = "S3's ETag is MD5 (#589-Q5, ADR-0035): the ETag imitates S3's, the MD5 of a " +
+            "single-part object's body, as a change marker in a test double that protects nothing.")]
     private async Task PutAsync(HttpContext context, string path)
     {
         using MemoryStream buffer = new();

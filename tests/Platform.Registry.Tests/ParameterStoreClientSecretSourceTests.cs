@@ -2,6 +2,7 @@ using Amazon.Runtime;
 using Amazon.SimpleSystemsManagement;
 using Amazon.SimpleSystemsManagement.Model;
 using Microsoft.Extensions.Logging.Abstractions;
+using Platform.Testing;
 
 namespace Platform.Registry.Tests;
 
@@ -239,7 +240,7 @@ public sealed class ParameterStoreClientSecretSourceTests
         {
             ErrorCode = "ValidationException",
         });
-        ListLoggerProvider logs = new();
+        CapturedLog logs = new();
         ParameterStoreClientSecretSource source = new(ssm, logs.CreateLogger<ParameterStoreClientSecretSource>());
         string[] refs = [App1Ref, App2Ref, "ssm:" + App3Name + ":1", "ssm:" + App1Name + ":9"];
 
@@ -259,8 +260,8 @@ public sealed class ParameterStoreClientSecretSourceTests
 
         Assert.Equal(Canary, source.Get(App1Ref));
         Assert.Equal(4, logs.Lines.Count);
-        Assert.All(refs.Skip(1), secretRef => Assert.Contains(logs.Lines, line => line.Contains(secretRef)));
-        Assert.All(logs.Lines, line => Assert.DoesNotContain(Canary, line));
+        Assert.All(refs.Skip(1), secretRef => Assert.Contains(logs.Lines, line => line.Text.Contains(secretRef)));
+        Assert.All(logs.Lines, line => Assert.DoesNotContain(Canary, line.Text));
         Assert.All(thrown, text => Assert.DoesNotContain(Canary, text));
     }
 }

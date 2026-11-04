@@ -3,29 +3,68 @@
 # delete the branches the landing finished.
 # Owner: integrator.
 #
-#     tools/land.sh <pr-number> [--subject "<merge subject>"] [--body-file <path>]
+#     tools/land.sh <pr-number> --body-file <path> [--subject "<merge subject>"]
 #                   [--unreviewed "<reason>"]
 #
 # Run it from a worktree sitting at the pull request's base with nothing uncommitted, because the
 # roadmap is derived from the tree the merge commit makes:
 #
 #     git worktree add --detach ../spa-land origin/main
+#     git worktree remove ../spa-land        # done for you when the landing succeeds
+#
+# That worktree is disposable (#490). Once the merge, the roadmap refresh and its push have all
+# succeeded, a landing run from a linked worktree that is detached and clean, untracked files
+# included, removes it as its last act and names it. From a worktree on a branch, or one with an
+# untracked file, it leaves it and prints the `git worktree remove` that removes it; a landing that
+# fails anywhere leaves it for inspection. The repository's own working tree is never removed.
 #
 # --subject is the merge subject a check reads. --body-file names the merge body, which reaches the
 # merge commit followed by the review trailer below: a file, or a pipe -- a named pipe, or a
 # process substitution such as `--body-file <(...)` -- but never standard input, `-` included,
 # because with no --subject standard input answers the confirmation. The body says what was
 # verified and how, and it carries the `Outstanding:` line and the `Outstanding test ids:` line
-# when a row landed without being finished.
+# when a row landed without being finished. So it is required: a landing with no --body-file, or
+# one whose body is empty or only whitespace, is refused before anything is asked of gh (#552),
+# where before it merged with the trailer alone.
 # Both merge subject forms and what the body owes are in docs/agents/landing-work.md -> "Land it".
 #
 # It merges only a head a review record clears (#67). A review record is one line a review leaves on
 # the pull request, `Reviewed <40-hex head> against <40-hex base>: merge` (or `: hold`), whose form
 # is in docs/agents/review.md -> "Landing or holding". The latest record naming the pull request's
 # current head must say merge, or nothing merges; tools/review_record.py, beside this script, reads
-# the records and says which. The merge is then pinned to that head with --match-head-commit, so a
-# push that lands while this runs makes GitHub refuse the merge rather than take an unreviewed head.
+# the records and says which, run as `review_record.py --pr <number> --head <head>` so the gh calls
+# that list them live in the reader alone (#488). The merge is then pinned to that head with
+# --match-head-commit, so a push that lands while this runs makes GitHub refuse the merge rather
+# than take an unreviewed head.
 # The merge body ends with `Reviewed: <head> <record URL>`, which this script writes, not its caller.
+#
+# When the comment holding the clearing record ends its findings with a `## Follow-ups` table that
+# has a row, the review carried a finding rather than holding on it, and docs/agents/review.md ->
+# "Landing or holding" has the merge body record it as an `Outstanding:` line. So the reader is run
+# with --follow-ups, which prints each row's Finding after the URL, and a merge body with no line
+# beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
+# no such row is not checked, and nor is an --unreviewed landing, which reads no record.
+# Each such row also names, before the merge, whether an issue has filed it (#573): the morning
+# files a record's rows from open pull requests only (#514), so once this merges nobody files a row
+# still open. A row no issue answers (one titled with the finding, with a `**Raised by:** #<pr>`
+# line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
+# says so; nothing is refused for it.
+#
+# It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
+# between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
+# closes each one (#566). A refusal names each #n no commit names, and --unreviewed does not lift it.
+#
+# It merges only a body that cites each decision it owes (#530). A `Closes #n` line that names a
+# change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
+# docs/agents/tracker-policy.md -> "Landing" has that body state the why and cite the decision
+# comment (#413). The citation half is mechanical: tools/decision_citation.py, beside this script,
+# reads each closed issue's labels and, for a change request, the latest decision comment by the
+# human's account, and prints the URL the body owes when that decision accepts with `ADR: no`; this
+# script refuses unless the body file carries that URL, naming the request and the URL to cite. A
+# request decided `ADR: yes`, a declined one and an issue without the label owe nothing, and the
+# why stays the reviewer's to judge. --unreviewed does not lift it either. #492's merge closed
+# #495, #497 and #498, each decided `ADR: no`, citing none of them, and a merge body cannot be
+# edited afterwards.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
@@ -45,8 +84,9 @@
 # commit, run tools/roadmap.py on it, and push the refresh as its own commit when the blocks moved.
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
 # see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
-# this script deletes the branches the merge finished and lists the ones it keeps (#71), and when it
-# deleted any, this script's last line names the file of the commands that restore them (#115).
+# this script deletes the branches the merge finished and counts the ones it keeps by reason (#71,
+# #524), and when it deleted any, this script's last line names the file of the commands that
+# restore them (#115).
 # Just before the cleanup it names the repository's main checkout, says whether it is behind the
 # merge, and prints the fast-forward to run there when docs/agents/landing-work.md allows one; it
 # never moves that checkout itself (#281). Its companion, tools/prune_branches_tests.py, runs this
@@ -83,8 +123,8 @@ while [ $# -gt 0 ]; do
       # `--body-file <(...)` hands over, both of which gh reads (#72). -p follows the path to what
       # it names, so a /dev/fd/N whose descriptor this process did not inherit names nothing and is
       # refused here, the way a missing path is. The descriptor stays open until the body is read
-      # below, because nothing in this script closes one it inherited; tools/land_tests.py reads
-      # the body through one.
+      # after this loop, because nothing in this script closes one it inherited; tools/land_tests.py
+      # reads the body through one.
       [ -f "$2" ] || [ -p "$2" ] || die "--body-file: $2 is not a file or a pipe."
       [ -r "$2" ] || die "--body-file: $2 is not readable."
       # Made absolute here, because the script changes to the repository root before the merge and
@@ -115,6 +155,21 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$pr" ] || die "which pull request? tools/land.sh <pr-number>"
+
+# The body is required, and read here, once, before anything is asked of gh (#552, R3 of #98).
+# Until then a missing --body-file, an empty file or an empty pipe merged with the trailer alone,
+# although docs/agents/landing-work.md -> "Land it" says the body says what was verified and how.
+# Read once because a pipe cannot be read twice, and the text is kept for the merge. $(<) drops the
+# file's trailing newlines; the blank test is the one --unreviewed's reason gets, so a body of
+# newlines, spaces and tabs is as empty as no file.
+[ -n "$body_file" ] \
+  || die "--body-file is required: the merge body says what was verified and how (docs/agents/landing-work.md -> Land it). Pass --body-file <path>."
+text="$(< "$body_file")"
+case "$text" in
+  *[![:space:]]*) ;;
+  *) die "--body-file: $body_file is empty or only whitespace, and the merge body says what was verified and how (docs/agents/landing-work.md -> Land it)." ;;
+esac
+
 command -v gh >/dev/null 2>&1 || die "gh is not on PATH. tools/preflight.sh says what is missing."
 command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH, so the roadmap cannot be derived."
 
@@ -152,28 +207,164 @@ head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
 full_sha='^[0123456789abcdef]{40}$'
 [[ $head =~ $full_sha ]] || die "gh reported '$head' as the head of #$pr, which is not a full commit sha."
 
+# A `Closes #n` line in the description closes ticket n when this merges into the default branch:
+# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue.
+# So each n has to be a ticket the branch did work for (#566). On 2026-10-29 #536's branch was
+# rebuilt without e2fc266, the one commit naming #352, and its description still closed #352, whose
+# work change request #551 still carried; only a sub-agent's reading caught it. Every n a Closes
+# line names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
+# trailer) of a non-merge commit between the base and the pinned head. `issue-n` is how an
+# overnight lane's task commit names a ticket with no plan row, `Task issue-<n>: ...` in
+# .claude/workflows/overnight.js, where only the lane's merge carries `Ticket: #n`; without it the
+# check refused 13 of the 23 Closes lines of #529, on the overnight route (decided on #566:
+# https://github.com/adammedford/spa-platform/issues/566#issuecomment-6511060750). A ticket whose
+# body has a `**Plan row:** X` line gets task id X, so its lane commit, `Task X: ...`, names it
+# only where the lane wrote #n in the body; one that did not is refused, failing closed, and the
+# refusal's remedy applies.
+# A merge is left out because its message names what it joins, which a rebuild can keep after the
+# commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
+# not a description, which can change after it. .claude/workflows/review-queue.js applies this same
+# rule before its review spends any agent on the head (#688), so a change to it here changes that copy.
+#
+# A Closes line is read in the form docs/agents/landing-work.md -> "Land it" gives it and
+# .claude/workflows/morning.js reads, one `Closes #n` to a line, with the keyword in any case, as
+# GitHub reads it, and whatever follows the number, such as the carriage return that ends each line
+# of a description edited on the web. n is every digit after the `#`. `#n` and `issue-n` are
+# matched in a message only where no digit follows, so #35 is not found inside #352 nor issue-35
+# inside issue-352, and `issue-n` only where no letter, digit or underscore comes before it. The
+# head's commits are read only when there is a Closes line, and fetched by sha when this clone
+# lacks them, the way actions/checkout fetches a pull request's commit from GitHub:
+# https://github.com/actions/checkout.
+description="$(gh pr view "$pr" --json body --jq .body)"
+closes_line='^[[:space:]]*[Cc][Ll][Oo][Ss][Ee][Ss][[:space:]]+#([0-9]+)'
+closes=""
+while IFS= read -r line; do
+  if [[ $line =~ $closes_line ]]; then closes="$closes #${BASH_REMATCH[1]}"; fi
+done <<< "$description"
+if [ -n "$closes" ]; then
+  { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
+    && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
+    || die "could not read the commits of #$pr up to $head, so the tickets its Closes lines name cannot be checked."
+  unnamed=""
+  for ticket in $closes; do
+    named="($ticket|(^|[^[:alnum:]_])issue-${ticket#\#})([^0-9]|\$)"
+    [[ $messages =~ $named ]] || unnamed="$unnamed $ticket"
+  done
+  [ -z "$unnamed" ] \
+    || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
+fi
+
+# The body is $text, read once after the argument loop (#552) and reused from here on, because
+# it may be a named pipe or an inherited descriptor, which gives its bytes once (#72). $(<)
+# dropped the file's trailing newlines, which is what the trailer's gap below rests on.
+
+# Each ticket a Closes line names, against the decision it may owe a citation (#530). The reader
+# beside this script judges one issue a run, with its own gh calls, and answers on its status: 0
+# and the decision comment's URL on standard output, which the body has to carry; 1 when nothing is
+# owed; 2 when it could not read the issue. Its output is held and shown only when it could not
+# read, so a landing that closes twenty tickets owing nothing stays quiet, and gh's own words reach
+# the reader of a refusal. A status 0 that printed no URL is read as unreadable, not as nothing
+# owed: a check fails closed (CODING_STANDARDS.md). The URL is matched as the bytes GitHub keeps
+# the comment at, anywhere in the body. It runs with --unreviewed too, as the check above does,
+# and before the review records are read, so a body that owes a citation is refused before any
+# gh call that reads the records.
+if [ -n "$closes" ]; then
+  echo "--- reading the decisions of the tickets #$pr closes"
+  uncited=""
+  for ticket in $closes; do
+    status=0
+    said="$(python3 -I "$here/decision_citation.py" --issue "${ticket#\#}" 2>&1)" || status=$?
+    case "$status:$said" in
+      0:?*) case "$text" in *"$said"*) ;; *) uncited="$uncited $ticket ($said)" ;; esac ;;
+      1:*) ;;
+      *)
+        [ -z "$said" ] || printf '%s\n' "$said" >&2
+        die "could not read the decision of $ticket (the reader exited $status), so it does not merge; the reader says why above." ;;
+    esac
+  done
+  [ -z "$uncited" ] \
+    || die "the merge body cites no decision for$uncited, so it does not merge. Each was decided ADR: no, so the body states the why and cites the decision comment's URL (docs/agents/tracker-policy.md -> Landing)."
+fi
+
 if [ -n "$unreviewed" ]; then
   trailer="Unreviewed: $unreviewed"
 else
-  # Both listings whole: --paginate follows every page and --slurp wraps the pages in one array, so
-  # a record on page two is read (`gh api --help`). {owner} and {repo} are filled from this
-  # repository's remote, as for `gh pr view`. The reader prints the clearing record's URL, or says
-  # why nothing clears the head, on standard error above the line below.
+  # The reader's --pr form lists the pull request's comments and reviews itself, every page of each
+  # (#488), and judges the head passed with --head: the one this script pinned above, not whatever
+  # a second read would report. It prints the clearing record's URL on its first line and, with
+  # --follow-ups, the Finding of each row of that record's `## Follow-ups` table on the lines after
+  # it (#521); or it says on standard error, above the line below, why nothing clears the head
+  # (status 1) or why it could not read the records (status 2: a gh call failed, or what came back
+  # was not GitHub's shape).
   echo "--- reading the review records of #$pr at $head"
-  comments="$(gh api "repos/{owner}/{repo}/issues/$pr/comments" --paginate --slurp)"
-  reviews="$(gh api "repos/{owner}/{repo}/pulls/$pr/reviews" --paginate --slurp)"
-  record="$(printf '{"comments": %s, "reviews": %s}\n' "$comments" "$reviews" \
-    | python3 -I "$here/review_record.py" "$head")" \
-    || die "no review record clears #$pr at $head, so it does not merge. An agent session that wrote none of its commits reviews it and posts the record; docs/agents/review.md -> Landing or holding."
+  status=0
+  read_out="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head" --follow-ups)" || status=$?
+  case "$status" in
+    0) ;;
+    1) die "no review record clears #$pr at $head, so it does not merge. An agent session that wrote none of its commits reviews it and posts the record; docs/agents/review.md -> Landing or holding." ;;
+    *) die "could not read the review records of #$pr, so it does not merge; the reader says why above." ;;
+  esac
+  record="${read_out%%"$newline"*}"
+  follow_ups=""
+  [ "$read_out" = "$record" ] || follow_ups="${read_out#*"$newline"}"
   trailer="Reviewed: $head $record"
 fi
 
-# The trailer is the body's last line, after one blank line. $(<) drops the file's trailing newlines,
-# so the gap is always one blank line however the file ended.
-body="$trailer"
-if [ -n "$body_file" ]; then
-  text="$(< "$body_file")"
-  [ -z "$text" ] || body="$(printf '%s\n\n%s' "$text" "$trailer")"
+# The trailer is the body's last line, after one blank line. The text was read once after the
+# argument loop, never blank (#552), with its trailing newlines dropped, so the gap is always
+# one blank line however the file ended, and the Outstanding: check below reads it from $text
+# (#521).
+body="$(printf '%s\n\n%s' "$text" "$trailer")"
+
+# A carried finding owes the merge body an `Outstanding:` line (#521): docs/agents/review.md ->
+# "Landing or holding" puts it there, and docs/agents/landing-work.md -> "Land it" asks for the
+# line whenever a row lands unfinished. The line is one beginning `Outstanding:`, after any
+# indentation, in the body passed with --body-file; `Outstanding test ids:` is the other line that
+# section asks for and not this one, and `Outstanding: none` is a line, whose truth is the human's.
+# The record landed #507 on 2026-10-28 with one follow-up, and the body named it under a heading of
+# its own that no reader looks for. Each row is named so the line can be written from the refusal.
+if [ -n "${follow_ups:-}" ]; then
+  has_outstanding=""
+  outstanding_line='^[[:space:]]*Outstanding:'
+  while IFS= read -r line; do
+    if [[ $line =~ $outstanding_line ]]; then has_outstanding=1; break; fi
+  done <<< "$text"
+  if [ -z "$has_outstanding" ]; then
+    rows=""
+    while IFS= read -r line; do
+      [ -z "$line" ] || rows="$rows; $line"
+    done <<< "$follow_ups"
+    die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
+  fi
+
+  # A carried row also owes an issue, and the morning files a record's rows from open pull requests
+  # only (#514), so a row still unfiled when this merges is nobody's to file unless somebody is
+  # told (#573): on 2026-10-29 #568's two rows reached #569 and #570 only because the session read
+  # the record before it merged. So each row no issue answers is named here, and the merge goes on;
+  # this warns and refuses nothing. A row is answered as .claude/workflows/morning.js's filedAs
+  # answers it: an issue whose title is the finding, the two compared lowercased with each run of
+  # whitespace one space and none at the ends, and whose body has a `**Raised by:**` line naming
+  # #<pr> with no digit after it. The issues are the listing the morning takes, every state, and
+  # the --jq keeps the ones whose Raised-by line names this pull request and prints their titles;
+  # the match on the title is made here, with awk's tolower and its field splitting, which
+  # collapses blanks and trims them. A listing gh cannot make is said, and the rows are not
+  # checked: a warning that cannot be computed is not a reason to hold a merge a record clears.
+  filed_jq='.[] | select(any(.body | split("\n")[]; startswith("**Raised by:**") and test("#'"$pr"'([^0-9]|$)"))) | .title'
+  if filed="$(gh issue list --state all --limit 500 --search "Raised by #$pr in:body" --json number,title,body --jq "$filed_jq")"; then
+    filed_titles="$(printf '%s\n' "$filed" | awk '{ $0 = tolower($0); $1 = $1; print }')"
+    while IFS= read -r finding; do
+      [ -n "$finding" ] || continue
+      wanted="$(printf '%s\n' "$finding" | awk '{ $0 = tolower($0); $1 = $1; print }')"
+      answered=""
+      while IFS= read -r title; do
+        if [ "$title" = "$wanted" ]; then answered=1; break; fi
+      done <<< "$filed_titles"
+      [ -n "$answered" ] \
+        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514); file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" >&2
+    done <<< "$follow_ups"
+  else
+    printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2
+  fi
 fi
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
@@ -213,9 +404,9 @@ python3 -I tools/roadmap.py
 # finishes its integration branch: docs/agents/landing-work.md -> "Land it" says each is deleted
 # then, and this is where (#71). The cleanup beside this script reads which rows the roadmap now
 # calls landed, so it runs once the merge is fetched, from this checkout, which sits at origin/main.
-# It deletes only what its rules allow and lists every branch it keeps and why. A cleanup that stops
-# leaves finished branches behind, not a wrong merge, so it warns rather than failing a landing that
-# has already happened.
+# It deletes only what its rules allow and counts the branches it keeps under each reason, which
+# its --verbose lists one by one (#524). A cleanup that stops leaves finished branches behind, not a
+# wrong merge, so it warns rather than failing a landing that has already happened.
 #
 # A cleanup that deleted anything ends on a line naming the file it wrote the restore lines to, in
 # the words below, which tools/prune_branches.py keeps as RESTORE_FILE_LINE; the two change
@@ -294,26 +485,75 @@ name_main_checkout() {
 }
 
 restore_file_line="prune_branches: these commands are also in "
+pruned=0
+restore_file=""
 prune_finished() {
   [ "$base" = main ] || return 0
   name_main_checkout
   echo "--- deleting the branches this landing finished"
-  pruned=0
   listing="$(python3 -I "$here/prune_branches.py" --delete)" || pruned=$?
   [ -z "$listing" ] || printf '%s\n' "$listing"
-  [ "$pruned" -eq 0 ] \
-    || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
   last="${listing##*"$newline"}"
   case "$last" in
-    "$restore_file_line"?*)
-      restore_file="${last#"$restore_file_line"}"
-      echo "land: the commands that restore what the cleanup deleted are in $restore_file" ;;
+    "$restore_file_line"?*) restore_file="${last#"$restore_file_line"}" ;;
   esac
+}
+
+# The worktree the landing ran in is disposable once the landing has happened (#490): eighteen were
+# left behind by earlier landings before this. It is removed only when it is a linked worktree, on
+# a detached HEAD, with nothing uncommitted and no untracked file -- the one `git worktree add
+# --detach` made for this landing. A worktree on a branch is somebody's work, and an untracked file
+# is something nobody has looked at, so either is left and the command that removes it is printed.
+# The repository's own working tree is never removed, and git cannot remove it anyway. Ignored
+# files do not count, and `git worktree remove` deletes them with the tree without --force:
+# https://git-scm.com/docs/git-worktree#_commands. It runs after the cleanup, which needs a checkout
+# at origin/main to read the roadmap from, and nothing here fails the landing, which has happened.
+release_worktree() {
+  local git_dir common at reason changes
+  git_dir="$(CDPATH= cd -- "$(git rev-parse --git-dir)" && pwd -P)" \
+    && common="$(CDPATH= cd -- "$(git rev-parse --git-common-dir)" && pwd -P)" \
+    || { echo "land: git could not name this worktree's git directories, so $root is left as it is."; return 0; }
+  [ "$git_dir" != "$common" ] || return 0
+  # The printed command names the main checkout when the common directory is its .git.
+  at="$common"
+  case "$at" in */.git) at="${at%/.git}" ;; esac
+  if git symbolic-ref -q HEAD >/dev/null; then
+    reason="it is on the branch $(git symbolic-ref --short HEAD)"
+  elif ! changes="$(git status --porcelain)"; then
+    reason="git could not read its status"
+  elif [ -n "$changes" ]; then
+    reason="it has uncommitted or untracked files"
+  else
+    # Out of the tree before removing it, so nothing after this runs in a directory that is gone.
+    # A cd that fails is a reason to keep the tree, not an exit under set -e after the landing.
+    if cd -- "$common" && git worktree remove -- "$root"; then
+      echo "land: removed the worktree this landing ran in, $root, which was detached and clean."
+      # The tree is gone whatever the prune says, so a failed prune is named, not reported as a
+      # tree that stays.
+      git worktree prune \
+        || echo "land: git worktree prune failed after the removal; run git -C $(printf %q "$at") worktree prune."
+      return 0
+    fi
+    reason="git refused to remove it"
+  fi
+  echo "land: the worktree this landing ran in, $root, stays: $reason. To remove it, run:"
+  printf '      git -C %q worktree remove %q\n' "$at" "$root"
+}
+
+# The landing's last act and its last lines: the branch cleanup, then the worktree, then what the
+# cleanup left to say, so the line naming the restore file stays last (#115).
+finish_landing() {
+  prune_finished
+  release_worktree
+  [ "$pruned" -eq 0 ] \
+    || printf 'land: the branch cleanup stopped, so finished branches may remain. Run\n      tools/prune_branches.py --delete from a checkout at origin/main.\n' >&2
+  [ -z "$restore_file" ] \
+    || echo "land: the commands that restore what the cleanup deleted are in $restore_file"
 }
 
 if git diff --quiet -- README.md docs/roadmap.md; then
   echo "land: the generated blocks did not move, so there is nothing to refresh."
-  prune_finished
+  finish_landing
   exit 0
 fi
 
@@ -329,4 +569,4 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 echo "--- pushing the refresh"
 git push origin "HEAD:$base"
 echo "land: #$pr is in and the roadmap says so."
-prune_finished
+finish_landing

@@ -39,7 +39,7 @@ internal sealed class RecordingSessionStore(ISessionStore inner) : ISessionStore
     /// <summary>
     /// Asked as each removal arrives, when a test sets it, and its answers kept in
     /// <see cref="GatedRemovals"/>: a test sets it to whether the session module has a gate held, which
-    /// tells a removal made under a lease from the cookie handler's ungated one.
+    /// tells a removal made under a turn from the cookie handler's ungated one.
     /// </summary>
     public Func<bool>? GateHeld { get; set; }
 

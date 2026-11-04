@@ -99,12 +99,17 @@ resource "aws_cognito_user_pool_client" "app" {
     refresh_token = "minutes"
   }
 
-  # Each refresh returns a new refresh token; the one it replaces still works for 10 seconds, so
-  # two concurrent refreshes do not end a session (G0 item 2 asks what happens inside the window).
+  # Each refresh returns a new refresh token, and the one it replaces still works for 60 seconds,
+  # the most Cognito allows (#332 D1, which amends ADR-0017's rejected alternative "raise Cognito's
+  # grace window instead of locking": this raises it with locking). The window buys recovery: a
+  # successor can recover a refresh whose holder died after rotation and before its write, while a
+  # retry reaches the provider inside the window (lease expiry < t < rotation + grace). It costs
+  # width: the longer window widens the two-grant hazard ADR-0017 found (C-2.17), which the lease
+  # and its check-before-call narrow.
   # https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html
   refresh_token_rotation {
     feature                    = "ENABLED"
-    retry_grace_period_seconds = 10
+    retry_grace_period_seconds = 60
   }
 
   # Logout revokes the refresh token (docs/plan/02-contracts.md -> POST /bff/logout).
@@ -148,8 +153,13 @@ resource "aws_ssm_parameter" "client_secret" {
   value       = aws_cognito_user_pool_client.app[each.key].client_secret
 
   # A rotation writes a new version by hand (docs/plan/05-infrastructure-and-cost.md -> Rotating
-  # a client secret); the next apply must not put the old secret back.
+  # a client secret); the next apply must not put the old secret back. That also keeps a replaced
+  # client's new secret out of an existing parameter, so the parameter is re-created with its
+  # client (#554): the trigger is the client's id, which changes only on replacement, where the
+  # whole resource would fire on an in-place change too (a callback URL) and reset the parameter's
+  # versions under a clientSecretRef that names one.
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes       = [value]
+    replace_triggered_by = [aws_cognito_user_pool_client.app[each.key].id]
   }
 }

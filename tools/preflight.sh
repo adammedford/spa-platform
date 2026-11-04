@@ -55,7 +55,24 @@ first_version() { printf '%s\n' "$1" | sed -n 's/[^0-9]*\([0-9][0-9]*\(\.[0-9][0
 # ends each command's options, so a path starting with a hyphen is a path: POSIX utility syntax
 # guideline 10, https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02.
 # The same fix as tools/land.sh's body path (#66); tools/preflight_tests.py has both cases (#96).
-tools_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+#
+# Started through a symbolic link, `$0` is the link, and the directory beside it holds none of these
+# files: the floor's helper failed to source and the Terraform rows read MISSING (#509). So each
+# link is followed to what it names, a relative target read from the link's own directory as the
+# kernel reads it, and `cd -P` resolves any linked directory on the way, so `..` is the repository
+# the script sits in. A loop over plain `readlink` rather than `readlink -f` or `realpath`, which
+# older macOS releases do not ship. bash itself opens `$0` before any of this runs, so a link that
+# loops never gets here.
+script="$0"
+while [ -L "$script" ]; do
+  link_dir="$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd)"
+  script="$(readlink -- "$script")"
+  case "$script" in
+    /*) ;;
+    *) script="$link_dir/$script" ;;
+  esac
+done
+tools_dir="$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd)"
 
 # The Terraform floor's version and where it is installed come from the one file and the one
 # helper that tools/check.sh and CI read them through (#69), so this cannot name a different floor
@@ -254,6 +271,12 @@ if [ "$aws_ok" -eq 1 ]; then
     missing "AWS project" "${project_env} is absent, so nothing says which project is intended"
   elif [ -z "$want_profile" ]; then
     missing "AWS project" "tools/aws-project.env names no AWS_PROFILE, so nothing says which project is intended"
+  elif [ -z "$want_region" ]; then
+    # Fails closed, as the profile does (#508): a file that names no Region gives the two Region
+    # comparisons below nothing to compare, and the ok row would then claim a Region the file never
+    # named. An empty `AWS_REGION=` line, a commented one and a form the parse does not read, such
+    # as `readonly AWS_REGION=...`, all arrive here.
+    missing "AWS project" "tools/aws-project.env names no AWS_REGION, so nothing says which Region is intended"
   elif [ "$using" != "$want_profile" ]; then
     # The profile, not the account id: change request 1.5 kept account identifiers out of the
     # tracked tree, and on a correctly configured workstation the profile resolves to the account.
@@ -265,9 +288,9 @@ if [ "$aws_ok" -eq 1 ]; then
     # presence is the whole condition.
     #   https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html
     missing "AWS project" "profile '${using}' is named, but AWS_ACCESS_KEY_ID in the environment outranks it. unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN"
-  elif [ -n "$want_region" ] && [ "$eff_region" != "$want_region" ]; then
+  elif [ "$eff_region" != "$want_region" ]; then
     missing "AWS Region" "this shell resolves to '${eff_region:-unset}', expected '${want_region}'. set -a; . tools/aws-project.env; set +a"
-  elif [ -n "$want_region" ] && [ "$cfg_region" != "$want_region" ]; then
+  elif [ "$cfg_region" != "$want_region" ]; then
     missing "AWS Region" "profile '${using}' is configured for '${cfg_region:-unset}', expected '${want_region}', so a shell that has not sourced tools/aws-project.env would use it. aws configure set region ${want_region} --profile ${using}"
   else
     ok "AWS project" "profile '${using}', region ${eff_region}, as tools/aws-project.env names"

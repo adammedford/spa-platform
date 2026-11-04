@@ -39,7 +39,7 @@ output "backend_blocks" {
     -backend-config and never written into the block, because the bucket's name
     carries the account id and the Region is the project's, which
     tools/aws-project.env names (change requests 1.5 and 1.1). The native lock file
-    (use_lockfile) replaces a DynamoDB table, so no table exists.
+    (use_lockfile) replaces a DynamoDB lock table, so no lock table exists.
   EOT
   value = {
     for root, key in {

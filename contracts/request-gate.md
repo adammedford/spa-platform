@@ -47,20 +47,41 @@ constants so that no owner keeps a copy of its own: A-03 stops one workstream re
 and four workstreams raise these ids. A test in `tests/Platform.Abstractions.Tests` reads the
 table below and fails if the two drift. ADR-0015 decided it.
 
-| Rule id | Fires when |
-| --- | --- |
-| `host.unknown` | The request authority matches no registry `host` |
-| `path.invalid` | The path failed normalisation |
-| `path.reserved` | A reserved path that is switched off |
-| `gate.cookie-name` | A cookie name imitates a platform cookie, in another letter case or sent twice |
-| `gate.fetch-site` | `Sec-Fetch-Site` is absent, `same-site` or `cross-site` where `same-origin` is required |
-| `gate.origin` | `Origin` is present and is not the app origin |
-| `gate.method` | The path does not accept the method |
-| `gate.navigation` | `/bff/login` without `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` |
-| `csrf.token` | The antiforgery token was missing or wrong |
-| `auth.callback` | Any refused login callback |
-| `auth.session` | A cookie that resolves to no session for this app |
-| `api.unknown` | The app lists no upstream under that name |
+| Rule id | Fires when | `code` |
+| --- | --- | --- |
+| `host.unknown` | The request authority matches no registry `host` | `not_found` |
+| `path.invalid` | The path failed normalisation | `invalid_request` |
+| `path.reserved` | A reserved path that is switched off | `not_found` |
+| `gate.cookie-name` | A cookie name imitates a platform cookie, in another letter case or sent twice | `invalid_request` |
+| `gate.fetch-site` | `Sec-Fetch-Site` is absent, `same-site` or `cross-site` where `same-origin` is required | `origin_rejected` |
+| `gate.origin` | `Origin` is present and is not the app origin | `origin_rejected` |
+| `gate.method` | The path does not accept the method | `method_not_allowed` |
+| `gate.navigation` | `/bff/login` without `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` | `origin_rejected` |
+| `csrf.token` | The antiforgery token was missing or wrong | `csrf_failed` |
+| `auth.callback` | Any refused login callback | — |
+| `auth.session` | A cookie that resolves to no session for this app | `unauthenticated` |
+| `api.unknown` | The app lists no upstream under that name | `unknown_api` |
+| `auth.store` | A session store operation failed or ran out `StoreDeadline` (the `continuity` spec's F17), or a refresh ended at the store's bound, 2 × TTL, with the session kept (its D2, a distinct cause); not the session remove `POST /bff/logout` makes, which answers the usual logout (its F11) | `session_store_unavailable` |
 
-Nothing writes `auth.callback` or `auth.session` yet; they wait on workstream 3. A refusal by an
-upstream API is the API's to log.
+`auth.callback` ends on no problem body: the OpenID Connect handler's remote-failure event writes
+the static failure page `contracts/http-contract.md` → Errors describes, under that id.
+`auth.session` is noted by workstream 3 wherever a cookie resolves to no session for this app,
+except at `/bff/login` and `/bff/logout`, which do what they were asked over a dead cookie and end
+in no rejection; elsewhere another writer then ends the response: the `/bff/session` endpoint
+answers `401 unauthenticated`; the access-token step behind `MapPlatformProxy` answers
+`401 unauthenticated`; and `UsePlatformShellGate`'s challenge answers a fetch with
+`401 unauthenticated` and a navigation with a redirect to the identity provider, which has no
+problem body. A refusal by an upstream API is the API's to log.
+
+`auth.store` is ended or noted by workstream 3 wherever a session store operation fails or runs
+out `StoreDeadline`, and wherever a refresh ends at the store's bound, and no cookie is cleared.
+A failure inside `UseAuthentication` (the cookie handler's read on any path, and the login
+callback's create) is ended by workstream 3's schemes and shell gate: the callback's create by the
+app's OpenID Connect scheme, with the problem body, not the static failure page; any other by
+`UsePlatformShellGate`, on every path, `/bff` and `/api` included, before the antiforgery check
+sees the request. A failure after that is ended by the writer that meets it: the `/bff/session`
+endpoint, `GET /bff/login`'s discard and `POST /bff/logout`'s read before the remove each answer
+`503 session_store_unavailable`, and behind `MapPlatformProxy` the access-token source notes the
+rule and returns `StoreUnavailable`, which the access-token step answers with that body. The
+session remove `POST /bff/logout` makes is the exception: unknown at `StoreDeadline`, it answers
+the usual logout (the `continuity` spec's F11).

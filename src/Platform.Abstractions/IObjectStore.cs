@@ -7,10 +7,17 @@ namespace Platform.Abstractions;
 public interface IObjectStore
 {
     /// <summary>
-    /// Reads a key. Null means the key does not exist. When <paramref name="ifNoneMatch"/> is the
-    /// object's current ETag the result is <see cref="StoredObject.NotModified"/> with no body,
-    /// which is how the registry source polls without paying for a body it already has.
+    /// Reads a key. Null means the store confirmed the key does not exist. When
+    /// <paramref name="ifNoneMatch"/> is the object's current ETag the result is
+    /// <see cref="StoredObject.NotModified"/> with no body, which is how the registry source polls
+    /// without paying for a body it already has.
     /// </summary>
+    /// <exception cref="ObjectReadRefusedException">
+    /// The store refused the read, which is ambiguous: a missing key under a role without listing,
+    /// or an existing key the role may not read. The caller decides what that means for its key, and
+    /// never reads it as null. Change request contracts/changes/issue-381-object-read-refusal.md,
+    /// item 1.
+    /// </exception>
     Task<StoredObject?> GetAsync(string key, string? ifNoneMatch, CancellationToken ct);
 
     /// <summary>

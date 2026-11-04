@@ -1,7 +1,11 @@
 # ADR-0021: A pre-accepted answer is provisional; a scripted session commits only to confirmed answers, and the human lands
 
 - **Status:** Accepted. **Amended 2026-10-18 by ADR-0023:** decision 1 governs what a session
-  applies, not the code a lane builds; the other decisions are unchanged.
+  applies, not the code a lane builds; the other decisions are unchanged. **Amended 2026-10-28 by
+  [ADR-0032](0032-change-requests-are-issues-and-each-decision-has-one-layer.md):**
+  decision 4's list loses a change request's status line, and a change request, once decided, is
+  committed as an integrator ticket on its decision comment; a change request may be filed from a
+  pre-accepted answer, as it asks and decides nothing; the other decisions are unchanged.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. The grill of #78 (the morning workflow spec), questions Q1, Q2, Q7

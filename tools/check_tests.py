@@ -46,6 +46,7 @@ Run: python3 -I tools/check_tests.py
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import os
 import pathlib
@@ -144,9 +145,10 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
-# the file modes, and so a name to the list of what ran; #291 added the part-row merges.
+# the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
+# the full-landing merges; #606 added the analysis guard.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the roadmap, the artifacts, the file modes")
+            "the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -154,10 +156,16 @@ HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
 # The steering check is handed the base A-05 judges against, for its authority rule's range
 # (#102), and is run without one when there is no base, so that it reads every commit instead.
 STEERING = ["python3", "-I", ".github/steering.py"]
+# The full-landing merges (#296) are judged over the same range, after the part-row merges, which
+# run in the script itself, and before the roadmap.
+LANDING_SUBJECTS = ["python3", "-I", "tools/landing_subjects.py", "--base", "origin/main"]
 PYTHON_CHECKS = [
     ["python3", "-I", ".github/path-ownership.py", "origin/main", "HEAD"],
     STEERING + ["--base", "origin/main"],
+    LANDING_SUBJECTS,
     ["python3", "-I", "tools/roadmap.py", "--check"],
+    # The analysis guard (#606) reads the tree, not the diff, so it runs with or without a base.
+    ["python3", "-I", "tools/analysis_guard.py"],
 ]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
@@ -211,11 +219,23 @@ def setUpModule():
     print(f"check_tests: tools/check.sh runs under {BASH} {bash_full_version()}", file=sys.stderr)
 
 
+# The elapsed lines (#629): one per executed step and per companion, and the total just before the
+# verdict, all on standard output. ElapsedTests asserts them; every other case reads standard
+# output without them, so the lines the hook printed before #68, typed into HookTests, stay as typed.
+ELAPSED = re.compile(r"^(check|pre-push): elapsed: (.+): (\d+)s$")
+
+
 class Result:
     def __init__(self, completed: subprocess.CompletedProcess):
         self.status = completed.returncode
-        self.stdout = completed.stdout.decode("utf-8", "surrogateescape")
-        self.stderr = completed.stderr.decode("utf-8", "surrogateescape")
+        self.raw_stdout = completed.stdout.decode("utf-8", "surrogateescape")
+        self.stdout = "".join(line for line in self.raw_stdout.splitlines(keepends=True)
+                              if not ELAPSED.match(line.rstrip("\n")))
+        self.stderr = (completed.stderr or b"").decode("utf-8", "surrogateescape")
+
+    def elapsed(self) -> list[tuple[str, str, int]]:
+        """Each elapsed line of standard output, in order, as (prefix, step, seconds)."""
+        return [(m.group(1), m.group(2), int(m.group(3))) for m in map(ELAPSED.match, self.raw_stdout.splitlines()) if m]
 
     def last_line(self, stream: str) -> str:
         lines = stream.splitlines()
@@ -329,14 +349,17 @@ class Case:
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
 
     def run(self, *args: str, hook: bool = False, through_shebang: bool = False,
-            cwd: pathlib.Path | None = None, umask: int = 0o022) -> Result:
+            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False) -> Result:
         # The file-mode mask is the child's own, set between fork and exec, so the cases running
         # at the same time on other threads keep theirs; os.umask would change the whole process's.
         # 022 by default, what a checkout and CI have, whatever mask runs this companion.
+        # merged sends standard error to standard output, as a lane's `> log 2>&1` does, so a case
+        # reads the two streams in the order a log holds them.
         target = HOOK if hook else SCRIPT
         command = [str(target), *args] if through_shebang else [BASH, str(target), *args]
         completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(), umask=umask,
-                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT if merged else subprocess.PIPE, timeout=60)
         return Result(completed)
 
     def calls(self) -> list[list[str]]:
@@ -408,6 +431,16 @@ class HookTests(CheckTestCase):
                           "pre-push: the steering check failed.", HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS[:2], case.calls())
 
+    def test_an_analysis_guard_that_fails(self):
+        # #606: the guard runs after the roadmap and before the artifacts, and its failure stops the hook.
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/analysis_guard.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines(["python3 double failed: -I tools/analysis_guard.py",
+                          "pre-push: the analyzer configs or a suppression break ADR-0035's rules, or were not judged.",
+                          HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+
     def test_an_email_that_is_not_the_noreply_address(self):
         case = Case(self, change="docs/notes.md", email="someone@example.com")
         result = case.run(hook=True)
@@ -424,7 +457,9 @@ class HookTests(CheckTestCase):
         self.assertLines([
             "pre-push: A-05 not checked: python3 is not on PATH.",
             "pre-push: steering not checked: python3 is not on PATH.",
+            "pre-push: the full-landing merges not checked: python3 is not on PATH.",
             "pre-push: the roadmap not checked: python3 is not on PATH.",
+            "pre-push: the analysis guard not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)
@@ -436,11 +471,13 @@ class HookTests(CheckTestCase):
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
         self.assertLines(["pre-push: A-05 not checked: no main to diff against.",
-                          "pre-push: part-row merges not checked: no main to diff against."], result.stderr)
+                          "pre-push: part-row merges not checked: no main to diff against.",
+                          "pre-push: full-landing merges not checked: no main to diff against."], result.stderr)
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
-        # No base, so the steering check is handed none and reads every commit HEAD reaches.
-        self.assertEqual([STEERING] + PYTHON_CHECKS[2:] + BUILD + terraform_checks(), case.calls())
+        # No base, so the steering check is handed none and reads every commit HEAD reaches, and the
+        # full-landing merges, like the part-row merges, are not judged.
+        self.assertEqual([STEERING] + PYTHON_CHECKS[3:] + BUILD + terraform_checks(), case.calls())
 
     def test_duplicated_build_artifacts(self):
         case = Case(self, change="docs/notes.md")
@@ -580,6 +617,23 @@ class FullModeTests(CheckTestCase):
                                       "the gateway image.")
         self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         self.assertIn("image double ran: ", result.stdout)
+
+    def test_skip_tests_runs_all_but_the_suite_and_names_the_skip(self):
+        # #375: the overnight integrate step's re-run after a gate red on projects the change cannot
+        # reach. Everything after the suite still runs, and the verdict says the suite did not.
+        case = Case(self, change="src/App/App.cs")
+        result = self.full(case, "--skip-tests")
+        self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, not the tests (--skip-tests), "
+                                      "the smoke test, the gateway image.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE + IMAGE, case.calls())
+        self.assertIn("check: the tests skipped: --skip-tests says they were run another way (#375).",
+                      result.stdout)
+
+    def test_skip_tests_still_fails_on_what_follows_the_suite(self):
+        case = Case(self, change="src/App/App.cs", fails_on={"smoke": "Debug"})
+        result = self.full(case, "--skip-tests")
+        self.assertVerdict(result, 1, "check: fail: the smoke test failed.")
+        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE, case.calls())
 
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
@@ -731,6 +785,7 @@ class FullModeTests(CheckTestCase):
             (("--full", "--port"), "--port needs a value"),
             (("--full", "--port", "eighty"), "--port takes a number, not eighty"),
             (("--port", PORT), "--port is for --full"),
+            (("--skip-tests",), "--skip-tests is for --full"),
             (("--base",), "--base needs a value"),
             (("--fast",), "unknown argument --fast"),
         ):
@@ -913,6 +968,46 @@ class PartRowMergeTests(CheckTestCase):
         self.assertEqual(1, result.status, result.stdout)
         self.assertLines([part_row_missing("pre-push", sha, subject, "Outstanding:"),
                           f"pre-push: {PART_ROW_FAIL}", HOOK_FIX], result.stderr)
+
+
+LANDING_FAIL = ("a full-landing merge names a ticket with an open box or a plan row with an open part ticket, "
+                "or the full-landing merges were not judged.")
+
+
+class FullLandingMergeTests(CheckTestCase):
+    """#296: tools/landing_subjects.py is run over the range the part-row merges are judged on, in
+    both modes, and its failure fails the check. What it judges is its own companion's to prove,
+    tools/landing_subjects_tests.py; here python3 is a double, as for every Python check."""
+
+    def test_the_full_check_runs_it_over_the_base_the_caller_names(self):
+        case = Case(self, change="docs/notes.md")
+        fork = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=case.work, env=case.env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+        result = case.run("--full", "--port", PORT, "--base", fork)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertIn(["python3", "-I", "tools/landing_subjects.py", "--base", fork], case.calls())
+
+    def test_a_held_merge_fails_the_full_check_before_the_roadmap(self):
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main",
+                          f"check: fail: {LANDING_FAIL}"], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:3], case.calls())
+
+    def test_the_hook_holds_it_too(self):
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main",
+                          f"pre-push: {LANDING_FAIL}", HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:3], case.calls())
+
+    def test_the_header_says_what_it_catches(self):
+        header = "\n".join(line for line in SCRIPT.read_text().splitlines() if line.startswith("#"))
+        self.assertIn("tools/landing_subjects.py", header)
+        self.assertIn('"Merge task"', header)
+        self.assertIn("open `- [ ]` box", header)
 
 
 class FloorTests(CheckTestCase):
@@ -1103,6 +1198,15 @@ LIBRARIES = {
 }
 
 
+def companion_names(path: str) -> list[str]:
+    """The two companions a script at `path` could have, as tools/check.sh's companion_names
+    spells them: its name with the extension dropped, hyphens made underscores, and `_tests.py`
+    added, or with hyphens kept and `-tests.py` added, beside it."""
+    folder, _, name = path.rpartition("/")
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return [f"{folder}/{stem.replace('-', '_')}_tests.py", f"{folder}/{stem}-tests.py"]
+
+
 def companion(path: str) -> list[str]:
     """The call that runs the companion at `path`."""
     return ["python3", "-I", path]
@@ -1237,11 +1341,20 @@ class CompanionTests(CheckTestCase):
         case = Case(self, extra={path: "" for path in beside}, change=scripts)
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        # tools/image_build_tests.py judges .dockerignore and the Dockerfiles, which no script's
-        # name names, so no change but its own earns it here; CI's documents job runs it on every
-        # pull request (#204). It was in this list from #204's merge, and the case failed on it.
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
-                                       "tools/image_build_tests.py"})
+        # A companion with no script beside it, tools/image_build_tests.py among them, is not
+        # reached from one, so no change here earns it. What it judges lies outside tools/ and
+        # .github/ (for that one: .dockerignore, the Dockerfiles, what they copy), so it must
+        # declare those files on its "Checkout inputs:" line, and a change to one earns it (#390;
+        # InputTests proves that). It was in the expected list from #204's merge until #390, and the
+        # case failed on it.
+        named = {name for path in tracked if path not in real for name in companion_names(path)}
+        scriptless = set(real) - named
+        self.assertIn("tools/image_build_tests.py", scriptless)
+        for path in sorted(scriptless):
+            with self.subTest(scriptless=path):
+                self.assertNotEqual([], declared_inputs((ROOT / path).read_text(encoding="utf-8")),
+                                    f"{path} has no script, so only a Checkout inputs line earns it")
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"} - scriptless)
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 
@@ -1365,6 +1478,190 @@ class LibraryTests(CheckTestCase):
         expected = [".github/gizmo_tests.py", ".github/named-tests.py", ".github/two_words_tests.py",
                     "tools/other_tests.py", "tools/scripts/deep_tests.py", "tools/thing_tests.py"]
         self.assertEqual([companion(path) for path in expected], companions_run(case))
+
+
+# A companion that reads files of the checkout outside tools/ and .github/, for InputTests, in the
+# shape of tools/pins_inventory_tests.py, which copies the live pins file, SDK pin file, solution,
+# build properties and project files and asserts on what they hold (#354). Its declaration is a
+# line of its own starting "Checkout inputs:"; the fixture writes it with escapes, so no line of this
+# file starts that way. Root.csproj sits at the top level so a pattern the check let the shell expand
+# would turn into that file's name and miss every other project.
+INPUTS = {
+    "tools/reader.py": "# reads the checkout\n",
+    "tools/reader_tests.py": '"""Copies the checkout.\n\nCheckout inputs: Directory.Packages.props global.json *.csproj\n"""\n',
+    "Directory.Packages.props": "<Project />\n",
+    "global.json": "{}\n",
+    "Root.csproj": "<Project />\n",
+    "src/App/App.csproj": "<Project />\n",
+    "spikes/g0/global.json": "{}\n",
+}
+PINS_COMPANION = "tools/pins_inventory_tests.py"
+IMAGE_COMPANION = "tools/image_build_tests.py"
+
+
+def declared_inputs(text: str) -> list[str]:
+    """The patterns a companion's "Checkout inputs:" line names."""
+    lines = [line for line in text.splitlines() if line.startswith("Checkout inputs:")]
+    return lines[0].split(":", 1)[1].split() if lines else []
+
+
+class InputTests(CheckTestCase):
+    """#354: under --full, a change to a file of the checkout that a companion declares on its
+    "Checkout inputs:" line runs that companion. On #336 a new pin in Directory.Packages.props passed
+    the full check with "test companions skipped", and tools/pins_inventory_tests.py, which copies
+    that file and counts its pins, failed three cases in CI's Documents job."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def scripts(self) -> dict[str, str]:
+        return {**SCRIPTS, **INPUTS}
+
+    def test_a_declared_input_runs_the_companion_that_declares_it_and_no_other(self):
+        for change in ("Directory.Packages.props", "global.json", "src/App/App.csproj", "src/New/New.csproj"):
+            with self.subTest(change=change):
+                case = Case(self, extra=self.scripts(), change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                # These are .NET source to the classifier, so the build half runs as well.
+                self.assertEqual([companion("tools/reader_tests.py")], companions_run(case))
+                self.assertTrue(result.last_line(result.stdout).endswith(
+                    ", the test companion tools/reader_tests.py."), result.stdout)
+
+    def test_a_file_no_companion_declares_runs_none(self):
+        # A pattern with no slash in it and no wildcard names the top-level file alone: the spike's
+        # own global.json is not the solution's SDK pin.
+        for change in ("src/App/App.cs", "README.md", "spikes/g0/global.json", "docs/notes.md"):
+            with self.subTest(change=change):
+                case = Case(self, extra=self.scripts(), change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], companions_run(case))
+
+    def test_a_declared_input_and_a_touched_script_run_each_companion_once(self):
+        case = Case(self, extra=self.scripts(),
+                    change=("Directory.Packages.props", "tools/reader.py", "tools/thing.sh"))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([companion("tools/reader_tests.py"), companion("tools/thing_tests.py")],
+                         companions_run(case))
+
+    def test_a_failing_companion_an_input_earns_fails_the_verdict(self):
+        case = Case(self, extra=self.scripts(), change="global.json",
+                    fails_on={"python3": "tools/reader_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the test companion tools/reader_tests.py failed.",
+                         result.last_line(result.stderr))
+
+    def test_the_hook_runs_no_companion_for_an_input(self):
+        case = Case(self, extra=self.scripts(), change="Directory.Packages.props")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual([], companions_run(case))
+
+    def test_a_companion_whose_inputs_cannot_be_read_fails_the_check(self):
+        # A tracked companion missing from the working tree: grep exits 2, and the check fails
+        # rather than reading that as "declares nothing" and running less (CODING_STANDARDS.md, "A
+        # check fails closed").
+        case = Case(self, extra=self.scripts(), change="global.json")
+        (case.work / "tools" / "reader_tests.py").unlink()
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: could not read the checkout inputs tools/reader_tests.py declares.",
+                         result.last_line(result.stderr))
+
+    def test_a_new_pin_runs_the_pins_inventory_companion_and_its_failure_fails_the_check(self):
+        # #354's own shape: the real companion's text, and a change to the pins file alone.
+        text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
+        for fails_on in ({}, {"python3": PINS_COMPANION}):
+            with self.subTest(fails_on=fails_on):
+                case = Case(self, extra={PINS_COMPANION: text, "Directory.Packages.props": "<Project />\n"},
+                            change="Directory.Packages.props", fails_on=fails_on)
+                result = self.full(case)
+                self.assertEqual([companion(PINS_COMPANION)], companions_run(case))
+                if fails_on:
+                    self.assertEqual(1, result.status, result.stdout)
+                    self.assertEqual(f"check: fail: the test companion {PINS_COMPANION} failed.",
+                                     result.last_line(result.stderr))
+                else:
+                    self.assertEqual(0, result.status, result.stderr)
+
+    def test_the_pins_companion_declares_every_file_it_copies_from_the_checkout(self):
+        # The files are read from the companion's own Repo, built as its cases build it, not from a
+        # list kept here: a file Repo starts copying that the line leaves out is a change the full
+        # check would pass and CI's Documents job would fail.
+        text = (ROOT / PINS_COMPANION).read_text(encoding="utf-8")
+        patterns = declared_inputs(text)
+        self.assertNotEqual([], patterns, f"{PINS_COMPANION} has no Checkout inputs line")
+        spec = importlib.util.spec_from_file_location("pins_inventory_tests", ROOT / PINS_COMPANION)
+        pins = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pins)
+        repo = pins.Repo(self)
+        copied = sorted(path.relative_to(repo.dir).as_posix() for path in repo.dir.rglob("*")
+                        if path.is_file() and ".git" not in path.relative_to(repo.dir).parts)
+        self.assertIn("src/Gateway/Gateway.csproj", copied)
+        self.assertIn("Directory.Packages.props", copied)
+        self.assertEqual([], [path for path in copied
+                              if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)])
+
+    def test_a_change_the_image_build_companion_reads_runs_it_and_its_failure_fails_the_check(self):
+        # #390, #354's shape for the other companion that reads the checkout: the real text of
+        # tools/image_build_tests.py, which has no script of its own, so before its line no change
+        # but its own earned it. Each change below is one it reads: the build context's ignore file,
+        # a Dockerfile it holds, a new Dockerfile its census would find, git's ignore files, and a
+        # file each Dockerfile's COPY takes from the context.
+        text = (ROOT / IMAGE_COMPANION).read_text(encoding="utf-8")
+        for change in (".dockerignore", "src/Gateway/Dockerfile", "tests/e2e/Dockerfile", "Dockerfile",
+                       ".gitignore", "infra/envs/poc/.gitignore", "src/App/App.cs",
+                       "contracts/new.schema.json", "fixtures/MockApi/Program.cs",
+                       "tools/bench/floor/Program.cs", "nuget.config"):
+            with self.subTest(change=change):
+                case = Case(self, extra={IMAGE_COMPANION: text, ".dockerignore": "bin\n"}, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([companion(IMAGE_COMPANION)], companions_run(case))
+        for change in ("README.md", "docs/notes.md", "infra/roots/a/main.tf", "fixtures/TestIdp/Program.cs"):
+            with self.subTest(change=change):
+                case = Case(self, extra={IMAGE_COMPANION: text}, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([], companions_run(case))
+        case = Case(self, extra={IMAGE_COMPANION: text, ".dockerignore": "bin\n"}, change=".dockerignore",
+                    fails_on={"python3": IMAGE_COMPANION})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual(f"check: fail: the test companion {IMAGE_COMPANION} failed.",
+                         result.last_line(result.stderr))
+
+    def test_the_image_build_companion_declares_every_file_of_the_checkout_it_reads(self):
+        # As the pins guard does, this reads the companion's own names for what it reads, not a list
+        # kept here: a Dockerfile added to DOCKERFILES, a COPY a Dockerfile gains, or a path the
+        # outputs case moves to joins what the line must cover, or this fails. A COPY of a directory
+        # stands for every file that may be tracked under it later, which the context case reads too.
+        text = (ROOT / IMAGE_COMPANION).read_text(encoding="utf-8")
+        patterns = declared_inputs(text)
+        self.assertNotEqual([], patterns, f"{IMAGE_COMPANION} has no Checkout inputs line")
+        spec = importlib.util.spec_from_file_location("image_build_tests", ROOT / IMAGE_COMPANION)
+        image = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(image)
+        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON]
+        dockerfiles = (*image.DOCKERFILES, *image.OTHER_OWNERS)
+        reads += dockerfiles
+        # Its census of Dockerfiles finds a new one anywhere, at the top level too.
+        reads += image.tracked(["*Dockerfile"]) + ["Dockerfile", "some/new/place/Dockerfile"]
+        for dockerfile in dockerfiles:
+            sources = image.copied_from_context(dockerfile)
+            reads += image.tracked(sources)
+            reads += [source.rstrip("/") + "/new/file.cs" for source in sources if source.endswith("/")]
+        # git check-ignore reads the ignore file of the top level and of each directory above the
+        # outputs document.
+        parts = image.OUTPUTS_DOCUMENT.split("/")[:-1]
+        reads += ["/".join([*parts[:n], ".gitignore"]) for n in range(len(parts) + 1)]
+        self.assertIn("src/Gateway/Program.cs", reads)
+        self.assertIn("infra/envs/poc/.gitignore", reads)
+        self.assertEqual([], sorted({path for path in reads
+                                     if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)}))
 
 
 # Workflow scripts and their test companions, for WorkflowCompanionTests: a script's companion is
@@ -1559,6 +1856,147 @@ class CiWorkflowCompanionTests(CheckTestCase):
     def test_the_overnight_step_is_folded_into_it(self):
         # #213's own step ran the overnight companion alone; this step runs it with the rest.
         self.assertNotIn("run: node .claude/workflows/overnight_tests.mjs", WORKFLOW.read_text())
+
+
+# The steps that every run with a base executes, in order, as the elapsed lines name them (#629).
+ELAPSED_STEPS = ["A-05", "the steering check", "the part-row merges", "the full-landing merges", "the roadmap",
+                 "the analysis guard", "the artifacts", "the file modes"]
+# Under --full, finding which test companions the change earns is a step of its own: on 2026-10-29
+# the companions were where the integrate step's span went (#629).
+REACH = "the test companions' reach"
+
+
+class ElapsedTests(CheckTestCase):
+    """#629: each step the check executes, and each test companion, writes its elapsed time in whole
+    seconds on a line of its own, `<me>: elapsed: <step>: <N>s`, and the total comes just before the
+    verdict, in both modes; a skipped step writes none. The verdict, the fail lines and the test
+    runner's own lines are unchanged, which every other class asserts."""
+
+    def steps(self, result: Result) -> list[str]:
+        return [step for _, step, _ in result.elapsed()]
+
+    def assertTotalBeforeVerdict(self, result: Result, me: str, verdict: str):
+        """In the log, as `> log 2>&1` writes it, the total is the line before the verdict, and the
+        verdict is the last line."""
+        lines = result.raw_stdout.splitlines()
+        self.assertEqual(verdict, lines[-1])
+        total = ELAPSED.match(lines[-2])
+        self.assertIsNotNone(total, f"the line before the verdict is {lines[-2]!r}, not the total")
+        self.assertEqual((me, "total"), (total.group(1), total.group(2)))
+
+    def test_a_docs_only_full_check_times_each_step_it_runs_and_no_other(self):
+        case = Case(self, change="docs/notes.md")
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "total"], self.steps(result))
+        self.assertEqual({"check"}, {me for me, _, _ in result.elapsed()})
+        self.assertTotalBeforeVerdict(result, "check", f"check: pass: {FULL_RAN}.")
+
+    def test_a_dotnet_change_times_the_build_the_tests_the_smoke_test_and_the_image(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the tests", "the smoke test", "the gateway image", REACH, "total"],
+                         self.steps(result))
+        # Each line comes after its step's own output.
+        lines = result.raw_stdout.splitlines()
+        self.assertLess(lines.index("smoke double ran: Debug " + PORT), lines.index(next(
+            line for line in lines if line.startswith("check: elapsed: the smoke test: "))))
+
+    def test_skip_tests_writes_no_line_for_the_suite(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run("--full", "--port", PORT, "--skip-tests")
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the smoke test", "the gateway image", REACH, "total"],
+                         self.steps(result))
+
+    def test_a_change_under_infra_times_terraform_and_its_tests(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + ["Terraform", "the Terraform tests", REACH, "total"], self.steps(result))
+
+    def test_each_test_companion_is_timed_on_its_own(self):
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", ".github/gizmo.py"))
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
+                                          "the test companion tools/thing_tests.py", "total"], self.steps(result))
+
+    def test_each_workflow_companion_is_timed_on_its_own(self):
+        case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + [REACH] + [f"the workflow test companion {path}" for path in WORKFLOW_COMPANIONS]
+                         + ["total"], self.steps(result))
+
+    def test_the_hook_times_its_steps_with_its_own_prefix(self):
+        case = Case(self, change="src/App/App.cs")
+        result = case.run(hook=True, merged=True)
+        self.assertEqual(0, result.status, result.raw_stdout)
+        # The hook's lines say "pre-push:", as the header says of the default mode; it finds no companions.
+        self.assertEqual(ELAPSED_STEPS + ["the build", "total"], self.steps(result))
+        self.assertEqual({"pre-push"}, {me for me, _, _ in result.elapsed()})
+        self.assertTotalBeforeVerdict(result, "pre-push", f"pre-push: {HOOK_RAN}, the build pass.")
+
+    def test_a_failed_check_ends_on_the_total_and_then_its_verdict(self):
+        # The step that failed writes no line of its own; the total still comes before the verdict.
+        case = Case(self, change="src/App/App.cs", fails_on={"smoke": "Debug"})
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(ELAPSED_STEPS + ["the build", "the tests", "total"], self.steps(result))
+        self.assertTotalBeforeVerdict(result, "check", "check: fail: the smoke test failed.")
+
+    def test_a_failure_in_the_hook_puts_the_total_before_its_two_lines(self):
+        case = Case(self, change="src/App/App.cs", fails_on={"dotnet": "build"})
+        result = case.run(hook=True, merged=True)
+        self.assertEqual(1, result.status)
+        lines = result.raw_stdout.splitlines()
+        self.assertEqual(["pre-push: the solution does not build.", HOOK_FIX], lines[-2:])
+        self.assertRegex(lines[-3], r"^pre-push: elapsed: total: \d+s$")
+
+    def test_an_unexpected_failure_ends_on_the_total_and_then_its_verdict(self):
+        case = Case(self)
+        outside = case.dir / "outside"
+        outside.mkdir()
+        result = case.run("--full", "--port", PORT, cwd=outside, merged=True)
+        self.assertEqual(1, result.status)
+        lines = result.raw_stdout.splitlines()
+        self.assertRegex(lines[-1], r"^check: fail: stopped with status \d+\.$")
+        self.assertRegex(lines[-2], r"^check: elapsed: total: \d+s$")
+
+    def test_the_seconds_are_the_steps_own(self):
+        # A smoke test that takes two seconds is timed as such, and the total holds it.
+        case = Case(self, change="src/App/App.cs")
+        case.write_executable(case.work / "tools" / "smoke.sh", "#!/bin/bash\n/bin/sleep 2\n")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stderr)
+        seconds = {step: n for _, step, n in result.elapsed()}
+        self.assertGreaterEqual(seconds["the smoke test"], 2)
+        # Loose above: CI runs the cases eight at a time, and a loaded runner can stretch a sleep.
+        self.assertLessEqual(seconds["the smoke test"], 6)
+        self.assertGreaterEqual(seconds["total"], seconds["the smoke test"])
+        self.assertLess(seconds["the gateway image"], 2)
+
+    def test_the_parsers_that_read_a_log_do_not_read_an_elapsed_line(self):
+        # tools/retro_record.py reads the test runner's indented summary lines and the verdict, and
+        # tools/test_reach.py the tests' fail line: an elapsed line is none of them (#629 Q16). The
+        # patterns are read from the two parsers and the lines from a run, so a change to either
+        # side is judged here (CODING_STANDARDS.md, "A guard reads the thing it guards").
+        def load(name: str):
+            spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        retro, reach = load("retro_record"), load("test_reach")
+        lines = [line for line in Case(self, change="src/App/App.cs").run("--full", "--port", PORT).raw_stdout.splitlines()
+                 if ELAPSED.match(line)]
+        self.assertIn("the tests", [ELAPSED.match(line).group(2) for line in lines])
+        for line in lines:
+            self.assertIsNone(retro.SUMMARY.match(line), line)
+            self.assertFalse(any(pattern.match(line) for pattern, _ in retro.VERDICTS), line)
+            self.assertNotEqual(reach.TESTS_FAILED, line)
 
 
 class InterpreterTests(CheckTestCase):

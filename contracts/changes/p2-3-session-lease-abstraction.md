@@ -5,7 +5,11 @@
 - **Tasks:** P2-3; P2-1, whose store carries the lease when it sits on the item; 6.2 and 6.3, whose
   composed suites prove it again (#60)
 - **Date:** 2026-10-19
-- **Status:** decided, 2026-10-20. See the Decision section below.
+- **Status:** decided, 2026-10-20. See the Decision section below. Item 3's margin amended
+  2026-10-24, on https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562.
+  Amended a second time 2026-10-29, the budget end to end (#445), on
+  https://github.com/adammedford/spa-platform/issues/476#issuecomment-6474906480: the figures stay, two
+  bullets of the first amendment are corrected in place, and the shutdown promise is pending.
 
 ## The gap
 
@@ -187,7 +191,10 @@ https://github.com/adammedford/spa-platform/issues/218 (all accepted as recommen
    AccessTokenSourceOptions.LeaseMargin`, 10 s + 5 s today. The margin covers the versioned write
    after the refresh returns and clock skew between tasks, since the acquiring task's clock is
    compared with the holder's. A holder that dies mid-refresh frees the session after at most
-   15 s, under T-D10's caveat that the refresh it gave up on may still have run.
+   15 s, under T-D10's caveat that the refresh it gave up on may still have run. **Amended
+   2026-10-24:** the margin is `2 × StoreDeadline + 1 s` and covers taking the lease as well, so the
+   time to live is 10 s + 11 s and a dead holder frees the session after at most 21 s; see the
+   amendment below.
 4. **The loser's loop.** A caller that cannot take the lease re-reads the record every 250 ms,
    under `CancellationToken.None` like every store call on this path (T-B15, T-B16), until the
    version moves or the lease expires. A record that vanishes mid-loop answers
@@ -232,3 +239,114 @@ https://github.com/adammedford/spa-platform/issues/218 (all accepted as recommen
 
 Two citations in the request are corrected by this record: `ProviderDeadline` is
 `AccessTokenSource.cs:298`, and `SessionEnd` ends the session under the gate at lines 33-48.
+
+### Amendment, 2026-10-24: item 3's margin
+
+On Adam's answer G1 on #332, confirmed in https://github.com/adammedford/spa-platform/issues/332#issuecomment-6389235562. Item 3's "10 s + 5 s today" no longer holds.
+#332's D2 has the holder check, just before the provider call, that `ProviderDeadline +
+StoreDeadline + 1 s` (16 s) remains on its lease, so at 15 s no refresh could ever pass, however fast
+its acquisition (#341's validation, https://github.com/adammedford/spa-platform/issues/341#issuecomment-6379673480).
+Taking the lease is itself a store operation bounded by `StoreDeadline`, so the margin covers it as
+well:
+
+- `LeaseMargin` is `2 × StoreDeadline + 1 s`, stated as that formula: 11 s, and the time to live
+  21 s, today. The time to live is still the one derived value `ProviderDeadline + LeaseMargin`.
+- A holder that dies frees the session after at most 21 s. F3's recovery window is (21 s, r + G)
+  after acquisition: open at the 60 s grace the cell runs since #339, empty at 10 s, which is
+  accepted.
+- The worst-case refresh, acquisition included, is 21 s, inside F1's `ShutdownTimeout` of 25 s.
+  **Corrected 2026-10-29 (second amendment):** 21 s bounds the lease, not the request. What
+  finishes under the 25 s is the durable write of a refresh admitted before the stop, at most
+  20 s from its acquire's send; a loser's request is not bounded by it.
+- D2's check passes when "at least" its reserve remains, so the boundary passes: an acquisition
+  that takes its whole 5 s leaves 21 s - 5 s = 16 s, which is the reserve.
+  **Corrected 2026-10-29 (second amendment):** the check is timed from the acquire's send and
+  the re-read under the lease counts too, so the acquire and the re-read together may take at
+  most 5 s, not the acquisition alone; and "the reserve" is the lease budget, below.
+
+So the margin covers taking the lease, the versioned write after the refresh returns, and clock
+skew between tasks. Item 3 carries an inline pointer to this amendment, and ADR-0024 a status-line
+one; decision 4's body is unchanged, as G1 asked.
+
+### Amendment, 2026-10-29: the budget end to end
+
+On #445, whose ten questions Adam confirmed as Overnight 2026-10-28's Q13 to Q22 with overrides on
+Q16, Q17, Q19, Q20, Q21 and Q22, in https://github.com/adammedford/spa-platform/issues/476#issuecomment-6474906480.
+#341's review observed that item 3's margin does not budget the re-read under the lease, and the
+first amendment's last two bullets stated the boundary wrongly; they are corrected in place above,
+not deleted. The figures do not move: the margin stays `2 × StoreDeadline + 1 s`, the time to
+live 21 s and `ShutdownTimeout` 25 s. What changes is the promise, stated below as a decision.
+
+**The budget, once.** S is `StoreDeadline` (5 s), P is `ProviderDeadline` (10 s), and 1 s is the
+allowance for clock skew between tasks. Every figure is derived from these three and nowhere
+else, except `ShutdownTimeout`'s 25 s: workstream 2's constant in `PlatformHostingLimits`, which
+the budget constrains (> TTL − 1 s) and does not derive.
+
+| Step | Bound | Formula | Today |
+| --- | --- | --- | --- |
+| The lease budget: what must remain of the lease just before the provider is called, for the call, the versioned write after it and skew | the property `ReservedBudget` | P + S + 1 s | 16 s |
+| The time to live, `ProviderDeadline + LeaseMargin` | the lease | P + 2S + 1 s | 21 s |
+| The acquire and the re-read under the lease, together, timed from the acquire's send | D2's check passes only while this much of the lease has gone | TTL − lease budget = S | 5 s |
+| The provider call | `ProviderDeadline`, and `BackchannelTimeout` = P | P | 10 s |
+| The versioned write | `StoreDeadline` | S | 5 s |
+| Modelled work after admission, the call and the write | from the check passing | P + S | 15 s |
+| The durable write, from the acquire's send | the holder's write deadline | TTL − 1 s | 20 s |
+| `ShutdownTimeout` (ws2, `PlatformHostingLimits`) | exceeds the write deadline | > TTL − 1 s | 25 s |
+| Exhaustion: the threshold a pass is checked against after it ends without a grant | not a request deadline | 2 × TTL | 42 s |
+
+The lease protects from the acquire's send until the rotated token is durable, plus skew (Q14).
+The lost-replace re-read, the refusal's re-read and remove, and the release run outside it, since
+a successor taking over after the write costs no session the holder would have kept. The check
+keeps #341's choice: it counts the re-read under the lease, timed from the acquire's send (Q15).
+"Lease budget" is the name for `P + S + 1 s` in prose and records from here on (Q18); "the
+reserve" is `GLOSSARY.md`'s Reserve design, ADR-0017's locking, and is not used for this figure.
+The property may keep its name `ReservedBudget`, or be renamed in the workstream 3 ticket below.
+
+**Decision 1, G1's limit (Q16).** The figures stay. The check passes only when the acquire and
+the re-read together take at most S, so two 3 s operations fail it while each is inside its own
+deadline; a pass that fails the check gives the lease back and waits as a loser; 503 with the
+session kept comes only when an unsuccessful pass, no lease taken or the check failed, ends after
+2 × TTL has elapsed. 2 × TTL is the exhaustion threshold checked after an unsuccessful pass and
+not a request deadline, and no end-to-end request bound is claimed. This latency is below F17's
+threshold, a failed or timed-out operation, so it is an accepted availability limit and not an
+outage F17 covers. Weighed and declined: widening the margin to `3 × S + 1 s` (TTL 26 s, which
+moves `ShutdownTimeout` to 28 s or so and lengthens a dead holder's recovery by 5 s, across three
+owners), and shrinking S to 4 s (which moves D4's 5 s through F10, F11, F12, F17 and the DynamoDB
+adapter's default).
+
+**Decision 2, what F1's shutdown bound promises (Q17).** A successful refresh admitted before the
+host is told to stop writes before it stops, with at most 15 s of modelled work after admission
+and 20 s from its acquire's send under the 25 s `ShutdownTimeout`; the durable write is the
+milestone, not the request's completion. F3b's failed or unknown write and F4's check-to-send
+pause stay as exceptions. A loser's wait, about 2 × TTL plus one pass, is F2's and F3's, not F1's:
+an aborted loser holds no lease and has no provider call in flight, so it costs the request, not
+the session. A refresh admitted after the stop is decision 3.
+
+**Decision 3, the admission rule at shutdown (Q19), pending.** Once `ApplicationStopping` is
+observed at admission, after the awaited acquire and re-read and before the provider call, no
+provider refresh starts on either refresh path; the refusal releases any acquired lease and
+answers `ProviderUnavailable` with the session kept; an admitted refresh keeps its own provider
+deadline and writes with no shutdown cancellation. The residual case, a refresh refused at the
+stop whose token was due, is F3's bounded recovery, a retry reaching the provider before r + G,
+not an automatic recovery within 60 s. This rule is built in the workstream 3 ticket raised by
+#445, and the shutdown promise of decision 2 is pending until that ticket lands (Q21): until
+then, a loser that takes the lease after the stop may be aborted mid-refresh.
+
+**The store-at-bound answer (Q20).** It stays 503 `idp_unavailable` now. #332's deferred
+`503 session_store_unavailable` row carries the note that shutdown refusal, lease exhaustion and
+provider failure all answer `ProviderUnavailable` today and must stay distinguishable causes when
+the row is designed, at the next gate.
+
+**Where it is recorded (Q21) and what follows (Q22).** This section; a status-line pointer on
+ADR-0024 and no new ADR, since the figures stay and a corrected statement of reversible constants
+does not clear ADR-0024's threshold; #332's F1, D1 and D2 rows reworded through the tracker route.
+Two tickets, each `**Raised by:** #445`: workstream 3's carries the `MayCallProvider` and
+`LeaseMargin` comments, decision 3's gate on both refresh paths, and its tests (admission at S and
+refusal at S + ε through `AccessTokenSource`; sustained failure reaching the exhaustion response
+with the session kept and no provider grant; a stop observed while the acquire or the re-read is
+pending refuses admission and releases the lease; a refresh admitted just before the stop writes
+despite the signal; the no-lease path observes the same rule; at least one test drives the host
+lifetime signal production wiring uses), with the `ReservedBudget` rename optional; workstream
+2's restates `PlatformHostingLimits.ShutdownTimeout`'s comment against the 20 s write deadline,
+figure unchanged. None for workstreams 6 or 1: T8's rows and the spec's 30 s `stopTimeout` do not
+change.

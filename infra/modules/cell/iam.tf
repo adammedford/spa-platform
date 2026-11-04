@@ -29,6 +29,32 @@ locals {
     "${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}",
     ":parameter/spa-platform/${var.cell}/apps/*",
   ])
+
+  # Continuity (#338). The session table (sessions.tf) and its appId index, behind
+  # session_store = "dynamodb". The table's count and the grant below both read this one condition,
+  # so the grant exists exactly when the table does.
+  session_store_is_dynamodb = var.session_store == "dynamodb"
+  session_table_name        = "${local.name_prefix}-sessions"
+  session_table_index_name  = "appId"
+
+  # The key ring, behind data_protection_parameter_prefix (P2-2 decisions 8 and 12). The variable's
+  # validation holds the prefix to /spa-platform/{cell}/data-protection/, so these ARNs are this
+  # cell's ring and no other's. The prefix's own ARN carries no trailing slash: GetParametersByPath
+  # is authorised against the path itself as well as its children (P2-2 decision 12).
+  key_ring_enabled = var.data_protection_parameter_prefix != ""
+  key_ring_path_arn = join("", [
+    "arn:${data.aws_partition.current.partition}:ssm:",
+    "${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}",
+    ":parameter${trimsuffix(var.data_protection_parameter_prefix, "/")}",
+  ])
+
+  # The tags the gateway puts on each ring parameter it creates (#274): the platform's two, and
+  # ManagedBy = gateway, since Terraform does not manage them (contracts/resource-tags.md).
+  key_ring_tags = {
+    Platform  = "spa-platform"
+    Cell      = var.cell
+    ManagedBy = "gateway"
+  }
 }
 
 # --- Who may assume them ----------------------------------------------------------------------
@@ -143,7 +169,11 @@ data "aws_iam_policy_document" "task" {
   # "The gateway cannot write. The task role reads this cell's bucket prefixes; it has no write to
   # the registry (P-03)." -- contracts/s3-layout.md. GetObject alone, and the bucket's own ARN is
   # not among the resources, so no listing is reachable even if an action were added: the gateway
-  # does a conditional GET on the registry and a GET on a key the registry names.
+  # does a conditional GET on the registry and GETs keys under prefixes the registry names. Without
+  # s3:ListBucket, S3 answers a GET on a missing key with 403, not 404 NoSuchKey
+  # (https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html, "Permissions"), and
+  # S3ObjectStore reads that 403 as a refused read, not as a missing key
+  # (contracts/changes/issue-381-object-read-refusal.md).
   statement {
     sid       = "ReadRegistryAndReleases"
     effect    = "Allow"
@@ -160,7 +190,10 @@ data "aws_iam_policy_document" "task" {
   # policy admits this account's principals when the call arrives through Systems Manager:
   # https://docs.aws.amazon.com/systems-manager/latest/userguide/ps-restrict-decryption.html
   # A customer-managed replacement key requires a reviewed, explicit kms:Decrypt grant for that
-  # key; the AWS-managed-key assumption does not extend to customer-managed keys.
+  # key; the AWS-managed-key assumption does not extend to customer-managed keys. The key ring's
+  # parameters below are SecureStrings the gateway writes as well as reads, so a customer-managed
+  # key, if data_protection_kms_key_id ever sets one, needs its encrypt side granted too, beside
+  # kms:Decrypt (P2-2 decision 12).
   statement {
     sid    = "ReadClientSecrets"
     effect = "Allow"
@@ -193,6 +226,95 @@ data "aws_iam_policy_document" "task" {
     ]
 
     resources = ["*"]
+  }
+
+  # Continuity (#338). The three statements below exist only behind their inputs, so a Phase 1 cell
+  # holds the three grants above and nothing else.
+  #
+  # The DynamoDB store's five operations (change request P2-1, item 5 and Decision 7): GetItem, a
+  # consistent read; PutItem, create, replace and the lease's acquire, each conditional; DeleteItem,
+  # remove and the lease's release; Query on the appId index and BatchWriteItem, RemoveAppAsync's
+  # purge. No Scan, no UpdateItem and nothing of the table's administration. The index is named
+  # rather than index/*, so the subject index G7 adds (ADR-0028) needs its own reviewed line. The
+  # ARN is the table's own, as the bucket's is above (ADR-0014), so the grant is on the table this
+  # module creates and not on whatever a name resolves to.
+  dynamic "statement" {
+    for_each = local.session_store_is_dynamodb ? [1] : []
+
+    content {
+      sid    = "ReadWriteSessions"
+      effect = "Allow"
+
+      actions = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:BatchWriteItem",
+      ]
+
+      resources = [
+        aws_dynamodb_table.sessions[0].arn,
+        "${aws_dynamodb_table.sessions[0].arn}/index/${local.session_table_index_name}",
+      ]
+    }
+  }
+
+  # The key ring (P2-2 decision 12). PutParameter writes a new key and GetParametersByPath reads the
+  # ring, and deliberately no ssm:DeleteParameter: nothing in the platform deletes a key, and a role
+  # that cannot delete one cannot lose the ring by accident. Without it an explicit deletion through
+  # IKeyManager fails and serving does not. teardown.sh deletes the ring as the operator.
+  dynamic "statement" {
+    for_each = local.key_ring_enabled ? [1] : []
+
+    content {
+      sid    = "ReadWriteKeyRing"
+      effect = "Allow"
+
+      actions = [
+        "ssm:PutParameter",
+        "ssm:GetParametersByPath",
+      ]
+
+      resources = [
+        local.key_ring_path_arn,
+        "${local.key_ring_path_arn}/*",
+      ]
+    }
+  }
+
+  # A PutParameter carrying Tags is authorised as ssm:AddTagsToResource as well (#274), and the
+  # gateway tags each ring parameter it creates. The Service Authorization Reference gives the
+  # operation both actions, each taking aws:RequestTag/${TagKey} and aws:TagKeys:
+  # https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html#list_ssm-operation-PutParameter
+  # StringEquals on each tag's value refuses a call that carries none of them, which ForAllValues on
+  # aws:TagKeys alone would pass; aws:TagKeys refuses a fourth tag. So the role can tag a ring
+  # parameter with the platform's tags and nothing else.
+  dynamic "statement" {
+    for_each = local.key_ring_enabled ? [1] : []
+
+    content {
+      sid       = "TagKeyRingOnCreate"
+      effect    = "Allow"
+      actions   = ["ssm:AddTagsToResource"]
+      resources = ["${local.key_ring_path_arn}/*"]
+
+      dynamic "condition" {
+        for_each = local.key_ring_tags
+
+        content {
+          test     = "StringEquals"
+          variable = "aws:RequestTag/${condition.key}"
+          values   = [condition.value]
+        }
+      }
+
+      condition {
+        test     = "ForAllValues:StringEquals"
+        variable = "aws:TagKeys"
+        values   = keys(local.key_ring_tags)
+      }
+    }
   }
 }
 

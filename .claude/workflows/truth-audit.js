@@ -297,7 +297,7 @@ const issueBody = (f, ctx) => {
   L.push('', '## Evidence', '')
   for (const e of f.evidence) L.push(`- ${e.where}: ${e.quote}`)
   L.push('', '## Proposed correction', '', f.correction || 'Not determinable from the tree; the owner decides.', '')
-  if (f.sites.some((s) => s.fixKind === 'change-request')) L.push('A site is a frozen contract and the correction changes what it lists, so it waits for a change request under contracts/changes/, written by the owner beside the decision; the audit writes none.', '')
+  if (f.sites.some((s) => s.fixKind === 'change-request')) L.push('A site is a frozen contract and the correction changes what it lists, so it waits for a `change-request` issue, which triage files with `**Raised by:**` this finding. The finding stays this one `needs-triage` issue, and the audit files no request.', '')
   if (f.sites.some((s) => s.fixKind === 'plan-re-export')) L.push('A site is under the plan export, which is never edited in place: its fix is a fresh export (docs/agents/domain.md).', '')
   L.push(`Audited at ${ctx.sha}; reported on the Truth audit ${ctx.date} issue.`, '')
   L.push('A correction that becomes a decision goes into a contract, a decision record or the glossary, not only into this issue (ADR-0020).', '')

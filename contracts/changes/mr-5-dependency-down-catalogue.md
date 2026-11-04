@@ -7,7 +7,7 @@
   (discovery and refresh), 3.4 (the session store), 4.1 and 4.2 (the proxy), 6.3 (the negative
   suite); P2-1 (the durable store), P2-5 (the instance id), P2-7 (export)
 - **Date:** 2026-10-19
-- **Status:** open
+- **Status:** moved to #543, 2026-10-29, by the cutover #439
 
 ## What exists
 

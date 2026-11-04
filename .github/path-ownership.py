@@ -26,11 +26,6 @@ that merges main also uses the per-commit rule. Review still checks the task's s
 plan row and OWNERSHIP.md; this guard does not replace that review. Octopus merges are refused:
 Git's remerge diff supports two parents, so integrate lanes with successive two-parent merges.
 
-Change requests are always allowed
-----------------------------
-Anyone may add a file under `contracts/changes/`. That is how a change to an integrator path is
-requested, and a workstream that could not write there would have no way to ask.
-
 Usage: python3 -I .github/path-ownership.py <base-ref> <head-ref>
 """
 
@@ -43,10 +38,6 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 OWNERSHIP = REPOSITORY_ROOT / "OWNERSHIP.md"
-
-# Anyone may add a change request. OWNERSHIP.md says so, and a workstream with no way to ask for a
-# contract change would have no way to work.
-ALWAYS_ALLOWED = ("contracts/changes/",)
 
 # git's empty tree. A root commit has no parent to diff against.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -147,13 +138,11 @@ def files_in(commit: str) -> list[str]:
 
 
 def owners_of(paths: list[str], parsed: list[tuple[str, str]]) -> tuple[dict[str, list[str]], list[str]]:
-    """Group paths by owner, dropping the always-allowed ones and collecting the unowned."""
+    """Group paths by owner, collecting the unowned."""
     by_owner: dict[str, list[str]] = {}
     unowned: list[str] = []
 
     for path in paths:
-        if path.startswith(ALWAYS_ALLOWED):
-            continue
         owner = owner_of(path, parsed)
         if owner is None:
             unowned.append(path)
@@ -235,10 +224,6 @@ def main() -> int:
         for path in unowned:
             print(f"  {path}")
         return 1
-
-    if not by_owner:
-        print(f"A-05: {len(files)} file(s), all under {', '.join(ALWAYS_ALLOWED)}. Anyone may add one.")
-        return 0
 
     if len(by_owner) == 1:
         owner = next(iter(by_owner))

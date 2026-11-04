@@ -32,6 +32,14 @@ _TAGS = (cell.ROOT / "contracts" / "resource-tags.md").read_text()
 PLATFORM_VALUE = re.search(r"\| `Platform` \| `([^`]+)` \| Every resource", _TAGS)[1]
 BOOTSTRAP_VALUE = re.search(r"\| `Platform` \| `([^`]+)` \|\n", _TAGS)[1]
 CERTIFICATE = f"arn:aws:acm:{REGION}:{ACCOUNT}:certificate/0123abcd-0000-1111-2222-333344445555"
+# The cell's ring prefix, /spa-platform/{cell}/data-protection/ (P2-2 decision 8), read from the cell
+# module's variable rather than typed, and the key names the package writes under it.
+_VARIABLES = (cell.MODULE / "variables.tf").read_text()
+RING_PREFIX = re.search(r'data_protection_parameter_prefix == "(/spa-platform/)\$\{var\.cell\}(/data-protection/)"',
+                        _VARIABLES).expand(rf"\g<1>{CELL}\g<2>")
+RING_KEYS = list(cell.RING_KEYS[:2])
+assert all(name.startswith(RING_PREFIX) for name in cell.RING_KEYS), "cell_doubles.RING_KEYS is not under the module's prefix"
+OTHER_RING_KEY = "/spa-platform/other/data-protection/key-00000009-aaaa-bbbb-cccc-ddddeeeeffff"
 
 
 def tagged(arn: str, kind: str, root: str, value: str = PLATFORM_VALUE, cell_name: str = CELL) -> dict:
@@ -68,6 +76,14 @@ def deployed_world(bucket: str = cell.BUCKET) -> dict:
         tagged(CERTIFICATE, "acm:certificate", "certs"),
         tagged(f"arn:aws:s3:::spa-platform-{CELL}-tfstate-{ACCOUNT}", "s3:bucket", "bootstrap", BOOTSTRAP_VALUE),
     ] + [tagged(cell.td_arn(f"{cell.FAMILY}:{n}"), "ecs:task-definition", "platform") for n in (1, 2, 3)]
+    # The key ring the gateway wrote under the cell's prefix, tagged on create (#274) and outside every
+    # root's state, so no destroy removes it; and a parameter under another cell's prefix, which
+    # teardown leaves alone. That one is untagged here: Phase 1 matches the platform tag alone, so a
+    # second cell's tagged ring would answer P-05 whatever teardown did (contracts/resource-tags.md).
+    for name in RING_KEYS:
+        world["parameters"].append(name)
+        world["tagged"].append(tagged(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}", "ssm:parameter", "gateway"))
+    world["parameters"].append(OTHER_RING_KEY)
     return world
 
 
@@ -184,6 +200,49 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         sizes = [len(call["options"]["task-definitions"]) for call in case.aws("ecs delete-task-definitions")]
         self.assertEqual([10, 10, 5], sizes)
 
+    def test_the_key_ring_is_deleted_after_the_platform_root_and_before_the_proof(self):
+        # P2-2 decision 17: the gateway creates the ring at run time, outside Terraform, so no destroy
+        # removes it, and a cell rebuilt under the same name would load the old ring. Deleted after
+        # the platform root, so no task is left to write a new key, and before verify-teardown.sh.
+        case, result = self.torn_down()
+        calls = case.calls()
+        listing = case.aws("ssm get-parameters-by-path")
+        self.assertEqual(1, len(listing))
+        self.assertEqual(RING_PREFIX.rstrip("/"), listing[0]["options"]["path"])
+        self.assertIs(True, listing[0]["options"]["recursive"])
+        deletes = case.aws("ssm delete-parameters")
+        self.assertEqual([sorted(RING_KEYS)], [sorted(call["options"]["names"]) for call in deletes])
+        platform = next(c for c in calls if c.get("command") == "destroy" and c.get("root") == "platform")
+        proof = next(c for c in calls if c.get("command") == "iam list-roles")
+        self.assertLess(calls.index(platform), calls.index(listing[0]))
+        self.assertLess(calls.index(deletes[-1]), calls.index(proof))
+        self.assertIn("deleted 2 key ring parameters under " + RING_PREFIX, result.stdout)
+
+    def test_another_cell_s_ring_is_left(self):
+        case, _ = self.torn_down()
+        self.assertEqual([OTHER_RING_KEY], case.load()["parameters"])
+
+    def test_an_empty_ring_prefix_is_not_an_error(self):
+        # A memory cell with no ring, or a second teardown: nothing under the prefix, nothing deleted.
+        world = deployed_world()
+        world["parameters"] = [OTHER_RING_KEY]
+        world["tagged"] = [entry for entry in world["tagged"] if not entry["arn"].endswith(tuple(RING_KEYS))]
+        case, result = self.torn_down(world)
+        self.assertEqual(1, len(case.aws("ssm get-parameters-by-path")))
+        self.assertEqual([], case.aws("ssm delete-parameters"))
+        self.assertIn("deleted 0 key ring parameters under " + RING_PREFIX, result.stdout)
+
+    def test_more_than_ten_ring_parameters_go_ten_at_a_time(self):
+        # DeleteParameters takes at most ten names a call.
+        # https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DeleteParameters.html
+        world = deployed_world()
+        for name in cell.RING_KEYS[2:]:
+            world["parameters"].append(name)
+            world["tagged"].append(tagged(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}", "ssm:parameter", "gateway"))
+        case, _ = self.torn_down(world)
+        self.assertEqual([10, 10, 3], [len(call["options"]["names"]) for call in case.aws("ssm delete-parameters")])
+        self.assertEqual([OTHER_RING_KEY], case.load()["parameters"])
+
     def test_the_query_retries_while_the_tagging_api_lags(self):
         world = deployed_world()
         world["tag_lag"] = 2
@@ -271,6 +330,28 @@ class TeardownFails(cell.CompanionTestCase):
         self.assertIn("still in use after 3 seconds", result.stderr)
         self.assertEqual(4, len(case.aws("acm delete-certificate")))
         self.assertNotIn("pass:", result.stdout)
+        self.assertNoUnexpectedCall(case)
+
+    def test_a_ring_deletion_refused_fails_before_the_proof(self):
+        world = deployed_world()
+        world["faults"]["ssm delete-parameters"] = ["AccessDeniedException", "DeleteParameters"]
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("could not delete the key ring parameters", result.stderr)
+        self.assertEqual([], case.aws("iam list-roles"))
+        self.assertNoUnexpectedCall(case)
+
+    def test_a_ring_listing_refused_fails_before_the_proof(self):
+        # A refused listing is not an empty ring: it stops before any delete and before the proof.
+        world = deployed_world()
+        world["faults"]["ssm get-parameters-by-path"] = ["AccessDeniedException", "GetParametersByPath"]
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("the key ring parameters under " + RING_PREFIX + ": AccessDeniedException", result.stderr)
+        self.assertEqual([], case.aws("ssm delete-parameters"))
+        self.assertEqual([], case.aws("iam list-roles"))
         self.assertNoUnexpectedCall(case)
 
     def test_a_version_left_in_the_bucket_stops_before_any_destroy(self):

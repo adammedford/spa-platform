@@ -2,7 +2,7 @@
 #
 # 1.11 is the floor because that release gave the S3 backend its native lock file
 # (`use_lockfile`). Every other root in this repository locks that way, so no
-# DynamoDB table exists anywhere in the platform. See infra/bootstrap/README.md.
+# DynamoDB lock table exists anywhere in the platform. See infra/bootstrap/README.md.
 
 terraform {
   required_version = ">= 1.11.0"

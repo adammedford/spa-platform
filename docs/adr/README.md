@@ -11,9 +11,9 @@ branches take the same number, the one that lands second renumbers its ADR befor
 
 ADR-0001 to ADR-0012 restate decisions D1 to D12 from the Plan tab, which is exported to
 `docs/plan/01-plan.md`. The plan is a **frozen export** whose source of truth is the Claude Doc, so
-it is never edited in place. These files are the **live decision record**: a decision made or
-revised after the 11 October 2026 export belongs here, as a new ADR or a status change on an
-existing one, not as an edit to `docs/plan/`.
+it is never edited in place. These files are the **live record** of the decisions that meet the
+threshold in "Where a decision lives" below. An amendment to one is a new ADR, and no decision is
+an edit to `docs/plan/`.
 
 Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 
@@ -49,9 +49,46 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0028](0028-back-channel-logout-outside-bff-by-subject.md) | Back-channel logout at `/signout-backchannel-oidc`, outside `/bff`, ends a subject's sessions on one app through a session index that removes by subject and lands with its endpoint at G7; a `sid`-only token is refused and cross-task `jti` replay is accepted | — |
 | [0029](0029-prove-teardown-through-every-reader-of-the-platform-tag.md) | Prove teardown through every reader of the platform tag: IAM's own API for roles and customer managed policies, the cell's roles by name, and the tag query in the selected Region with INACTIVE ECS records and unknown EC2 ids dropped; amends ADR-0013's premise, not its decision | — |
 | [0030](0030-workflow-test-companions-run-on-a-workflow-change.md) | The workflow test companions run when a file under `.claude/workflows/` changes, every one of them, in CI's Documents job and in `tools/check.sh --full`; a workflow script with no companion fails both | — |
+| [0031](0031-contract-fixed-behaviour-lives-once-in-abstractions.md) | A contract-fixed behaviour every workstream would copy lives once in `Platform.Abstractions` as a public static type (`Rejection`, `Problems`), pinned by `PublicSurfaceTests` and held to the contract's own tables by a test; extends ADR-0015 decision 1 from a value to a behaviour | — |
+| [0032](0032-change-requests-are-issues-and-each-decision-has-one-layer.md) | A change request is a `change-request` issue the human decides in a decision comment, which is a confirmed answer, and its own number is never authority; a steering change its ticket does not ask for is proposed as one; `contracts/changes/` is a closed archive; each statement about a decision has one layer, and only a new ADR amends an ADR; amends ADR-0020 decision 2, ADR-0021 decision 4 and ADR-0023 decisions 2 to 4 | — |
+| [0033](0033-seven-startup-clocks-against-a-startup-floor-budgeted-at-twice-the-worst-max.md) | Time a gateway cold start by seven startup clocks against a startup floor, budget each clock at 2 × the worst max of its basis (local 4 / 6 / 7 s, the deployed column empty until #178), prove `B-` ids by the startup benchmark's verdict on tier Local (L), and open the tuning effort on a valid breach | — |
+| [0034](0034-a-wrong-full-landing-on-main-stands-and-the-guard-sits-before-the-merge.md) | A wrong full landing on main stands: no trunk rebuild, no demotion form and no issue-reading pass in the roadmap derivation, the record corrected in prose; the guard sits before the merge, holding a full-landing subject while an open part ticket declares its row, and the merge of a row's last open part names the row once the carrier has landed it in part and never when the row is already landed whole (#332 D7, as #476 Q2 amended it) | — |
+| [0035](0035-analyze-every-build-in-two-tiers-ramped-to-error-with-codeql-required.md) | Analyze source in every build at `10-all`, in a strict and a relaxed tier, with every security rule at error, ramped through pending lines in `.globalconfig`; CodeQL `security-extended` as a required job | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's
 reserve refresh design is now **adopted** rather than held in reserve, and ADR-0011's profile gains
 a client credential style. No decision carries open gate work at G0 now; the next gate work is
 ADR-0011's PingFederate profile at G7.
+
+## Where a decision lives
+
+A decision is written as up to four statements: the rule as it holds now, its why, its provenance
+and its authority. Each statement has one layer to live in, and a reader reads the layers in this
+order. The plan is a snapshot and holds none of them going forward.
+
+| Layer | For | Read |
+| --- | --- | --- |
+| A contract, `GLOSSARY.md` or another steering document other than an ADR (the set: `docs/agents/landing-work.md` → "A commit that changes a steering document") | The rule as it holds now | First, always |
+| ADR | Why a hard-to-reverse choice was made, and what it rejected | Second, when the governing file cites it or a change would contradict it |
+| Merge body | Provenance: which issue and decision moved the file, and the why of a decision with no ADR | When asking why a sentence changed |
+| Issue comment (decision, grill record) | Authority and discussion; nothing is built on it directly | Last, for history |
+| `docs/plan/` | The 11 October 2026 snapshot; a contract or ADR that differs wins | Background |
+
+A change-request decision gets an ADR when any of these holds:
+
+- (a) it amends or supersedes an ADR;
+- (b) it is a change that waits for a gate under `contracts/README.md` → "What may land between
+  gates" (changed stage, owner, signature, narrowed schema, rule id, renamed field);
+- (c) it is hard to reverse, surprising without context, and the result of a real trade-off.
+
+Otherwise the merge body states the why and cites the decision comment.
+
+An ADR is amended only by a new ADR. The new ADR's Plan ref names the decisions it amends, the
+older ADR's Status line gains `**Amended <date> by [ADR-NNNN](<file>):**` and what changes, and the
+older body is not edited. A fact in an accepted ADR that a later change made stale, with no decision
+changed, is not an amendment and gets no body edit either: the Status line gains a Status-line
+pointer, one sentence naming the issue or commit that holds the current fact, restating no rule.
+A change that would alter what a decision says is an amendment, however small, and takes a new ADR.
+The "amended by change request" notes on ADR-0007, ADR-0009, ADR-0014,
+ADR-0016 and ADR-0024, and the one in ADR-0014's body, stay as history.

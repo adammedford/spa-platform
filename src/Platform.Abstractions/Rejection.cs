@@ -14,8 +14,8 @@ namespace Platform.Abstractions;
 /// stage spelled the status and code itself, in four projects that A-03 keeps apart, and the copies
 /// had diverged (#142). ADR-0015 decision 1 put the ids in this project; #142 (Q1, Q5) and change
 /// request contracts/changes/issue-160-rejection-table.md put the join and its writer beside them.
-/// tests/Platform.Abstractions.Tests holds <see cref="Rows"/> to the <c>code</c> column that change
-/// request decided for contracts/request-gate.md -> Rule ids.
+/// tests/Platform.Abstractions.Tests holds <see cref="Rows"/> to the <c>code</c> column of
+/// contracts/request-gate.md -> Rule ids.
 ///
 /// What is not behind it, on purpose. The Warning line is the caller's: this never logs, so
 /// <c>UsePlatformHostResolution</c> can stay silent and every pinned line keeps its template and
@@ -47,14 +47,15 @@ public static class Rejection
         (RuleIds.CsrfToken, Problems.CsrfFailed),
         (RuleIds.AuthSession, Problems.Unauthenticated),
         (RuleIds.ApiUnknown, Problems.UnknownApi),
+        (RuleIds.AuthStore, Problems.SessionStoreUnavailable),
     ];
 
     /// <summary>
     /// Notes the rule on <see cref="IRequestTelemetryFeature"/>, null-conditionally, and writes no
     /// response. For a rejection whose response another writer ends: the shell gate's challenge, the
-    /// <c>/bff/session</c> 401, the <c>/api</c> 401 Proxy's access-token step writes, and the callback
-    /// failure page (#142, Q11). With no feature installed, as in a stage's own test project, it costs
-    /// nothing.
+    /// <c>/bff/session</c> 401, the <c>/api</c> 401 and 503 <c>session_store_unavailable</c> Proxy's
+    /// access-token step writes, and the callback failure page (#142, Q11; #729). With no feature
+    /// installed, as in a stage's own test project, it costs nothing.
     /// </summary>
     /// <exception cref="ArgumentException">The id is not in <see cref="RuleIds.All"/>.</exception>
     public static void Note(HttpContext context, string rule)

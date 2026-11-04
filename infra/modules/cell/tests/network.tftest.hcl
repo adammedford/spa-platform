@@ -4,13 +4,14 @@
 #   terraform -chdir=infra/modules/cell test
 #
 # Plan row 1.2's done-when is "the plan has no NAT, bastion or database, and no other ingress rule".
-# Under ADR-0016 both halves are properties of the configuration, proved here at plan time. The
-# resource-type allowlist in module.tftest.hcl holds the first half: no NAT gateway, instance or
-# database type can be declared. This file holds the second. The cell declares exactly the four
-# security-group rules plan row 1.2 names, two in each direction, and the VPC's default group,
-# which AWS creates admitting all traffic from its own members, is adopted with none. Two runs check
-# what a deployment would otherwise trip over first: where the two subnets go, and that every
-# description is one EC2 accepts.
+# Under ADR-0016 both halves are properties of the configuration, proved here at plan time. P-01
+# in the platform root's tests holds the first half: a NAT gateway or a database only in the gated
+# form it admits (#583, issue-338). The resource-type allowlist in module.tftest.hcl adds that no
+# instance type can be declared; it names the gated types, so it cannot tell gated from ungated.
+# This file holds the second. The cell declares exactly the four security-group rules plan row 1.2
+# names, two in each direction, and the VPC's default group, which AWS creates admitting all traffic
+# from its own members, is adopted with none. Two runs check what a deployment would otherwise trip
+# over first: where the two subnets go, and that every description is one EC2 accepts.
 #
 # What it does not prove is the deployed half of P-06, that a connection from outside to the task's
 # public address on the gateway's port times out. That needs the applied cell and runs at G3 (task
@@ -193,7 +194,8 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
   }
 
   # Out to Cognito, S3, Parameter Store, ECR and logs from the task's public address: there is no
-  # NAT gateway (plan row 1.2, docs/plan/05-infrastructure-and-cost.md -> Phase 1 topology).
+  # NAT gateway (plan row 1.2, docs/plan/05-infrastructure-and-cost.md -> Phase 1 topology). Under
+  # multi_task the same one rule goes out through the NAT gateway (#347).
   assert {
     condition = (
       aws_vpc_security_group_egress_rule.task_https_out.security_group_id == aws_security_group.task.id

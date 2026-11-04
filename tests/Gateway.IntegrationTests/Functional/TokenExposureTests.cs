@@ -21,7 +21,7 @@ public sealed partial class TokenExposureTests
     /// A JWT: three base64url segments, the first starting <c>eyJ</c> (an encoded <c>{"</c>). The provider's
     /// access and ID tokens are JWTs, so one from any source is caught by its shape as well as by value.
     /// </summary>
-    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")]
+    [GeneratedRegex(@"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Jwt();
 
     [Fact]

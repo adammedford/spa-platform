@@ -88,3 +88,24 @@ output "gateway_image" {
   EOT
   value       = var.gateway_image
 }
+
+# --- Continuity (#347) -------------------------------------------------------------------------
+
+output "continuity_environment" {
+  description = <<-EOT
+    The continuity keys of the gateway's task environment, each null when the inputs leave it out:
+    Session:Store, Session:TableName and the DataProtection pair. Read from the gateway container's
+    environment in the task definition's container_definitions, rather than echoed from the inputs
+    or from the locals that environment is built from, so the platform root's test sees what its
+    pass-through delivered to the container, which a root test cannot read off the module's
+    resources.
+  EOT
+  value = {
+    for key in ["Session__Store", "Session__TableName", "DataProtection__ParameterPrefix", "DataProtection__KmsKeyId"] :
+    key => one([
+      for e in one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == local.gateway_container_name
+      ]).environment : e.value if e.name == key
+    ])
+  }
+}

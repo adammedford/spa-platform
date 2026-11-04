@@ -1,7 +1,7 @@
 # Terraform and provider versions for the platform root, and its backend.
 #
 # 1.11 is the floor because that release gave the S3 backend its native lock file,
-# which is why no DynamoDB table exists anywhere in this platform.
+# which is why no DynamoDB lock table exists anywhere in this platform.
 
 terraform {
   required_version = ">= 1.11.0"

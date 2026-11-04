@@ -3,7 +3,7 @@
 - **Raised by:** workstream 4, API and security, during #148 (stage-host 5/10)
 - **Tasks:** #148; #140, the `stage-host` spec; change request issue-145, section 4, which defined `CapturedLine`
 - **Date:** 2026-10-23
-- **Status:** open
+- **Status:** moved to #540, 2026-10-29, by the cutover #439
 
 ## What changed
 

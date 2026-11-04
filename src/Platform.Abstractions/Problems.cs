@@ -48,7 +48,10 @@ public static class Problems
     /// <summary>403. The antiforgery token was missing or wrong.</summary>
     public const string CsrfFailed = "csrf_failed";
 
-    /// <summary>404. Unknown host, missing asset, or a reserved path that is switched off.</summary>
+    /// <summary>
+    /// 404. Unknown host, missing asset (any key but the app's shell, which is
+    /// <see cref="ShellUnavailable"/>), or a reserved path that is switched off.
+    /// </summary>
     public const string NotFound = "not_found";
 
     /// <summary>404. The app lists no upstream under that name.</summary>
@@ -57,11 +60,29 @@ public static class Problems
     /// <summary>405. The path does not accept the method.</summary>
     public const string MethodNotAllowed = "method_not_allowed";
 
+    /// <summary>
+    /// 500. The app's release has no readable <c>index.html</c>: the store answered null or refused
+    /// the read, and both answer the same, so that one absent shell does not answer 404 or 500
+    /// depending on the role's permissions. Change request
+    /// contracts/changes/issue-381-object-read-refusal.md, item 3.
+    /// </summary>
+    public const string ShellUnavailable = "shell_unavailable";
+
     /// <summary>502. The upstream could not be reached.</summary>
     public const string UpstreamUnavailable = "upstream_unavailable";
 
     /// <summary>503. The identity provider could not be reached to refresh the token; the session is kept.</summary>
     public const string IdpUnavailable = "idp_unavailable";
+
+    /// <summary>
+    /// 503. A session store operation failed or ran out <c>StoreDeadline</c>, or a refresh ended at the
+    /// store's bound (2 × TTL, the spec's D2); not the session remove <c>POST /bff/logout</c> makes,
+    /// which answers the usual logout (F11). No cookie is cleared and the session, if it exists, is
+    /// kept. The <c>continuity</c> spec's F17 row (#332), landed with G3's tag (#343). Distinct from
+    /// <see cref="IdpUnavailable"/>, so that a store outage and a provider outage stay distinguishable
+    /// causes.
+    /// </summary>
+    public const string SessionStoreUnavailable = "session_store_unavailable";
 
     /// <summary>504. The upstream exceeded the entry's timeout.</summary>
     public const string UpstreamTimeout = "upstream_timeout";
@@ -81,8 +102,10 @@ public static class Problems
         (StatusCodes.Status404NotFound, NotFound),
         (StatusCodes.Status404NotFound, UnknownApi),
         (StatusCodes.Status405MethodNotAllowed, MethodNotAllowed),
+        (StatusCodes.Status500InternalServerError, ShellUnavailable),
         (StatusCodes.Status502BadGateway, UpstreamUnavailable),
         (StatusCodes.Status503ServiceUnavailable, IdpUnavailable),
+        (StatusCodes.Status503ServiceUnavailable, SessionStoreUnavailable),
         (StatusCodes.Status504GatewayTimeout, UpstreamTimeout),
     ];
 

@@ -26,7 +26,29 @@ internal sealed class SigningKeyRing : IDisposable
         _generation = 1;
     }
 
-    private static RsaSecurityKey NewKey(string kid) => new(RSA.Create(2048)) { KeyId = kid };
+    // RSA.Create defers generating the key to its first use, which would be the first /jwks request: up
+    // to 190 ms on Linux, more on a loaded runner, inside a gateway test's sub-second provider deadline.
+    // The export here generates it while the provider is built, outside any request.
+    //
+    // The runtime source at v10.0.0 says so. RSA.Create(int) creates the platform RSA and sets KeySize
+    // (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/RSA.cs#L29-L43).
+    // On Linux that is an RSAOpenSsl inside an RSAWrapper, which forwards KeySize and ExportParameters
+    // (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/RSA.Create.OpenSsl.cs#L8-L11,
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/RSAWrapper.cs#L20-L24
+    // and #L47-L48). RSAOpenSsl's KeySize setter stores the key as a Lazy over GenerateKey, and
+    // ExportParameters(false) reaches GetKey, which reads that Lazy's Value
+    // (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Common/src/System/Security/Cryptography/RSAOpenSsl.cs#L42-L58,
+    // #L319-L322, #L420-L446 and #L708-L725). On macOS that is an RSASecurityTransforms
+    // (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/RSA.Create.SecurityTransforms.cs#L8-L11),
+    // which leaves its key pair null until ExportParameters calls GetKeys, which generates it
+    // (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Common/src/System/Security/Cryptography/RSASecurityTransforms.cs#L49-L75
+    // and #L605).
+    private static RsaSecurityKey NewKey(string kid)
+    {
+        RSA rsa = RSA.Create(2048);
+        rsa.ExportParameters(includePrivateParameters: false);
+        return new(rsa) { KeyId = kid };
+    }
 
     /// <summary>The key every token is signed with, unless the unpublished key is asked for.</summary>
     public SigningCredentials Current

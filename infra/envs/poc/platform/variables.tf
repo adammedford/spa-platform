@@ -28,8 +28,9 @@ variable "cell" {
 variable "vpc_cidr" {
   description = <<-EOT
     The cell's address range. ForwardedHeaders:TrustedNetworks in platform
-    configuration names this range, so the gateway trusts the load balancer's
-    X-Forwarded-For and nothing else's. The module validates the shape.
+    configuration names the two public subnets the load balancer sits in, not
+    this whole range, so the gateway trusts the load balancer's X-Forwarded-For
+    and nothing else's. The module validates the shape.
   EOT
   type        = string
   default     = "10.20.0.0/16"
@@ -146,4 +147,49 @@ variable "allowed_upstreams" {
   EOT
   type        = list(string)
   default     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+}
+
+# --- Continuity (#347 Q7): the inputs #338 and #347 gave the cell, passed through ----------------
+#
+# Each defaults to Phase 1's value, so a terraform.tfvars that names none of them plans the one-task
+# cell G3 ran. The G6 sitting (#348) sets them in its untracked terraform.tfvars; the values are in
+# terraform.tfvars.example. The module holds each value's rule, refuses dynamodb with no prefix and
+# refuses multi_task without dynamodb.
+
+variable "multi_task" {
+  description = <<-EOT
+    The two-task cell of #332 D6 (true) or Phase 1's one public task (false): two tasks in two
+    private subnets behind one NAT gateway and the S3 and DynamoDB gateway endpoints. The module's
+    rule: true needs session_store = "dynamodb".
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "session_store" {
+  description = <<-EOT
+    Where sessions live: memory in Phase 1, dynamodb from G6 (ADR-0004, ADR-0012; #332 D6). The
+    module's rule: dynamodb needs data_protection_parameter_prefix.
+  EOT
+  type        = string
+  default     = "memory"
+}
+
+variable "data_protection_parameter_prefix" {
+  description = <<-EOT
+    The Parameter Store prefix of the cell's shared data-protection key ring, or empty for none, which
+    is Phase 1. Set, it is exactly /spa-platform/{cell}/data-protection/ (P2-2 decision 8); the module
+    refuses any other value.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "data_protection_kms_key_id" {
+  description = <<-EOT
+    The KMS key the ring's parameters are encrypted under, or empty for the account's aws/ssm key,
+    which is G6's value (#332 D6: no customer-managed key).
+  EOT
+  type        = string
+  default     = ""
 }

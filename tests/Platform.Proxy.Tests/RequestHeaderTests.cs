@@ -121,7 +121,7 @@ public sealed class RequestHeaderTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(
             Ct, TestApps.Entry("app1", apis: [TestApps.Api("orders", listener.BaseAddress.AbsoluteUri)]));
-        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false, CheckCertificateRevocationList = true });
         using HttpRequestMessage request = gateway.Request(HttpMethod.Get, Host, "/api/orders/items");
         foreach ((string name, string value) in Planted)
         {

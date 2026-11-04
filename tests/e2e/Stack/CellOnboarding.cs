@@ -174,7 +174,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
         using HttpResponseMessage answer = await setup.Tunnel(login, ct);
 
         Uri? location = answer.Headers.Location;
-        bool ownClient = (int)answer.StatusCode is >= 300 and < 400
+        bool ownClient = (int)answer.StatusCode is >= 300 and < 400 // Not an Errors row: the redirect range's upper bound.
             && location is { IsAbsoluteUri: true }
             && location.GetLeftPart(UriPartial.Path) == cell.AuthorizeEndpoint
             && QueryHelpers.ParseQuery(location.Query).TryGetValue("client_id", out Microsoft.Extensions.Primitives.StringValues clientId)

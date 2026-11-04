@@ -51,6 +51,9 @@ public static class Contract
     private static readonly Lazy<ImmutableArray<ErrorRow>> ErrorTable =
         new(() => ContractParser.ErrorRows(Read(ContractParser.BrowserContract)));
 
+    private static readonly Lazy<string> AssetNotFoundCaching =
+        new(() => ContractParser.AssetNotFoundCacheControl(Read(ContractParser.BrowserContract)));
+
     private static readonly Lazy<ImmutableArray<string>> LogFieldNames =
         new(() => ContractParser.TelemetryNames(Read(ContractParser.TelemetryContract), "Log fields"));
 
@@ -97,6 +100,12 @@ public static class Contract
     /// content security policy", with the provider-origin placeholder still in it.
     /// </summary>
     public static string BaselineCspTemplate => Baseline.Value;
+
+    /// <summary>
+    /// The <c>Cache-Control</c> value every 404 the asset endpoint answers carries, from
+    /// <c>contracts/http-contract.md</c> -> Endpoints (change request issue-381-object-read-refusal, item 4).
+    /// </summary>
+    public static string AssetNotFoundCacheControl => AssetNotFoundCaching.Value;
 
     /// <summary>The telemetry contract's request-line field names, in the order its "Log fields" row lists them.</summary>
     public static ImmutableArray<string> LogFields => LogFieldNames.Value;

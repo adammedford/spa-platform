@@ -9,8 +9,8 @@ namespace Platform.Telemetry;
 
 /// <summary>
 /// <c>UsePlatformTelemetry</c> (contracts/pipeline.md): the request log line, the app on the request's span, and the
-/// <c>gateway.requests</c> and <c>security.rejections</c> counts, all written once the rest of the
-/// pipeline has returned.
+/// <c>gateway.requests</c>, <c>security.rejections</c> and <c>storage.read_refusals</c> counts, all
+/// written once the rest of the pipeline has returned.
 ///
 /// The app is read after the pipeline because host resolution pins it later than this stage runs. A
 /// request host resolution rejected, or one refused before it ran, has no <see cref="IAppFeature"/>, and its line says so with a null <c>app_id</c>.
@@ -24,6 +24,13 @@ namespace Platform.Telemetry;
 /// answers, because this stage runs first (ADR-0018): the method allowlist's 405 in
 /// <c>UsePlatformForwardedHeaders</c> carries <c>gate.method</c> on its line and in the count, with a
 /// null <c>app_id</c>, like any other.
+///
+/// <c>read_refused</c> reaches the line the same way: the asset route writes which class of key the
+/// store refused to read, and this stage logs it and counts it under <c>storage.read_refusals</c>, the
+/// second instrument this stage owns for an event another project raises (contracts/telemetry.md -> The
+/// instruments; change request contracts/changes/issue-381-object-read-refusal.md, items 5 and 6).
+/// Unlike <c>rule</c> and <c>session_ref</c>, the line carries the field only when a read was refused
+/// (#429), so a line for any other request is the one it was before.
 /// </summary>
 internal sealed class RequestTelemetry
 {
@@ -38,6 +45,7 @@ internal sealed class RequestTelemetry
     private readonly ILogger logger;
     private readonly Counter<long> requests;
     private readonly Counter<long> rejections;
+    private readonly Counter<long> readRefusals;
 
     public RequestTelemetry(ILoggerFactory loggers, IMeterFactory meters)
     {
@@ -47,6 +55,8 @@ internal sealed class RequestTelemetry
             "gateway.requests", unit: "{request}", description: "Requests the gateway answered, by app, route and status.");
         rejections = meter.CreateCounter<long>(
             "security.rejections", unit: "{request}", description: "Requests the gateway rejected, by rule id and app.");
+        readRefusals = meter.CreateCounter<long>(
+            "storage.read_refusals", unit: "{request}", description: "Requests whose object read the store refused, by app and key class.");
     }
 
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
@@ -76,6 +86,7 @@ internal sealed class RequestTelemetry
     private void Complete(HttpContext context, RequestTelemetryFeature fields, TimeSpan elapsed, bool failed)
     {
         string? rule = fields.Rule;
+        string? readRefused = fields.ReadRefused;
         IAppFeature? resolved = context.Features.Get<IAppFeature>();
         string? appId = resolved?.App.AppId;
         long? revision = resolved?.Snapshot.Revision;
@@ -103,6 +114,15 @@ internal sealed class RequestTelemetry
             rejections.Add(1,
                 new KeyValuePair<string, object?>("rule", rule),
                 new KeyValuePair<string, object?>("app_id", appId));
+        }
+
+        // contracts/telemetry.md -> The instruments: from the field the line logs, and before the line's
+        // level check, so the count and the lines carrying read_refused are one decision per request.
+        if (readRefused is not null)
+        {
+            readRefusals.Add(1,
+                new KeyValuePair<string, object?>("app_id", appId),
+                new KeyValuePair<string, object?>("key_class", readRefused));
         }
 
         if (logger.IsEnabled(LogLevel.Information))
@@ -140,7 +160,11 @@ internal sealed class RequestTelemetry
         return "asset";
     }
 
-    /// <summary>The line's fields, as structured state the formatter writes field by field.</summary>
+    /// <summary>
+    /// The line's fields, as structured state the formatter writes field by field. <c>read_refused</c>
+    /// sits beside <c>rule</c> and <c>session_ref</c>, the feature's other two fields, and only on a line
+    /// whose read was refused: a null is left out rather than written, as #429 asks.
+    /// </summary>
     private sealed class RequestLine(
         string? appId, long? revision, string route, IRequestTelemetryFeature telemetry, int status, double durationMs)
         : IReadOnlyList<KeyValuePair<string, object?>>
@@ -152,6 +176,7 @@ internal sealed class RequestTelemetry
             new("route", route),
             new("rule", telemetry.Rule),
             new("session_ref", telemetry.SessionRef),
+            .. telemetry.ReadRefused is { } refused ? [new KeyValuePair<string, object?>("read_refused", refused)] : (KeyValuePair<string, object?>[])[],
             new("status", status),
             new("duration_ms", durationMs),
         ];
@@ -168,13 +193,15 @@ internal sealed class RequestTelemetry
     }
 
     /// <summary>
-    /// The feature this stage hands the rest of the pipeline. Both fields start null, which is what a
-    /// request that no stage rejected and that carried no session keeps.
+    /// The feature this stage hands the rest of the pipeline. Every field starts null, which is what a
+    /// request that no stage rejected, that carried no session and whose object read was not refused keeps.
     /// </summary>
     private sealed class RequestTelemetryFeature : IRequestTelemetryFeature
     {
         public string? Rule { get; set; }
 
         public string? SessionRef { get; set; }
+
+        public string? ReadRefused { get; set; }
     }
 }

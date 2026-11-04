@@ -27,16 +27,26 @@ namespace Gateway.TestHarness;
 /// </summary>
 public sealed class LoadBalancerTransport : HttpMessageHandler
 {
-    private readonly Uri gateway;
+    private readonly Func<Uri> target;
     private readonly string clientAddress;
     private readonly HttpMessageInvoker network;
 
     /// <param name="gateway">The gateway's listener, e.g. <c>http://127.0.0.1:54321/</c>.</param>
     /// <param name="clientAddress">The browser's address as the ALB reports it in <c>X-Forwarded-For</c>.</param>
     public LoadBalancerTransport(Uri gateway, string clientAddress = "198.51.100.7")
+        : this(Fixed(gateway), clientAddress)
     {
-        ArgumentNullException.ThrowIfNull(gateway);
-        this.gateway = gateway;
+    }
+
+    /// <param name="target">
+    /// Picks the gateway listener for each request, as the ALB picks a target: called once per request, so
+    /// a harness with two hosts can alternate between them or send each hop where a test says (#345).
+    /// </param>
+    /// <param name="clientAddress">The browser's address as the ALB reports it in <c>X-Forwarded-For</c>.</param>
+    public LoadBalancerTransport(Func<Uri> target, string clientAddress = "198.51.100.7")
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        this.target = target;
         this.clientAddress = clientAddress;
         network = new HttpMessageInvoker(new SocketsHttpHandler
         {
@@ -45,6 +55,13 @@ public sealed class LoadBalancerTransport : HttpMessageHandler
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.None,
             PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+
+            // An ALB passes a client's traceparent through and writes none of its own (it adds
+            // X-Amzn-Trace-Id: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-request-tracing.html).
+            // The gateway's HttpClient instrumentation listens process-wide, so without this the
+            // handler would put the test process's own trace context on every request and the
+            // gateway would log that trace id instead of the client's (#358 Q143).
+            ActivityHeadersPropagator = null,
         });
     }
 
@@ -63,7 +80,7 @@ public sealed class LoadBalancerTransport : HttpMessageHandler
         // The authority as the browser sends it in Host: the port only when it is not the scheme's default.
         // A test that set Host itself keeps its own.
         request.Headers.Host ??= url.IsDefaultPort ? url.IdnHost : $"{url.IdnHost}:{url.Port}";
-        request.RequestUri = new Uri(gateway, url.PathAndQuery);
+        request.RequestUri = new Uri(target(), url.PathAndQuery);
 
         request.Headers.Remove("X-Forwarded-Proto");
         request.Headers.Remove("X-Forwarded-Port");
@@ -77,6 +94,12 @@ public sealed class LoadBalancerTransport : HttpMessageHandler
         request.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
 
         return network.SendAsync(request, ct);
+    }
+
+    private static Func<Uri> Fixed(Uri gateway)
+    {
+        ArgumentNullException.ThrowIfNull(gateway);
+        return () => gateway;
     }
 
     protected override void Dispose(bool disposing)

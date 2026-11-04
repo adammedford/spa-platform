@@ -52,6 +52,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,17 +82,19 @@ SINCE = steering.AUTHORITY_SINCE
 BEFORE = SINCE - datetime.timedelta(days=1)
 AFTER = SINCE + datetime.timedelta(hours=1)
 
-# Either side of the decision rule's starting point, read from the module the same way.
-DECIDED_AFTER = steering.DECIDED_SINCE + datetime.timedelta(hours=1)
-DECIDED_BEFORE = steering.DECIDED_SINCE - datetime.timedelta(hours=1)
+# Either side of the point the two change-request rules start from, read from the module the same
+# way. Both are after AUTHORITY_SINCE, so a commit at either is held for a steering change.
+CLOSED_AFTER = steering.REQUESTS_CLOSED_SINCE + datetime.timedelta(hours=1)
+CLOSED_BEFORE = steering.REQUESTS_CLOSED_SINCE - datetime.timedelta(hours=1)
 
-# A change request as every one under contracts/changes/ writes its Status, open and decided.
+# An archived change request as every one under contracts/changes/ writes its Status, open and
+# decided.
 OPEN_REQUEST = "# A change request\n\n- **Raised by:** a lane\n- **Status:** open\n"
 DECIDED_REQUEST = ("# A change request\n\n- **Raised by:** a lane\n"
                    "- **Status:** decided, 2026-10-20. See the Decision section below.\n")
 
-# One file in each place ADR-0023 decision 2 names as a steering document, typed here rather than
-# read from the module: the case holding the module's list to the ADR is a separate one.
+# One file in each place the landing guide names as a steering document, typed here rather than
+# read from the module: the case holding the module's list to the guide is a separate one.
 STEERING_EXAMPLES = (
     "GLOSSARY.md",
     "AGENTS.md",
@@ -263,38 +266,66 @@ def holds(sha: str, subject: str, *paths: str) -> str:
             "Authority: trailer")
 
 
-def undecides(sha: str, subject: str, path: str, *authorities: str,
-              state: str = "decided") -> str:
-    """The line the decision rule prints for a commit that sets a change request to a decision on
-    no confirmed answer's URL."""
-    return (f'commit {sha[:12]} ("{subject}") changes {path}, sets {path} to {state}, and cites '
-            f"no confirmed answer: Authority: {', '.join(authorities)}")
-
-
-def unreadable(sha: str, subject: str, path: str) -> str:
-    """The line the decision rule prints for a change request whose Status it cannot read."""
-    return f'commit {sha[:12]} ("{subject}") leaves {path} with a Status this check cannot read'
-
-
-UNREADABLE_HEADLINE = "STEERING FAILED: a change request's Status cannot be read."
-
-# Status lines in shapes no change request has used, each of which a writer could reach for, and
-# none of which STATUS reads. #188's review found each read as open, so each decided request passed.
-OTHER_SHAPES = (
-    ("bold label, colon outside", "**Status**: decided, 2026-10-20."),
-    ("plain list item", "- Status: decided, 2026-10-20."),
-    ("numbered item", "1. **Status:** decided, 2026-10-20."),
-    ("italic state", "- **Status:** _decided_, 2026-10-20."),
-    ("table row", "| Field | Value |\n| --- | --- |\n| Status | decided |"),
-    ("heading", "## Status\n\nDecided, 2026-10-20."),
-    ("lower case", "- **status:** decided, 2026-10-20."),
-)
-
-
 def refuses(sha: str, subject: str, paths: tuple[str, ...], authority: str, why: str) -> str:
     """The line the authority rule prints for an `Authority:` trailer that resolves to nothing."""
     return (f'commit {sha[:12]} ("{subject}") changes {", ".join(paths)}, and Authority: '
             f"{authority} {why}")
+
+
+def cites_request(sha: str, subject: str, paths: tuple[str, ...], authority: str) -> str:
+    """The line the authority rule prints for an `Authority:` trailer citing a change request."""
+    return refuses(sha, subject, paths, authority,
+                   "is a change request, which asks for a decision rather than recording one")
+
+
+def adds(sha: str, subject: str, *paths: str) -> str:
+    """The line the closed archive prints for a commit adding a file under contracts/changes/."""
+    return f'commit {sha[:12]} ("{subject}") adds {", ".join(paths)}'
+
+
+REQUESTED_HEADLINE = "STEERING FAILED: an Authority: trailer cites a change request's own number."
+CLOSED_HEADLINE = ("STEERING FAILED: a commit adds a file under contracts/changes/, which is "
+                   "closed to new files.")
+NAMELESS_HEADLINE = ("STEERING FAILED: a commit changes a steering document and cites no "
+                     "authority.")
+
+
+# An accepted ADR in the shape every numbered file under docs/adr/ takes: a Status item, then the
+# rest of the header, a Plan ref whose continuation lines are indented as ADR-0014's are, and the
+# sections. One line each from the rejected options and the consequences stand where e2fc266
+# edited ADR-0017's. No line carries a `#` against a digit or a ticket citation, for the reason the
+# citations above are assembled.
+ADR = "docs/adr/0017-a-decision.md"
+ADR_LINES = (
+    "# ADR-0017: A decision\n",
+    "\n",
+    "- **Status:** Accepted.\n",
+    "- **Date:** 2026-10-16\n",
+    "- **Deciders:** integrator\n",
+    "- **Plan ref:** the plan's task row, which runs on\n",
+    "  over a second line the way ADR-0014's does.\n",
+    "\n",
+    "## Context\n",
+    "\n",
+    "What the gate found.\n",
+    "\n",
+    "## Decision\n",
+    "\n",
+    "1. Lock the refresh.\n",
+    "\n",
+    "## Alternatives rejected\n",
+    "\n",
+    "- Raise the grace window instead of locking.\n",
+    "\n",
+    "## Consequences\n",
+    "\n",
+    "- The lock costs one wait per refresh.\n",
+)
+STATUS = ADR_LINES.index("- **Status:** Accepted.\n")
+REJECTED_LINE = "- Raise the grace window instead of locking.\n"
+CONSEQUENCE_LINE = "- The lock costs one wait per refresh.\n"
+ADR_HEADLINE = ("STEERING FAILED: a commit range edits the body of an ADR that existed at the "
+                "base.")
 
 
 # 91e2103's line as AGENTS.md carried it.
@@ -361,7 +392,7 @@ class SteeringTests(unittest.TestCase):
                               capture_output=True, text=True)
         return done.stdout.strip()
 
-    def no_lookup(self, root: pathlib.Path) -> tuple[set[int], set[int], str]:
+    def no_lookup(self, root: pathlib.Path) -> tuple[set[int], set[int], set[int], str]:
         self.fail("the check asked GitHub for its numbers; a case whose tree cites a `#NNN` says "
                   "what GitHub would answer with github() or offline()")
 
@@ -374,18 +405,22 @@ class SteeringTests(unittest.TestCase):
                   "listing lacks says what GitHub would answer with looked_up()")
 
     def looked_up(self, kinds: dict[int, str], why: str = "") -> None:
-        """What GitHub would answer when asked for one number the listing lacks: "issue" or
-        "pull" for a number in `kinds`, None (its 404) for any other; or, given `why`, that it
-        could not say."""
+        """What GitHub would answer when asked for one number the listing lacks: "issue",
+        "request" or "pull" for a number in `kinds`, None (its 404) for any other; or, given
+        `why`, that it could not say."""
         steering.issue_kind = lambda root, number: (None, why) if why else (kinds.get(number), "")
 
-    def github(self, *numbers: int, pulls: tuple[int, ...] = ()) -> None:
-        """What GitHub would answer: these numbers are issues, and `pulls` are pull requests."""
-        steering.issued_numbers = lambda root: (set(numbers), set(pulls), "")
+    def github(self, *numbers: int, pulls: tuple[int, ...] = (),
+               requests: tuple[int, ...] = ()) -> None:
+        """What GitHub would answer: these numbers are issues, `pulls` are pull requests, and
+        `requests` are issues labelled change-request, so issues as well."""
+        steering.issued_numbers = lambda root: (
+            set(numbers) | set(requests), set(pulls), set(requests), ""
+        )
 
     def offline(self, why: str) -> None:
         """What the lookup says when GitHub cannot be asked: no numbers, and the reason."""
-        steering.issued_numbers = lambda root: (set(), set(), why)
+        steering.issued_numbers = lambda root: (set(), set(), set(), why)
 
     def comments(self, kept: dict[str, str], why: str = "", author: str = "adammedford") -> None:
         """What GitHub would answer for a comment id: the URL it keeps that comment at and who
@@ -578,6 +613,19 @@ class SteeringTests(unittest.TestCase):
             "'Freezes at: G1a' names G1a",
             out,
         )
+
+    def test_the_freeze_advice_sends_the_correction_to_a_change_request_issue(self):
+        """#442 Q34: a change request is an issue now, and contracts/changes/ is closed to new
+        files, so the advice for a frozen cell that disagrees names an issue and not the
+        directory."""
+        self.write_index(
+            "| Pipeline and entry points | [`pipeline.md`](pipeline.md) | G1b | Everyone |"
+        )
+        self.write_contract("contracts/pipeline.md", "G1a")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("correct that side through a change-request issue", out)
+        self.assertNotIn(steering.CHANGE_REQUESTS, out)
 
     def test_a_header_whose_bullet_runs_on_is_quoted_to_the_end_of_its_freeze(self):
         """http-contract.md's shape: the freeze, then its reason, over more than one line.
@@ -861,6 +909,77 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("contracts/README.md agrees with the 1 freeze header it "
                       "indexes", out)
 
+    def test_a_target_with_no_header_by_design_passes_and_is_not_counted(self):
+        """The three shapes that carry no header: a code file, a directory of code, and a schema's
+        example. Each beside a contract that does carry one, so the count shows the headerless
+        target was passed over rather than the row."""
+        for shape, cell, write in (
+            ("a code file", "[`pipeline.md`](pipeline.md), `src/Gateway/Program.cs`",
+             lambda: self.write("src/Gateway/Program.cs")),
+            ("a directory", "[`pipeline.md`](pipeline.md), `src/Platform.Abstractions`",
+             lambda: self.write("src/Platform.Abstractions/")),
+            ("a schema's example", "[`pipeline.md`](pipeline.md), "
+             "[`pipeline.example.json`](pipeline.example.json)",
+             lambda: self.write("contracts/pipeline.example.json", "{}\n")),
+        ):
+            with self.subTest(shape=shape):
+                self.write_index(f"| Pipeline | {cell} | G1a | Everyone |")
+                self.write_contract("contracts/pipeline.md", "G1a")
+                write()
+                code, out = self.check()
+                self.assertEqual(0, code, out)
+                self.assertIn("contracts/README.md agrees with the 1 freeze header it indexes",
+                              out)
+
+    def test_a_target_whose_header_cannot_be_read_fails(self):
+        """#493 and #512: each of these was passed over in silence, and the check still said the
+        index agreed. A row naming a contract that does not exist is the reproduction from #44's
+        review: `ghost.md`, at a gate no contract names."""
+        for shape, target, write, message in (
+            ("a target that does not exist", "[`ghost.md`](ghost.md)", lambda: None,
+             "ghost.md exists neither beside contracts/README.md nor at the repository root"),
+            ("a contract with no freeze bullet", "[`telemetry.md`](telemetry.md)",
+             lambda: self.write("contracts/telemetry.md", "# Telemetry\n\nNo header.\n"),
+             "contracts/telemetry.md carries no '- **Freezes at:**' bullet"),
+            ("a header naming no gate", "[`telemetry.md`](telemetry.md)",
+             lambda: self.write_contract("contracts/telemetry.md", "when it lands"),
+             "contracts/telemetry.md's header 'Freezes at: when it lands' names no gate"),
+            ("a schema stating no freeze", "[`registry.schema.json`](registry.schema.json)",
+             lambda: self.write("contracts/registry.schema.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.schema.json is a schema whose description states no freeze"),
+            ("JSON that does not parse", "[`registry.schema.json`](registry.schema.json)",
+             lambda: self.write("contracts/registry.schema.json", "{\n"),
+             "contracts/registry.schema.json is not JSON that parses"),
+            # #512: the part before the '#' is empty, and an empty path resolved to contracts/
+            # itself, which passed as a directory of code carrying no header by design.
+            ("a link that is only a fragment", "[`pipeline`](#pipeline)", lambda: None,
+             "#pipeline is only a fragment, and names no file"),
+            # #511: these two passed as code and as a schema's example by their suffix alone,
+            # though they are neither.
+            ("JSON that is neither a schema nor an example", "[`registry.json`](registry.json)",
+             lambda: self.write("contracts/registry.json",
+                                json.dumps({"description": "The registry."}) + "\n"),
+             "contracts/registry.json is JSON that states no freeze and is not a schema's "
+             "*.example.json"),
+            ("a contract that is neither markdown, JSON nor code",
+             "[`openapi.yaml`](openapi.yaml)",
+             lambda: self.write("contracts/openapi.yaml", "openapi: 3.1.0\n"),
+             "contracts/openapi.yaml is neither a markdown contract, JSON nor code, so no header "
+             "is read from it"),
+        ):
+            with self.subTest(shape=shape):
+                for stale in ("contracts/telemetry.md", "contracts/registry.schema.json",
+                              "contracts/registry.json", "contracts/openapi.yaml"):
+                    (self.root / stale).unlink(missing_ok=True)
+                number = self.write_index(f"| A contract | {target} | G7z | Nobody |")
+                write()
+                code, out = self.check()
+                self.assertEqual(1, code, out)
+                self.assertIn("STEERING FAILED: a contracts index target has no readable freeze "
+                              "header.", out)
+                self.assertIn(f"contracts/README.md:{number}: row 'A contract': {message}", out)
+
     def test_the_live_index_agrees_with_every_header_it_points_at(self):
         """The one case against the real tree: the shapes above are the shapes actually in it.
 
@@ -1137,7 +1256,7 @@ class SteeringTests(unittest.TestCase):
             "and 61-security-suite-refresh-outcome-flake.md",
             out,
         )
-        self.assertIn("docs/agents/issue-tracker.md", out)
+        self.assertIn("docs/agents/tracker-policy.md", out)
 
     def test_every_number_sharing_files_is_reported_in_every_tracker(self):
         """Three files on one number are one line naming all three, and a second collision in
@@ -1309,7 +1428,7 @@ class SteeringTests(unittest.TestCase):
 
         def lookup(root):
             asked.append(root)
-            return {43}, set(), ""
+            return {43}, set(), set(), ""
 
         steering.issued_numbers = lookup
         self.cite_in("docs/adr/0021-a-decision.md", f"Decided in {issue(43)}.")
@@ -1399,7 +1518,7 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("docs/agents/landing-work.md has the forms", out)
 
     def test_a_change_to_each_steering_document_is_held(self):
-        """One commit per place ADR-0023 decision 2 names: five root files and three directories.
+        """One commit per place the landing guide names: five root files and three directories.
 
         Each judged alone, from the commit before it, so a line naming the wrong path or a place
         the rule stopped reading shows up as that place's subtest and no other.
@@ -1567,7 +1686,7 @@ class SteeringTests(unittest.TestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
                                       f"is a comment by {who}, not by @adammedford, the "
-                                      "repository's owner, since docs/agents/issue-tracker.md "
+                                      "repository's owner, since docs/agents/tracker-policy.md "
                                       "names no account"), out)
                 self.assertIn("STEERING FAILED: an Authority: comment was written by an account "
                               "that does not confirm.", out)
@@ -1582,12 +1701,12 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(0, code, out)
 
     def test_the_account_the_guide_names_confirms_and_the_owner_then_does_not(self):
-        """The account is read from the guide, not assumed: once docs/agents/issue-tracker.md
+        """The account is read from the guide, not assumed: once docs/agents/tracker-policy.md
         names one, its comment vouches and the owner's no longer does."""
-        guide = ("# Issue tracker\n\n## This repository's additions\n\n"
+        guide = ("# Tracker policy\n\n## This repository's additions\n\n"
                  "- **The human's account is `@adam-m`.** A `Confirm` comment counts only when\n"
                  "  this account wrote it.\n")
-        self.write(steering.GUIDE, guide)
+        self.write("docs/agents/tracker-policy.md", guide)
         for author, code_wanted in (("adam-m", 0), ("adammedford", 1)):
             with self.subTest(author=author):
                 self.comments({COMMENT_ID: COMMENT}, author=author)
@@ -1600,8 +1719,27 @@ class SteeringTests(unittest.TestCase):
                 if code_wanted:
                     self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
                                           "is a comment by @adammedford, not by @adam-m, the "
-                                          "account docs/agents/issue-tracker.md names for a "
+                                          "account docs/agents/tracker-policy.md names for a "
                                           "Confirm"), out)
+
+    def test_an_account_line_left_in_the_setup_written_guide_is_not_read(self):
+        """#432: the account line moved to docs/agents/tracker-policy.md, which no setup skill
+        writes, so a re-run of the setup skill cannot delete it (#412). A line in
+        docs/agents/issue-tracker.md, the guide that skill rewrites, names nobody: @mallory's
+        comment is judged against the owner, and the line says which file was read."""
+        self.write("docs/agents/issue-tracker.md",
+                   "# Issue tracker\n\n## This repository's additions\n\n"
+                   "- **The human's account is `@mallory`.** It confirms.\n")
+        self.comments({COMMENT_ID: COMMENT}, author="mallory")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on the setup guide's account"
+        sha = self.commit(message(subject, COMMENT))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(refuses(sha, subject, ("GLOSSARY.md",), COMMENT,
+                              "is a comment by @mallory, not by @adammedford, the repository's "
+                              "owner, since docs/agents/tracker-policy.md names no account"), out)
 
     def test_a_range_that_renames_the_account_cannot_vouch_itself(self):
         """#316 review: the account is read from the guide at the base. A range that writes the
@@ -1609,7 +1747,7 @@ class SteeringTests(unittest.TestCase):
         judged against the owner the base's guide leaves, so both commits fail."""
         self.comments({COMMENT_ID: COMMENT}, author="mallory")
         base = self.baseline()
-        self.write(steering.GUIDE, "# Issue tracker\n\n## This repository's additions\n\n"
+        self.write(steering.GUIDE, "# Tracker policy\n\n## This repository's additions\n\n"
                                    "- **The human's account is `@mallory`.** It confirms.\n")
         guide_sha = self.commit(message("Name the account", COMMENT))
         self.write("GLOSSARY.md", "# Glossary\n")
@@ -1617,7 +1755,7 @@ class SteeringTests(unittest.TestCase):
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
         why = ("is a comment by @mallory, not by @adammedford, the repository's owner, since "
-               "docs/agents/issue-tracker.md names no account")
+               "docs/agents/tracker-policy.md names no account")
         self.assertIn(refuses(guide_sha, "Name the account", (steering.GUIDE,), COMMENT, why), out)
         self.assertIn(refuses(glossary_sha, "The glossary, on mallory's Confirm",
                               ("GLOSSARY.md",), COMMENT, why), out)
@@ -1757,21 +1895,60 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(1, code, out)
         self.assertIn(holds(sha, subject, "GLOSSARY.md"), out)
 
-    def test_a_change_request_added_passes_without_a_trailer(self):
-        """ADR-0023 decision 2: adding a change request is not a change to a steering document,
-        and AGENTS.md gives it to every workstream as the way to ask for a contract change."""
+    def test_a_change_request_added_from_the_closing_date_is_refused_whatever_it_cites(self):
+        """#442 Q31: contracts/changes/ is the read-only archive of requests filed before they were
+        issues, so from REQUESTS_CLOSED_SINCE on a commit adding any file there is refused, under
+        its own headline, on a vouched trailer or none, and a README is no exception."""
+        self.github(102)
         base = self.baseline()
-        self.write(f"{steering.CHANGE_REQUESTS}issue-102-a-request.md", "# A change request\n")
-        self.commit(message("Ask for a contract change"))
+        for number, (name, authorities) in enumerate(
+            (("issue-102-a-request.md", (issue(102),)),
+             ("issue-103-a-request.md", ()),
+             ("README.md", (issue(102),))),
+            start=1,
+        ):
+            with self.subTest(name=name, authorities=authorities):
+                request = f"{steering.CHANGE_REQUESTS}{name}"
+                self.write(request, OPEN_REQUEST)
+                subject = f"Ask for a contract change, the file {number}"
+                sha = self.commit(message(subject, *authorities), made=CLOSED_AFTER)
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(CLOSED_HEADLINE, out)
+                self.assertIn(adds(sha, subject, request), out)
+                self.assertIn("File the request as an issue", out)
+                self.assertNotIn(NAMELESS_HEADLINE, out)
+                base = sha
+
+    def test_a_change_request_added_before_the_closing_date_passes_without_a_trailer(self):
+        """The archive's own files: each added since AUTHORITY_SINCE on no trailer, as the old
+        exemption allowed, and a landed commit cannot be reworded, so the cut-off is a date."""
+        base = self.baseline()
+        self.write(f"{steering.CHANGE_REQUESTS}issue-102-a-request.md", OPEN_REQUEST)
+        self.commit(message("Ask for a contract change"), made=CLOSED_BEFORE)
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertNotIn("STEERING FAILED", out)
 
-    def test_a_change_request_edited_or_removed_is_held(self):
-        """Only adding one passes: editing or removing a change request is the integrator deciding
-        it, a change to contracts/ like any other."""
+    def test_a_request_added_beside_another_steering_change_owes_both(self):
+        """The added file is refused for itself, and the other steering path still needs an
+        authority: the closed archive is not a way round the trailer."""
+        base = self.baseline()
         request = f"{steering.CHANGE_REQUESTS}issue-102-a-request.md"
-        self.write(request, "# A change request\n\n**Status:** open\n")
+        self.write(request, OPEN_REQUEST)
+        self.append("AGENTS.md", "A line.")
+        subject = "A request and a guide line"
+        sha = self.commit(message(subject), made=CLOSED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(adds(sha, subject, request), out)
+        self.assertIn(holds(sha, subject, "AGENTS.md"), out)
+
+    def test_a_change_request_edited_or_removed_is_held(self):
+        """Editing or removing an archived change request is a change to contracts/ like any
+        other, before the archive closed and after it."""
+        request = f"{steering.CHANGE_REQUESTS}issue-102-a-request.md"
+        self.write(request, OPEN_REQUEST)
         self.baseline()
         for shape in ("edited", "removed"):
             with self.subTest(shape=shape):
@@ -1781,255 +1958,102 @@ class SteeringTests(unittest.TestCase):
                 else:
                     (self.root / request).unlink()
                 subject = f"The change request, {shape}"
-                sha = self.commit(message(subject))
+                sha = self.commit(message(subject), made=CLOSED_AFTER)
                 code, out = self.check("--base", base)
                 self.assertEqual(1, code, out)
                 self.assertIn(holds(sha, subject, request), out)
+                self.assertNotIn(CLOSED_HEADLINE, out)
 
-    def test_a_change_request_added_as_decided_on_a_ticket_alone_is_held(self):
-        """#187: 9f56729 and 37af894 added their requests already decided, each citing its own
-        ticket, whose acceptance asked the lane to record the decision. That is a lane deciding;
-        ADR-0021 decision 4 wants a confirmed answer, so the ticket alone is held."""
+    def test_an_archived_request_edited_to_decided_on_a_ticket_passes(self):
+        """#442 Q31: the decision rule is gone. An edit to an archived file is a steering change
+        like any other, so a plain ticket number authorises one setting its Status to decided."""
         self.github(143)
-        base = self.baseline()
         request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
+        self.write(request, OPEN_REQUEST)
+        base = self.baseline()
         self.write(request, DECIDED_REQUEST)
-        subject = "Task issue-143: the change request, decided"
-        sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
+        self.commit(message("The archived request, decided", issue(143)), made=CLOSED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_an_authority_naming_a_change_request_is_refused(self):
+        """#442 Q29: anyone may file a change request, so its own number authorises nothing, and
+        it is reported under its own headline, which points at the decision comment's URL."""
+        self.github(102, requests=(150,))
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on the request that asks for it"
+        sha = self.commit(message(subject, issue(150)), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn("STEERING FAILED: a commit sets a change request to a decision on no "
-                      "confirmed answer.", out)
-        self.assertIn(undecides(sha, subject, request, "#143"), out)
+        self.assertIn(REQUESTED_HEADLINE, out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+        self.assertIn("Cite its decision comment's URL instead", out)
+        self.assertNotIn("names no issue and no comment", out)
 
-    def test_a_change_request_added_as_decided_with_no_trailer_is_held(self):
-        """No trailer at all is the authority rule's failure, as for any steering change."""
-        base = self.baseline()
-        request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
-        self.write(request, DECIDED_REQUEST)
-        subject = "The change request, decided on nothing"
-        sha = self.commit(message(subject), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(1, code, out)
-        self.assertIn(holds(sha, subject, request), out)
-
-    def test_a_change_request_added_as_decided_on_a_confirmed_answer_passes(self):
-        """The comment holding the human's answer is what decides a request."""
+    def test_a_change_request_beside_a_confirmed_answer_is_still_refused(self):
+        """Every authority is judged: the decision comment's URL by the confirming account
+        passes alone, and the request's number beside it still fails."""
+        self.github(requests=(150,))
         self.comments({COMMENT_ID: COMMENT})
-        base = self.baseline()
-        self.write(f"{steering.CHANGE_REQUESTS}issue-145-a-request.md", DECIDED_REQUEST)
-        self.commit(message("The change request, decided as Adam confirmed", COMMENT),
-                    made=DECIDED_AFTER)
+        self.baseline()
+
+        base = self.git("rev-parse", "HEAD")
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, on the decision", COMMENT), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertIn("1 commit changing a steering document cites its authority.", out)
 
-    def test_a_change_request_edited_from_open_to_decided_on_a_ticket_alone_is_held(self):
-        """Deciding by an edit is the same decision as deciding by an add."""
-        self.github(159)
-        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
-        self.write(request, OPEN_REQUEST)
-        base = self.baseline()
-        self.write(request, DECIDED_REQUEST)
-        subject = "The change request, decided"
-        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
+        base = self.git("rev-parse", "HEAD")
+        self.append("GLOSSARY.md", "A line.")
+        subject = "The glossary, on the decision and the request"
+        sha = self.commit(message(subject, COMMENT, issue(150)), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(1, code, out)
-        self.assertIn(undecides(sha, subject, request, "#159"), out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+        self.assertNotIn(f"Authority: {COMMENT} ", out)
 
-    def test_a_decided_change_request_edited_again_on_a_ticket_passes(self):
-        """06fe6aa's shape: a review fixing the prose of a request already decided decides nothing
-        new, so the ticket asking for the fix is enough, as for any steering edit."""
-        self.github(159)
-        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
-        self.write(request, DECIDED_REQUEST)
+    def test_a_closed_change_request_past_the_listing_is_refused(self):
+        """A landed or declined request keeps its label, and the label alone refuses it, whatever
+        the issue's state or other labels; the single lookup reads it as the listing does, so a
+        request past the listing's last page is refused too."""
+        self.github(43)
+        self.looked_up({150: "request"})
         base = self.baseline()
-        self.append(request, "The reason, said better.")
-        self.commit(message("Review: the decision's reason", "#159"), made=DECIDED_AFTER)
+        self.write("GLOSSARY.md", "# Glossary\n")
+        subject = "The glossary, on a closed request"
+        sha = self.commit(message(subject, issue(150)), made=CLOSED_AFTER)
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(cites_request(sha, subject, ("GLOSSARY.md",), issue(150)), out)
+
+    def test_a_change_request_cited_before_the_closing_date_passes(self):
+        """#442 Q28: the label is read as it stands now, so a commit made before the rule is
+        judged as it was then, when a request's number was an issue like any other."""
+        self.github(requests=(150,))
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, before the rule", issue(150)), made=CLOSED_BEFORE)
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn("1 commit changing a steering document cites its authority.", out)
+
+    def test_a_number_github_cannot_say_is_a_request_is_unchecked_and_passes(self):
+        """When GitHub cannot say what a number is, it cannot say it is a change request either,
+        so the trailer is unchecked with GitHub's reason, as for any number."""
+        self.github(43)
+        self.looked_up({}, why="gh: Server Error (HTTP 502)")
+        base = self.baseline()
+        self.write("GLOSSARY.md", "# Glossary\n")
+        self.commit(message("The glossary, while GitHub stumbles", issue(150)), made=CLOSED_AFTER)
         code, out = self.check("--base", base)
         self.assertEqual(0, code, out)
         self.assertNotIn("STEERING FAILED", out)
-
-    def test_a_change_request_added_open_or_with_no_status_passes_after_the_rule(self):
-        """Asking stays free: an open request, or one with no Status line, needs no trailer."""
-        for name, text in (("open", OPEN_REQUEST), ("bare", "# A change request\n")):
-            with self.subTest(request=name):
-                base = self.git("rev-parse", "HEAD") if name == "bare" else self.baseline()
-                self.write(f"{steering.CHANGE_REQUESTS}issue-1-{name}.md", text)
-                self.commit(message(f"Ask for a contract change, {name}"), made=DECIDED_AFTER)
-                code, out = self.check("--base", base)
-                self.assertEqual(0, code, out)
-                self.assertNotIn("STEERING FAILED", out)
-
-    def test_a_change_request_added_as_decided_before_the_rule_passes(self):
-        """A commit made before DECIDED_SINCE could not have known the rule: 9f56729 and 37af894
-        stay as they landed."""
-        self.github(143)
-        base = self.baseline()
-        self.write(f"{steering.CHANGE_REQUESTS}issue-145-a-request.md", DECIDED_REQUEST)
-        self.commit(message("Task issue-143: the change request, decided", "#143"),
-                    made=DECIDED_BEFORE)
-        code, out = self.check("--base", base)
-        self.assertEqual(0, code, out)
-        self.assertNotIn("STEERING FAILED", out)
-
-    def test_a_change_request_with_its_status_in_another_shape_is_held_as_unreadable(self):
-        """#188's review: a Status line in any other shape read as open, so a decided request in
-        it passed with no trailer. Now the check says it cannot read it, naming the path, and does
-        not also ask for a trailer an open request would not need."""
-        base = self.baseline()
-        for number, (shape, line) in enumerate(OTHER_SHAPES, start=1):
-            with self.subTest(shape=shape):
-                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
-                self.write(request, f"# A change request\n\n- **Raised by:** a lane\n{line}\n")
-                subject = f"A change request, its Status as a {shape}"
-                sha = self.commit(message(subject), made=DECIDED_AFTER)
-                code, out = self.check("--base", base)
-                self.assertEqual(1, code, out)
-                self.assertIn(UNREADABLE_HEADLINE, out)
-                self.assertIn(unreadable(sha, subject, request), out)
-                self.assertNotIn("carries no Authority: trailer", out)
-                base = sha
-
-    def test_an_unreadable_status_is_held_whatever_the_authority_cites(self):
-        """A confirmed answer's URL settles a decision, not a Status nobody can read."""
-        self.comments({COMMENT_ID: COMMENT})
-        base = self.baseline()
-        request = f"{steering.CHANGE_REQUESTS}issue-145-a-request.md"
-        self.write(request, "# A change request\n\n- **Status:** _decided_, 2026-10-20.\n")
-        subject = "The change request, decided as Adam confirmed"
-        sha = self.commit(message(subject, COMMENT), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(1, code, out)
-        self.assertIn(unreadable(sha, subject, request), out)
-
-    def test_an_open_request_edited_into_another_shape_is_held_as_unreadable(self):
-        """An edit that moves the Status out of the two shapes is held too, and the edit's own
-        authority is still judged as any steering edit's is."""
-        self.github(159)
-        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
-        self.write(request, OPEN_REQUEST)
-        base = self.baseline()
-        self.write(request, "# A change request\n\n- **Raised by:** a lane\n**Status**: decided\n")
-        subject = "The change request, decided in a new shape"
-        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(1, code, out)
-        self.assertIn(unreadable(sha, subject, request), out)
-        self.assertNotIn("a commit sets a change request to a decision", out)
-
-    def test_a_change_request_naming_any_state_but_open_is_a_decision(self):
-        """`accepted` decides a request as surely as `decided`: held on a ticket alone, passed on a
-        confirmed answer's URL."""
-        self.github(143)
-        self.comments({COMMENT_ID: COMMENT})
-        base = self.baseline()
-        for number, state in enumerate(("accepted", "rejected"), start=1):
-            with self.subTest(state=state):
-                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
-                self.write(request, f"# A change request\n\n- **Status:** {state}, 2026-10-20.\n")
-                subject = f"Task issue-143: the change request, {state}"
-                sha = self.commit(message(subject, "#143"), made=DECIDED_AFTER)
-                code, out = self.check("--base", base)
-                self.assertEqual(1, code, out)
-                self.assertIn("STEERING FAILED: a commit sets a change request to a decision on no "
-                              "confirmed answer.", out)
-                self.assertIn(undecides(sha, subject, request, "#143", state=state), out)
-                self.git("reset", "--quiet", "--hard", base)
-        self.write(f"{steering.CHANGE_REQUESTS}issue-3-a-request.md",
-                   "# A change request\n\n- **Status:** accepted, 2026-10-20.\n")
-        self.commit(message("The change request, accepted as Adam confirmed", COMMENT),
-                    made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(0, code, out)
-
-    def test_a_change_request_whose_prose_mentions_a_status_but_labels_none_is_open(self):
-        """A word in a sentence or an identifier is no Status line: issue-160's request carries
-        `int Status` and `StatusOf` in its prose, under a Status line of its own."""
-        base = self.baseline()
-        self.write(f"{steering.CHANGE_REQUESTS}issue-1-a-request.md",
-                   "# A change request\n\nThe gateway answers 401, a status `StatusOf` maps.\n"
-                   "- `ImmutableArray<(int Status, string Code)> Rows`: the table's rows.\n"
-                   "Status codes stay as they are.\n")
-        self.commit(message("Ask for a contract change"), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(0, code, out)
-        self.assertNotIn("STEERING FAILED", out)
-
-    def test_a_second_status_naming_another_state_is_held_as_unreadable(self):
-        """The second #188 review: a request left `- **Status:** open` with a decided Status added
-        under a Decision heading read as open at the commit and at its parent, so the decision
-        passed with no confirmed answer. Two Status lines naming different states cannot say which
-        holds, so the file is held, added or edited, whatever the trailer cites."""
-        self.github(159)
-        self.comments({COMMENT_ID: COMMENT})
-        request = f"{steering.CHANGE_REQUESTS}issue-160-a-request.md"
-        self.write(request, OPEN_REQUEST)
-        base = self.baseline()
-        self.append(request, "## Decision\n\n- **Status:** decided, 2026-10-22. Accepted.")
-        for authority in ("#159", COMMENT):
-            with self.subTest(edited_with=authority):
-                subject = f"The change request, decided under its open Status, on {authority}"
-                sha = self.commit(message(subject, authority), made=DECIDED_AFTER)
-                code, out = self.check("--base", base)
-                self.assertEqual(1, code, out)
-                self.assertIn(UNREADABLE_HEADLINE, out)
-                self.assertIn(unreadable(sha, subject, request), out)
-                self.git("reset", "--quiet", "--soft", base)
-        self.git("reset", "--quiet", "--hard", base)
-        added = f"{steering.CHANGE_REQUESTS}issue-161-a-request.md"
-        self.write(added, OPEN_REQUEST + "\n## Decision\n\n- **Status:** accepted, 2026-10-22.\n")
-        subject = "Ask for a contract change, already accepted below"
-        sha = self.commit(message(subject), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(1, code, out)
-        self.assertIn(unreadable(sha, subject, added), out)
-
-    def test_a_status_named_twice_in_the_same_state_is_read_as_that_state(self):
-        """Only a disagreement is ambiguous: a request that repeats its state reads as that state,
-        so an open one added twice-labelled is still free, and a decided one is still a decision
-        a confirmed answer settles."""
-        self.github(159)
-        self.comments({COMMENT_ID: COMMENT})
-        base = self.baseline()
-        self.write(f"{steering.CHANGE_REQUESTS}issue-1-a-request.md",
-                   OPEN_REQUEST + "\n## Status\n\n- **Status:** open, still.\n")
-        self.commit(message("Ask for a contract change, open twice"), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(0, code, out)
-        self.assertNotIn("STEERING FAILED", out)
-        request = f"{steering.CHANGE_REQUESTS}issue-2-a-request.md"
-        self.write(request, DECIDED_REQUEST + "\n- **Status:** Decided, as above.\n")
-        subject = "The change request, decided twice on a ticket"
-        sha = self.commit(message(subject, "#159"), made=DECIDED_AFTER)
-        code, out = self.check("--base", base)
-        self.assertEqual(1, code, out)
-        self.assertNotIn(UNREADABLE_HEADLINE, out)
-        self.assertIn(undecides(sha, subject, request, "#159"), out)
-        self.git("commit", "--quiet", "--amend", "-m",
-                 message("The change request, decided twice as Adam confirmed", COMMENT))
-        code, out = self.check("--base", base)
-        self.assertEqual(0, code, out)
-        self.assertNotIn("STEERING FAILED", out)
-
-    def test_an_open_status_in_another_shape_is_held_and_told_the_shape_to_write(self):
-        """The second #188 review: `open` in code marks or italics, or a plain `Status:` label,
-        says open and is held all the same. That is kept, not widened (#193, Q6 on #226): the rule
-        fails closed, and the message names the shape to write, so a held lane rewrites one line."""
-        base = self.baseline()
-        shapes = (("code", "- **Status:** `open`"), ("italic", "- **Status:** _open_"),
-                  ("plain label", "- Status: open"))
-        for number, (shape, line) in enumerate(shapes, start=1):
-            with self.subTest(shape=shape):
-                request = f"{steering.CHANGE_REQUESTS}issue-{number}-a-request.md"
-                self.write(request, f"# A change request\n\n- **Raised by:** a lane\n{line}\n")
-                subject = f"Ask for a contract change, open as {shape}"
-                sha = self.commit(message(subject), made=DECIDED_AFTER)
-                code, out = self.check("--base", base)
-                self.assertEqual(1, code, out)
-                self.assertIn(unreadable(sha, subject, request), out)
-                self.assertIn("`- **Status:** open`", out)
-                base = sha
+        self.assertIn("steering: 1 Authority: citation not checked: gh: Server Error (HTTP 502).",
+                      out)
 
     def test_offline_a_steering_commit_naming_no_authority_still_fails(self):
         """The trailer's presence needs no network, so no network is no excuse for its absence.
@@ -2105,16 +2129,382 @@ class SteeringTests(unittest.TestCase):
         self.assertEqual(2, stopped.exception.code)
         self.assertIn("no commit no-such-ref to judge the commits against", errors.getvalue())
 
-    def test_the_steering_documents_are_the_ones_adr_0023_names(self):
-        """A guard reads the thing it guards: the list is decision 2's, read from the ADR, and the
-        change requests' directory is the one GLOSSARY.md's *Change request* names."""
-        adr = next((ROOT / "docs" / "adr").glob("0023-*.md")).read_text()
-        decision = adr.split("**The steering documents are**", 1)[1]
-        decision = decision.split("Adding a change request", 1)[0]
-        self.assertEqual(sorted(re.findall(r"`([^`]+)`", decision)),
+    def test_the_steering_documents_are_the_ones_the_landing_guide_names(self):
+        """A guard reads the thing it guards: the set and its exceptions are the steering-set
+        paragraph's in docs/agents/landing-work.md, the set's one home (#442 Q32), the backticked
+        names before "except" being the set and those after it, to the clause that says why, the
+        exceptions. The change requests' directory is one GLOSSARY.md names (#442 Q38)."""
+        guide = (ROOT / "docs" / "agents" / "landing-work.md").read_text()
+        paragraph = guide.split("**A commit that changes a steering document names its "
+                                "authority**", 1)[1]
+        paragraph = " ".join(paragraph.split("The commit's message ends", 1)[0].split())
+        listed = paragraph.split("The steering documents are", 1)[1]
+        documents, exceptions = listed.split(" except ", 1)
+        exceptions = exceptions.split(", which", 1)[0]
+        self.assertEqual(sorted(re.findall(r"`([^`]+)`", documents)),
                          sorted(steering.STEERING_DOCUMENTS))
+        self.assertEqual(sorted(re.findall(r"`([^`]+)`", exceptions)),
+                         sorted(steering.STEERING_EXCEPTIONS))
         glossary = (ROOT / "GLOSSARY.md").read_text()
-        self.assertIn(f"`{steering.CHANGE_REQUESTS}<task-id>-<slug>.md`", glossary)
+        self.assertIn(steering.CHANGE_REQUESTS, glossary)
+
+    def test_a_setup_written_guide_is_no_steering_document_and_the_rest_are(self):
+        """#442 Q26 and Q27: docs/agents/ stays a directory, so a new guide such as
+        tracker-policy.md is in the set without being named; the three a setup skill rewrites
+        are out; domain.md and CLAUDE.md, which the setup skill also writes, stay in while they
+        hold rules of this repository's."""
+        for path in ("docs/agents/tracker-policy.md", "docs/agents/domain.md", "CLAUDE.md"):
+            with self.subTest(path=path):
+                self.assertTrue(steering.is_steering(path))
+        for path in ("docs/agents/issue-tracker.md", "docs/agents/triage-labels.md",
+                     "docs/agents/aws-rules.md"):
+            with self.subTest(path=path):
+                self.assertFalse(steering.is_steering(path))
+
+    # --- an ADR that existed at the base keeps its body -----------------------------------------
+
+    def write_adr(self, path: str = ADR, text: str = "") -> None:
+        """An ADR as docs/adr/ writes one, or with the text a case gives."""
+        self.write(path, text or "".join(ADR_LINES))
+
+    def adr_commit(self, subject: str) -> str:
+        """Commit an ADR change before the authority rule's starting point, so that rule holds
+        nothing and the ADR rule is the only one these cases read."""
+        return self.commit(message(subject), made=BEFORE)
+
+    def test_e2fc266_s_shape_fails_on_exactly_its_two_body_lines(self):
+        """A Status note plus two body lines, as e2fc266 wrote them into ADR-0017: the Status item
+        gains its continuation lines and passes, and each body line is named twice, at the line
+        HEAD holds it on and at the base line it replaced."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR:** decision 1 changes.\n"
+        lines.insert(STATUS + 1, "  See the later ADR for the window.\n")
+        lines.insert(STATUS + 2, "  And its evidence.\n")
+        rejected = lines.index(REJECTED_LINE)
+        lines[rejected] = REJECTED_LINE.rstrip("\n") + " *Amended by a later decision.*\n"
+        consequence = lines.index(CONSEQUENCE_LINE)
+        lines[consequence] = CONSEQUENCE_LINE.rstrip("\n") + " *The grace is 60 seconds now.*\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Amend the ADR in place")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        named = [line.strip() for line in out.splitlines() if line.startswith(f"  {ADR}")]
+        self.assertEqual([
+            f"{ADR}: removed at base line {ADR_LINES.index(REJECTED_LINE) + 1}: "
+            f"{REJECTED_LINE.rstrip()}",
+            f"{ADR}:{rejected + 1}: {lines[rejected].rstrip()}",
+            f"{ADR}: removed at base line {ADR_LINES.index(CONSEQUENCE_LINE) + 1}: "
+            f"{CONSEQUENCE_LINE.rstrip()}",
+            f"{ADR}:{consequence + 1}: {lines[consequence].rstrip()}",
+        ], named)
+        # The Status item moved every later line down two, so the two sides number differently.
+        self.assertEqual(ADR_LINES.index(REJECTED_LINE) + 2, rejected)
+        self.assertIn("docs/adr/README.md", out)
+        self.assertIn("ADR-0032 decision 7", out)
+        self.assertIn("No Authority: trailer", out)
+
+    def test_a_status_only_change_with_a_new_continuation_line_passes_and_is_counted(self):
+        """0617b64's and 8c69209's shape: the Status bullet reworded and a continuation line
+        added under it. The count is what the assertion holds, since a rule deleted outright also
+        exits 0."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR.**\n"
+        lines.insert(STATUS + 1, "  See the later ADR for what changes.\n")
+        self.write_adr(text="".join(lines))
+        self.adr_commit("A Status-line note")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_two_adrs_are_counted_in_the_plural(self):
+        self.write_adr()
+        self.write_adr("docs/adr/0018-another-decision.md")
+        base = self.adr_commit("Two ADRs")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 2 ADRs existing at the base keep their bodies.", out)
+
+    def test_a_new_adr_passes_however_it_is_written(self):
+        """An ADR absent at the base is not judged, and nor is the README row it adds; a new ADR
+        fixed in a later commit of the same range, as 91a4d2e fixed ADR-0032, passes too."""
+        self.write_adr()
+        base = self.adr_commit("One ADR")
+        self.write_adr("docs/adr/0036-a-new-decision.md")
+        self.write("docs/adr/README.md", "# Architecture decisions\n\n| 0036 | A new one |\n")
+        self.adr_commit("A new ADR")
+        self.write_adr("docs/adr/0036-a-new-decision.md", "".join(ADR_LINES) + "A fix.\n")
+        self.adr_commit("The new ADR, fixed")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_a_line_after_the_status_item_is_body_unless_it_is_indented(self):
+        """The item ends at the first line that is blank or not indented, so a line added right
+        after it fails unless it is a continuation line, and an indented line after a blank one
+        is body as well."""
+        for shape, added, fails in (
+            ("an unindented line", "- **Supersedes:** nothing.\n", True),
+            ("an indented line", "  under the bullet.\n", False),
+        ):
+            with self.subTest(shape=shape):
+                self.write_adr()
+                base = self.adr_commit("The ADR as it was accepted")
+                lines = list(ADR_LINES)
+                lines.insert(STATUS + 1, added)
+                self.write_adr(text="".join(lines))
+                self.adr_commit(f"Add {shape} after the Status item")
+                code, out = self.check("--base", base)
+                if fails:
+                    self.assertEqual(1, code, out)
+                    self.assertIn(f"  {ADR}:{STATUS + 2}: {added.rstrip()}\n", out)
+                else:
+                    self.assertEqual(0, code, out)
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[STATUS + 1:STATUS + 1] = ["\n", "  after a blank line.\n"]
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Indent a line after a blank one")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(f"  {ADR}:{STATUS + 2}: ''\n", out)
+        self.assertIn(f"  {ADR}:{STATUS + 3}:   after a blank line.\n", out)
+
+    def test_an_indented_plan_ref_line_is_body(self):
+        """ADR-0014's shape: another header item with continuation lines is not the Status item,
+        so editing one of its lines fails."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        continuation = "  over a second line the way ADR-0014's does.\n"
+        lines = list(ADR_LINES)
+        where = lines.index(continuation)
+        lines[where] = "  over a second line, reworded.\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Reword the Plan ref")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(f"  {ADR}:{where + 1}:   over a second line, reworded.\n", out)
+
+    def test_a_deleted_or_renamed_adr_fails_naming_the_file(self):
+        """A renumber breaks every citation of the old number, so a rename fails like a delete,
+        and names where the file went. The two ADRs differ, so git pairs the rename by content."""
+        self.write_adr()
+        self.write_adr("docs/adr/0018-another-decision.md",
+                       "# ADR-0018: Another decision\n\n- **Status:** Accepted.\n\n"
+                       "A body that shares nothing with the other one.\n")
+        base = self.adr_commit("Two ADRs")
+        (self.root / ADR).unlink()
+        renamed = "docs/adr/0019-another-decision.md"
+        (self.root / "docs/adr/0018-another-decision.md").rename(self.root / renamed)
+        self.adr_commit("Delete one ADR and renumber the other")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertIn(f"  {ADR}: existed at the base and is deleted\n", out)
+        self.assertIn("  docs/adr/0018-another-decision.md: existed at the base and is renamed "
+                      f"to {renamed}\n", out)
+
+    def test_a_whitespace_only_change_or_a_rewrap_fails(self):
+        """Every byte outside the Status item counts: a trailing space, a tab for spaces, a lost
+        final newline and a paragraph re-wrapped across two lines are each an edit."""
+        consequence = ADR_LINES.index(CONSEQUENCE_LINE)
+        for shape, text, named in (
+            ("a trailing space",
+             "".join(ADR_LINES).replace(CONSEQUENCE_LINE, CONSEQUENCE_LINE[:-1] + " \n"),
+             f"{ADR}:{consequence + 1}: '- The lock costs one wait per refresh. '"),
+            ("no final newline", "".join(ADR_LINES).rstrip("\n"),
+             f"{ADR}: removed at base line {len(ADR_LINES) + 1}: ''"),
+            ("a re-wrap",
+             "".join(ADR_LINES).replace(CONSEQUENCE_LINE,
+                                        "- The lock costs one wait\n  per refresh.\n"),
+             f"{ADR}:{consequence + 2}:   per refresh."),
+        ):
+            with self.subTest(shape=shape):
+                self.write_adr()
+                base = self.adr_commit("The ADR as it was accepted")
+                self.write_adr(text=text)
+                self.adr_commit(f"Make {shape}")
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(f"  {named}\n", out)
+
+    def test_the_readme_and_a_draft_are_not_judged(self):
+        self.write_adr()
+        self.write("docs/adr/README.md", "# Architecture decisions\n")
+        self.write("docs/adr/draft-a-later-decision.md", "# ADR draft: A later decision\n")
+        base = self.adr_commit("An ADR, the index and a draft")
+        self.write("docs/adr/README.md", "# Architecture decisions\n\nA new paragraph.\n")
+        (self.root / "docs/adr/draft-a-later-decision.md").unlink()
+        self.adr_commit("The index changes and the draft goes")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_an_adr_with_no_status_item_at_the_base_is_frozen_whole(self):
+        """With no Status item at the base nothing may change, so adding one is no escape: the
+        new bullet is body, and so is the note written as its continuation line, which it would
+        otherwise cover. The first line of the file is tried too, where the lines before the item
+        are the same on both sides."""
+        lines = [line for line in ADR_LINES if not line.startswith("- **Status:**")]
+        note = "  *Amended: the window rose with locking.*\n"
+        for shape, where in (("in the header", STATUS), ("on the first line", 0)):
+            with self.subTest(shape=shape):
+                self.write_adr(text="".join(lines))
+                base = self.adr_commit("An ADR with no Status item")
+                added = list(lines)
+                added[where:where] = ["- **Status:** Accepted.\n", note]
+                self.write_adr(text="".join(added))
+                self.adr_commit("Give it a Status item with a note")
+                code, out = self.check("--base", base)
+                self.assertEqual(1, code, out)
+                self.assertIn(f"  {ADR}:{where + 1}: - **Status:** Accepted.\n", out)
+                self.assertIn(f"  {ADR}:{where + 2}: {note.rstrip()}\n", out)
+
+    def test_an_edit_above_the_status_item_names_that_edit_and_not_the_item(self):
+        """#659 Q42 lists every changed line, so a retitled ADR whose Status gains a note names the
+        title alone: the Status item still stands after the same body lines, and what it says may
+        change."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = list(ADR_LINES)
+        lines[0] = "# ADR-0017: A decision, retitled\n"
+        lines[STATUS] = "- **Status:** Accepted. **Amended by a later ADR.**\n"
+        lines.insert(STATUS + 1, "  See the later ADR.\n")
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Retitle the ADR and note its Status")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        named = [line.strip() for line in out.splitlines() if line.startswith(f"  {ADR}")]
+        self.assertEqual([
+            f"{ADR}: removed at base line 1: {ADR_LINES[0].rstrip()}",
+            f"{ADR}:1: {lines[0].rstrip()}",
+        ], named)
+
+    def test_a_status_item_moved_into_the_body_is_body(self):
+        """The Status item is a slot in the header, not a block that travels: e2fc266's note
+        written as a Status bullet moved down beside the rejected option, with the note as its
+        continuation line, would leave identical bytes once each side's item is removed. So HEAD's
+        item counts as the Status item only where the base's stood."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        lines = [line for line in ADR_LINES if not line.startswith("- **Status:**")]
+        rejected = lines.index(REJECTED_LINE)
+        note = "  *Amended by a later decision: the window rose with locking.*\n"
+        lines[rejected + 1:rejected + 1] = ["- **Status:** Accepted.\n", note]
+        self.write_adr(text="".join(lines))
+        self.adr_commit("Move the Status item beside the rejected option")
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertIn(f"  {ADR}:{rejected + 2}: - **Status:** Accepted.\n", out)
+        self.assertIn(f"  {ADR}:{rejected + 3}: {note.rstrip()}\n", out)
+        self.assertIn(f"  {ADR}: removed at base line {STATUS + 1}: - **Status:** Accepted.\n",
+                      out)
+
+    def test_a_status_item_removed_entirely_passes(self):
+        """#659 Q36 read as written: removing the item from both copies leaves identical bytes,
+        and no body text gets in that way (the implementer's decision 4 on #634)."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(line for line in ADR_LINES
+                                    if not line.startswith("- **Status:**")))
+        self.adr_commit("Remove the Status item")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_a_branch_behind_its_base_passes(self):
+        """The base's own later work is not the branch's: a branch forked before its base added an
+        ADR and noted another's Status is judged from the fork, where neither change was made."""
+        self.write_adr()
+        self.adr_commit("One ADR")
+        trunk = self.git("symbolic-ref", "--short", "HEAD")
+        self.git("branch", "behind")
+        self.write_adr("docs/adr/0036-a-new-decision.md")
+        lines = list(ADR_LINES)
+        lines[STATUS] = "- **Status:** Accepted. **Amended by ADR-0036.**\n"
+        self.write_adr(text="".join(lines))
+        self.adr_commit("The base adds an ADR and notes the older one")
+        self.git("switch", "--quiet", "behind")
+        self.write("src/a-file.txt", "work\n")
+        self.adr_commit("The branch's own work")
+        code, out = self.check("--base", trunk)
+        self.assertEqual(0, code, out)
+        self.assertNotIn("STEERING FAILED", out)
+        self.assertIn(" 1 ADR existing at the base keeps its body.", out)
+
+    def test_a_body_edit_reverted_later_in_the_range_passes(self):
+        """Net over the range: an edit one commit makes and a later one undoes is no edit."""
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit.\n")
+        self.adr_commit("Edit the body")
+        self.write_adr()
+        self.adr_commit("Revert the edit")
+        code, out = self.check("--base", base)
+        self.assertEqual(0, code, out)
+
+    def test_an_authority_trailer_does_not_excuse_a_body_edit(self):
+        """#659 Q38: the authority rule vouches for the trailer, and the body edit still fails."""
+        self.github(634)
+        self.write_adr()
+        base = self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit the ticket asked for.\n")
+        self.commit(message("Edit the body on a ticket's authority", issue(634)))
+        code, out = self.check("--base", base)
+        self.assertEqual(1, code, out)
+        self.assertIn(ADR_HEADLINE, out)
+        self.assertNotIn(NAMELESS_HEADLINE, out)
+        self.assertIn(f"  {ADR}:{len(ADR_LINES) + 1}: An edit the ticket asked for.\n", out)
+
+    def test_without_a_base_no_adr_is_judged_and_the_run_says_so(self):
+        """No base, no commit to say which ADRs existed: the line says so, a body edit in the
+        history fails nothing, and the summary claims no count."""
+        self.write_adr()
+        self.adr_commit("The ADR as it was accepted")
+        self.write_adr(text="".join(ADR_LINES) + "An edit.\n")
+        self.adr_commit("Edit the body")
+        code, out = self.check()
+        self.assertEqual(0, code, out)
+        self.assertIn("steering: no ADR body judged: no --base names the commit they existed "
+                      "at.\n", out)
+        self.assertNotIn("keep", out)
+
+    def test_the_no_base_line_prints_on_a_failing_run_too(self):
+        self.append("AGENTS.md", "- **Done:** everything.")
+        code, out = self.check()
+        self.assertEqual(1, code, out)
+        self.assertIn("steering: no ADR body judged:", out)
+
+    def test_a_base_sharing_no_commit_with_head_judges_no_adr_and_says_so(self):
+        self.write_adr()
+        self.adr_commit("The ADR as it was accepted")
+        trunk = self.git("symbolic-ref", "--short", "HEAD")
+        self.git("switch", "--quiet", "--orphan", "unrelated")
+        self.write_adr(text="Another history.\n")
+        other = self.adr_commit("An unrelated root")
+        self.git("switch", "--quiet", "--force", trunk)
+        code, out = self.check("--base", other)
+        self.assertIn(f"steering: no ADR body judged: {other[:12]} and HEAD share no commit", out)
+        self.assertNotIn(ADR_HEADLINE, out)
+
+    def test_every_adr_in_the_live_tree_is_judged(self):
+        """The green side is the repository's own docs/adr/: with an empty range every numbered
+        ADR is counted, and README and any draft are not."""
+        self.live()
+        code, out = self.check("--base", "HEAD")
+        numbered = [path for path in (ROOT / "docs" / "adr").iterdir()
+                    if re.fullmatch(r"\d{4}-.*\.md", path.name)]
+        self.assertGreaterEqual(len(numbered), 35)
+        self.assertNotIn(ADR_HEADLINE, out)
+        self.assertIn(f" {len(numbered)} ADRs existing at the base keep their bodies.", out)
 
     # --- the GitHub lookups, against a stand-in for gh ----------------------------------------
 
@@ -2122,23 +2512,53 @@ class SteeringTests(unittest.TestCase):
         """A command that runs `script` in this interpreter, in place of gh."""
         return (sys.executable, "-I", "-c", script, *arguments)
 
-    def test_the_listing_tells_issues_from_pull_requests(self):
-        """The line the --jq writes per number, read back into issues and pull requests."""
+    def test_the_listing_tells_issues_from_pull_requests_and_change_requests(self):
+        """The line the --jq writes per number, read back into issues, pull requests and change
+        requests, a change request being an issue too."""
         steering.GH_ISSUES = self.stand_in(
-            "print('43 issue'); print('120 pull'); print('102 issue')")
-        self.assertEqual(({43, 102}, {120}, ""), REAL_ISSUED_NUMBERS(self.root))
+            "print('43 issue'); print('120 pull'); print('102 issue'); print('150 request')")
+        self.assertEqual(({43, 102, 150}, {120}, {150}, ""), REAL_ISSUED_NUMBERS(self.root))
+
+    def test_both_lookups_read_the_change_request_label(self):
+        """#442 Q29: the listing's line and the single lookup's read the labels. Run through jq
+        over issues as the API serves them: a request open, closed, or beside ready-for-agent is a
+        request; a label whose name holds a space or a comma is matched whole; a pull request is a
+        pull request whatever its labels."""
+        jq = shutil.which("jq")
+        # CODING_STANDARDS.md -> "An assertion must be able to fail": a missing tool fails here,
+        # named, rather than skipping the one case that runs the filter. jq ships on macOS and on
+        # GitHub's Ubuntu runners.
+        self.assertIsNotNone(jq, "jq is not on PATH; install it to run the label filter's case")
+        served = [
+            {"number": 150, "state": "open", "labels": [{"name": "change-request"}]},
+            {"number": 151, "state": "closed", "labels": [{"name": "change-request"}]},
+            {"number": 152, "state": "open",
+             "labels": [{"name": "ready-for-agent"}, {"name": "change-request"}]},
+            {"number": 153, "state": "open",
+             "labels": [{"name": "not change-request"}, {"name": "change-request,x"}]},
+            {"number": 154, "state": "open", "labels": []},
+            {"number": 120, "state": "open", "labels": [{"name": "change-request"}],
+             "pull_request": {"url": "https://api.github.com/x"}},
+        ]
+        listed = subprocess.run((jq, "-r", steering.GH_ISSUES[-1]), input=json.dumps(served),
+                                capture_output=True, text=True, check=True).stdout
+        self.assertEqual(["150 request", "151 request", "152 request", "153 issue", "154 issue",
+                          "120 pull"], listed.splitlines())
+        one = subprocess.run((jq, "-r", steering.GH_ISSUE[-1]), input=json.dumps(served[1]),
+                             capture_output=True, text=True, check=True).stdout
+        self.assertEqual("151 request\n", one)
 
     def test_the_listing_says_what_gh_said_when_it_fails(self):
         steering.GH_ISSUES = self.stand_in(
             "import sys; sys.stderr.write('\\ngh: Bad credentials (HTTP 401)\\n'); sys.exit(1)")
-        self.assertEqual((set(), set(), "gh: Bad credentials (HTTP 401)"),
+        self.assertEqual((set(), set(), set(), "gh: Bad credentials (HTTP 401)"),
                          REAL_ISSUED_NUMBERS(self.root))
 
     def test_the_listing_refuses_an_answer_that_is_not_its_lines(self):
         """An answer in the old shape, a bare number, is refused rather than read as an issue."""
         steering.GH_ISSUES = self.stand_in("print('43')")
-        issues, pulls, why = REAL_ISSUED_NUMBERS(self.root)
-        self.assertEqual((set(), set()), (issues, pulls))
+        issues, pulls, requests, why = REAL_ISSUED_NUMBERS(self.root)
+        self.assertEqual((set(), set(), set()), (issues, pulls, requests))
         self.assertTrue(why.startswith("gh answered with something other than numbers"), why)
 
     def test_the_comment_lookup_returns_the_url_github_keeps_the_comment_at(self):
@@ -2181,7 +2601,7 @@ class SteeringTests(unittest.TestCase):
     def test_the_single_lookup_says_what_github_calls_the_number(self):
         """The number goes where the command names {number}, and the answer is the listing's line
         for it, read back into issue or pull request."""
-        for kind in ("issue", "pull"):
+        for kind in ("issue", "request", "pull"):
             with self.subTest(kind=kind):
                 steering.GH_ISSUE = self.stand_in(
                     f"import sys; print(sys.argv[1] + ' {kind}')", "{number}")

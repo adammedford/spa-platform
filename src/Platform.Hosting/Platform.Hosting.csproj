@@ -7,6 +7,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The key ring (plan row P2-2; change request P2-2, decisions 3 and 10). The SDK is referenced
+         directly so this graph takes the solution's pin rather than the key-ring package's 4.0.7.3
+         floor (#216). -->
+    <PackageReference Include="Amazon.AspNetCore.DataProtection.SSM" />
+    <PackageReference Include="AWSSDK.SimpleSystemsManagement" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- N-13 is proved against AssetPath directly as well as over the socket: Kestrel collapses dot
          segments and refuses a NUL before the endpoint runs, so those rows would test Kestrel alone. -->
     <InternalsVisibleTo Include="Platform.Hosting.Tests" />

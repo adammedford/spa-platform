@@ -23,7 +23,10 @@
 # port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
 # tests, and the test companions the change earns: that of each script in tools/ or .github/ it
 # touches (#134), and that of each script or companion naming a library it touches, followed through
-# the libraries that name that one (#237). CI runs the companions .github/workflows/ci.yml lists,
+# the libraries that name that one (#237), and that of each companion declaring, on its
+# `Checkout inputs:` line, a file of the checkout the change touches (#354), so a new pin runs the
+# pins inventory's companion, and a change to .dockerignore, a Dockerfile or a file one copies runs
+# the image build's (#390). CI runs the companions .github/workflows/ci.yml lists,
 # one step each, whatever the diff, so that file says which run there; this check runs only those
 # the diff earns, CI's or not. Neither side's list is copied into the other, so neither goes stale
 # when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
@@ -32,6 +35,9 @@
 # which runs this file and so stays CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
 # exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
 # bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
+# In both modes each step it executes, and each test companion, writes its elapsed seconds on a line
+# of its own, `check: elapsed: <step>: <N>s` (`pre-push:` in the default mode), and the total comes
+# on the line just before the verdict (#629), so a log shows which steps a slow check spent its time on.
 #
 # tools/image-check.sh builds the gateway's image the way a workstation does, from a copy of the
 # tree it has first given a host obj/ and an owner-only appsettings.json, and starts it as the
@@ -69,10 +75,24 @@
 # green on main, and only this makes that run test anything. The hook never passes it, and a lane
 # does not need it: its diff earns its skips.
 #
+# --skip-tests, with --full only, runs everything the full check runs except `dotnet test --solution`:
+# the build, the smoke test, the gateway image, Terraform and its tests and the companions still
+# run. The overnight integrate step passes it once, after a local check that failed on test projects
+# the ticket's change cannot reach has had those projects re-run alone and pass (#375), judged against
+# the same merge's first parent (#629): the check stops at its first failure, so a check red on the
+# tests never ran what comes after them, and counting it
+# passed on the re-run alone would be a green verdict that skipped a check. The suite's verdict is
+# then the first log's, every other project passed, plus each re-run's. The verdict line names the
+# skip, "the build, not the tests (--skip-tests), ...", so the log never reads as a whole pass.
+#
 # --base names what the branch is judged against, for A-05, the steering check's authority rule and
 # the halves. The default is the default branch, origin/main, else main: the question is what the
 # branch adds to main. An overnight lane names its fork point instead, so its own commits are
-# judged rather than the night's merges.
+# judged rather than the night's merges. The overnight integrate step's local check names the
+# merge's first parent, so each merge is judged alone, with its roadmap refresh, and earns only its
+# own companions; once every lane has settled, one closing check names the run base and judges the
+# whole run (#629). On 2026-10-29 each integrate named the run base, and the last merge's check
+# re-ran every companion the night's earlier merges had earned.
 #
 # Both modes hold a part-row merge without its Outstanding lines (#291): every commit from that base
 # to HEAD whose subject starts "Merge part of task" must carry a line starting `Outstanding:` and
@@ -80,6 +100,18 @@
 # unfinished. The check names each such commit and each line it lacks, on its own line, and fails.
 # A "Merge task" commit is held to neither. On #287 row 6.7's merge 340fd07 carried neither line,
 # and fixing it then would have rewritten every later commit.
+#
+# Both modes hold a full-landing merge whose ticket is unfinished (#296): tools/landing_subjects.py
+# reads every commit over the same range whose subject starts "Merge task" or "Merge tasks", takes
+# each issue a `Ticket: #<n>` line of its message names, and fails when that issue's body holds an
+# open `- [ ]` box, naming the commit, the issue and each open box. A "Merge part of task" commit,
+# and a commit with no Ticket line, is never judged by it. On 2026-10-22 the overnight integrate step
+# wrote "Merge task 6.7" over #62 with two boxes open, and tools/roadmap.py, which reads such a
+# subject as landed for good, said S7 owed nothing. It also fails a full landing that names a plan
+# row while an open issue, other than one on the merge's Ticket lines, declares itself part of that
+# row (#388, #457): "Merge task P2-2" landed so on 2026-10-24 with #338 and #342 open. Without gh, a
+# login or GitHub it says the merges went unchecked and fails nothing, as the steering check does
+# offline; only python3 is a tool it needs.
 #
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
@@ -92,19 +124,21 @@ set -euo pipefail
 
 usage() {
   echo "usage: tools/check.sh [--base <ref>] [--both-halves]" >&2
-  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves]" >&2
+  echo "       tools/check.sh --full --port <port> [--base <ref>] [--both-halves] [--skip-tests]" >&2
   echo "check: fail: $1." >&2
   exit 2
 }
 
 full=false
 both=false
+skip_tests=false
 port=""
 named_base=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --full) full=true ;;
     --both-halves) both=true ;;
+    --skip-tests) skip_tests=true ;;
     --port)
       [ "$#" -ge 2 ] || usage "--port needs a value"
       port="$2"
@@ -128,6 +162,7 @@ if $full; then
   me="check"
 else
   [ -z "$port" ] || usage "--port is for --full"
+  ! $skip_tests || usage "--skip-tests is for --full"
   me="pre-push"
 fi
 
@@ -137,14 +172,32 @@ verdict=""
 on_exit() {
   status=$?
   if $full && [ "$status" -ne 0 ] && [ -z "$verdict" ]; then
+    elapsed_total
     echo "check: fail: stopped with status $status." >&2
     exit 1
   fi
 }
 trap on_exit EXIT
 
+# The elapsed lines (#629): after each step it executes, and after each test companion, the check
+# writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just
+# before the verdict, pass or fail, in whole seconds from bash's $SECONDS. A skipped step writes
+# none. On 2026-10-29 the integrate step's span grew from 2m31s to 10m27s while the suite took
+# about 2 minutes, and no log could say which steps took the rest. The lines go to standard output
+# and change no other line: the verdict, the fail lines and the test runner's summary read as
+# before, which is what tools/test_reach.py and tools/retro_record.py parse.
+step_at=$SECONDS
+elapsed() {
+  echo "$me: elapsed: $1: $((SECONDS - step_at))s"
+  step_at=$SECONDS
+}
+elapsed_total() {
+  echo "$me: elapsed: total: ${SECONDS}s"
+}
+
 fail() {
   verdict="fail"
+  elapsed_total
   if $full; then
     echo "check: fail: $1" >&2
   else
@@ -246,9 +299,11 @@ touches() {
   $both || [ -z "$base" ] || printf '%s\n' "$changed" | .github/touches.sh "$1"
 }
 
+step_at=$SECONDS
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I .github/path-ownership.py "$base" HEAD || fail "check A-05 failed."
+    elapsed "A-05"
   elif $full; then
     fail "no origin/main or main to judge against; name one with --base."
   else
@@ -279,12 +334,16 @@ fi
 # decided the change (ADR-0023, #102), so it is handed that base. With none, it reads every commit
 # HEAD reaches, so no base is not a skip. Offline it still requires the trailer, and says it could
 # not check what the trailer cites.
+# The ADR rule reads the same range net, from the merge-base of the base and HEAD: an ADR that
+# existed there may change only its Status item, and a body edit, delete or rename fails whatever
+# the trailer says (ADR-0032 decision 7, #634); with no base it says no ADR was judged.
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I .github/steering.py --base "$base" || fail "the steering check failed."
   else
     python3 -I .github/steering.py || fail "the steering check failed."
   fi
+  elapsed "the steering check"
 else
   missing python3 steering
 fi
@@ -335,10 +394,31 @@ $part_rows
 EOF
   [ "$part_rows_missing" -eq 0 ] \
     || fail "a part-row merge lacks a line docs/agents/landing-work.md requires of a row that stays unfinished."
-elif $full; then
-  fail "no origin/main or main to judge the part-row merges against; name one with --base."
+  elapsed "the part-row merges"
 else
   echo "pre-push: part-row merges not checked: no main to diff against." >&2
+fi
+
+# --- the full-landing merges ------------------------------------------------------------------
+#
+# A "Merge task" subject says the row landed whole, and tools/roadmap.py reads it so anywhere in the
+# history and never takes it back. On 2026-10-22 the 6.7 lane reported itself complete while #62
+# held two open boxes, the overnight integrate step wrote "Merge task 6.7", and correcting it took
+# two review rounds, two rebuilds of the run branch and a force-push; on main it could not have been
+# corrected at all (#296). tools/landing_subjects.py says what it judges and what it leaves; this
+# hands it the same range as the part-row merges, and, the same way, no base is no check: the
+# hook says so, and the full check has already failed at A-05. Its own exit 2, a range it could not
+# read, fails here as surely as a held merge.
+if command -v python3 > /dev/null; then
+  if [ -n "$base" ]; then
+    python3 -I tools/landing_subjects.py --base "$base" \
+      || fail "a full-landing merge names a ticket with an open box or a plan row with an open part ticket, or the full-landing merges were not judged."
+    elapsed "the full-landing merges"
+  else
+    echo "pre-push: full-landing merges not checked: no main to diff against." >&2
+  fi
+else
+  missing python3 "the full-landing merges"
 fi
 
 # --- the roadmap ------------------------------------------------------------------------------
@@ -351,8 +431,25 @@ fi
 if command -v python3 > /dev/null; then
   python3 -I tools/roadmap.py --check \
     || fail "the roadmap is out of date. Run tools/roadmap.py and commit what it writes."
+  elapsed "the roadmap"
 else
   missing python3 "the roadmap"
+fi
+
+# --- the analysis guard -----------------------------------------------------------------------
+#
+# The build enforces every analyzer severity, but not the shape of the files that set them, nor the
+# shape of a suppression: a relaxation of a security rule, a later .editorconfig section that
+# overrides the relaxed tier's, a category line, or a suppression citing nothing would all leave the
+# build green (ADR-0035 decisions 5, 12 and 13; #606). tools/analysis_guard.py says what it fails
+# and why. It reads the tree, not the diff, so it is never skipped; its exit 2, a tree it could not
+# read, fails here as surely as a finding.
+if command -v python3 > /dev/null; then
+  python3 -I tools/analysis_guard.py \
+    || fail "the analyzer configs or a suppression break ADR-0035's rules, or were not judged."
+  elapsed "the analysis guard"
+else
+  missing python3 "the analysis guard"
 fi
 
 # --- duplicated build artifacts ---------------------------------------------------------------
@@ -378,6 +475,7 @@ if [ -n "$duplicates" ]; then
   echo "  find src tests fixtures tools -type d \\( -name bin -o -name obj \\) -prune -exec rm -rf {} +" >&2
   fail "duplicated build artifacts make the build report errors that are not in the source."
 fi
+elapsed "the artifacts"
 
 # --- tracked files their owner alone can read ------------------------------------------------
 #
@@ -423,6 +521,7 @@ EOF
   echo "  git ls-files -z | xargs -0 chmod go+r" >&2
   fail "a tracked file only its owner can read is a file the gateway's container cannot read; run chmod go+r on it."
 fi
+elapsed "the file modes"
 
 # --- the build, and in full the tests and the smoke test ----------------------------------------
 #
@@ -434,17 +533,27 @@ fi
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the roadmap, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
   quietly dotnet build --nologo --verbosity quiet || fail "the solution does not build."
+  elapsed "the build"
   ran="$ran, the build"
   if $full; then
-    dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+    if $skip_tests; then
+      echo "check: the tests skipped: --skip-tests says they were run another way (#375)."
+      tests_ran="not the tests (--skip-tests)"
+    else
+      dotnet test --solution SpaPlatform.slnx --no-build --ignore-exit-code 8 || fail "the tests failed."
+      elapsed "the tests"
+      tests_ran="the tests"
+    fi
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
+    elapsed "the smoke test"
     tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
-    ran="$ran, the tests, the smoke test, the gateway image"
+    elapsed "the gateway image"
+    ran="$ran, $tests_ran, the smoke test, the gateway image"
   fi
 elif $full; then
   echo "check: build, tests, smoke test and gateway image skipped: no .NET source changed."
@@ -509,6 +618,7 @@ elif [ -n "$terraform_bin" ]; then
     fi
     quietly "$terraform_bin" -chdir="$dir" validate || fail "terraform validate failed in $dir."
   done
+  elapsed "Terraform"
   ran="$ran, $terraform_named"
 
   if $full; then
@@ -526,6 +636,7 @@ elif [ -n "$terraform_bin" ]; then
     for dir in $(printf '%s\n' $tested | sort -u); do
       "$terraform_bin" -chdir="$dir" test || fail "terraform test failed in $dir."
     done
+    elapsed "the Terraform tests"
     ran="$ran, the Terraform tests"
   fi
 else
@@ -643,10 +754,50 @@ $user"
   done
 }
 
-# Whether the companion $1 runs: the diff names it, or --both-halves asks for every one. grep -Fx
-# rather than -q: -q would close the pipe at a match and fail printf under pipefail.
+# Whether the diff changes a file of the checkout the companion $1 declares it reads. A companion can
+# read files outside tools/ and .github/, which no rule above reaches: tools/pins_inventory_tests.py
+# copies the live pins file, SDK pin file, solution, build properties and project files and counts
+# what they hold, so on #336 a new pin passed this check with its companions skipped and failed
+# three cases in CI's Documents job (#354). Such a companion says which on a line of its own,
+#
+#     Checkout inputs: Directory.Packages.props global.json *.csproj
+#
+# and a changed path matching one of the patterns earns it. A pattern is a shell `case` pattern
+# held to the whole path from the top level, so `global.json` is the top-level file alone and
+# `*.csproj` is a project file at any depth. The list lives in the companion, beside the copies that
+# depend on it, and not here, so a companion that starts reading another file changes one file. The
+# patterns are split with pathname expansion off, or `*.csproj` would become the names of the
+# project files in the working directory. grep exits 1 on no such line; any other status is a
+# companion that was not read, and fails the check rather than run less.
+declares_a_changed_input() {
+  local line pattern path status
+  status=0
+  line="$(grep -h -e '^Checkout inputs:' -- "$1")" || status=$?
+  [ "$status" -le 1 ] || fail "could not read the checkout inputs $1 declares."
+  [ -n "$line" ] || return 1
+  line="${line//Checkout inputs:/ }"
+  set -f
+  for pattern in $line; do
+    for path in ${changed:-}; do
+      case "$path" in
+        $pattern)
+          set +f
+          return 0
+          ;;
+      esac
+    done
+  done
+  set +f
+  return 1
+}
+
+# Whether the companion $1 runs: the diff names it, or a file of the checkout it declares, or
+# --both-halves asks for every one. grep -Fx rather than -q: -q would close the pipe at a match and
+# fail printf under pipefail.
 earned() {
-  $both || printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null
+  $both && return 0
+  printf '%s\n' "$named" | grep -Fx -- "$1" > /dev/null && return 0
+  declares_a_changed_input "$1"
 }
 
 # What the verdict adds when it ran no check of the check itself.
@@ -679,6 +830,7 @@ if $full; then
       companions="$companions $found"
     fi
   done
+  elapsed "the test companions' reach"
 
   if [ -z "$companions" ] && $both; then
     echo "check: no test companion is tracked in tools/ or .github/."
@@ -690,6 +842,7 @@ if $full; then
     for found in $companions; do
       echo "check: the test companion $found:"
       python3 -I "$found" || fail "the test companion $found failed."
+      elapsed "the test companion $found"
       listed="${listed:+$listed, }$found"
       count=$((count + 1))
     done
@@ -744,6 +897,7 @@ if $full; then
       for found in $workflow_companions; do
         echo "check: the workflow test companion $found:"
         node "$found" || fail "the workflow test companion $found failed."
+        elapsed "the workflow test companion $found"
         listed="${listed:+$listed, }$found"
         count=$((count + 1))
       done
@@ -759,6 +913,7 @@ if $full; then
 fi
 
 verdict="pass"
+elapsed_total
 if $full; then
   echo "check: pass: $ran$unrun."
 else

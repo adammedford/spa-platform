@@ -11,6 +11,13 @@ exit status, what the reader prints on standard output (the record's URL, which 
 the merge body) and the fragment of standard error that names the refusal. Nothing is imported, so
 no case can reach a part of the reader that land.sh cannot.
 
+**The `--pr` form has the same seam, with gh doubled (#488).** `review_record.py --pr <n>` makes the
+`gh` calls land.sh used to make, so its cases put a strict gh double alone on PATH that serves the
+head and the listings and records every call; any other call exits 97. One case runs each set of
+captured listings through both forms and asserts the same status, standard output and standard
+error, so the two cannot drift apart. `-I` isolates the reader's imports, not PATH, so the double is
+the gh it finds.
+
 **The fixtures are GitHub's shapes.** Each comment and review is built with the fields GitHub's REST
 API returns, and the reader reads only some of them:
 https://docs.github.com/en/rest/issues/comments#list-issue-comments and
@@ -29,9 +36,13 @@ Run: python3 -I tools/review_record_tests.py
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -77,14 +88,15 @@ class Outcome:
         self.stderr = completed.stderr.decode("utf-8")
 
 
-def read(head: str = HEAD, comments: list | None = None, reviews: list | None = None, *,
+def read(head: str = HEAD, *flags: str, comments: list | None = None, reviews: list | None = None,
          pages: dict | None = None, raw: bytes | None = None) -> Outcome:
-    """Run the reader as land.sh does. `comments` and `reviews` go in as one page each."""
+    """Run the reader as land.sh does, with `flags` after the head. `comments` and `reviews` go in
+    as one page each."""
     if raw is None:
         payload = pages if pages is not None else {"comments": [comments or []],
                                                    "reviews": [reviews or []]}
         raw = json.dumps(payload).encode("utf-8")
-    completed = subprocess.run([sys.executable, "-I", str(READER), head], input=raw,
+    completed = subprocess.run([sys.executable, "-I", str(READER), head, *flags], input=raw,
                                capture_output=True, timeout=30)
     return Outcome(completed)
 
@@ -312,6 +324,294 @@ class InputTests(ReaderTestCase):
         outcome = read(reviews=[review(21, None, "2026-10-18T01:00:00Z"),
                                 review(22, "", "2026-10-18T01:00:01Z")])
         self.assertRefused(outcome, f"no review record names {HEAD}")
+
+
+# The pull request the `--pr` cases ask about, and the three calls the reader makes of gh for it,
+# in the shapes gh's manual gives them: https://cli.github.com/manual/gh_pr_view and
+# https://cli.github.com/manual/gh_api. They are the calls land.sh made itself before #488.
+NUMBER = "7"
+VIEW_HEAD = ["pr", "view", NUMBER, "--json", "headRefOid", "--jq", ".headRefOid"]
+LIST_COMMENTS = ["api", f"repos/{{owner}}/{{repo}}/issues/{NUMBER}/comments", "--paginate", "--slurp"]
+LIST_REVIEWS = ["api", f"repos/{{owner}}/{{repo}}/pulls/{NUMBER}/reviews", "--paginate", "--slurp"]
+
+# Both forms, as every refusal of an argument names them.
+PR_FORM = "review_record.py --pr <number>"
+STDIN_FORM = "review_record.py <40-hex head>"
+
+GH_DOUBLE = """#!/bin/bash
+# A double for gh, written by tools/review_record_tests.py for one case. It answers only the calls
+# the reader's --pr form makes, records each call's arguments, and exits 97 on any other call.
+log={log}
+n=0
+while [ -e "$log/call-$n" ]; do n=$((n + 1)); done
+printf '%s\\0' "$@" > "$log/call-$n"
+unexpected() {{ printf 'gh double: unexpected call\\n' >&2; exit 97; }}
+case "$*" in
+  "pr view {number} --json headRefOid --jq .headRefOid")
+    [ -z {view_fails} ] || {{ printf '%s\\n' {view_fails} >&2; exit 1; }}
+    printf '%s\\n' {head} ;;
+  "api repos/{{owner}}/{{repo}}/issues/{number}/comments --paginate --slurp")
+    [ -z {api_fails} ] || {{ printf '%s\\n' {api_fails} >&2; exit 1; }}
+    /bin/cat -- {comments} ;;
+  "api repos/{{owner}}/{{repo}}/pulls/{number}/reviews --paginate --slurp")
+    /bin/cat -- {reviews} ;;
+  *) unexpected ;;
+esac
+"""
+
+
+class Asked:
+    """One run of the `--pr` form against a gh double: its outcome and the calls gh received."""
+
+    def __init__(self, outcome: Outcome, calls: list):
+        self.outcome = outcome
+        self.calls = calls
+
+
+def ask(*arguments: str, head: str = HEAD, comments: list | None = None,
+        reviews: list | None = None, pages: dict | None = None, raw_comments: bytes | None = None,
+        view_fails: str = "", api_fails: str = "", gh: bool = True) -> Asked:
+    """Run the reader's --pr form as a caller does, with a gh double first and alone on PATH that
+    serves `head` as the pull request's head and the listings as `gh api --paginate --slurp` pages
+    them. Captured listings in the stdin form's shape go in as `pages`."""
+    if pages is None:
+        pages = {"comments": [comments or []], "reviews": [reviews or []]}
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        bin_dir, log = root / "bin", root / "log"
+        bin_dir.mkdir()
+        log.mkdir()
+        (root / "comments.json").write_bytes(raw_comments if raw_comments is not None
+                                             else json.dumps(pages["comments"]).encode("utf-8"))
+        (root / "reviews.json").write_text(json.dumps(pages["reviews"]))
+        if gh:
+            double = bin_dir / "gh"
+            double.write_text(GH_DOUBLE.format(
+                log=shlex.quote(str(log)), number=NUMBER, head=shlex.quote(head),
+                comments=shlex.quote(str(root / "comments.json")),
+                reviews=shlex.quote(str(root / "reviews.json")),
+                view_fails=shlex.quote(view_fails), api_fails=shlex.quote(api_fails)))
+            double.chmod(0o755)
+        env = {"PATH": str(bin_dir), "HOME": str(root), "LC_ALL": "C"}
+        completed = subprocess.run([sys.executable, "-I", str(READER), *arguments], input=b"",
+                                   capture_output=True, timeout=30, env=env, cwd=root)
+        names = sorted(log.glob("call-*"), key=lambda path: int(path.name.split("-")[1]))
+        calls = [path.read_bytes().decode("utf-8").split("\0")[:-1] for path in names]
+    return Asked(Outcome(completed), calls)
+
+
+# Listings as a pull request might carry them, each answered by the stdin form one way: a clear,
+# a hold, a record of another head, a near miss, a line from outside, two pages, and nothing.
+CAPTURED = {
+    "a merge record in a comment": {
+        "comments": [[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")]], "reviews": [[]]},
+    "a merge record in a commented review": {
+        "comments": [[]], "reviews": [[review(21, record(HEAD, "merge"), "2026-10-18T01:00:00Z")]]},
+    "a hold after a merge": {
+        "comments": [[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z"),
+                      comment(12, record(HEAD, "hold"), "2026-10-18T02:00:00Z")]], "reviews": [[]]},
+    "a merge record of an earlier head": {
+        "comments": [[comment(11, record(EARLIER, "merge"), "2026-10-18T01:00:00Z")]],
+        "reviews": [[]]},
+    "an abbreviated record": {
+        "comments": [[comment(11, f"Reviewed {HEAD[:7]} against {BASE[:7]}: merge",
+                              "2026-10-18T01:00:00Z")]], "reviews": [[]]},
+    "a record from outside the repository": {
+        "comments": [[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z", "NONE",
+                              "a-stranger")]], "reviews": [[]]},
+    "a record on the second page": {
+        "comments": [[comment(n, "LGTM", "2026-10-18T00:00:00Z") for n in range(1, 31)],
+                     [comment(31, record(HEAD, "merge"), "2026-10-18T01:00:00Z")]],
+        "reviews": [[]]},
+    "nothing on the pull request": {"comments": [[]], "reviews": [[]]},
+}
+
+
+class PullRequestFormTests(ReaderTestCase):
+    """`review_record.py --pr <n>` looks the head and both listings up itself (#488), and answers
+    exactly what the stdin form answers for the same listings."""
+
+    def test_the_two_forms_agree_on_captured_listings(self):
+        for name, pages in CAPTURED.items():
+            with self.subTest(listings=name):
+                piped = read(pages=pages)
+                asked = ask("--pr", NUMBER, pages=pages)
+                self.assertEqual((piped.status, piped.stdout, piped.stderr),
+                                 (asked.outcome.status, asked.outcome.stdout, asked.outcome.stderr))
+                self.assertEqual([VIEW_HEAD, LIST_COMMENTS, LIST_REVIEWS], asked.calls)
+
+    def test_it_judges_the_head_gh_reports(self):
+        cleared = ask("--pr", NUMBER, comments=[comment(11, record(HEAD, "merge"),
+                                                        "2026-10-18T01:00:00Z")])
+        self.assertCleared(cleared.outcome, f"{PULL}#issuecomment-11")
+        moved = ask("--pr", NUMBER, head=OTHER, comments=[comment(11, record(HEAD, "merge"),
+                                                                  "2026-10-18T01:00:00Z")])
+        self.assertRefused(moved.outcome, f"no review record names {OTHER}")
+
+    def test_a_head_given_is_judged_and_not_looked_up(self):
+        # land.sh pins the merge to the head it read once, so it hands that head over: gh reporting
+        # another head by now changes nothing the reader says.
+        asked = ask("--pr", NUMBER, "--head", HEAD, head=OTHER,
+                    comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")])
+        self.assertCleared(asked.outcome, f"{PULL}#issuecomment-11")
+        self.assertEqual([LIST_COMMENTS, LIST_REVIEWS], asked.calls)
+
+    def test_a_head_given_that_no_record_clears(self):
+        asked = ask("--pr", NUMBER, "--head", HEAD, comments=[comment(11, record(HEAD, "hold"),
+                                                                      "2026-10-18T01:00:00Z")])
+        self.assertRefused(asked.outcome, "says hold", f"{PULL}#issuecomment-11")
+
+
+class PullRequestFormInputTests(ReaderTestCase):
+    """What the --pr form cannot read: status 2, nothing on stdout, and gh's own words passed on."""
+
+    def assertUnreadable(self, asked: Asked, *fragments: str):
+        self.assertEqual(2, asked.outcome.status, asked.outcome.stderr)
+        self.assertEqual("", asked.outcome.stdout)
+        for fragment in fragments:
+            self.assertIn(fragment, asked.outcome.stderr)
+
+    def test_a_listing_gh_cannot_fetch(self):
+        asked = ask("--pr", NUMBER, api_fails="gh: Server Error (HTTP 502)")
+        self.assertUnreadable(asked, "HTTP 502", "gh api")
+        self.assertEqual([VIEW_HEAD, LIST_COMMENTS], asked.calls)
+
+    def test_a_head_gh_cannot_look_up(self):
+        asked = ask("--pr", NUMBER, view_fails="GraphQL: Could not resolve to a PullRequest")
+        self.assertUnreadable(asked, "Could not resolve to a PullRequest", "gh pr view")
+        self.assertEqual([VIEW_HEAD], asked.calls)
+
+    def test_a_head_gh_reports_that_is_not_a_full_sha(self):
+        asked = ask("--pr", NUMBER, head=HEAD[:7])
+        self.assertUnreadable(asked, "not a full commit sha")
+        self.assertEqual([VIEW_HEAD], asked.calls)
+
+    def test_a_listing_that_is_not_json(self):
+        asked = ask("--pr", NUMBER, raw_comments=b"<html>rate limited</html>")
+        self.assertUnreadable(asked, "not JSON")
+
+    def test_gh_missing_from_path(self):
+        self.assertUnreadable(ask("--pr", NUMBER, gh=False), "gh")
+
+
+# A review comment carrying a record and a `## Follow-ups` table, in the shape review-queue.js
+# writes (its followUpLines and cell): each Finding cell with `|` escaped as `\|`.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+
+
+def with_follow_ups(line: str, *findings: str) -> str:
+    rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+    return "\n".join(["## Review", "", line, "", "## Follow-ups", "", FOLLOW_UP_HEAD,
+                      "| --- | --- | --- | --- |", *rows, "", "## Outstanding", "", "- none"])
+
+
+class FollowUpsTests(ReaderTestCase):
+    """With `--follow-ups` last, the reader prints, after the URL, one line per row of the clearing
+    record's `## Follow-ups` table: its Finding cell, read as morning.js's followUpsOf reads it, so
+    land.sh can refuse a merge body with no `Outstanding:` line that carries them (#521). Without the
+    flag nothing changes, so what docs/agents/landing-work.md says the reader prints stays true."""
+
+    def test_the_header_is_the_one_review_queue_writes_and_morning_reads(self):
+        # The cases below prove the reader reads a table under FOLLOW_UP_HEAD; this one reads that
+        # header back from the script that writes the table and the one that files its rows. Were
+        # either renamed, the reader would find no table, land.sh's check would pass on every
+        # record, and every other case here would still be green: a guard reads the thing it
+        # guards (CODING_STANDARDS.md), and a check that reads nothing must not read as a pass.
+        for script in ("review-queue.js", "morning.js"):
+            with self.subTest(script=script):
+                source = (ROOT / ".claude" / "workflows" / script).read_text(encoding="utf-8")
+                found = re.search(r"^const FOLLOW_UP_HEAD = '([^']*)'$", source, re.MULTILINE)
+                self.assertIsNotNone(found, f"{script} no longer defines FOLLOW_UP_HEAD on one line")
+                self.assertEqual(FOLLOW_UP_HEAD, found.group(1))
+
+    def test_each_row_follows_the_url(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail", "An unread flag")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(0, outcome.status, outcome.stderr)
+        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\nAn unread flag\n",
+                         outcome.stdout)
+
+    def test_without_the_flag_the_url_stands_alone(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
+        outcome = read(comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_a_record_with_no_table_prints_the_url_alone(self):
+        outcome = read(HEAD, "--follow-ups",
+                       comments=[comment(11, record(HEAD, "merge"), "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_a_table_with_no_row_prints_the_url_alone(self):
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, with_follow_ups(record(HEAD, "merge")),
+                                                               "2026-10-18T01:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+
+    def test_an_escaped_pipe_in_a_finding_is_read_back_as_a_pipe(self):
+        body = with_follow_ups(record(HEAD, "merge"), "`a \\| b` is split wrong")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\n`a | b` is split wrong\n", outcome.stdout)
+
+    def test_the_table_ends_at_the_first_line_that_is_not_a_row(self):
+        # A row with the wrong number of cells, or an empty Finding, is not a follow-up; the table
+        # ends at the first line not bracketed by pipes, as morning.js reads it.
+        body = "\n".join([record(HEAD, "merge"), "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- |",
+                          "| First | Spec | here | this record |", "|  | Spec | here | this record |",
+                          "| Three | cells | only |", "", "| After the table | Spec | here | x |"])
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\nFirst\n", outcome.stdout)
+
+    def test_only_the_clearing_record_s_table_is_read(self):
+        held = with_follow_ups(record(HEAD, "hold"), "Carried by the hold")
+        outcome = read(HEAD, "--follow-ups",
+                       comments=[comment(11, held, "2026-10-18T01:00:00Z"),
+                                 comment(12, record(HEAD, "merge"), "2026-10-18T02:00:00Z")])
+        self.assertCleared(outcome, f"{PULL}#issuecomment-12")
+
+    def test_a_refusal_prints_no_rows(self):
+        body = with_follow_ups(record(HEAD, "hold"), "A finding")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertRefused(outcome, "says hold")
+
+    def test_the_two_forms_agree_with_the_flag(self):
+        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
+        pages = {"comments": [[comment(11, body, "2026-10-18T01:00:00Z")]], "reviews": [[]]}
+        piped = read(HEAD, "--follow-ups", pages=pages)
+        for arguments in (["--pr", NUMBER, "--follow-ups"],
+                          ["--pr", NUMBER, "--head", HEAD, "--follow-ups"]):
+            with self.subTest(arguments=arguments):
+                asked = ask(*arguments, pages=pages)
+                self.assertEqual((piped.status, piped.stdout, piped.stderr),
+                                 (asked.outcome.status, asked.outcome.stdout, asked.outcome.stderr))
+        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\n", piped.stdout)
+
+
+class ArgumentTests(ReaderTestCase):
+    """A wrong argument is refused, before any input is read or any gh call made, with both forms
+    named, so a caller holding a number or a head learns the form that takes it."""
+
+    def assertWrongArguments(self, *arguments: str):
+        asked = ask(*arguments)
+        self.assertEqual(2, asked.outcome.status, asked.outcome.stderr)
+        self.assertEqual("", asked.outcome.stdout)
+        self.assertIn(PR_FORM, asked.outcome.stderr)
+        self.assertIn(STDIN_FORM, asked.outcome.stderr)
+        self.assertEqual([], asked.calls)
+
+    def test_a_pull_request_number_where_a_head_is_expected(self):
+        self.assertWrongArguments(NUMBER)
+
+    def test_a_head_where_a_pull_request_number_is_expected(self):
+        self.assertWrongArguments("--pr", HEAD)
+
+    def test_other_wrong_arguments(self):
+        for arguments in ([], ["--pr"], ["--pr", "0"], ["--pr", "-7"], ["--pr", NUMBER, HEAD],
+                          ["--head", HEAD], ["--pr", NUMBER, "--head"],
+                          ["--pr", NUMBER, "--head", HEAD[:7]], ["--pr", NUMBER, "--head", NUMBER],
+                          ["--pr", NUMBER, "--pr", NUMBER], [HEAD, HEAD], ["--merge"],
+                          ["--follow-ups"], ["--follow-ups", HEAD], ["--pr", NUMBER, "--follow-ups", HEAD],
+                          [HEAD, "--follow-ups", "--follow-ups"], ["--pr", "--follow-ups", NUMBER]):
+            with self.subTest(arguments=arguments):
+                self.assertWrongArguments(*arguments)
 
 
 if __name__ == "__main__":

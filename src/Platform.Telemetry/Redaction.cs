@@ -30,8 +30,27 @@ internal static partial class Redaction
     /// The text with the query string cut from every URL or path in it. The callback carries the
     /// authorization code and state in its query (ADR-0007), so no query survives, whatever it holds.
     /// </summary>
-    public static string WithoutQueryStrings(string text) =>
-        text.Contains('?', StringComparison.Ordinal) ? QueryString().Replace(text, "?" + Redacted) : text;
+    public static string WithoutQueryStrings(string text) => WithoutQueryStrings(text, QueryString());
+
+    // The pattern is a parameter so that a test can hand in one that runs out of its match timeout:
+    // the shipped one is linear, so no loggable text reaches the catch below (#677).
+    internal static string WithoutQueryStrings(string text, Regex queryString)
+    {
+        if (!text.Contains('?', StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        try
+        {
+            return queryString.Replace(text, "?" + Redacted);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Fails closed: a text the pattern could not finish is not written at all.
+            return Redacted;
+        }
+    }
 
     /// <summary>
     /// The message rendered again from its template with each sensitive hole redacted, or null when
@@ -39,7 +58,21 @@ internal static partial class Redaction
     /// substitutes every value, so a credential in a plainly named property would be in the message
     /// even after its field was redacted.
     /// </summary>
-    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties)
+    public static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties) =>
+        Render(properties, Hole());
+
+    // The hole pattern is a parameter for the same reason as WithoutQueryStrings's (#677). Here the
+    // shipped pattern can run out: the budget covers the whole Replace, values rendered in the
+    // evaluator included, so a value slow to turn into text reaches the catch below. The
+    // documentation does not say the budget covers the evaluator; the source does. Replace runs the
+    // evaluator inside RunAllMatchesWithCallback's callback, and that method sets one deadline,
+    // InitializeTimeout, before its loop over matches and never resets it, so every later
+    // CheckTimeout measures against it:
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.Replace.cs#L179-L184
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/Regex.cs#L526-L564
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Text.RegularExpressions/src/System/Text/RegularExpressions/RegexRunner.cs#L339-L362
+    // How slow a value must be depends on where the engine checks its clock, which no test can pin.
+    internal static string? Render(IReadOnlyList<KeyValuePair<string, object?>>? properties, Regex hole)
     {
         if (properties is null)
         {
@@ -73,23 +106,32 @@ internal static partial class Redaction
             return Redacted;
         }
 
-        return Hole().Replace(template, match =>
+        try
         {
-            if (match.Value is "{{" or "}}")
+            return hole.Replace(template, match =>
             {
-                return match.Value[..1];
-            }
+                if (match.Value is "{{" or "}}")
+                {
+                    return match.Value[..1];
+                }
 
-            string name = match.Groups["name"].Value;
-            if (IsSensitiveName(name))
-            {
-                return Redacted;
-            }
+                string name = match.Groups["name"].Value;
+                if (IsSensitiveName(name))
+                {
+                    return Redacted;
+                }
 
-            return values.TryGetValue(name, out object? value)
-                ? System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "(null)"
-                : match.Value;
-        });
+                return values.TryGetValue(name, out object? value)
+                    ? System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "(null)"
+                    : match.Value;
+            });
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Fails closed, as a missing template does: a sensitive line that could not be rendered
+            // again carries no message rather than the logger's, which holds the value.
+            return Redacted;
+        }
     }
 
     private static string Flatten(string name)
@@ -107,14 +149,21 @@ internal static partial class Redaction
         return new string(buffer[..length]);
     }
 
+    // Every pattern here carries a match timeout (MA0009, a security rule, which ADR-0035
+    // decision 4 requires at error in both analysis tiers). Both are linear, with no nested
+    // quantifier, so no text on its own comes near it; it bounds a pattern a later edit makes
+    // backtrack, and a timeout fails closed above. Render's budget also covers the values its
+    // evaluator renders, so a slow value can spend it (#677; the runtime source cited at Render).
+    private const int MatchTimeoutMilliseconds = 100;
+
     // A message-template hole, {Name}, {@Name} or {Name:format}, or an escaped brace.
-    [GeneratedRegex(@"\{\{|\}\}|\{[@$]?(?<name>[^{}:,]+)(?:[,:][^{}]*)?\}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\{\{|\}\}|\{[@$]?(?<name>[^{}:,]+)(?:[,:][^{}]*)?\}", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex Hole();
 
     // A '?' followed by at least one character that could be part of a URL. "/signin-oidc?code=x",
     // "https://h/p?a=b" and a bare "?code=x" (HttpRequest.QueryString renders with its leading '?')
     // match; "is it? yes" does not. Nothing is asked of the character before the '?', so a query
     // string logged on its own, or after a space, is cut too (review of task 6.4).
-    [GeneratedRegex(@"\?[^\s""'<>]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\?[^\s""'<>]+", RegexOptions.CultureInvariant, MatchTimeoutMilliseconds)]
     private static partial Regex QueryString();
 }

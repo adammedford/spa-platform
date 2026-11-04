@@ -32,6 +32,30 @@ def targets(root: pathlib.Path) -> list[pathlib.Path]:
     )
 
 
+# The one reviewed upload (#576): the startup benchmark's nightly ARM64 job keeps each run's `.txt`
+# and `.json` as the run's artifact, which ADR-0033 -> Decision (the reporting; #176 Q6) asks for.
+# Those files are the benchmark's own output, marks and facts (commit, image ids, Docker, host),
+# written to a directory of their own under the runner's temp that nothing else writes; two such
+# files are already tracked under tools/bench/results/. No Terraform runs in that job and no
+# credential reaches it (its stand-ins use literal placeholders). The exception is pinned to that
+# file and that one path, as the NuGet cache is: any other upload, a second path, or the same step
+# in another file is refused as before, and a plan upload stays refused everywhere (CR 1.1).
+REVIEWED_UPLOAD = (".github/workflows/startup-bench.yml", ["path: ${{ runner.temp }}/startup-bench/"])
+
+
+def step_paths(lines: list[str], n: int) -> list[str]:
+    """The `path:` entries of the step whose `uses:` is line n (1-based): the lines below it that
+    are indented deeper, as written, so a multiline or a second path reads as not the one allowed."""
+    line = lines[n - 1]
+    indent = len(line) - len(line.lstrip())
+    block = []
+    for following in lines[n:]:
+        if following.strip() and len(following) - len(following.lstrip()) <= indent:
+            break
+        block.append(following)
+    return [entry.strip() for entry in block if entry.strip().startswith("path:")]
+
+
 def check(root: pathlib.Path) -> list[str]:
     problems: list[str] = []
     for path in targets(root):
@@ -45,18 +69,12 @@ def check(root: pathlib.Path) -> list[str]:
             # Quotes around action values and commands are legal YAML/shell syntax.
             normalized = line.replace('"', "").replace("'", "")
             if UPLOAD.search(normalized):
-                problems.append(f"{rel}:{n}: artifact uploads require a reviewed plan-secrecy policy")
+                if (rel, step_paths(lines, n)) != REVIEWED_UPLOAD:
+                    problems.append(f"{rel}:{n}: artifact uploads require a reviewed plan-secrecy policy")
             if CACHE.search(normalized):
-                indent = len(line) - len(line.lstrip())
-                block = []
-                for following in lines[n:]:
-                    if following.strip() and len(following) - len(following.lstrip()) <= indent:
-                        break
-                    block.append(following)
                 # The sole current cache stores dependencies, not the workspace or runner temp.
                 # Multiline/dynamic paths and any new cache need an explicit review (CR 1.1).
-                paths = [entry.strip() for entry in block if entry.strip().startswith("path:")]
-                if rel != ".github/workflows/ci.yml" or paths != ["path: ~/.nuget/packages"]:
+                if rel != ".github/workflows/ci.yml" or step_paths(lines, n) != ["path: ~/.nuget/packages"]:
                     problems.append(f"{rel}:{n}: only the reviewed NuGet dependency cache is allowed")
             if TERRAFORM.search(normalized):
                 problems.append(
@@ -75,7 +93,7 @@ def main() -> int:
     if problems:
         print("PLAN SECRECY FAILED: review the complete plan pipeline before enabling it.")
         return 1
-    print("plan secrecy: no direct plan/show commands or artifact uploads in checked CI sources")
+    print("plan secrecy: no direct plan/show commands, and no artifact upload but the reviewed one, in checked CI sources")
     return 0
 
 
