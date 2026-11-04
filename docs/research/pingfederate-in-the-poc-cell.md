@@ -554,7 +554,7 @@ sitting.
 Today's Phase 1 cell per hour: ALB $0.0225 + gateway task (0.25 vCPU, 1 GB, ARM) $0.0117 + one IPv4
 $0.005 = about $0.039, plus LCU cents (the plan's "About $30" a month). With the provider task and its
 address: about $0.091 per hour, about $0.36 for a four-hour sitting, about $0.73 for eight, about
-$2.20 for a day left standing. On the G6 two-task shape (#347 Q10: about $0.10 per hour, $70.50 a
+$2.18 for a day left standing. On the G6 two-task shape (#347 Q10: about $0.10 per hour, $70.50 a
 month) the provider adds its $0.047 without an address: about $0.15 per hour. The docs-only reading of
 `docs/agents/aws-rules.md` gives no number for the spend limit ("The user may have a spend limit if
 they are on the paid plan"); it is read in AWS Settings, which this ticket does not open. Neither
