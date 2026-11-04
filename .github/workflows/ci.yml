@@ -292,6 +292,16 @@ jobs:
         # the land.sh companion below runs only one case of each.
         run: python3 -I tools/decision_citation_tests.py
 
+      - name: The overnight answers reader lists the questions that wait on a landing, and whether a Confirm covers each
+        # tools/land.sh prints, before it merges, each question on an open `Overnight <date>` issue
+        # that names the pull request or a ticket it closes (#531), and this is the code that reads
+        # them. Its companion feeds it GitHub's shapes of the open issues and their comments built
+        # to trip each rule -- a title merely containing Overnight, a pull request in the listing,
+        # a number inside a longer one or a decision URL, a question split across parts, a Confirm
+        # whose first sentence, override lines or author decide coverage -- and the land.sh
+        # companion below runs only one case of each.
+        run: python3 -I tools/overnight_answers_tests.py
+
       - name: The retro's record reader reads each record line the way its rules say
         # The retro workflow (#77) files tickets from what tools/retro_record.py decides a record line
         # is: a check log's verdict, a side log, an earlier round, a report's date, the noun merge, cost
