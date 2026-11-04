@@ -12,7 +12,7 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 ARG TARGETARCH
 WORKDIR /src
 
-COPY global.json nuget.config Directory.Build.props Directory.Packages.props ./
+COPY global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt ./
 COPY tools/bench/floor/Bench.Floor.csproj tools/bench/floor/
 RUN dotnet restore tools/bench/floor/Bench.Floor.csproj -a "$TARGETARCH"
 
