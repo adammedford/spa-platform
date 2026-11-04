@@ -622,6 +622,8 @@ try {
       [[`test_a_closing_reference_anywhere_in_a_line_is_read (__main__.ClosesTests) (description='\\tResolved: #352\\r')`, `${T} (__main__.ClosesTests) (keyword='resolved')`], 'reproduced', 'merge'],
       [[`${T} (__main__.ClosesTests.${T}) (keyword='resolved')`], 'reproduced', 'merge'],
       [[`${T} (__main__.ClosesTests) (keyword='(re)solved')`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests) [a message (with a parenthesis)]`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests.${T}) [a message] (keyword='resolved')`], 'reproduced', 'merge'],
       [[`${T} (__main__.OtherTests) (keyword='resolved')`], 'did-not-fail', 'hold'],
     ]) {
       env = run({ prs: [209] }, SUB, { mutate: { [`ClosesTests.${T}`]: { ...row('reproduced', names.length, 85), failingNames: names } } })
@@ -632,34 +634,40 @@ try {
     }
   }
 
-  // A candidate that names its whole file, a Python companion listed as one row (#793): on #791 no
+  // A candidate that is its whole file, a Python companion listed as one row (#793): on #791 no
   // failing name matched 'overnight_answers_tests.py (companion)', so the companion red on its own test
-  // read as caught elsewhere and held. Its bare name is its file's basename, or its test is its project
-  // path, so every failing name in the run is its own: reproduced, no caught cell, merge, with no catch
-  // accepted. It keeps its own row beside a candidate in the same file, and a candidate whose bare name
-  // is not its file's stays a catch.
+  // read as caught elsewhere and held. A test that is its file's or project's path or basename, and
+  // nothing else, owns every failing name in its run: reproduced, no caught cell, merge, with no catch
+  // accepted, and it keeps its own row beside a candidate in the same file. Each of the four is proved
+  // alone, file and project apart. A test that adds anything to the name, a scope such as
+  // '(check: ...)' or '(companion)', is not the whole file: red only on another check it is a catch the
+  // verdict did not accept, did-not-fail, and holds (#794).
   checks++
   {
     const F = 'tools/overnight_answers_tests.py'
     const ONE = 'ConfirmTests.test_every_confirm_comment_counts'
     const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
-    const comp = (test, project = F) => ({ test, project, file: F, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
-    for (const whole of ['overnight_answers_tests.py (companion)', 'overnight_answers_tests.py', F]) {
-      const WHOLE = { 210: pr(210, [F], { candidates: [comp(whole), comp(ONE)] }) }
-      env = run({ prs: [210] }, WHOLE, { mutate: { [whole]: { ...row('reproduced', 1, 18), failingNames: RED }, [ONE]: row('reproduced', 1, 18) } })
+    const comp = (test, project = F, file = F) => ({ test, project, file, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
+    const verdictOf = async (cands, mutate) => {
+      env = run({ prs: [210] }, { 210: pr(210, [F], { candidates: cands }) }, { mutate })
       result = await execute(env)
-      const c = resultOf(210, result)
-      const m = (c.mutations || []).find((x) => x.test === whole) || {}
-      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)} red on ${RED[0]}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
-      if ((c.mutations || []).filter((x) => x.test === whole).length !== 1 || !(c.mutations || []).some((x) => x.test === ONE)) fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)}: mutations ${JSON.stringify((c.mutations || []).map((x) => x.test))}, expected one row for it and one for ${ONE}`)
+      return resultOf(210, result)
     }
-    const NOT_WHOLE = { 210: pr(210, [F], { candidates: [comp(ONE)] }) }
-    env = run({ prs: [210] }, NOT_WHOLE, { mutate: { [ONE]: { ...row('reproduced', 1, 18), failingNames: RED } } })
-    result = await execute(env)
-    {
-      const c = resultOf(210, result)
-      const m = (c.mutations || []).find((x) => x.test === ONE) || {}
-      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${ONE} red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    for (const [label, cand] of [
+      ['its file path', comp(F, 'tools', F)],
+      ['its file basename', comp('overnight_answers_tests.py', 'tools', F)],
+      ['its project path', comp(F, F, 'tools/answers_helper.py')],
+      ['its project basename', comp('overnight_answers_tests.py', F, 'tools/answers_helper.py')],
+    ]) {
+      const c = await verdictOf([cand, comp(ONE)], { [cand.test]: { ...row('reproduced', 1, 18), failingNames: RED }, [ONE]: row('reproduced', 1, 18) })
+      const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
+      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 210 with the whole-file candidate ${JSON.stringify(cand.test)} (${label}) red on ${RED[0]}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
+      if ((c.mutations || []).filter((x) => x.test === cand.test).length !== 1 || !(c.mutations || []).some((x) => x.test === ONE)) fail(`PR 210 with the whole-file candidate ${JSON.stringify(cand.test)} (${label}): mutations ${JSON.stringify((c.mutations || []).map((x) => x.test))}, expected one row for it and one for ${ONE}`)
+    }
+    for (const scoped of [ONE, 'overnight_answers_tests.py (check: every Confirm comment counts)', 'overnight_answers_tests.py (companion)', `${F} (check: every Confirm comment counts)`]) {
+      const c = await verdictOf([comp(scoped)], { [scoped]: { ...row('reproduced', 1, 18), failingNames: RED } })
+      const m = (c.mutations || []).find((x) => x.test === scoped) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(scoped)} red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
   }
 

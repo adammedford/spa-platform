@@ -549,7 +549,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
-6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
+6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
@@ -727,14 +727,13 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
-// A unittest subtest prints a parameters parenthesis after the class one, 'test_x (pkg.Class)
-// (k='v')', and is read without it (#793): on #792 the greedy parenthesis took both groups, the
-// name read as the bare test_x, and a candidate Class.test_x red on its own subtest read as caught
-// elsewhere.
+// A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
+// the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
+// greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
+// red on its own subtest read as caught elsewhere.
 const dotted = (f, withClass = true) => {
-  const [, head, all] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
-  const sub = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*\(.*$/.exec(all || '')
-  const inner = sub ? sub[1] : all
+  const sub = /^\s*([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*(?:\[.*?\])?\s*(?:\(.*\))?\s*$/.exec(f)
+  const [, head, inner] = sub || /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
   if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
   return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
 }
@@ -817,15 +816,17 @@ const mutationRow = (n, m, i, got) => {
   // stays as reported. A failing name is the named test when it ends in the named test's whole dotted
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
-  // fails closed to the verdict's check (#695). dotted() above reads each name. A test that names its
-  // whole file, a Python companion listed as one candidate such as 'x_tests.py (companion)' whose
-  // bare name, the text before its first space or '(', is its file's or project's basename, or a test
-  // that is its project path, owns every test in that file: any failing name is its own (#793). On
+  // fails closed to the verdict's check (#695). dotted() above reads each name. A test that is its
+  // whole file, a Python companion listed as one candidate whose test is its file's or project's path
+  // or basename and nothing else, owns every test in that file: any failing name is its own (#793). On
   // #791 no failing name could match the cell, so the companion red on its own test read as caught
-  // elsewhere and held.
+  // elsewhere and held. A test that adds anything to the name, 'x_tests.py (check: ...)' scoping one
+  // check of it or 'x_tests.py (companion)', is not the whole file and stays a catch, failing closed
+  // to the verdict: owning every failing name, a scoped test red only on another check would read
+  // reproduced (#794).
   const base = (p) => (p || '').split('/').pop()
-  const bare = (/^[^\s(]*/.exec((m.test || '').trim()) || [''])[0]
-  const wholeFile = !!bare && (bare === base(m.file) || bare === base(m.project) || m.test === m.project)
+  const cell = (m.test || '').trim()
+  const wholeFile = !!cell && [m.file, m.project, base(m.file), base(m.project)].includes(cell)
   const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
