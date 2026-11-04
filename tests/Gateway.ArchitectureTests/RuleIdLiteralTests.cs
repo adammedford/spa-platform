@@ -49,22 +49,25 @@ public sealed class RuleIdLiteralTests : IDisposable
     }
 
     [Fact]
-    public void The_ids_are_the_thirteen_rule_ids_and_the_thirteen_problem_codes()
+    public void The_ids_are_the_thirteen_rule_ids_and_the_fourteen_problem_codes()
     {
         // Counted from the two contract tables, contracts/request-gate.md -> Rule ids and
         // contracts/http-contract.md -> Errors, not from the types the rule reads: RuleIdsTests and
         // RejectionTableTests hold those types to the tables, and this holds the rule to both types.
-        // The twelfth code is shell_unavailable (#427); the thirteenth code is session_store_unavailable
-        // and the thirteenth rule id auth.store, both #343's item 2. Mutation (#726): drop
-        // SessionStoreUnavailable from Problems.Rows and AuthStore from RuleIds.All, as before item 2,
-        // and the count reads 24 and neither id is in the set.
-        Assert.Equal(26, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
+        // The codes are numbered by landing. The twelfth code is shell_unavailable (#427); the
+        // thirteenth code is session_store_unavailable and the thirteenth rule id auth.store, both
+        // #343's item 2; the fourteenth code is store_unavailable (#543), which the Errors table and
+        // Problems.Rows place after idp_unavailable, not last. Mutation (#739): remove only the
+        // StoreUnavailable entry from Problems.Rows, keeping the constant, and the count reads 26 and
+        // store_unavailable is not in the set.
+        Assert.Equal(27, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains("host.unknown", RuleIdLiterals.Ids);
         Assert.Contains("api.unknown", RuleIdLiterals.Ids);
         Assert.Contains("invalid_request", RuleIdLiterals.Ids);
         Assert.Contains("upstream_timeout", RuleIdLiterals.Ids);
         Assert.Contains("shell_unavailable", RuleIdLiterals.Ids);
         Assert.Contains("session_store_unavailable", RuleIdLiterals.Ids);
+        Assert.Contains("store_unavailable", RuleIdLiterals.Ids);
         Assert.Contains("auth.store", RuleIdLiterals.Ids);
     }
 
