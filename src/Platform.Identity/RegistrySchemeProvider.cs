@@ -83,8 +83,8 @@ public sealed class RegistrySchemeProvider(IHttpContextAccessor accessor) : IAut
     {
         public SchemePair(string appId)
         {
-            Cookie = new AuthenticationScheme(SchemeNames.Cookie(appId), null, typeof(CookieAuthenticationHandler));
-            Oidc = new AuthenticationScheme(SchemeNames.Oidc(appId), null, typeof(OpenIdConnectHandler));
+            Cookie = new AuthenticationScheme(SchemeNames.Cookie(appId), null, typeof(PlatformCookieHandler));
+            Oidc = new AuthenticationScheme(SchemeNames.Oidc(appId), null, typeof(PlatformOidcHandler));
             CookieTask = Task.FromResult<AuthenticationScheme?>(Cookie);
             OidcTask = Task.FromResult<AuthenticationScheme?>(Oidc);
             RequestHandlersTask = Task.FromResult<IEnumerable<AuthenticationScheme>>([Oidc]);

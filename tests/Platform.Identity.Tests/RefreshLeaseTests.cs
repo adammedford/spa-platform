@@ -188,7 +188,7 @@ public sealed class RefreshLeaseTests
     {
         // Decision 1's exhaustion: every pass's acquire and re-read take 3 s each, inside their own 5 s
         // deadline and over it together, so every pass fails the check and gives the lease back, and once
-        // an unsuccessful pass ends after 2 × TTL (42 s) has elapsed the call answers ProviderUnavailable
+        // an unsuccessful pass ends after 2 × TTL (42 s) has elapsed the call answers StoreUnavailable
         // with no grant and the record as it was. 2 × TTL is the threshold a pass is checked against, not a
         // request deadline, so the call ends on the first pass to finish past it. Mutation: take the
         // threshold as a deadline on the acquire; the pass that straddles it ends on a cancelled store
@@ -219,7 +219,10 @@ public sealed class RefreshLeaseTests
 
         IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
 
-        Assert.Equal((503, "idp_unavailable"), (answer.Status, answer.Body));
+        // The store's bound, not a provider outage: auth.store's session_store_unavailable (#729's
+        // decision, part 4; #727). Mutation: return ProviderUnavailable at the bound, as before #727, and
+        // this reads idp_unavailable with no rule.
+        Assert.Equal((503, "session_store_unavailable", "auth.store"), (answer.Status, answer.Body, answer.Rule));
         Assert.Empty(gateway.Idp.RefreshGrants);
         Assert.Equal(atLogin, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
         Assert.Empty(answer.Cookies);
@@ -236,6 +239,40 @@ public sealed class RefreshLeaseTests
             Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal);
             Assert.All(tokens, token => Assert.DoesNotContain(token, line.Text, StringComparison.Ordinal));
         });
+    }
+
+    [Fact]
+    public async Task A_call_queued_behind_a_refresh_that_ended_at_the_stores_bound_answers_as_that_turn_did()
+    {
+        // #727 (#332 D2): a waiter that inherits a NoLease turn answers session_store_unavailable under
+        // auth.store, as the turn did, and starts no pass of its own: one NoLease line, no grant. Every
+        // acquire takes 6 s, over the 5 s StoreDeadline, so no pass may call the provider; the loser's
+        // real 250 ms polls keep the first call in its loop while the second queues on the gate.
+        // Mutation: drop the AtStoreBound case from the waiter's switch; the waiter runs its own passes to
+        // the bound and a second NoLease line is written.
+        CapturedLog logs = new();
+        ManualMonotonicClock clock = new();
+        ScriptedLeases leases = new(new InMemoryRefreshLeases(clock))
+        {
+            AfterAcquire = _ =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(6));
+                return Task.CompletedTask;
+            },
+        };
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([App1], leases: leases,
+            services: s => s.AddSingleton<TimeProvider>(clock).AddSingleton(logs.Provider));
+        Dictionary<string, string> jar = await LoginDueAsync(gateway);
+
+        Task<IdentityGateway.Answer> first = Task.Run(() => gateway.SendAsync(App1, IdentityGateway.TokenPath, jar), TestContext.Current.CancellationToken);
+        await gateway.GateHeldAsync(first);
+        IdentityGateway.Answer second = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+        IdentityGateway.Answer holder = await first;
+
+        Assert.All([holder, second], answer =>
+            Assert.Equal((503, "session_store_unavailable", "auth.store"), (answer.Status, answer.Body, answer.Rule)));
+        Assert.Empty(gateway.Idp.RefreshGrants);
+        Assert.Single(SourceLines(logs), line => line.Contains("within two times to live", StringComparison.Ordinal));
     }
 
     [Theory]
