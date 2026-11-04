@@ -92,9 +92,10 @@
    literal keys, and the Simple PCV's `username`-only contract.
 4. **Admin credentials and TLS.** The first administrator is `administrator`, created headlessly by
    hook 83 with `POST /administrativeAccounts` from `PING_IDENTITY_PASSWORD` (default
-   `2FederateM0re`, Ping's published value; `PING_IDENTITY_PASSWORD_FILE` is also read) the moment
+   `2FederateM0re`, Ping's published value), which that hook reads from the environment alone
+   (`test -z "${PING_IDENTITY_PASSWORD}" && container_failure 83`), the moment
    `PUT /license/agreement` returns 200 on a new server; 401 means an admin already exists
-   ([hook-83], [pf-readme], [lib-get-value]). The runtime certificate is a system-generated default;
+   ([hook-83], [pf-readme]). The runtime certificate is a system-generated default;
    a PKCS12 or PEM key pair is imported with `POST /keyPairs/sslServer/import` (`fileData`,
    `password`, `format`) and activated with `PUT /keyPairs/sslServer/settings`
    (`runtimeServerCertRef`, `activeRuntimeServerCerts`), which the getting-started profile does in
@@ -428,9 +429,10 @@ and `ca_certificate_pem_files` pointing at the project's authority ([tf-index]).
 - **The admin API is destructive at the bulk level** and per-resource otherwise; the hooks import
   once, then delete the file ([hook-85]). Re-running a changed `data.json` means a fresh container
   (no `/opt/out` volume), which is the compose stack's natural shape.
-- **Logs.** `PING_DEBUG=true` prints the licence file; `VERBOSE=true` runs the hooks with `set -x`,
-  which echoes `curl` lines carrying the admin password ([hook-17], [hook-85]). The stack leaves both
-  unset (N-16).
+- **Logs.** `PING_DEBUG=true` prints the licence file; `VERBOSE=true` runs the common hooks with
+  `set -x`; and `DEBUG=true` turns on `start_debug_logging`, which brackets the `curl` calls of hooks
+  83 and 85 and so echoes command lines carrying the admin password ([hook-17], [hook-83],
+  [hook-85], [lib-run-hook]). The stack leaves all three unset (N-16).
 
 ## 4. Admin credentials and TLS
 
@@ -443,9 +445,14 @@ to `/administrativeAccounts`; on `401` "Found existing admin PingFederate instan
 The hook runs only when a `data.json` is present or `CREATE_INITIAL_ADMIN_USER=true` ("The initial
 admin user will only be created on the first startup of the server after the license is accepted")
 ([hook-81], [pf-readme]). `PING_IDENTITY_PASSWORD` defaults to `2FederateM0re` in the image and in
-every Ping example ([pf-readme], [gs-readme], [compose-example]); `get_value ... true` also reads
-`PING_IDENTITY_PASSWORD_FILE`, so a Docker or Compose secret file works ([lib-get-value]). The
-getting-started `data.json` additionally SAVEs an `/administrativeAccounts` item `Administrator`
+every Ping example ([pf-readme], [gs-readme], [compose-example]). Hook 83 reads it from the
+environment only, so the value must be set there (a profile's `env_vars` can set it, as
+getting-started does, at the cost of putting it in the profile); the `get_value ... true` fallback
+to `PING_IDENTITY_PASSWORD_FILE` is used by hooks 81 and 85, which authenticate the bulk import and
+the cluster calls, not by the account creation ([hook-83], [hook-81], [hook-85], [lib-get-value]).
+Whether `pingsecrets.lib.sh` exports a `/run/secrets` file into the environment before hook 83 runs
+was not read in full; the compose snippet in section 6 therefore passes the password as an
+environment variable. The getting-started `data.json` additionally SAVEs an `/administrativeAccounts` item `Administrator`
 with `${PING_IDENTITY_PASSWORD}` ([gs-data]). Admin API authentication stays `native` unless
 `PF_ADMIN_API_AUTHENTICATION` is set ([pf-readme], [admin-api-access]). The fixture sets its own
 password; the compose stack passes it by name, never in the file.
