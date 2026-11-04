@@ -86,7 +86,9 @@ export const meta = {
 // catching test guards the break and, for a candidate, why the named test could not go red on it, so
 // a row pinned to a test that could never guard its break is answered by the test that does (#684,
 // #689). A stated or nominated mutation keeps its own test: the author named it, or the Standards
-// axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail. A
+// axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail;
+// except on a Node companion, an .mjs project, which prints no test names, where a row of any kind
+// is a caught row the verdict answers by its checks' fail() messages (#905). A
 // later review reads a caught cell as the named test alone, so a catcher, whose own break nobody
 // mutated, is neither answered nor cleared by it (#693). A held test the cap cuts is still
 // unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a
@@ -144,17 +146,20 @@ export const meta = {
 // low Spec finding quoting its sentence, which the comment carries beside the head comparison's and
 // the verdict weighs but does not re-take. It carries; it does not hold.
 //
-// A Closes line no commit names (#688). tools/land.sh refuses a description whose Closes #n names a
-// ticket no non-merge commit since the fork point names as #n or issue-n (#566), so a merge record on
-// such a head clears what the landing then refuses (#683's record on 3982a6f, which cost an empty
-// commit and a delta review). The inventory reports each commit's parent count beside its message,
-// and after the skip of a recorded head the script applies land.sh's rule to the description and the
-// messages: a ticket no commit with fewer than two parents names fails the pull request at stage
-// closes, before any range or axis agent runs, with each #n named and land.sh's remedy (name it in the
-// commit that did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n).
-// A missing parent count counts as a merge, so the check fails closed. Nothing is posted, and once the
-// head or description is fixed the review runs again on the final head. land.sh stays the gate, since
-// a description can change after a review.
+// A closing reference no commit names (#688). tools/land.sh refuses a description whose closing
+// reference, `Closes #n` or any other form GitHub closes a ticket on (#578), names a ticket no
+// non-merge commit since the fork point names as #n or issue-n (#566), so a merge record on such a
+// head clears what the landing then refuses (#683's record on 3982a6f, which cost an empty commit and
+// a delta review). The inventory reports each commit's parent count beside its message, and after the
+// skip of a recorded head the script applies land.sh's rule to the description and the messages: a
+// ticket no commit with fewer than two parents names fails the pull request at stage closes, before
+// any range or axis agent runs, with each #n named and land.sh's remedy (name it in the commit that
+// did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n), and the
+// owner/repo#n form fails it there too, naming the form and asking for Closes #n. A missing parent
+// count counts as a merge, so the check fails closed. Nothing is posted, and once the head or
+// description is fixed the review runs again on the final head. land.sh stays the gate, since a
+// description can change after a review. The copy of land.sh's rule is held to it by a shared table
+// of rows both test companions run (#745), described where the rule is written below.
 //
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
@@ -239,7 +244,8 @@ const recordsIn = (inv) => {
 // The rows of a review comment's Mutations table, as mutationLines below writes it (#289): one
 // { test, broken, result } per row, each cell unescaped as cell() escaped it, result the leading word
 // of the Result cell. A comment with no such table, a human's or an older shape's, yields none. A
-// caught row's cell, `<named test> (caught by <tests>)`, held or candidate (#689), yields the named
+// caught row's cell, `<named test> (caught by <tests>)`, held or candidate (#689), or of any kind on
+// an .mjs project (#905), yields the named
 // test alone (#693): the row reproduced the named test's break, not the catchers', so a catcher the
 // runner printed by the name the inventory gives it is neither answered as held nor cleared as a
 // candidate by that row.
@@ -451,7 +457,8 @@ const VERDICT = {
     outstanding: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' },
     // The held and candidate tests whose caught row (#684, #689) the verdict accepts: a test the row
-    // names guards the break and, for a candidate, the named test could not go red on it.
+    // names guards the break and, for a candidate, the named test could not go red on it. On an .mjs
+    // project, a row of any kind whose every message is a named check's own fail() message (#905).
     caughtAccepted: { type: 'array', items: { type: 'string' } },
     // A delta review after a hold: each finding of the held record, whether that record held on it or
     // carried it as a follow-up, and whether the range answers it.
@@ -549,7 +556,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
-6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
+6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
@@ -639,7 +646,7 @@ ${stale.length ? `The script compared every head the description states with the
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed.${r.caughtBy.length ? ` Caught by ${r.caughtBy.join(', ')}, not by ${r.test}.` : ''} ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. In every other case leave it out too, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind whose project is a Node companion (an .mjs file) is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted, and the verdict is hold. In every other case leave it out too, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
@@ -727,8 +734,13 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
+// the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
+// greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
+// red on its own subtest read as caught elsewhere.
 const dotted = (f, withClass = true) => {
-  const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+  const sub = /^\s*([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*(?:\[.*?\])?\s*(?:\(.*\))?\s*$/.exec(f)
+  const [, head, inner] = sub || /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
   if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
   return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
 }
@@ -753,9 +765,19 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const byTest = new Map(candidates.map((c) => [c.test, c]))
   // Newest first, so a test two records held on is mutated by the latest one's break; one a later
   // record reproduced is answered and drops out.
+  // A held cell in the spelling the inventory gave a whole companion before #794, '<file>
+  // (companion)', is held on the whole-file candidate whose path or basename is <file> (#801): on
+  // #791 that cell named no candidate's test, now the bare path, so its row had no file and its red
+  // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file:
+  // a cell that scopes one check is matched by the test it names, as before.
+  const wholeFor = (cell) => {
+    const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
+    return f ? candidates.filter((c) => c.file && c.project === c.file && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+  }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
-    const named = candidates.filter((c) => names(h.test, c.test))
+    const byName = candidates.filter((c) => names(h.test, c.test))
+    const named = byName.length ? byName : wholeFor(h.test)
     const answered = (test) => h.later.some((t) => t === test || names(t, test))
     return named.length ? named.filter((c) => !answered(c.test)).map((c) => ({ ...c, ...base }))
       : answered(h.test) ? [] : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
@@ -811,16 +833,36 @@ const mutationRow = (n, m, i, got) => {
   // stays as reported. A failing name is the named test when it ends in the named test's whole dotted
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
-  // fails closed to the verdict's check (#695). dotted() above reads each name.
-  const isNamed = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
+  // fails closed to the verdict's check (#695). dotted() above reads each name. A test that is its
+  // whole file owns every test in that file: any failing name is its own (#793). That is a candidate
+  // whose project is its file, so its run is that file alone, as a Python companion's is, and whose
+  // test is that path or its basename and nothing else. On #791 no failing name could match the cell,
+  // so the companion red on its own test read as caught elsewhere and held. Anything else stays a
+  // catch, failing closed to the verdict (#794): a test that adds to the name, 'x_tests.py (check:
+  // ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform test file, whose run
+  // is its whole directory, so a sibling file's red run would read as its own.
+  const cell = (m.test || '').trim()
+  // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
+  // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
+  // A stated row has no file but a same-test candidate's, so one scoped to a check is known by the
+  // .mjs file its cell names; that makes it only a caught row, which the verdict still has to answer.
+  const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
+  const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
+  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
-  if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
+  // A Node companion, a project that is an .mjs file, prints no test names: a check is a block of
+  // the file, and its failures are its fail() messages, which no cell such as 'x_tests.mjs check 39'
+  // can match by name (#905). On #798 and #796 a stated row red only on its own checks' messages read
+  // did-not-fail, and no acceptance could answer it. So a row of any kind there is a caught row, which
+  // the verdict answers when it verifies the messages are the named checks' own, and holds otherwise.
+  const checksOnly = (/\.mjs$/.test(m.project || '') || nodeFile) && !wholeFile
+  if (caughtElsewhere && !checksOnly && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
     row.result = 'did-not-fail'
   }
   // -1 is a count the body does not give (STATED): compare only the counts the author stated.
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
-  row.caughtBy = caughtElsewhere && (m.kind === 'held' || m.kind === 'candidate') ? row.failingNames : []
+  row.caughtBy = caughtElsewhere && (checksOnly || m.kind === 'held' || m.kind === 'candidate') ? row.failingNames : []
   return row
 }
 // What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
@@ -983,27 +1025,44 @@ const laterDateFindings = (inv) => {
   return found
 }
 
-// ---------------------------------------------------------------- a Closes line no commit names
-// The tickets a Closes line names that tools/land.sh would refuse (#688), by land.sh's rule (#566):
-// every line of the description that reads, after optional whitespace, the keyword in any case,
-// whitespace, # and digits, whatever follows them; and n is named only where #n, or issue-n with no
-// letter, digit or underscore before it, appears with no digit after it in the message of a commit
-// whose parent count is an integer below 2, as git log --no-merges keeps. A commit with no parent
-// count does not count, so the check fails closed. Each ticket is named once, in the order given.
-const CLOSES_LINE = /^\s*closes\s+#(\d+)/i
-const unnamedCloses = (inv) => {
-  const tickets = []
-  for (const line of String(inv.description || '').split('\n')) {
-    const m = CLOSES_LINE.exec(line)
-    if (m && !tickets.includes(m[1])) tickets.push(m[1])
+// ---------------------------------------------------------------- a closing reference no commit names
+// What tools/land.sh would refuse in a description (#688), by land.sh's rule (#566, #578), copied
+// because a workflow script runs nothing. The copy is held to land.sh's by a table, not by this
+// comment (#745): fixtures/closing-references.json beside this script holds rows of a description,
+// commit messages and the answer, review-queue_tests.mjs runs this script on every row and
+// tools/land_tests.py runs land.sh on every row, so a change here or there that the other file
+// does not make fails a companion. Change the rule in both files and the table together.
+// The rule, as land.sh's comment gives it. A closing reference is one of GitHub's closing keywords
+// (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved) in any case, with no
+// letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
+// after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
+// POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
+// owner/repo#n, GitHub's form for another repository's ticket, refuses the description whatever
+// else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
+// holding one, the last on that line, which is the match land.sh's greedy prefix finds. Otherwise
+// each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
+// with no digit after it in the message of a commit whose parent count is an integer below 2, as git
+// log --no-merges keeps; a commit with no parent count does not count, so the check fails closed.
+// The tickets are named in the description's order, once for each time they are written, as land.sh
+// names them.
+const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
+const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+)', 'gi')
+const closingReferences = (inv) => {
+  const lines = String(inv.description || '').split('\n')
+  for (const line of lines) {
+    const forms = [...line.matchAll(OTHER_REPOSITORY)]
+    if (forms.length) return { otherRepository: forms[forms.length - 1][1], unnamed: [] }
   }
+  const tickets = lines.flatMap((line) => [...line.matchAll(CLOSING_REFERENCE)].map((m) => m[1]))
   const messages = (inv.commitMessages || [])
     .filter((c) => c && Number.isInteger(c.parents) && c.parents < 2 && typeof c.message === 'string')
     .map((c) => c.message)
-  return tickets.filter((n) => {
+  const unnamed = tickets.filter((n) => {
     const named = new RegExp('(?:#' + n + '|(?<![A-Za-z0-9_])issue-' + n + ')(?!\\d)')
     return !messages.some((msg) => named.test(msg))
   })
+  return { otherRepository: '', unnamed }
 }
 
 // ---------------------------------------------------------------- a rebuilt head
@@ -1066,8 +1125,12 @@ const reviewOne = async (n, res, at) => {
     return { ...res, outcome: 'skipped', stage: '', verdict: latest.verdict, recordUrl: latest.url, skippedBecauseRecorded: true }
   }
 
-  // A Closes line land.sh would refuse stops the pull request before any other agent runs (#688).
-  const unnamed = unnamedCloses(inv)
+  // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
+  const { otherRepository, unnamed } = closingReferences(inv)
+  if (otherRepository) {
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+  }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')
     log(`#${n}: the description closes ${list}, which no non-merge commit names; stopped before the review`)

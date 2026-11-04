@@ -76,9 +76,12 @@ public sealed class SchemeProviderTests
             (await gateway.Schemes.GetAllSchemesAsync()).Select(s => s.Name).Order(StringComparer.Ordinal));
         AuthenticationScheme handler = Assert.Single(await gateway.Schemes.GetRequestHandlerSchemesAsync());
         Assert.Equal("oidc:app1", handler.Name);
-        Assert.Equal(typeof(OpenIdConnectHandler), handler.HandlerType);
-        Assert.Equal(typeof(CookieAuthenticationHandler),
-            (await gateway.Schemes.GetSchemeAsync("cookie:app1"))?.HandlerType);
+        // The framework's handlers, each derived once to end a session store failure under auth.store (#727).
+        Assert.Equal(typeof(PlatformOidcHandler), handler.HandlerType);
+        Assert.True(handler.HandlerType.IsSubclassOf(typeof(OpenIdConnectHandler)));
+        Type? cookie = (await gateway.Schemes.GetSchemeAsync("cookie:app1"))?.HandlerType;
+        Assert.Equal(typeof(PlatformCookieHandler), cookie);
+        Assert.True(cookie!.IsSubclassOf(typeof(CookieAuthenticationHandler)));
     }
 
     [Fact]

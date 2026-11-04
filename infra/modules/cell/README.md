@@ -165,7 +165,10 @@ needs credentials, a state bucket and the first-deployment order in
   subnets with a public address, because the no-NAT design leaves that as the task's
   only route out; under `multi_task`, two of them in the private subnets with none. ECS Exec is on and the root filesystem stays writable: those are two
   of the three conditions the Session Manager tunnel comes with, and the third is the
-  four `ssmmessages` permissions below.
+  four `ssmmessages` permissions below. Both containers drop every Linux capability
+  (`capabilities.drop = ["ALL"]`) and run an init process (`initProcessEnabled`), which
+  forwards SIGTERM to `dotnet` and reaps zombies (#786); neither process needs a
+  capability, since each runs as its image's non-root user on a port above 1024.
 - **The deployment.** One service, desired count 1 (2 under `multi_task`), circuit breaker on with rollback,
   minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
   stops a task. Both images are variables with no default that names a tag:

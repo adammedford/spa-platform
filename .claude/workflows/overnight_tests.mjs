@@ -36,7 +36,8 @@
 // find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
 // and checks that each skips implement and review, runs the gate once and integrates. A last short run has the live
 // read find tickets relabelled since collect (#721), #544's case relabelled ready-for-human among them, and checks
-// that none is implemented, that each takes its live status, and that a read that died fails closed. No agent,
+// that none is implemented, that each takes its live status, and that a read that died fails closed. Every
+// house-rules prompt sends docker to ~/.docker/bin before an agent may call it absent (#742). No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1666,7 +1667,45 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   if (/gh issue (edit|comment|create|close)/.test(lp)) fail('#721: the live read\'s prompt names a gh write')
 }
 
-// 39. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
+// 39. The implementer breaks what it adds (#633). On 2026-10-29 reviewers made nine guards across eight tickets able
+//     to fail after each lane's check had passed them, because only the review prompt asked for a mutation. Every
+//     implement prompt asks, in STEP 1 before its gate, for each guard, filter and assertion the lane adds to be broken
+//     one at a time against its own test, restored from a copy taken before the break (never by `git checkout --`,
+//     which resets the file to forkSha while nothing is committed and discards the guard; #797's review), and named
+//     with its failure count in the Task commit's body. The position bounds fail closed when either anchor is missing.
+{
+  const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
+  if (!impls.length) fail('#633: no implement prompt was rendered, so the mutation check read nothing')
+  for (const c of impls) {
+    const wt = (/^Worktree: (\S+?)\.? Branch:/m.exec(c.prompt) || [])[1]
+    if (!wt) { fail(`#633: the ${c.label} prompt names no worktree`); continue }
+    const wants = [
+      '- Every guard, filter and assertion you add must be able to fail (CODING_STANDARDS.md, "An assertion must be able to fail"): break each one on purpose, one at a time, run only its test or companion, see it fail,',
+      `see it fail, and restore it before the next: copy the file aside before you break it (\`cp ${wt}/<path> ${LOG}/${c.label.slice('implement:'.length)}-mutation.bak\`) and copy it back after (\`cp ${LOG}/${c.label.slice('implement:'.length)}-mutation.bak ${wt}/<path>\`), which returns exactly what you wrote.`,
+      'Name each mutation and its failure count in the Task commit\'s body ("A new invariant test names the mutation that made it fail").',
+    ]
+    for (const w of wants) if (!c.prompt.includes(w)) fail(`#633: the ${c.label} prompt lacks: ${w.slice(0, 80)}...`)
+    if (/checkout -- /.test(c.prompt.replace('Never restore with `git checkout -- <path>`', ''))) fail(`#633: the ${c.label} prompt restores a mutation with \`checkout --\`, which resets the file to the last commit and discards the lane's uncommitted guard`)
+    const at = c.prompt.indexOf(wants[0])
+    const lo = c.prompt.indexOf('- Build test-first: ')
+    const hi = c.prompt.indexOf('- At the end, run the gate once:')
+    if (lo < 0 || hi < 0) fail(`#633: the ${c.label} prompt lacks the '- Build test-first: ' or the '- At the end, run the gate once:' line, so the mutation bullet's place in STEP 1 cannot be checked`)
+    else if (at >= 0 && !(at > lo && at < hi)) fail(`#633: the ${c.label} prompt's mutation bullet is not in STEP 1 before its gate`)
+  }
+}
+
+// 40. No lane calls docker absent before it has looked in ~/.docker/bin (#742). On 2026-11-02 the lanes for #731 and
+//     #732 were skipped as needing an absent docker, while Docker Desktop 29.9.1 sat in ~/.docker/bin, which an agent's
+//     non-login bash PATH leaves out. Every house-rules prompt carries the rule verbatim: put that directory on PATH in
+//     the same Bash call as the docker command, and report docker absent only when neither place has it.
+{
+  const RULE = '- Docker Desktop installs `docker` in `~/.docker/bin`, which your non-login Bash PATH leaves out: begin every Bash call that runs docker with `export PATH="$HOME/.docker/bin:$PATH" &&`, since the shell\'s state resets after every call, and call docker absent only when neither `command -v docker` nor `~/.docker/bin/docker` finds it, as tools/image-check.sh looks. On 2026-11-02 the lanes for #731 and #732 were skipped for a docker that was installed there (#742).'
+  const housed = allPrompts.filter((c) => /House rules \(/.test(c.prompt))
+  if (!housed.length) fail('#742: no prompt carries the house rules, so the docker-path rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(RULE)) fail(`#742: the ${c.label} prompt's house rules do not send docker to ~/.docker/bin before calling it absent`)
+}
+
+// 41. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
 //     "Decided by implementer" list, and a "## Decisions taken" comment only for a human-owned one. So every review
 //     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
 //     decision's alternatives from the Answer, which is among the comments it reads past the results JSON.

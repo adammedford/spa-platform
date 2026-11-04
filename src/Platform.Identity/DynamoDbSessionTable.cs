@@ -214,11 +214,11 @@ internal sealed class DynamoDbSessionTable
 /// <summary>
 /// A session-store operation that did not complete: it failed, or its outcome was still unknown when
 /// <see cref="DynamoDbSessionTable.StoreDeadline"/> ran out (D4). It names the operation and nothing
-/// else: no key, no <c>pk</c>, no record (N-16). The identity chain catches it in one place, logout's
-/// remove in <see cref="SessionEnd"/>, which reports the removal not confirmed and lets the logout clear
-/// the cookies (the F11 exception, #386). Everywhere else nothing catches it, so the request ends on the
-/// gateway's generic 500, where the server writes the one Error line with this message, and no cookie is
-/// set or cleared on the way (F17 on #332).
+/// else: no key, no <c>pk</c>, no record (N-16). Logout's remove in <see cref="SessionEnd"/> catches it
+/// and reports the removal not confirmed, and the logout clears the cookies (the F11 exception, #386).
+/// Everywhere else the writer that meets it ends the request under <c>auth.store</c>, 503
+/// <c>session_store_unavailable</c>, with one Error line naming <see cref="Operation"/> and no cookie
+/// set or cleared (F17 on #332; <see cref="StoreFailure"/>, #727).
 /// </summary>
 internal sealed class SessionStoreUnavailableException(string operation, TimeSpan deadline, Exception? inner)
     : Exception(

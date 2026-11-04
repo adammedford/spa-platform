@@ -22,6 +22,9 @@ namespace Platform.Identity;
 /// endpoint reserves, compared the same way (ignoring case), so a path this gate lets through is one
 /// on which no asset is ever served. A method other than <c>GET</c> or <c>HEAD</c> serves no asset
 /// either, and passes on to the stage that answers it 405.
+///
+/// One answer comes before all of that, on every path and method: a session store failure the cookie
+/// handler recorded is ended here under <c>auth.store</c> (<see cref="StoreFailure"/>, #727).
 /// </summary>
 internal static class ShellGate
 {
@@ -32,6 +35,16 @@ internal static class ShellGate
 
     public static async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
+        // auth.store before anything else, on every path and method, /bff and /api included: the cookie
+        // handler's read of the session failed inside UseAuthentication and wrote nothing, and this is the
+        // first stage after it, so the antiforgery check never sees the request and no later writer reads
+        // the failure as no session (contracts/request-gate.md -> Rule ids, the auth.store paragraph; #727).
+        if (StoreFailure.Recorded(context) is { } operation)
+        {
+            await StoreFailure.EndAsync(context, operation);
+            return;
+        }
+
         if (!Gated(context.Request))
         {
             await next(context);

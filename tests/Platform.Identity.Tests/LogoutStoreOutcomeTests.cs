@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Builder;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
@@ -12,8 +12,8 @@ namespace Platform.Identity.Tests;
 /// <summary>
 /// F11's caller half (#386, under #332): what <c>POST /bff/logout</c> does with the session store's
 /// answers. A remove still unknown at <c>StoreDeadline</c> is reported not confirmed on one line and the
-/// logout goes on as usual (Q187); a store read that fails earlier in the logout keeps F17's 500 with
-/// both cookies intact (Q188); and once the end has run, the cookie handler's sign-out makes no store
+/// logout goes on as usual (Q187); a store read that fails earlier in the logout ends under
+/// <c>auth.store</c> with both cookies intact (Q188, #727); and once the end has run, the cookie handler's sign-out makes no store
 /// call of its own (Q192).
 /// </summary>
 public sealed class LogoutStoreOutcomeTests
@@ -80,12 +80,14 @@ public sealed class LogoutStoreOutcomeTests
     [Theory]
     [InlineData(1, "the cookie handler's read")]
     [InlineData(2, "the read under the session's gate")]
-    public async Task P2_1_F11_a_logout_whose_earlier_store_read_fails_keeps_F17s_500_with_both_cookies_intact(int failingRead, string which)
+    public async Task P2_1_F11_a_logout_whose_earlier_store_read_fails_ends_503_session_store_unavailable_with_both_cookies_intact(int failingRead, string which)
     {
-        // Q188. Only the end's remove is caught: a read that fails before it, whether the cookie handler's
-        // or SessionEnd's under the gate, still ends on the server's generic 500 with no cookie set or
-        // cleared. Mutation: widen SessionEnd's catch to the whole of EndAsync, gate entry included, and the
-        // second case answers 302 with both cookies cleared.
+        // Q188, as #727 answers it. Only the end's remove takes the F11 exception: a read that fails
+        // before it, whether the cookie handler's (ended by UsePlatformShellGate) or SessionEnd's under
+        // the gate (ended by the logout endpoint), ends under auth.store with no cookie set or cleared and
+        // no provider logout. Mutation: widen SessionEnd's catch to the whole of EndAsync, gate entry
+        // included, and the second case answers 302 with both cookies cleared; drop the endpoint's catch,
+        // and the second case ends on an exception.
         _ = which;
         ScriptedReads reads = new(new InMemorySessionStore());
         RecordingSessionStore sessions = new(reads);
@@ -94,22 +96,15 @@ public sealed class LogoutStoreOutcomeTests
             [App1], services => services.AddSingleton(log.Provider), sessions: sessions);
         IdentityGateway.Login login = await gateway.LoginAsync(App1);
         (string key, _) = await sessions.SingleAsync();
-
-        await using StageHost server = await StageHost.StartAsync(
-            new StageHostOptions { Pipeline = app => app.Run(context => gateway.ServeAsync(context, App1)) },
-            Ct);
+        int before = log.Lines.Count;
         reads.FailRead = failingRead;
 
-        using HttpRequestMessage request = new(HttpMethod.Post, IdentityGateway.LogoutPath)
-        {
-            Content = new FormUrlEncodedContent([]),
-        };
-        request.Headers.Add("Cookie", string.Join("; ", login.Jar.Select(c => $"{c.Key}={c.Value}")));
-        using HttpResponseMessage answer = await server.Client.SendAsync(request, Ct);
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.LogoutPath, login.Jar, "POST");
 
-        Assert.Equal(500, (int)answer.StatusCode);
-        Assert.False(answer.Headers.Contains("Set-Cookie"));
-        CapturedLine error = Assert.Single([.. server.Log.Lines, .. log.Lines], l => l.Level >= LogLevel.Error);
+        Assert.Equal((503, "auth.store"), (answer.Status, answer.Rule));
+        Assert.Equal("session_store_unavailable", JsonDocument.Parse(answer.Body).RootElement.GetProperty("code").GetString());
+        Assert.Empty(answer.Cookies);
+        CapturedLine error = Assert.Single(log.Lines.Skip(before), l => l.Level >= LogLevel.Error);
         Assert.Contains("read (GetItem)", error.Text, StringComparison.Ordinal);
         Assert.Empty(sessions.Removed);
         reads.FailRead = null;
@@ -142,39 +137,4 @@ public sealed class LogoutStoreOutcomeTests
         cookies.Any(c => c.Name == name && c.Expires is { } expires && expires < DateTimeOffset.UtcNow);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    /// <summary>
-    /// A session store whose reads fail on cue: once <see cref="FailRead"/> is set, the read with that
-    /// number, counting from one after it was set, throws the store's "did not complete" as the DynamoDB
-    /// store does when a GetItem fails (F17). Every other call passes through.
-    /// </summary>
-    private sealed class ScriptedReads(ISessionStore inner) : ISessionStore
-    {
-        private int? failRead;
-        private int reads;
-
-        public int? FailRead
-        {
-            get => failRead;
-            set
-            {
-                failRead = value;
-                reads = 0;
-            }
-        }
-
-        public Task<string> CreateAsync(SessionRecord record, CancellationToken ct) => inner.CreateAsync(record, ct);
-
-        public Task<SessionRecord?> GetAsync(string key, CancellationToken ct) =>
-            failRead is { } n && Interlocked.Increment(ref reads) == n
-                ? throw new SessionStoreUnavailableException("read (GetItem)", DynamoDbSessionTable.DefaultStoreDeadline, null)
-                : inner.GetAsync(key, ct);
-
-        public Task<bool> ReplaceAsync(string key, SessionRecord record, long expectedVersion, CancellationToken ct) =>
-            inner.ReplaceAsync(key, record, expectedVersion, ct);
-
-        public Task RemoveAsync(string key, CancellationToken ct) => inner.RemoveAsync(key, ct);
-
-        public Task RemoveAppAsync(string appId, CancellationToken ct) => inner.RemoveAppAsync(appId, ct);
-    }
 }

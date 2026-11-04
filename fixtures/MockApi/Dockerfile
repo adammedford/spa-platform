@@ -6,12 +6,20 @@
 # Build from the repository root, because the build needs Directory.Packages.props:
 #   docker build -f fixtures/MockApi/Dockerfile -t mock-api .
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
+# Both FROM lines are src/Gateway/Dockerfile's own, character for character, digests and all (#782):
+# the two containers run in one task, so they build on the same layers, and the gateway Dockerfile's
+# comments say why each base is named by digest beside its tag (#781). Fixtures.Tests holds the two
+# files to the same lines, so a new digest there fails that suite until it is taken here too.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 ARG TARGETARCH
 WORKDIR /src
 
-# The build files first, so a source change does not re-resolve every package.
-COPY global.json nuget.config Directory.Build.props Directory.Packages.props ./
+# The build files first, so a source change does not re-resolve every package. The two analyzer
+# configs come with them, so the image publishes under the analysis every other build runs
+# (ADR-0035 decision 14; #673): Directory.Build.props switches analysis on only where .globalconfig
+# is (#606). The line is src/Gateway/Dockerfile's own, character for character, so the
+# banned-symbol lists come too, though the relaxed tier this project is in attaches none (#608).
+COPY global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt ./
 COPY fixtures/MockApi/MockApi.csproj fixtures/MockApi/
 
 # No Platform.* project is copied, because none is referenced (check A-02). The mock API's job is to
@@ -31,8 +39,27 @@ RUN dotnet publish fixtures/MockApi/MockApi.csproj -a "$TARGETARCH" --no-restore
 # https://docs.docker.com/reference/dockerfile/#copy---chown---chmod
 RUN chmod -R a+rX,go-w /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS final
+# The runtime stage is the gateway's Ubuntu chiseled -extra base: distroless, with no shell and no
+# package manager, and a non-root user by default; -extra for its ICU and tzdata, since the mock API
+# does not set InvariantGlobalization either
+# (https://learn.microsoft.com/en-us/dotnet/core/docker/container-images#scenario-based-images).
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8 AS final
 WORKDIR /app
+
+# Off, as in the gateway's image: the runtime's debugger, profiler and EventPipe diagnostics, and
+# with them the diagnostic port a process in the shared task could attach to
+# (https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling#enable-diagnostics).
+ENV DOTNET_EnableDiagnostics=0
+
+# What built the image, as the OCI annotations name it, from the same build arguments as the
+# gateway's; one the build does not pass reads "unset"
+# (https://github.com/opencontainers/image-spec/blob/main/annotations.md#pre-defined-annotation-keys).
+ARG SOURCE=unset
+ARG REVISION=unset
+ARG VERSION=unset
+LABEL org.opencontainers.image.source="$SOURCE"
+LABEL org.opencontainers.image.revision="$REVISION"
+LABEL org.opencontainers.image.version="$VERSION"
 
 # Two listeners, one per API, on the loopback ports the app definitions in fixtures/apps/ name as
 # their upstreams. They are reached from the gateway container over loopback inside the task, never
@@ -48,7 +75,8 @@ ENV MockApi__Issuer=""
 ENV MockApi__App1Client=""
 ENV MockApi__App2Client=""
 
-# The image runs as the non-root user the base image ships.
+# The image runs as the non-root user the base image ships, by its number, as the chiseled base's
+# own user is.
 USER $APP_UID
 
 COPY --from=build /app .
