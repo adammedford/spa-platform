@@ -726,7 +726,8 @@ try {
   // the verdict's acceptance could not answer it. A row of any kind on an .mjs project is a caught row:
   // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
   // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
-  // and the verdict prompt says how to judge the messages.
+  // and the verdict prompt says how to judge the messages: the rule for a row red on another check's
+  // message is scoped to .mjs projects, and keeps a held or candidate row's #684/#689 catch (#936).
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
@@ -754,7 +755,7 @@ try {
       const m = (c.mutations || []).find((x) => x.test === 'Said') || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row Said on a .NET project red only on Other.Test, accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
-    for (const phrase of ["when every message the row went red on is one of those checks' own fail() messages", 'A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted']) {
+    for (const phrase of ["when every message the row went red on is one of those checks' own fail() messages", 'On an .mjs project, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted', "A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break"]) {
       if (!(env.prompts['verdict:212'] || '').includes(phrase)) fail(`PR 212: the verdict prompt does not say how to judge a Node companion row by its checks' fail() messages: it lacks ${JSON.stringify(phrase)}`)
     }
     // Red on another check's message as well as its own, a stated .mjs row the verdict does not accept
