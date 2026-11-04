@@ -75,14 +75,15 @@ public sealed class DependencyUnavailableContractTests
     public void A_refused_asset_read_is_404_and_a_refused_shell_500_as_issue_381_decided()
     {
         // Mutation: write the draft's 503 store_unavailable for a refused read, and this fails on both
-        // answers; drop the shell's answer, and it fails on shell_unavailable; drop "never the key", the
-        // shell's Error clause or the Snapshot cell, and it fails on each.
+        // answers; drop the shell's answer, and it fails on shell_unavailable; drop "no rule id", the
+        // shell's "with the same header", the asset or shell label, "never the key", the shell's Error
+        // clause or the Snapshot cell, and it fails on each.
         string row = Row(TableHeading, "The object store refuses a read");
 
         Assert.Contains("`404` `not_found`", row);
-        Assert.Contains("`500` `shell_unavailable`", row);
-        Assert.Contains("`Cache-Control: private, no-store`", row);
-        Assert.Contains("`read_refused`", row);
+        Assert.Contains("`500` `shell_unavailable` with the same header", row);
+        Assert.Contains("`Cache-Control: private, no-store`, no rule id", row);
+        Assert.Contains("`read_refused`, `asset` or `shell`", row);
         Assert.Contains("never the key", row);
         Assert.Contains("one Error naming the app, the release and that the store refused", row);
         Assert.Equal("Stays", Cells(TableHeading, "The object store refuses a read")[3]);
@@ -92,12 +93,13 @@ public sealed class DependencyUnavailableContractTests
     public void Parameter_store_unreadable_at_a_cold_start_leaves_the_gateway_not_ready_and_every_host_unknown()
     {
         // Mutation: say /readyz answers 200 or the app paths answer 503, and this fails; change the
-        // Logged clause for the revision or the Snapshot cell, and it fails on that.
+        // Logged clause for each unreadable secret or for the revision, or the Snapshot cell, and it
+        // fails on that.
         string row = Row(TableHeading, "Parameter Store cannot be read at a cold start");
 
         Assert.Contains("`/readyz` stays `503`", row);
         Assert.Contains("`404` `not_found`", row);
-        Assert.Contains("never the value", row);
+        Assert.Contains("One Warning per app whose secret cannot be read, naming the app and the reference, never the value", row);
         Assert.Contains("one Error per poll that the revision is not applied", row);
         Assert.Equal(
             "There is none, and each poll reads the document again",
