@@ -721,6 +721,42 @@ try {
     }
   }
 
+  // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
+  // row 'overnight_tests.mjs check 39', red only on check 39's own messages, read did-not-fail, and
+  // the verdict's acceptance could not answer it. A row of any kind on an .mjs project is a caught row:
+  // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
+  // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
+  // and the verdict prompt says how to judge the messages.
+  checks++
+  {
+    const MJS = '.claude/workflows/overnight_tests.mjs'
+    const MSGS = ["#631: the review:issue-144 prompt's decisions step does not read the Answer's \"Decided by implementer\" list", "#631: the review:1.6b prompt's decisions step does not read the Answer's \"Decided by implementer\" list"]
+    for (const [label, shape, test, nominations] of [
+      ['stated', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, MJS)] }, 'overnight_tests.mjs check 39'],
+      ['nominated', {}, 'overnight_tests.mjs', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
+      ['candidate', { candidates: [{ test: 'overnight_tests.mjs check 39 (#631)', project: MJS, file: MJS, guards: 'the decisions step', breaks: '.claude/workflows/overnight.js' }] }, 'overnight_tests.mjs check 39 (#631)'],
+    ]) {
+      const SHAPE = { 212: pr(212, [MJS, '.claude/workflows/overnight.js'], shape) }
+      const mut = { ...row('reproduced', 2, 2), failingNames: MSGS }
+      for (const [accept, want, verdict] of [[true, 'reproduced', 'merge'], [false, 'did-not-fail', 'hold']]) {
+        env = run({ prs: [212] }, SHAPE, { mutate: { [test]: mut }, nominations, caught: accept ? { 212: [test] } : {} })
+        result = await execute(env)
+        const c = resultOf(212, result)
+        const m = (c.mutations || []).find((x) => x.test === test) || {}
+        if (m.result !== want || c.verdict !== verdict) fail(`PR 212 with the ${label} row ${JSON.stringify(test)} on ${MJS} red only on its checks' messages, ${accept ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      }
+    }
+    const OTHER = { 212: pr(212, ['tests/i.cs'], { statedMutations: [stated('Said', 1, -1)] }) }
+    env = run({ prs: [212] }, OTHER, { mutate: { Said: { ...row('reproduced', 1, 10), failingNames: ['Other.Test'] } }, caught: { 212: ['Said'] } })
+    result = await execute(env)
+    {
+      const c = resultOf(212, result)
+      const m = (c.mutations || []).find((x) => x.test === 'Said') || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row Said on a .NET project red only on Other.Test, accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+    if (!(env.prompts['verdict:212'] || '').includes('(#905)')) fail('PR 212: the verdict prompt does not say how to judge a Node companion row by its checks\' fail() messages')
+  }
+
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
   //     still posted, its record names the head the inventory read, and the return flags the move,
   //     per pull request and at run level, so the operator runs again.
