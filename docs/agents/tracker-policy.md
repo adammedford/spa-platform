@@ -276,9 +276,12 @@ tracker write, which auto mode refuses: run it in manual mode.
 
 `.scratch/<feature-slug>/issues/<NN>-<slug>.md` holds every ticket filed before the switch, and is
 read-only: no new file is added there, and a ticket that was open when the switch landed carries
-`**Status:** moved to #NNN` and continues on GitHub. `.scratch/<feature-slug>/log/` stays ignored.
-Resolved tickets keep their `## Answer` and `## Review`, and a merge body, ADR or contract that cites
-one still resolves by the rules below, which `.github/steering.py` holds over every tracked file.
+`**Status:** moved to #NNN` and continues on GitHub. `.scratch/<feature-slug>/log/` stays ignored, and
+so does everything under `.scratch/` outside the archive's ten directories, which `.gitignore` names one
+by one because the archive is a closed list: a session's own scratch goes to its scratchpad directory,
+not under `.scratch/` (#935). Resolved tickets keep their `## Answer` and `## Review`, and a merge
+body, ADR or contract that cites one still resolves by the rules below, which `.github/steering.py`
+holds over every tracked file.
 
 A `ticket NN` citation is read off **where it is written**:
 
