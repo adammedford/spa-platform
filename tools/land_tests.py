@@ -1603,11 +1603,13 @@ class ClosesTests(LandTestCase):
                 self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head},
                                  case.origin_refs())
 
-    def assertRowAnswered(self, row: dict):
+    def assertRowAnswered(self, row: dict, locale: str = "C"):
         """One row of the shared table (#745): its commits on the branch, oldest first, its
-        description on the pull request, and land.sh's answer the row's."""
+        description on the pull request, and land.sh's answer the row's, with land.sh run under
+        LC_ALL=`locale`."""
         case = MergingCase(self, commits=tuple(row["commits"]), description=row["description"])
-        result = case.run(PR, *case.with_body, "--subject", self.SUBJECT)
+        result = case.run(PR, *case.with_body, "--subject", self.SUBJECT,
+                          env=case.env(LC_ALL=locale))
         if "otherRepository" in row:
             self.assertRefused(case, result, f"closes {row['otherRepository']}, the owner/repo#n form",
                                READS_HEAD)
@@ -1628,8 +1630,10 @@ class ClosesTests(LandTestCase):
         self.assertGreater(len(CLOSING_ROWS), 0)
         for row in CLOSING_ROWS:
             with self.subTest(why=row.get("why")):
-                self.assertEqual({"why", "description", "commits"}, set(row) - {"unnamed", "otherRepository"})
+                self.assertEqual({"why", "description", "commits"},
+                                 set(row) - {"unnamed", "otherRepository", "locales"})
                 self.assertEqual(1, len({"unnamed", "otherRepository"} & set(row)))
+                self.assertIs(True, row.get("locales", True))
                 self.assertTrue(row["commits"] and all(isinstance(m, str) for m in row["commits"]))
                 for n in row.get("unnamed", []):
                     self.assertRegex(n, r"^[0-9]+$")
@@ -1649,6 +1653,15 @@ for index, row in enumerate(CLOSING_ROWS):
         self.assertRowAnswered(row)
     test_row.__doc__ = f"Row {index} of {CLOSING_TABLE.name}: {row['why']}."
     setattr(ClosesTests, f"test_shared_table_row_{index:02d}", test_row)
+    # A row marked locales runs again under C.UTF-8, a locale macOS and glibc both carry, whose
+    # [[:alnum:]] holds é and, on macOS, whose [[:space:]] holds a no-break space: land.sh reads
+    # the rule in the C locale whatever its caller's, as the script's ASCII copy reads it.
+    if row.get("locales"):
+        def test_row_in_utf8(self, row=row):
+            self.assertRowAnswered(row, "C.UTF-8")
+        test_row_in_utf8.__doc__ = f"Row {index} of {CLOSING_TABLE.name} under C.UTF-8: {row['why']}."
+        setattr(ClosesTests, f"test_shared_table_row_{index:02d}_in_c_utf8", test_row_in_utf8)
+        del test_row_in_utf8
 del index, row, test_row
 
 

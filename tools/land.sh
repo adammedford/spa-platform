@@ -254,7 +254,16 @@ full_sha='^[0123456789abcdef]{40}$'
 # before it. The head's commits are read only when there is a closing reference, and fetched by
 # sha when this clone lacks them, the way actions/checkout fetches a pull request's commit from
 # GitHub: https://github.com/actions/checkout.
+# The rule is read in the C locale whatever the caller's is, and the caller's is put back after it
+# (#745). [[:alnum:]] and [[:space:]] read the locale's classes, so in a UTF-8 locale, C.UTF-8
+# among them, an é before a keyword hid it and a no-break space after one was whitespace, while
+# land_tests.py runs this under LC_ALL=C and review-queue.js's copy reads ASCII: a description
+# could pass the review's pre-check and be refused here. An assignment to LC_ALL takes effect at
+# once in bash, and is exported only when the caller exported it.
 description="$(gh pr view "$pr" --json body --jq .body)"
+had_lc_all="${LC_ALL+set}"
+caller_lc_all="${LC_ALL-}"
+LC_ALL=C
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
 # In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
 # endings, and group 6 the ticket: `n` of `#n`, or the whole `owner/repo#n`.
@@ -284,6 +293,7 @@ if [ -n "$closes" ]; then
   [ -z "$unnamed" ] \
     || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
 fi
+if [ -n "$had_lc_all" ]; then LC_ALL="$caller_lc_all"; else unset LC_ALL; fi
 
 # The body is $text, read once after the argument loop (#552) and reused from here on, because
 # it may be a named pipe or an inherited descriptor, which gives its bytes once (#72). $(<)
