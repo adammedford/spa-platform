@@ -817,16 +817,15 @@ const mutationRow = (n, m, i, got) => {
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
   // fails closed to the verdict's check (#695). dotted() above reads each name. A test that is its
-  // whole file, a Python companion listed as one candidate whose test is its file's or project's path
-  // or basename and nothing else, owns every test in that file: any failing name is its own (#793). On
-  // #791 no failing name could match the cell, so the companion red on its own test read as caught
-  // elsewhere and held. A test that adds anything to the name, 'x_tests.py (check: ...)' scoping one
-  // check of it or 'x_tests.py (companion)', is not the whole file and stays a catch, failing closed
-  // to the verdict: owning every failing name, a scoped test red only on another check would read
-  // reproduced (#794).
-  const base = (p) => (p || '').split('/').pop()
+  // whole file owns every test in that file: any failing name is its own (#793). That is a candidate
+  // whose project is its file, so its run is that file alone, as a Python companion's is, and whose
+  // test is that path or its basename and nothing else. On #791 no failing name could match the cell,
+  // so the companion red on its own test read as caught elsewhere and held. Anything else stays a
+  // catch, failing closed to the verdict (#794): a test that adds to the name, 'x_tests.py (check:
+  // ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform test file, whose run
+  // is its whole directory, so a sibling file's red run would read as its own.
   const cell = (m.test || '').trim()
-  const wholeFile = !!cell && [m.file, m.project, base(m.file), base(m.project)].includes(cell)
+  const wholeFile = !!m.file && m.project === m.file && (cell === m.file || cell === m.file.split('/').pop())
   const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {

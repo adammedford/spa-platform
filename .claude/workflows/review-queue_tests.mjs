@@ -636,12 +636,12 @@ try {
 
   // A candidate that is its whole file, a Python companion listed as one row (#793): on #791 no
   // failing name matched 'overnight_answers_tests.py (companion)', so the companion red on its own test
-  // read as caught elsewhere and held. A test that is its file's or project's path or basename, and
-  // nothing else, owns every failing name in its run: reproduced, no caught cell, merge, with no catch
-  // accepted, and it keeps its own row beside a candidate in the same file. Each of the four is proved
-  // alone, file and project apart. A test that adds anything to the name, a scope such as
-  // '(check: ...)' or '(companion)', is not the whole file: red only on another check it is a catch the
-  // verdict did not accept, did-not-fail, and holds (#794).
+  // read as caught elsewhere and held. A candidate whose project is its file and whose test is that
+  // path or basename, and nothing else, owns every failing name in its run: reproduced, no caught
+  // cell, merge, with no catch accepted, and it keeps its own row beside a candidate in the same file.
+  // Anything else red only on another test is a catch the verdict did not accept, did-not-fail, and
+  // holds (#794): a test that adds to the name; a file-shaped test that is not its file; and a
+  // Terraform test file, whose project is its directory, red on a sibling file's run.
   checks++
   {
     const F = 'tools/overnight_answers_tests.py'
@@ -653,21 +653,27 @@ try {
       result = await execute(env)
       return resultOf(210, result)
     }
-    for (const [label, cand] of [
-      ['its file path', comp(F, 'tools', F)],
-      ['its file basename', comp('overnight_answers_tests.py', 'tools', F)],
-      ['its project path', comp(F, F, 'tools/answers_helper.py')],
-      ['its project basename', comp('overnight_answers_tests.py', F, 'tools/answers_helper.py')],
-    ]) {
-      const c = await verdictOf([cand, comp(ONE)], { [cand.test]: { ...row('reproduced', 1, 18), failingNames: RED }, [ONE]: row('reproduced', 1, 18) })
-      const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
-      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 210 with the whole-file candidate ${JSON.stringify(cand.test)} (${label}) red on ${RED[0]}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
-      if ((c.mutations || []).filter((x) => x.test === cand.test).length !== 1 || !(c.mutations || []).some((x) => x.test === ONE)) fail(`PR 210 with the whole-file candidate ${JSON.stringify(cand.test)} (${label}): mutations ${JSON.stringify((c.mutations || []).map((x) => x.test))}, expected one row for it and one for ${ONE}`)
+    for (const whole of [F, 'overnight_answers_tests.py']) {
+      const c = await verdictOf([comp(whole), comp(ONE)], { [whole]: { ...row('reproduced', 1, 18), failingNames: RED }, [ONE]: row('reproduced', 1, 18) })
+      const m = (c.mutations || []).find((x) => x.test === whole) || {}
+      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)} red on ${RED[0]}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
+      if ((c.mutations || []).filter((x) => x.test === whole).length !== 1 || !(c.mutations || []).some((x) => x.test === ONE)) fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)}: mutations ${JSON.stringify((c.mutations || []).map((x) => x.test))}, expected one row for it and one for ${ONE}`)
     }
-    for (const scoped of [ONE, 'overnight_answers_tests.py (check: every Confirm comment counts)', 'overnight_answers_tests.py (companion)', `${F} (check: every Confirm comment counts)`]) {
-      const c = await verdictOf([comp(scoped)], { [scoped]: { ...row('reproduced', 1, 18), failingNames: RED } })
-      const m = (c.mutations || []).find((x) => x.test === scoped) || {}
-      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(scoped)} red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    const TF = 'infra/modules/cell/tests/module.tftest.hcl'
+    const TF_RED = ['tests/network.tftest.hcl', 'run "a_network_run"']
+    for (const [cand, red] of [
+      [comp(ONE), RED],
+      [comp('overnight_answers_tests.py (check: every Confirm comment counts)'), RED],
+      [comp('overnight_answers_tests.py (companion)'), RED],
+      [comp(`${F} (check: every Confirm comment counts)`), RED],
+      [comp('other_tests.py'), RED],
+      [comp('tools/other_tests.py'), RED],
+      [comp('module.tftest.hcl', 'infra/modules/cell', TF), TF_RED],
+      [comp(TF, 'infra/modules/cell', TF), TF_RED],
+    ]) {
+      const c = await verdictOf([cand], { [cand.test]: { ...row('reproduced', red.length, 18), failingNames: red } })
+      const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(cand.test)} (project ${cand.project}) red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
   }
 
