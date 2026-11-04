@@ -769,6 +769,43 @@ try {
     }
   }
 
+  // An .mjs companion's row is read by its file (#938): on #796 the inventory gave a stated row on
+  // overnight_tests.mjs the directory as its project, which overrode its candidate's, so the row was
+  // neither the whole file nor an .mjs row, and red on the companion's own messages it held. Named by
+  // its path or basename it is the whole file and merges unaccepted; scoped to a check it is a caught
+  // row the verdict answers. A Terraform file and a .py companion with a directory project hold as before.
+  checks++
+  {
+    const MJS = '.claude/workflows/overnight_tests.mjs'
+    const MSGS = ['#706 Q1 (b): issue-2002 started at 1445, not before issue-2001 at 1363: the lane did not take its downstream-first ticket first']
+    const cand = { test: MJS, project: MJS, file: MJS, guards: 'the lane order', breaks: '.claude/workflows/overnight.js' }
+    for (const [test, caught, want, verdict] of [
+      [MJS, [], 'reproduced', 'merge'],
+      ['overnight_tests.mjs check 41', ['overnight_tests.mjs check 41'], 'reproduced', 'merge'],
+      ['overnight_tests.mjs check 41', [], 'did-not-fail', 'hold'],
+    ]) {
+      const SHAPE = { 213: pr(213, [MJS, '.claude/workflows/overnight.js'], { candidates: [cand], statedMutations: [stated(test, 1, -1, '.claude/workflows')] }) }
+      env = run({ prs: [213] }, SHAPE, { mutate: { [test]: { ...row('reproduced', 1, 1), failingNames: MSGS } }, caught: { 213: caught } })
+      result = await execute(env)
+      const c = resultOf(213, result)
+      const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
+      if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project .claude/workflows red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    const TF = 'infra/modules/cell/tests/module.tftest.hcl'
+    const PY = 'tools/overnight_collect_tests.py'
+    for (const [test, project, file, red] of [
+      [TF, 'infra/modules/cell', TF, ['tests/network.tftest.hcl']],
+      [PY, 'tools', PY, ['test_x (__main__.Other)']],
+    ]) {
+      const SHAPE = { 213: pr(213, [file], { candidates: [{ test, project, file, guards: 'g', breaks: 'b' }] }) }
+      env = run({ prs: [213] }, SHAPE, { mutate: { [test]: { ...row('reproduced', 1, 10), failingNames: red } } })
+      result = await execute(env)
+      const c = resultOf(213, result)
+      const m = (c.mutations || []).find((x) => x.test === test) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 213 with the candidate ${JSON.stringify(test)} on project ${project} red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+  }
+
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
   //     still posted, its record names the head the inventory read, and the return flags the move,
   //     per pull request and at run level, so the operator runs again.
