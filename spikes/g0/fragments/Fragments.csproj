@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- PROTOTYPE for "Scheme names and callback dispatch for a shell and its fragments" (#771, map #765).
+       Throwaway: lives on the prototype/fragment-dispatch branch and is never merged.
+       The real OpenIdConnectHandler from the pinned package against fixtures/TestIdp, with one shell and N fragment
+       clients behind one host. Browser.cs is linked unchanged from the hardened g0 harness; Registry and Auth are
+       this folder's own, because the shared ones parse only oidc:{appId}. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseAppHost>false</UseAppHost>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <RootNamespace>Spike</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../real-handler/RealOidcHardened/Browser.cs" Link="Shared/Browser.cs" />
+    <ProjectReference Include="../../../fixtures/TestIdp/TestIdp.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
+  </ItemGroup>
+</Project>

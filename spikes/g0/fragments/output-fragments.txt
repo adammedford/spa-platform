@@ -1,0 +1,46 @@
+PROTOTYPE fragments: handler 10.0.12.0, runtime 10.0.12
+
+== A: per-fragment callback paths /signin-oidc/{fragmentId}, exact dispatch, SkipUnrecognizedRequests off
+ok   A1 shell login then two silent fragment hops land on /app with one record: 200, records=1
+     path: /bff/login[302] > idp/authorize[302] > /signin-oidc[302] > /bff/chain[302] > idp/authorize[302] > /signin-oidc/orders[302] > /bff/chain[302] > idp/authorize[302] > /signin-oidc/billing[302] > /bff/chain[302] > /app[200]
+ok   A2 one authorization per client, in registry order: c-shop->/signin-oidc, c-orders->/signin-oidc/orders, c-billing->/signin-oidc/billing
+ok   A3 /bff/session: orders=signed-in, billing=signed-in
+ok   A4 three token sets in one record under suffixed names: .Token.access_token .Token.access_token:billing .Token.access_token:orders .Token.expires_at .Token.expires_at:billing .Token.expires_at:orders .Token.id_token .Token.id_token:billing .Token.id_token:orders .Token.refresh_token .Token.refresh_token:billing .Token.refresh_token:orders .Token.token_type .Token.token_type:billing .Token.token_type:orders
+ok   A5 each code redeemed by its own client: c-shop, c-orders, c-billing
+note A6 10 redirects from /bff/login to /app with 2 fragments; per fragment hop on loopback (handler cost, not a latency budget): 4.4 ms, 2.7 ms
+ok   A7 orders' state at /signin-oidc/billing: 400, billing's handler cannot unprotect it (failed, no state: state not recognised); record unchanged
+ok   A8 /bff/login?fragment=orders re-acquires orders' set into the same record key; the shell's set stays
+ok   A9 unrecognised state at /signin-oidc/orders reaches the failure path: 400 login failed
+ok   A10 logout: 3 revocations under c-shop, c-orders, c-billing, each known to its client; record removed; one redirect to the provider's end-session
+ok   A11 one provider logout, by the shell's client: c-shop ok; then idp/endsession[302] > /signout-callback-oidc[302] > /[404]
+ok   A12 changing billing's secret evicts only its scheme: oidc:shop:billing
+ok   A13 billing's code exchange refused (failed: token endpoint refused the client): chain continues, shell lands on /app, orders=signed-in, billing=unavailable
+ok   A14 a chain hop sends prompt=none: prompt=none
+ok   A15 error=login_required with readable state is a failed hop, not a failed login (failed: login_required): orders=unavailable, billing=signed-in
+ok   A16 unregistered redirect URI: the chain stalls at the provider's 400 and billing behind it is never tried; the shell is signed in: orders=signed-in, stall=missing, billing=missing
+ok   A17 a fragment onboarded after login is missing, and onboarding evicts only its name (oidc:shop:f0): orders=signed-in, billing=signed-in, reviews=signed-in, f0=missing
+ok   A18 the fallback signs f0 in: orders=signed-in, billing=signed-in, reviews=signed-in, f0=signed-in
+ok   A19 a fragment set for another subject is refused, not merged: orders=signed-in, billing=signed-in, reviews=unavailable, f0=signed-in
+
+note A20 N=0: 4 redirects from /bff/login to /app (within 20), final 200
+note A20 N=1: 7 redirects from /bff/login to /app (within 20), final 200
+note A20 N=2: 10 redirects from /bff/login to /app (within 20), final 200
+note A20 N=4: 16 redirects from /bff/login to /app (within 20), final 200
+note A20 N=5: 19 redirects from /bff/login to /app (within 20), final 200
+note A20 N=6: 22 redirects from /bff/login to /app (OVER 20), final 200
+note A20 N=8: 28 redirects from /bff/login to /app (OVER 20), final 200
+
+== B (control): every scheme on /signin-oidc, SkipUnrecognizedRequests on, dispatch by state
+ok   B1 shell login then two silent fragment hops land on /app with one record: 200, records=1
+     path: /bff/login[302] > idp/authorize[302] > /signin-oidc[302] > /bff/chain[302] > idp/authorize[302] > /signin-oidc[302] > /bff/chain[302] > idp/authorize[302] > /signin-oidc[302] > /bff/chain[302] > /app[200]
+ok   B2 one authorization per client, in registry order: c-shop->/signin-oidc, c-orders->/signin-oidc, c-billing->/signin-oidc
+ok   B3 /bff/session: orders=signed-in, billing=signed-in
+ok   B4 three token sets in one record under suffixed names: .Token.access_token .Token.access_token:billing .Token.access_token:orders .Token.expires_at .Token.expires_at:billing .Token.expires_at:orders .Token.id_token .Token.id_token:billing .Token.id_token:orders .Token.refresh_token .Token.refresh_token:billing .Token.refresh_token:orders .Token.token_type .Token.token_type:billing .Token.token_type:orders
+ok   B5 each code redeemed by its own client: c-shop, c-orders, c-billing
+note B6 10 redirects from /bff/login to /app with 2 fragments; per fragment hop on loopback (handler cost, not a latency budget): 2.8 ms, 2.5 ms
+ok   B8 /bff/login?fragment=orders re-acquires orders' set into the same record key; the shell's set stays
+ok   B9 unrecognised state at the shared /signin-oidc: every handler skips it, it falls through to the asset route: 404 path.reserved
+ok   B10 logout: 3 revocations under c-shop, c-orders, c-billing, each known to its client; record removed; one redirect to the provider's end-session
+ok   B11 one provider logout, by the shell's client: c-shop ok; then idp/endsession[302] > /signout-callback-oidc[302] > /[404]
+
+all checks held
