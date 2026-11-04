@@ -25,9 +25,11 @@ it; the parts are joined in order before reading so a question cut at a boundary
 question opens with `**Q<n>.**`, `**Q<n>**` or `Q<n>.` and runs to the next mark or the comment's
 end, its night-wide number unique across the issue (ADR-0021 decision 2). A question names a
 number when `#<n>` appears anywhere in it, matched whole, so #35 is not found in #352 nor in a
-decision URL's `#issuecomment-`. The heading's own ticket number does not select its questions
-(decided on #531): a landing that closes twenty tickets would otherwise list every question of
-each, and the obligation this exists for is one a question states in its own words.
+decision URL's `#issuecomment-`. The heading's own ticket number selects nothing by itself
+(#531): a question is listed when its own text, its `(#<ticket> Q<k>)` source tag included, names
+a given number. Every question the night posts opens with that tag, so a ticket the landing closes
+has its questions listed, which is what the landing wants; a question under a heading naming #<n>
+whose text and tag name no given number is not.
 
 A Confirm comment is one by the human's account whose body begins `Confirm`, read as
 .claude/workflows/morning.js reads it ("the questions, read here", readConfirmations): its first

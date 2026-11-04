@@ -384,9 +384,9 @@ fi
 # the reader alone. It runs after every refusal above and before the confirmation below, so the
 # human reads what waits before answering, and with --unreviewed too. It only reports: a question
 # it lists is the human's to act on, so none stops the merge, and a reader that fails (status 2,
-# its reason above) or a line it cannot print is said in one line and the merge proceeds. That is a
-# deliberate departure from CODING_STANDARDS.md -> "A check fails closed", decided on #531 for a
-# reader whose answer is advice, not a gate.
+# its reason above) is said in one line and the merge proceeds. That is a deliberate departure
+# from CODING_STANDARDS.md -> "A check fails closed", decided on #531 for a reader whose answer is
+# advice, not a gate.
 echo "--- reading the overnight answers that wait on #$pr"
 waiting_on=(--number "$pr")
 for ticket in $closes; do waiting_on=("${waiting_on[@]}" --number "${ticket#\#}"); done

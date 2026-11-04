@@ -139,6 +139,15 @@ class MatchingTests(ReaderTestCase):
                          f"#{NIGHT} {TITLE} Q2 names #495, no Confirm covers it: (#495 Q1) Does #495 "
                          "close at this merge? It should.")
 
+    def test_the_heading_ticket_selects_nothing_by_itself(self):
+        # The heading names #495; Q1's text and source tag name #497, so --number 495 finds
+        # nothing, while Q2, whose tag names #495, is found by its own text (#531).
+        body = questions(question(1, "Does #497 need a lane?", source="(#497 Q1)"),
+                         question(2, "Does it close here?"))
+        self.assertLines(self.read([comment(body)], numbers=(495,)),
+                         f"#{NIGHT} {TITLE} Q2 names #495, no Confirm covers it: (#495 Q1) Does it "
+                         "close here?")
+
     def test_a_number_is_matched_whole_and_in_any_line_of_the_question(self):
         # #5 is not in #50 nor in a decision URL's #issuecomment-5; it is found in a Recommended or
         # Answer line, which are the question's too.
