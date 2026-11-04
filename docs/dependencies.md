@@ -88,17 +88,22 @@ Each is read with `dotnet --list-runtimes`, the image's from inside it:
 
 | Where | Read on 22 October 2026 | Command |
 | --- | --- | --- |
-| The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.13; the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble` resolved to manifest list `sha256:8af87eba5e7cdafb1514d7388be287365da97c132509e84dfe252ffd552398ca` | `docker build --pull -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
+| The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.14, read on 3 November 2026 (#781); the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra` is pinned to manifest list `sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8` | `docker build -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
 | CI's build job | SDK 10.0.402, runtime 10.0.13, as `actions/setup-dotnet` installs them from `global.json`; this reading is from setup-dotnet's install log (run 39713194106 on main), since the step that reads it lands with #273 | `dotnet --version && dotnet --list-runtimes`, the step after `setup-dotnet` in `.github/workflows/ci.yml` |
 | This workstation | SDK 10.0.401, runtime 10.0.12 | `dotnet --version && dotnet --list-runtimes` |
 
-**The base image floats on purpose.** Both stages name a floating `10.0-noble` tag, so a build that
-pulls takes the newest patch, and what runs is fixed afterwards by digest: `deploy.sh` pushes, applies
-and asserts the image's own digest. A digest pin in the Dockerfile would need a commit for every
-runtime patch. The cost of floating is the cache: neither `deploy.sh` nor `tools/image-check.sh` pulls,
-and Docker Desktop's builder reuses the base it last pulled, so a workstation that pulled
-`10.0-noble` before 10.0.13 builds 10.0.12 until `docker pull mcr.microsoft.com/dotnet/aspnet:10.0-noble`
-(and `.../sdk:10.0-noble`) refreshes it. `tools/image-check.sh`'s runtime line shows which one it got.
+**The gateway's base images are pinned by digest.** Both stages of `src/Gateway/Dockerfile` name their
+base by tag and by the tag's manifest-list digest, `sdk:10.0-noble@sha256:...` and
+`aspnet:10.0-noble-chiseled-extra@sha256:...`, so two builds of one commit build on the same layers
+whatever a workstation's builder has cached, and the manifest list resolves the same pin for the ARM64
+task and an x64 workstation (#781). The cost is a commit for every runtime patch: read a tag's current
+digest with `docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra`
+and move the digest in the Dockerfile; the pins sweep lists both digests as its `base-images` family
+(`tools/pins_inventory.py`). `deploy.sh` still pushes, applies and asserts the built image's own digest.
+The mock API's and the startup floor's Dockerfiles still name floating tags, which the inventory reports
+as `unpinned-base-image` findings until their owners pin them; for those, a build without `--pull`
+reuses the base Docker last pulled until `docker pull` refreshes it. `tools/image-check.sh`'s runtime line
+shows which runtime the gateway image got.
 
 **The workstation's test hosts still run 10.0.12.** Updating the SDK to 10.0.402 or later
 (`brew upgrade --cask dotnet-sdk`) brings runtime 10.0.13. `global.json` is not raised to force it:

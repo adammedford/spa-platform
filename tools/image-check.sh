@@ -22,6 +22,13 @@
 # for STARTUP_SECONDS. Nothing is pushed. Before its verdict it prints the runtimes the image carries,
 # read with `dotnet --list-runtimes` inside it, which fail nothing (#273).
 #
+# Then it holds the image's hardened shape (#781). It fails when the image has /bin/sh, which the
+# chiseled base does not ship; when its environment does not set DOTNET_EnableDiagnostics=0; or when
+# it lacks any of the org.opencontainers.image.source, .revision and .version labels. The chiseled
+# image has no shell to look with, so the file system is read from outside: the started container is
+# exported and its listing searched. An export or a listing that cannot be read fails the check
+# rather than reading as an image with no shell.
+#
 # For this machine's architecture, not the ECS task's ARM64: both defects are the same on every
 # architecture, and an image for another one needs an emulator CI's runner is not given. No port is
 # published: the container's own log says whether the process started, so nothing on the host is
@@ -142,13 +149,42 @@ if ! $started; then
 fi
 
 # The shared framework the image runs, read inside it with the command a workstation and CI read
-# their own with, so this log says which patch the image carries (#273). The final stage's tag
-# floats, and this build does not pull, so a base the daemon cached before a patch shows here as the
-# older version. Informational: no version fails the check.
+# their own with, so this log says which patch the image carries (#273). The final stage names its
+# base by digest (#781), so the patch is the one that digest holds, whatever the daemon has cached.
+# Informational: no version fails the check.
 runtimes="$("$docker" run --rm --entrypoint dotnet "$image" --list-runtimes 2> /dev/null)" \
   || fail "the built image's runtimes could not be read with dotnet --list-runtimes."
 runtimes="$(printf '%s\n' "$runtimes" | awk 'NF >= 2 { printf "%s%s %s", sep, $1, $2; sep = ", " }')"
 [ -n "$runtimes" ] || fail "dotnet --list-runtimes in the built image named no runtime."
 echo "image-check: runtime: $runtimes, read with \`dotnet --list-runtimes\` in the built image."
+
+# The hardened shape (#781). After the runtime reading, so each failure above keeps its own verdict.
+# No shell: the started container's file system, exported and listed. /bin is a link to usr/bin on
+# Ubuntu, so the shell is listed under either name.
+"$docker" export "$name" > "$work/rootfs.tar" 2> /dev/null \
+  || fail "the gateway container's file system could not be exported to look for a shell."
+tar -tf "$work/rootfs.tar" > "$work/rootfs.txt" 2> /dev/null \
+  || fail "the gateway container's exported file system could not be listed to look for a shell."
+if grep -E '^(\./)?(usr/)?bin/sh$' "$work/rootfs.txt" > /dev/null; then
+  fail "the gateway image has a shell at /bin/sh; its runtime stage builds on the chiseled base, which ships none."
+fi
+
+# Diagnostics off: the variable exactly, as the runtime reads it.
+"$docker" image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" > "$work/env.txt" \
+  || fail "the built image's environment could not be inspected."
+if ! grep -x 'DOTNET_EnableDiagnostics=0' "$work/env.txt" > /dev/null; then
+  fail "the gateway image does not set DOTNET_EnableDiagnostics=0, so its debugger, profiler and EventPipe endpoints are open."
+fi
+
+# The OCI labels, each read on its own; one that is absent indexes to the empty string.
+labels=""
+for key in source revision version; do
+  value="$("$docker" image inspect -f "{{index .Config.Labels \"org.opencontainers.image.$key\"}}" "$image")" \
+    || fail "the built image's labels could not be inspected."
+  [ -n "$value" ] \
+    || fail "the gateway image has no org.opencontainers.image.$key label; the Dockerfile's final stage sets it from a build argument."
+  labels="${labels:+$labels, }org.opencontainers.image.$key=$value"
+done
+echo "image-check: hardened: no /bin/sh, DOTNET_EnableDiagnostics=0, and the labels $labels."
 
 echo "image-check: pass: the gateway image built from a tree with a host obj/ and an owner-only appsettings.json, and the gateway started as user $user, past WebApplication.CreateBuilder."

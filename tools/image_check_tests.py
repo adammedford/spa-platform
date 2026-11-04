@@ -12,7 +12,9 @@ tools/image-check.sh plants both conditions in a copy of the tree and builds and
 the cases here run the real script, with real Docker, on copies of this repository's tracked tree:
 one as it is, one without the `.dockerignore`, one without the Dockerfile's chmod, and one whose
 image runs as root. Each copy is a git repository of its own, because the script copies what git
-tracks.
+tracks. Three more hold the hardened shape #781 gave the image, each by taking one part out: the
+full Ubuntu base back in the runtime stage, which carries /bin/sh; no `DOTNET_EnableDiagnostics`
+line; and no `LABEL` line.
 
 **Docker is required, not optional.** A case that skipped without it would pass on the machine
 that cannot run it, the failure CODING_STANDARDS.md names. The cases find Docker as the script
@@ -94,6 +96,14 @@ class Tree:
         assert kept != lines, f"{name} has no line starting {starting!r}"
         path.write_text("".join(kept))
 
+    def replace_line(self, name: str, starting: str, line: str):
+        path = self.dir / name
+        lines = path.read_text().splitlines(keepends=True)
+        hits = [i for i, old in enumerate(lines) if old.startswith(starting)]
+        assert len(hits) == 1, f"{name} has {len(hits)} lines starting {starting!r}"
+        lines[hits[0]] = line
+        path.write_text("".join(lines))
+
 
 def last_line(text: str) -> str:
     lines = text.splitlines()
@@ -117,6 +127,11 @@ class ImageCheckTests(unittest.TestCase):
                          r"(?m)^image-check: runtime: (Microsoft\.\S+ 10\.0\.\d+, )*Microsoft\.NETCore\.App "
                          r"10\.0\.\d+(, Microsoft\.\S+ 10\.0\.\d+)*, read with `dotnet --list-runtimes` in the "
                          r"built image\.$")
+        # The hardened shape's three checks ran and passed (#781), before the verdict.
+        self.assertRegex(result.stdout,
+                         r"(?m)^image-check: hardened: no /bin/sh, DOTNET_EnableDiagnostics=0, and the labels "
+                         r"org\.opencontainers\.image\.source=unset, org\.opencontainers\.image\.revision=unset, "
+                         r"org\.opencontainers\.image\.version=unset\.$")
         # The planted conditions are the copy's, never the tree's: the tree's file keeps its mode,
         # and no obj/ is left in it.
         self.assertEqual(before, stat.S_IMODE((tree.dir / SETTINGS).stat().st_mode))
@@ -146,14 +161,53 @@ class ImageCheckTests(unittest.TestCase):
                          last_line(result.stderr))
 
     def test_an_image_that_runs_as_root_is_refused(self):
-        # Root reads an owner-only file, so an image without its USER would pass for the wrong reason.
+        # Root reads an owner-only file, so an image that runs as root would pass for the wrong reason.
+        # The chiseled base sets its own non-root user (#781), so taking the USER line out leaves the
+        # image non-root; the mutation that reaches root is a USER line naming it.
         tree = Tree(self)
-        tree.without_lines(DOCKERFILE, "USER ")
-        tree.git("commit", "-q", "-am", "No USER")
+        tree.replace_line(DOCKERFILE, "USER ", "USER root\n")
+        tree.git("commit", "-q", "-am", "USER root")
         result = tree.run()
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertEqual("image-check: fail: the gateway image runs as root, not as the runtime user, so it "
                          "cannot show what that user can read.", last_line(result.stderr))
+
+    # The image's hardened shape (#781). Each case takes one part of it out of the Dockerfile, builds
+    # the real image, and reads the verdict.
+
+    def test_an_image_with_a_shell_is_refused(self):
+        # The base before #781: full Ubuntu, with a shell and a package manager.
+        tree = Tree(self)
+        tree.replace_line(DOCKERFILE, "FROM mcr.microsoft.com/dotnet/aspnet:",
+                          "FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS final\n")
+        tree.git("commit", "-q", "-am", "The full Ubuntu base")
+        result = tree.run()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: the gateway image has a shell at /bin/sh; its runtime stage "
+                         "builds on the chiseled base, which ships none.", last_line(result.stderr))
+
+    def test_an_image_with_dotnet_diagnostics_on_is_refused(self):
+        tree = Tree(self)
+        tree.without_lines(DOCKERFILE, "ENV DOTNET_EnableDiagnostics=")
+        tree.git("commit", "-q", "-am", "Diagnostics on")
+        result = tree.run()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: the gateway image does not set DOTNET_EnableDiagnostics=0, so "
+                         "its debugger, profiler and EventPipe endpoints are open.", last_line(result.stderr))
+
+    def test_an_image_missing_any_one_oci_label_is_refused(self):
+        # One LABEL line each, so taking one out leaves the other two and the case shows that each
+        # label is read on its own.
+        for label in ("source", "revision", "version"):
+            with self.subTest(label=label):
+                tree = Tree(self)
+                tree.without_lines(DOCKERFILE, f"LABEL org.opencontainers.image.{label}=")
+                tree.git("commit", "-q", "-am", f"No {label} label")
+                result = tree.run()
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(f"image-check: fail: the gateway image has no org.opencontainers.image.{label} "
+                                 "label; the Dockerfile's final stage sets it from a build argument.",
+                                 last_line(result.stderr))
 
     def test_without_docker_it_fails_rather_than_passing(self):
         tree = Tree(self)
