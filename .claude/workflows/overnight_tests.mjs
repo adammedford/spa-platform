@@ -36,7 +36,8 @@
 // find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
 // and checks that each skips implement and review, runs the gate once and integrates. A last short run has the live
 // read find tickets relabelled since collect (#721), #544's case relabelled ready-for-human among them, and checks
-// that none is implemented, that each takes its live status, and that a read that died fails closed. No agent,
+// that none is implemented, that each takes its live status, and that a read that died fails closed. Every
+// house-rules prompt sends docker to ~/.docker/bin before an agent may call it absent (#742). No agent,
 // gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1664,6 +1665,17 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   const lp = prompts721[`live:${READY}`] || ''
   for (const part of [`gh issue view ${READY.slice(6)} --json state,labels,assignees`, 'no gh write', 'write no file']) if (!lp.includes(part)) fail(`#721: the live read's prompt lacks ${JSON.stringify(part)}`)
   if (/gh issue (edit|comment|create|close)/.test(lp)) fail('#721: the live read\'s prompt names a gh write')
+}
+
+// 39. No lane calls docker absent before it has looked in ~/.docker/bin (#742). On 2026-11-02 the lanes for #731 and
+//     #732 were skipped as needing an absent docker, while Docker Desktop 29.9.1 sat in ~/.docker/bin, which an agent's
+//     non-login bash PATH leaves out. Every house-rules prompt carries the rule verbatim: put that directory on PATH in
+//     the same Bash call as the docker command, and report docker absent only when neither place has it.
+{
+  const RULE = '- Docker Desktop installs `docker` in `~/.docker/bin`, which your non-login Bash PATH leaves out: begin every Bash call that runs docker with `export PATH="$HOME/.docker/bin:$PATH" &&`, since the shell\'s state resets after every call, and call docker absent only when neither `command -v docker` nor `~/.docker/bin/docker` finds it, as tools/image-check.sh looks. On 2026-11-02 the lanes for #731 and #732 were skipped for a docker that was installed there (#742).'
+  const housed = allPrompts.filter((c) => /House rules \(/.test(c.prompt))
+  if (!housed.length) fail('#742: no prompt carries the house rules, so the docker-path rule search read nothing')
+  for (const c of housed) if (!c.prompt.includes(RULE)) fail(`#742: the ${c.label} prompt's house rules do not send docker to ~/.docker/bin before calling it absent`)
 }
 
 if (failures.length) {
