@@ -1244,12 +1244,36 @@ class SharedCommit(unittest.TestCase):
 
 
 # The fake gh: logs its arguments to GH_LOG, fails as gh does when GH_FAIL is set, and answers
-# `issue view` with GH_ANSWER's file and `api graphql` with GH_GRAPHQL's, when set. Anything else it
-# is asked exits 97.
+# `issue view` with GH_ANSWER's file, `api graphql` with GH_GRAPHQL's and `issue list` with GH_LIST's,
+# when set. Anything else it is asked exits 97. Its `issue list` filters as GitHub's search does: a
+# `created:>=<time>` query keeps the issues created at or after the time, `created:><time>` only those
+# after it, so a test of the search's bound fails when the query's operator changes (#707's review).
+# A listing that is not a list of issues is answered as written, for the tests of an unreadable one.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "gh: could not reach GitHub" >&2; exit 1; fi
 if [ "$1 $2" = "api graphql" ] && [ -n "$GH_GRAPHQL" ]; then cat "$GH_GRAPHQL"; exit 0; fi
+if [ "$1 $2" = "issue list" ] && [ -n "$GH_LIST" ]; then
+exec "$GH_PYTHON" -I - "$GH_LIST" "$@" <<'PY'
+import json, re, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+query = sys.argv[sys.argv.index("--search") + 1] if "--search" in sys.argv else ""
+bound = re.fullmatch(r"created:(>=?)([^ ]+)", query)
+try:
+    listing = json.loads(raw)
+except ValueError:
+    listing = None
+if bound is None or not isinstance(listing, list):
+    sys.stdout.write(raw)
+else:
+    since = bound.group(2)
+    def kept(issue):
+        created = issue.get("createdAt") if isinstance(issue, dict) else None
+        return (not isinstance(created, str) or created > since
+                or (bound.group(1) == ">=" and created == since))
+    json.dump([issue for issue in listing if kept(issue)], sys.stdout)
+PY
+fi
 [ "$1 $2" = "issue view" ] || exit 97
 cat "$GH_ANSWER"
 """
@@ -1269,7 +1293,7 @@ class CommandLine(unittest.TestCase):
         self.log = self.directory / "gh.log"
         self.answer = self.directory / "answer.json"
         self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "GH_LOG": str(self.log),
-                    "GH_ANSWER": str(self.answer)}
+                    "GH_ANSWER": str(self.answer), "GH_PYTHON": sys.executable}
 
     def run_script(self, *args: str, stdin: str = "", **env: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], input=stdin,
@@ -1412,6 +1436,273 @@ class Workflow(unittest.TestCase):
         # the workflow relabels only on the verdict line of a judged failure as well.
         guard = self.code.index('"ticket-shape: fail: "[#]*" breaks "*)')
         self.assertLess(guard, self.code.index("gh issue edit"))
+
+
+# The --since mode (#636): the titles of issues filed on this tracker, as gh lists them.
+LISTED_547 = {"number": 547, "state": "CLOSED", "createdAt": "2026-10-29T18:38:16Z",
+              "title": "wiz walks the five runbooks in sitting C, between C3 and C5"}
+TITLE_558 = "wiz walks #244's five runbooks as a stage between F-07 and the rollback"
+LISTED_538 = {"number": 538, "state": "CLOSED", "createdAt": "2026-10-29T18:25:09Z",
+              "title": "Number the two-host continuity rows in the test id register"}
+TITLE_546 = "Number the deployed continuity rows in the test id register"
+# Two issues created in the same window that share words and are different tickets.
+LISTED_497 = {"number": 497, "state": "CLOSED", "createdAt": "2026-10-29T00:29:16Z",
+              "title": "contracts/test-ids.md Numbering gives a number when the row's change "
+                       "request is decided"}
+
+
+def listed(number: int, title: str, state: str = "OPEN",
+           created: str = "2026-10-31T12:00:00Z") -> dict:
+    """One issue as `gh issue list --json number,title,createdAt,state` gives it."""
+    return {"number": number, "state": state, "createdAt": created, "title": title}
+
+
+class PossibleDuplicates(unittest.TestCase):
+    """possible_duplicates() reads the titles alone: the title about to be filed against a listing,
+    a match when they share SHARED_WORDS content words or more."""
+
+    def matches(self, title: str, *issues: dict) -> dict[int, list[str]]:
+        return {found.number: found.shared
+                for found in shape.possible_duplicates(title, list(issues))}
+
+    def test_558_against_547_is_a_possible_duplicate(self):
+        # #558 duplicated #547, filed by another session two and a half hours earlier.
+        self.assertEqual(self.matches(TITLE_558, LISTED_547),
+                         {547: ["wiz", "walks", "five", "runbooks"]})
+
+    def test_546_against_538_is_a_possible_duplicate(self):
+        self.assertEqual(self.matches(TITLE_546, LISTED_538),
+                         {538: ["number", "continuity", "rows", "test", "register"]})
+
+    def test_the_threshold_is_three_shared_words(self):
+        self.assertEqual(shape.SHARED_WORDS, 3)
+        two = listed(700, "Gateway telemetry exporter fails closed")
+        three = listed(701, "Gateway telemetry exporter refuses nothing")
+        title = "gateway telemetry exporter"
+        self.assertEqual(self.matches("rename the gateway telemetry module", two, three), {})
+        self.assertEqual(self.matches(title, two, three),
+                         {700: ["gateway", "telemetry", "exporter"],
+                          701: ["gateway", "telemetry", "exporter"]})
+
+    def test_two_shared_words_are_no_match(self):
+        self.assertEqual(self.matches("wiz walks the cell's alarms", LISTED_547), {})
+
+    def test_a_possessive_issue_id_is_the_id(self):
+        # "#244's" and "#244" are one word; without the possessive dropped they share two.
+        self.assertEqual(self.matches("walk #244's runbooks", listed(702, "#244 runbooks walk")),
+                         {702: ["walk", "#244", "runbooks"]})
+        self.assertEqual(self.matches("walk #244’s runbooks", listed(702, "#244 runbooks walk")),
+                         {702: ["walk", "#244", "runbooks"]})
+
+    def test_ids_and_hyphenated_words_stay_whole(self):
+        self.assertEqual(shape.content_words("ADR-0024 says F-07 reads landing-work.md, #12."),
+                         ["adr-0024", "f-07", "reads", "landing-work", "#12"])
+
+    def test_no_stemming(self):
+        self.assertEqual(self.matches("runbook walk wiz", listed(703, "runbooks walks wiz")), {})
+
+    def test_short_words_and_stopwords_are_no_content(self):
+        # Articles, prepositions, conjunctions, and the filler verbs these titles use.
+        title = "the and of in on to by an for with from into between after says names gives"
+        self.assertEqual(shape.content_words(title), [])
+        self.assertEqual(self.matches(title, listed(704, title)), {})
+
+    def test_the_stopword_list_is_pinned(self):
+        # #636 Q3/#659 Q49: the stopwords are a constant the tests pin, so a word added or dropped
+        # moves the threshold's noise only by a change that edits this list too.
+        self.assertEqual(shape.STOPWORDS, frozenset((
+            "the",
+            "about", "above", "across", "after", "against", "along", "among", "around", "before",
+            "behind", "below", "beneath", "beside", "besides", "between", "beyond", "despite",
+            "down", "during", "except", "for", "from", "inside", "into", "like", "near", "off",
+            "onto", "out", "outside", "over", "past", "per", "since", "through", "throughout",
+            "till", "toward", "towards", "under", "underneath", "unlike", "until", "upon", "via",
+            "with", "within", "without",
+            "and", "but", "nor", "yet", "because", "although", "though", "unless", "while",
+            "whether", "than", "then", "when", "where", "once",
+            "says", "names", "gives",
+        )))
+
+    def test_each_word_counts_once(self):
+        self.assertEqual(self.matches("ticket ticket ticket shape",
+                                      listed(705, "ticket ticket ticket")), {})
+
+    def test_overlapping_tickets_are_still_listed(self):
+        # #510 and #497 are different tickets; the search lists a possible duplicate, never more.
+        title = ("Change request 6.4 still calls the method allowlist's 405 uncounted and names two "
+                 "sites by stage number")
+        self.assertEqual(self.matches(title, LISTED_497), {497: ["change", "request", "number"]})
+
+
+SINCE = "2026-10-29T18:00:00Z"
+LINE_547 = ("ticket-shape: possible-duplicate: #547 (closed, created 2026-10-29T18:38:16Z): wiz walks "
+            "the five runbooks in sitting C, between C3 and C5, sharing wiz, walks, five, runbooks")
+
+
+class Since(unittest.TestCase):
+    """main() with --since, end to end, with the fake gh answering `issue list`."""
+
+    setUp = CommandLine.setUp
+    run_script = CommandLine.run_script
+    last_line = CommandLine.last_line
+
+    def search(self, title: str, *issues: dict, args: tuple[str, ...] = (), since: str = SINCE,
+               listing: str | None = None) -> subprocess.CompletedProcess:
+        answer = self.directory / "list.json"
+        answer.write_text(json.dumps(list(issues)) if listing is None else listing,
+                          encoding="utf-8")
+        return self.run_script("--since", since, "--title", title, *args, GH_LIST=str(answer))
+
+    def lines(self, done: subprocess.CompletedProcess) -> list[str]:
+        return done.stdout.strip().splitlines()
+
+    def test_558_fails_naming_547(self):
+        done = self.search(TITLE_558, LISTED_547, listed(560, "Pin the image digests"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.lines(done)[:-1], [LINE_547], done.stdout)
+        self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: 1 possible "
+                                                        "duplicate"), done.stdout)
+        self.assertIn("#547", self.last_line(done))
+
+    def test_issues_of_both_states_are_searched_from_the_time_on(self):
+        self.search(TITLE_558, LISTED_547)
+        self.assertEqual(self.log.read_text(encoding="utf-8").strip(),
+                         f"issue list --state all --search created:>={SINCE} --limit 500 "
+                         "--json number,title,createdAt,state")
+
+    def test_an_issue_created_at_the_time_itself_is_searched(self):
+        done = self.search(TITLE_558, dict(LISTED_547, createdAt=SINCE))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("#547", self.last_line(done))
+
+    def test_no_possible_duplicate_passes(self):
+        for issues in ((), (listed(560, "Pin the image digests"),),
+                       (listed(561, "wiz walks the cell's alarms"),)):
+            with self.subTest(issues):
+                done = self.search(TITLE_558, *issues)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(len(self.lines(done)), 1, done.stdout)
+                self.assertTrue(self.last_line(done).startswith("ticket-shape: pass: "),
+                                done.stdout)
+
+    def test_three_shared_words_fail_and_two_pass(self):
+        title = "gateway telemetry exporter"
+        two = self.search(title, listed(700, "Gateway telemetry fails closed"))
+        three = self.search(title, listed(701, "Gateway telemetry exporter fails closed"))
+        self.assertEqual((two.returncode, three.returncode), (0, 1), two.stdout + three.stdout)
+
+    def test_every_match_named_passes(self):
+        other = listed(562, "wiz walks five runbooks again")
+        for args in (("--not-duplicate-of", "547,562"),
+                     ("--not-duplicate-of", "547", "--not-duplicate-of", "562")):
+            with self.subTest(args):
+                done = self.search(TITLE_558, LISTED_547, other, args=args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                lines = self.lines(done)
+                self.assertEqual(len(lines), 3, done.stdout)
+                self.assertEqual(lines[0], LINE_547.replace(
+                    "ticket-shape: possible-duplicate: ", "ticket-shape: note: possible-duplicate: ")
+                    + "; named by --not-duplicate-of", done.stdout)
+                self.assertTrue(lines[1].startswith("ticket-shape: note: possible-duplicate: #562"))
+                self.assertTrue(lines[-1].startswith("ticket-shape: pass: "), done.stdout)
+
+    def test_a_match_left_unnamed_fails(self):
+        other = listed(562, "wiz walks five runbooks again")
+        done = self.search(TITLE_558, LISTED_547, other, args=("--not-duplicate-of", "562"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = self.lines(done)
+        self.assertIn(LINE_547, lines)
+        self.assertTrue(any(line.startswith("ticket-shape: note: possible-duplicate: #562")
+                            for line in lines), done.stdout)
+        self.assertIn("#547", lines[-1])
+        self.assertNotIn("#562", lines[-1])
+
+    def test_a_named_non_match_is_a_note_and_excuses_nothing(self):
+        done = self.search(TITLE_558, LISTED_547, listed(560, "Pin the image digests"),
+                           args=("--not-duplicate-of", "560,561"))   # #561 is not listed
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = self.lines(done)
+        self.assertIn(LINE_547, lines)
+        notes = [line for line in lines if line.startswith("ticket-shape: note: not-duplicate-of: ")]
+        self.assertEqual(len(notes), 2, done.stdout)
+        self.assertIn("#560", notes[0])
+        self.assertIn("#561", notes[1])
+        # Named alone, a non-match leaves a clear search clear.
+        clear = self.search(TITLE_558, args=("--not-duplicate-of", "560"))
+        self.assertEqual(clear.returncode, 0, clear.stdout + clear.stderr)
+        self.assertTrue(self.last_line(clear).startswith("ticket-shape: pass: "), clear.stdout)
+
+    def test_a_listing_at_the_limit_is_nothing_searched(self):
+        full = [listed(1000 + n, f"Unrelated title {n}") for n in range(500)]
+        done = self.search("gateway telemetry exporter", *full)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(self.lines(done), [self.last_line(done)], done.stdout)
+        self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: nothing searched: "),
+                        done.stdout)
+        self.assertIn("500", self.last_line(done))
+        below = self.search("gateway telemetry exporter", *full[:499])
+        self.assertEqual(below.returncode, 0, below.stdout + below.stderr)
+
+    def test_a_failed_or_unreadable_listing_is_nothing_searched(self):
+        answer = self.directory / "list.json"
+        answer.write_text("[]", encoding="utf-8")
+        failed = self.run_script("--since", SINCE, "--title", TITLE_558, GH_LIST=str(answer),
+                                 GH_FAIL="1")
+        cases = [("gh fails", failed)]
+        for listing in ("not json", "", json.dumps({"number": 547}), json.dumps([{"number": 547}]),
+                        json.dumps([dict(LISTED_547, number="547")]),
+                        json.dumps([dict(LISTED_547, title=None)])):
+            cases.append((listing[:30], self.search(TITLE_558, listing=listing)))
+        unlisted = self.run_script("--since", SINCE, "--title", TITLE_558)   # gh exits 97
+        cases.append(("gh exits 97", unlisted))
+        for name, done in cases:
+            with self.subTest(name):
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: nothing "
+                                                                "searched: "), done.stdout)
+        self.assertIn("could not reach GitHub", failed.stdout)
+
+    def test_bad_arguments_exit_2_and_search_nothing(self):
+        title = ("--title", TITLE_558)
+        for args in (title, ("--since", SINCE), ("--since", SINCE, "--title", ""),
+                     ("--since", SINCE, "--title", "   "),
+                     ("--since", "2026-10-29", *title), ("--since", "2026-10-29T18:00:00", *title),
+                     ("--since", "2026-10-29T18:00:00+00:00", *title),
+                     ("--since", "2026-10-29 18:00:00Z", *title),
+                     ("--since", "2026-13-01T18:00:00Z", *title),
+                     ("--since", "2026-10-29T18:00:00.5Z", *title),
+                     ("--since", "2999-01-01T00:00:00Z", *title),
+                     ("--since", SINCE, "--since", SINCE, *title),
+                     ("--since", SINCE, *title, "--title", "again"),
+                     ("--since", SINCE, *title, "204"), ("204", "--since", SINCE, *title),
+                     ("-", "--since", SINCE, *title),
+                     ("--since", SINCE, *title, "--not-duplicate-of", "abc"),
+                     ("--since", SINCE, *title, "--not-duplicate-of", "547,"),
+                     ("--since", SINCE, *title, "--not-duplicate-of", "#547"),
+                     ("--since", SINCE, *title, "--not-duplicate-of"),
+                     ("--since", SINCE, "--title"),
+                     ("--not-duplicate-of", "547", "204"),
+                     ("--since", SINCE, *title, "--sinc", SINCE),
+                     ("--since=" + SINCE, *title)):
+            with self.subTest(args):
+                self.log.unlink(missing_ok=True)   # one case's gh call is no other case's
+                done = self.run_script(*args)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertTrue(self.last_line(done).startswith("ticket-shape: fail: "),
+                                done.stdout)
+                self.assertFalse(self.log.exists(), self.log.read_text(encoding="utf-8")
+                                 if self.log.exists() else "")
+
+
+class Policy(unittest.TestCase):
+    """docs/agents/tracker-policy.md names the mode as main() takes it."""
+
+    def test_the_policy_names_the_search_as_the_script_takes_it(self):
+        text = (ROOT / "docs" / "agents" / "tracker-policy.md").read_text(encoding="utf-8")
+        self.assertIn('`python3 -I tools/ticket_shape.py --since <time> --title "<title>"`', text)
+        self.assertIn("`--not-duplicate-of N[,N…]`", text)
+        self.assertIn("at least three content words", text)
+        self.assertEqual(shape.SHARED_WORDS, 3)
 
 
 if __name__ == "__main__":

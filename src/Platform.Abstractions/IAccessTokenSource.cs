@@ -28,6 +28,16 @@ public abstract record AccessTokenResult
     /// added it after the G1b freeze, as a new type that changes no existing signature.
     /// </summary>
     public sealed record ProviderUnavailable : AccessTokenResult;
+
+    /// <summary>
+    /// A session store operation failed or ran out <c>StoreDeadline</c>, or a refresh ended at the
+    /// store's bound, two times to live after it began without a grant (the <c>continuity</c> spec's
+    /// F17 and D2). No cookie is cleared and the session, if it exists, is kept. The source notes
+    /// <c>auth.store</c> before it returns; the proxy answers 503 <c>session_store_unavailable</c> and
+    /// writes no rule of its own. Change request #729 added it between gates, as a new type that
+    /// changes no existing signature.
+    /// </summary>
+    public sealed record StoreUnavailable : AccessTokenResult;
 }
 
 /// <summary>

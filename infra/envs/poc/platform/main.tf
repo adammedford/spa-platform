@@ -114,8 +114,10 @@ module "cell" {
   allowed_host_suffixes = var.allowed_host_suffixes
   allowed_upstreams     = var.allowed_upstreams
 
-  # Continuity (#347 Q7). The durable store, the shared key ring and its key, each defaulting to
-  # Phase 1's value and set by the G6 sitting in terraform.tfvars (terraform.tfvars.example).
+  # Continuity (#347 Q7). The two-task switch, the durable store, the shared key ring and its key,
+  # each defaulting to Phase 1's value and set by the G6 sitting in terraform.tfvars
+  # (terraform.tfvars.example).
+  multi_task                       = var.multi_task
   session_store                    = var.session_store
   data_protection_parameter_prefix = var.data_protection_parameter_prefix
   data_protection_kms_key_id       = var.data_protection_kms_key_id

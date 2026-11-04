@@ -42,7 +42,7 @@ public sealed class ContentReleaseTests
         JsonNode release = JsonNode.Parse(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "contracts", "registry.schema.json")))!["$defs"]!["release"]!;
         string name = ContentRelease.Name(prefix, Files());
 
-        Assert.Matches(new Regex(release["pattern"]!.GetValue<string>()), name);
+        Assert.Matches(new Regex(release["pattern"]!.GetValue<string>(), RegexOptions.None, RegexTimeout.Span), name);
         Assert.InRange(name.Length, release["minLength"]!.GetValue<int>(), release["maxLength"]!.GetValue<int>());
         Assert.StartsWith(prefix + "-", name, StringComparison.Ordinal);
     }

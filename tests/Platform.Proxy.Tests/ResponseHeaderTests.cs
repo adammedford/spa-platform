@@ -69,7 +69,7 @@ public sealed class ResponseHeaderTests
 
     private static async Task<HttpResponseMessage> Send(ProxyHost gateway)
     {
-        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false, CheckCertificateRevocationList = true });
         return await client.SendAsync(gateway.Request(HttpMethod.Get, Host, "/api/orders/items"), Ct);
     }
 }

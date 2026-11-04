@@ -107,6 +107,27 @@ account that can comment confirms nothing. Offline, the trailer is still require
 citations are reported as not checked; the line the rule passes prints how many held commits
 GitHub vouched for.
 
+**No edit to an ADR's body.** The authority rule's companion on the tree's side. ADR-0032 decision 7
+says that from then on only a new ADR amends an ADR, recorded by a Status-line note on the older
+one, and `docs/adr/README.md` says the older body is not edited, a stale fact included. Review
+alone enforced it, and caught e2fc266 only after its pull request was open: besides a Status note,
+it wrote two amendment notes into ADR-0017's rejected options and consequences (#634). So for
+every numbered `docs/adr/NNNN-*.md` that existed at the merge-base of `--base` and HEAD, whatever
+its Status says, the HEAD commit's copy must equal the merge-base's byte for byte once the Status
+item -- the `- **Status:**` bullet and the indented, non-blank lines straight after it -- is
+removed from both; README.md and a `draft-*.md` are not read (#659 Q34 to Q46). The range is net
+and read from the merge-base, as tools/check.sh and CI read the changed files, so a branch behind
+its base is not charged with the base's newer ADRs, and a body edit a later commit reverts is no
+edit. Every byte counts, whitespace and a re-wrap included; the item may change what it says but
+not where it stands, so one moved down the file is body; a file with no Status item at the base
+is frozen whole, so adding one opens nothing; a deleted or renamed ADR fails on its path, since
+its number and path are cited. No allowlist, trailer or confirmed answer exempts a body edit: a
+stale fact gets a Status-line pointer and a changed decision a new ADR. Each changed line is
+named, at its HEAD line for one HEAD holds and at its base line for one the base held. With no
+`--base`, or a base sharing no commit with HEAD, nothing says which ADRs existed, so the run
+prints one line saying no ADR was judged and fails nothing on it; the line it passes prints how
+many ADRs it compared.
+
 Run: python3 -I .github/steering_tests.py && python3 -I .github/steering.py --base origin/main
 """
 
@@ -114,6 +135,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import difflib
 import json
 import pathlib
 import re
@@ -213,6 +235,10 @@ UNCOMPARED = {
         "Test id register",
         "Never; a row is added by a decided change request (#322)",
     ): "the register never freezes, so there is no gate to compare its header against (#322)",
+    (
+        "Gate register",
+        "Never; a gate's row is added by a decided change request (#364)",
+    ): "the gate register never freezes, so there is no gate to compare its header against (#364)",
 }
 
 # The two header shapes in the tree. A markdown contract carries a bullet under its title; a JSON
@@ -442,6 +468,19 @@ ACCOUNT_LINE = re.compile(
     r"(?m)^- \*\*The human's account is `@(?P<login>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))`\.\*\*"
 )
 URL_OWNER = re.compile(r"^https://github\.com/(?P<owner>[^/\s]+)/")
+
+# The ADRs whose bodies the range may not edit: a four-digit numbered file directly under docs/adr/,
+# whatever its Status says (#659 Q34). Not README.md, whose index every new ADR edits, and not a
+# `draft-*.md`, which a scripted session writes and never commits numbered (ADR-0021 decision 4).
+# Anchored at the root, so `docs/adrs/0001-...` is another directory.
+ADR_DIRECTORY = "docs/adr/"
+NUMBERED_ADR = re.compile(r"^docs/adr/\d{4}-[^/]*\.md$")
+
+# The Status item: the line that begins `- **Status:**` and every line straight after it that is
+# not blank and begins with a space or a tab (#659 Q36). The first such line only, so a second
+# Status bullet written further down is body; and the Status item alone, so ADR-0014's indented
+# Plan ref is body too.
+STATUS_ITEM = b"- **Status:**"
 
 
 class Comment(typing.NamedTuple):
@@ -1234,6 +1273,160 @@ def unauthorised(
     return missing, refused, unchecked, vouched, requested, unconfirmed
 
 
+def blob(root: pathlib.Path, revision: str, path: str) -> bytes:
+    """A file's bytes as a commit holds them: bytes, because every byte outside the Status item
+    counts (#659 Q40), and text decoded with a replacement character could make two different
+    lines read the same."""
+    shown = subprocess.run(("git", "cat-file", "blob", f"{revision}:{path}"), cwd=root,
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        raise SystemExit(f"steering: git could not read {path} at {revision[:12]}: "
+                         f"{shown.stderr.decode('utf-8', 'replace').strip()}")
+    return shown.stdout
+
+
+def status_item(lines: list[bytes]) -> range:
+    """Where the Status item sits among an ADR's lines: its bullet and the indented, non-blank
+    lines straight after it; an empty range when the file has none."""
+    for start, line in enumerate(lines):
+        if line.startswith(STATUS_ITEM):
+            end = start + 1
+            while end < len(lines) and lines[end][:1] in (b" ", b"\t") and lines[end].strip():
+                end += 1
+            return range(start, end)
+    return range(0)
+
+
+# The one entry an ADR's Status item is compared as, whatever its lines say: equal only to itself,
+# so it can stand beside the lines without ever matching one.
+STATUS_SLOT = object()
+
+# One entry of the comparison: what it is compared as, and the numbered lines it reports.
+Entry = tuple[object, list[tuple[int, bytes]]]
+
+
+def entries(lines: list[bytes], item: range, slot: bool) -> list[Entry]:
+    """An ADR's lines as the comparison reads them, each with the lines it reports and their
+    numbers in its own file: a line outside the Status item as itself, and the item as one
+    STATUS_SLOT entry where it stands, or as nothing when `slot` is false."""
+    found: list[Entry] = []
+    for number, line in enumerate(lines, start=1):
+        if number - 1 not in item:
+            found.append((line, [(number, line)]))
+        elif not slot:
+            continue
+        elif number - 1 == item.start:
+            found.append((STATUS_SLOT, [(number, line)]))
+        else:
+            found[-1][1].append((number, line))
+    return found
+
+
+def printable(line: bytes) -> str:
+    """A line as a failure prints it: as written, or quoted when what changed may be a byte the
+    eye cannot see -- a trailing space, a tab, a carriage return, an empty line."""
+    text = line.decode("utf-8", "replace")
+    if not text or text != text.rstrip() or "\t" in text or "\r" in text:
+        return repr(text)
+    return text
+
+
+def body_edits(path: str, before: bytes, after: bytes) -> list[str]:
+    """The body lines that differ between the base's copy of an ADR and HEAD's, one line each:
+    a line HEAD holds, numbered on HEAD, and a line the base held, numbered on the base.
+
+    Each side's Status item is compared as one STATUS_SLOT entry, so what it says may change and
+    where it stands may not: a bullet moved down beside a body row would otherwise carry any note
+    written as its continuation past the comparison, e2fc266's edit in another shape, and an edit
+    above the item names that edit alone, not the item (#659 Q36, Q42). A base with no Status item
+    has no slot, so a Status item HEAD adds is a slot the base lacks and fails, its lines named
+    (#659 Q41). The base's slot is dropped only when HEAD has no item at all, since removing the
+    item from both must then leave identical bytes (Q36). The lines are split on the newline
+    alone, so a missing final newline and a carriage return are each a difference too.
+    """
+    old_lines = before.split(b"\n")
+    new_lines = after.split(b"\n")
+    old_item = status_item(old_lines)
+    new_item = status_item(new_lines)
+    old = entries(old_lines, old_item, slot=bool(new_item))
+    # HEAD's item is always a slot: dropping it when the base had none would let a Status item
+    # added to a Status-less file cover whatever its continuation lines say (Q41).
+    new = entries(new_lines, new_item, slot=True)
+    matcher = difflib.SequenceMatcher(
+        None, [key for key, _ in old], [key for key, _ in new], autojunk=False
+    )
+    found = []
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        for _, lines in old[old_start:old_end]:
+            found.extend(f"{path}: removed at base line {number}: {printable(line)}"
+                         for number, line in lines)
+        for _, lines in new[new_start:new_end]:
+            found.extend(f"{path}:{number}: {printable(line)}" for number, line in lines)
+    return found
+
+
+def adr_body_edits(root: pathlib.Path, base: str) -> tuple[list[str], int | None]:
+    """The body edits the range makes to the ADRs that existed at the base, and how many ADRs it
+    judged; None for the count when the base and HEAD share no commit, so no ADR can be said to
+    have existed.
+
+    The range is net, from the merge-base of the base and HEAD to the HEAD commit, which is the
+    `git diff "$base"...HEAD` tools/check.sh and CI read the changed files by (#659 Q35): a
+    branch behind its base does not see the base's newer ADRs or Status notes as its own, and a
+    body edit one commit makes and a later one reverts is no edit. The same merge-base says which
+    ADRs existed. git finds the files that differ, renames included, and the rule reads the bytes
+    of each one it modified; a deleted or renamed ADR fails on its path, since its number and path
+    are cited (#659 Q37).
+    """
+    head = resolved(root, "HEAD")
+    if head is None:
+        return [], 0
+    merged = git(root, "merge-base", base, head)
+    # git merge-base exits 1 when the two share no commit and higher on an error of its own; only
+    # the first is "nothing says which ADRs existed", and an error fails closed.
+    if merged.returncode == 1:
+        return [], None
+    if merged.returncode != 0:
+        raise SystemExit(f"steering: git merge-base could not compare {base[:12]} with HEAD: "
+                         f"{merged.stderr.strip()}")
+    fork = merged.stdout.strip()
+    listed = git(root, "ls-tree", "-z", "--name-only", fork, "--", ADR_DIRECTORY)
+    # A listing that failed is not an empty docs/adr/: read as one, it would judge nothing and
+    # print neither a count nor the not-judged line.
+    if listed.returncode != 0:
+        raise SystemExit(f"steering: git could not list {ADR_DIRECTORY} at {fork[:12]}: "
+                         f"{listed.stderr.strip()}")
+    existing = {
+        name for name in listed.stdout.split("\0") if NUMBERED_ADR.match(name)
+    }
+    changed = git(root, "diff", "-z", "--no-ext-diff", "--no-textconv", "-M", "--name-status",
+                  fork, head, "--", ADR_DIRECTORY)
+    if changed.returncode != 0:
+        raise SystemExit(f"steering: git diff could not compare {fork[:12]} with HEAD: "
+                         f"{changed.stderr.strip()}")
+    fields = changed.stdout.split("\0")
+    found = []
+    index = 0
+    while index + 1 < len(fields) and fields[index]:
+        status, path = fields[index], fields[index + 1]
+        index += 2
+        if status.startswith(("R", "C")):
+            renamed_to = fields[index]
+            index += 1
+            if status.startswith("R") and path in existing:
+                found.append(f"{path}: existed at the base and is renamed to {renamed_to}")
+            continue
+        if path not in existing:
+            continue
+        if status == "D":
+            found.append(f"{path}: existed at the base and is deleted")
+            continue
+        found.extend(body_edits(path, blob(root, fork, path), blob(root, head, path)))
+    return found, len(existing)
+
+
 def report(lines: list[str], headline: str, *advice: str) -> bool:
     """Print one rule's failures under its own headline, and say whether there were any.
 
@@ -1314,6 +1507,9 @@ def main(argv: list[str] | None = None) -> int:
         held, issues, pulls, requests, unchecked, looked_up, comments, account
     )
     added = closed_additions(held)
+    # With no base there is no commit to say which ADRs existed, so none is judged, and the line
+    # printed below says so (#659 Q39); tools/check.sh --full fails a run with no base anyway.
+    adr_edits, adrs_judged = adr_body_edits(root, base) if base else ([], None)
 
     # A list and not a chain of `or`, because every rule reports before any of them decides the
     # exit code: a session fixing one failure should see the others in the same run.
@@ -1454,6 +1650,18 @@ def main(argv: list[str] | None = None) -> int:
             "names, or the repository's owner while it names none. Cite that account's comment",
             "holding the confirmed answer, or leave the steering document as it was.",
         ),
+        report(
+            adr_edits,
+            "STEERING FAILED: a commit range edits the body of an ADR that existed at the base.",
+            "An ADR is amended only by a new ADR, and the body of one that has landed is never",
+            "edited: only its Status item, the '- **Status:**' bullet and the indented lines",
+            "under it, may change, and every other byte counts, whitespace and re-wrapping",
+            "included. Restore the lines above, and a deleted or renamed ADR at its path, as the",
+            "base has them. A fact gone stale gets a Status-line pointer, and a changed decision",
+            "gets a new ADR with a Status-line note on this one (docs/adr/README.md -> \"Where a",
+            "decision lives\", ADR-0032 decision 7). No Authority: trailer or confirmed answer",
+            "excuses a body edit.",
+        ),
     ]
 
     if unchecked and cited:
@@ -1467,6 +1675,13 @@ def main(argv: list[str] | None = None) -> int:
         citations = "citation" if len(unverified) == 1 else "citations"
         print(f"steering: {len(unverified)} {AUTHORITY}: {citations} not checked: "
               f"{unverified[0]}.")
+
+    if adrs_judged is None:
+        # Said whether or not the other rules passed, as the not-checked lines are: a run that
+        # judged no ADR must not look like one that judged them all.
+        why = ("no --base names the commit they existed at" if base is None
+               else f"{base[:12]} and HEAD share no commit to say which existed")
+        print(f"steering: no ADR body judged: {why}.")
 
     if any(failures):
         return 1
@@ -1488,6 +1703,10 @@ def main(argv: list[str] | None = None) -> int:
         commits = "commit changing" if vouched == 1 else "commits changing"
         cite = "cites its" if vouched == 1 else "cite their"
         summary += f" {vouched} {commits} a steering document {cite} authority."
+    if adrs_judged:
+        adrs = "ADR existing at the base keeps its body" if adrs_judged == 1 else (
+            "ADRs existing at the base keep their bodies")
+        summary += f" {adrs_judged} {adrs}."
     print(summary)
     return 0
 

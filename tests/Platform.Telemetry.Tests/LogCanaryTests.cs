@@ -43,7 +43,7 @@ public sealed class LogCanaryTests
 
     private static async Task SendCanaries(TelemetryHost host)
     {
-        using HttpClient client = new(new HttpClientHandler { UseCookies = false });
+        using HttpClient client = new(new HttpClientHandler { UseCookies = false, CheckCertificateRevocationList = true });
 
         // The callback: code and state in the query, as Cognito sends them (ADR-0007).
         await client.GetAsync(new Uri(host.BaseAddress, $"/signin-oidc?code={Code}&state={State}"), Ct);

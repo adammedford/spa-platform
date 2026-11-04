@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -69,6 +70,9 @@ public sealed class RegistryPoller : BackgroundService
     public static TimeSpan NextDelay(TimeSpan interval, double sample) =>
         interval * (1 - (Jitter * Math.Clamp(sample, 0, 1)));
 
+    [SuppressMessage("Security", "CA5394:Do not use insecure randomness",
+        Justification = "Poll jitter, not a secret (#590-Q5, ADR-0035): Random.Shared only spreads gateway " +
+            "tasks' S3 reads apart, so a predictable sample costs nothing.")]
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Return to the host at once: the first poll must not hold up start-up, or /healthz with it.

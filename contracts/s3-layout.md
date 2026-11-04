@@ -11,7 +11,9 @@ module can override it, so every consumer but one **reads** the platform root's 
 never derives the name: `spactl`, the scripts and the task environment alike. The one that derives
 it is `infra/bootstrap`, for the teardown role's and the CI plan role's grants, because it applies
 before the bucket exists. Its `platform_bucket_name` variable keeps it in step with the cell module:
-empty for the default, and set to the same value when the cell module overrides the name.
+empty for the default, and set to the same value when the cell module overrides the name. An
+override changes only what comes before the -<account id>-<region>-an suffix: the bucket is always
+created in the account regional namespace, and the cell module's plan fails on any other name.
 
 ```text
 registry/registry.json                         one object, every version kept

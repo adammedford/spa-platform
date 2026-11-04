@@ -220,9 +220,13 @@ The e2e host has no `--report-trx`: the flag is `--report-xunit-junit`, and an e
 bad flag with zero tests run, so a 5 is a failed stage and not a result.
 
 Count toward an id only the test cases whose class is under `Gateway.E2ETests.Functional.` or
-`Gateway.E2ETests.Negative.`, the id read from the method's prefix (`F01_` is F-01). The
-`Deployed/*` classes are meta-tests whose data carries ids of its own (`N-28` in
-`DeployedSubsetTests`); report their count beside the rows and credit them to no id. Post one
+`Gateway.E2ETests.Negative.`, the id read from the method's prefix (`F01_` is F-01), and the
+registered continuity Facts: a test case of `Gateway.E2ETests.Deployed.ContinuityTests` counts toward
+the id whose row in `contracts/test-ids.md` names its method. The register says which ids those are:
+read them there and not from a list here. A method no row names (`Row7_`) counts toward none, and a
+row naming two methods is refused. The other `Deployed/*` classes are meta-tests whose data carries
+ids of its own (`N-28` in `DeployedSubsetTests`); report their count beside the rows and credit them
+to no id. `tools/bench/e2e_evidence.py` applies this rule. Post one
 comment per id on #63, as the F-01 comment of 2026-10-27 does: the deploy it ran on, the command,
 the totals, the id's tests with their results, and the junit file's name and SHA-256.
 
@@ -774,8 +778,9 @@ keeps the Phase 1 one (#347 Q7). The bootstrap root stays.
 **The end of D.** After D10, and after every stop that declined it, print what was posted where
 (each #348 comment URL by its step), what is held, and what the human still owes. Under "Held" print
 the tick of #348's first box, which D never makes (rule 5), and say that the gate-evidence route for
-G6 waits for #364 (G6's row in `contracts/gates.md`) and #328, and that the tag is Adam's, on D0's
-commit, after that report (#348 Q34). D has no gate-evidence or tag step: C4 does not run for G6.
+G6 reads its exit test from G6's row in `contracts/gates.md` (#364) and runs outside D, and that the
+tag is Adam's, on D0's commit, after that report (#348 Q34). D has no gate-evidence or tag step: C4
+does not run for G6.
 
 ## Outside the sittings
 

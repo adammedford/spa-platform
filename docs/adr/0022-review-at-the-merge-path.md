@@ -1,6 +1,8 @@
 # ADR-0022: Hold review at the one sanctioned merge path, not with branch protection
 
-- **Status:** Accepted
+- **Status:** Accepted. See #507 (merged 2026-10-28 as 1e9ea6b) for the five review-debt merges
+  named in Consequences: a record naming each head says `merge`, and the `landing-work.md` section
+  that bullet cites was removed.
 - **Date:** 2026-10-18
 - **Deciders:** integrator, on Adam's confirmed answers
 - **Plan ref:** No decision row. #67, which carries archived overnight ticket 70's questions Q1 to
