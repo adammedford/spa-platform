@@ -149,7 +149,7 @@ const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), titl
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 // Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
 // above keep their meaning: a ticket with no readable path would wait on every ticket ahead of it in its lane. Checks
-// 40 and 41 run ticket sets of their own whose paths overlap.
+// 42 and 43 run ticket sets of their own whose paths overlap.
 for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
