@@ -839,7 +839,12 @@ const mutationRow = (n, m, i, got) => {
   // ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform test file, whose run
   // is its whole directory, so a sibling file's red run would read as its own.
   const cell = (m.test || '').trim()
-  const wholeFile = !!m.file && m.project === m.file && (cell === m.file || cell === m.file.split('/').pop())
+  // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
+  // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
+  // A stated row has no file but a same-test candidate's, so one scoped to a check is known by the
+  // .mjs file its cell names; that makes it only a caught row, which the verdict still has to answer.
+  const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
+  const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
   const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   // A Node companion, a project that is an .mjs file, prints no test names: a check is a block of
@@ -847,7 +852,7 @@ const mutationRow = (n, m, i, got) => {
   // can match by name (#905). On #798 and #796 a stated row red only on its own checks' messages read
   // did-not-fail, and no acceptance could answer it. So a row of any kind there is a caught row, which
   // the verdict answers when it verifies the messages are the named checks' own, and holds otherwise.
-  const checksOnly = /\.mjs$/.test(m.project || '') && !wholeFile
+  const checksOnly = (/\.mjs$/.test(m.project || '') || nodeFile) && !wholeFile
   if (caughtElsewhere && !checksOnly && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
     row.result = 'did-not-fail'
