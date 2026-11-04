@@ -712,6 +712,54 @@ run "ecs_exec_is_on_and_the_task_s_root_filesystem_stays_writable" {
   }
 }
 
+# #786. Each container drops every Linux capability Docker grants by default and runs an init process
+# as PID 1, which forwards signals to the process and reaps zombies. With the mock API image set, so
+# that both containers are in the task and either one alone failing turns the run red. try() rather
+# than bare access, so a container with no linuxParameters fails the assertion instead of erroring.
+# Mutations that turn this run red: linuxParameters on the gateway only, or on the mock API only;
+# drop empty, or ["NET_RAW"]; initProcessEnabled false or absent; an add list, even SYS_PTRACE.
+run "both_containers_drop_every_capability_and_run_an_init_process" {
+  command = plan
+
+  variables {
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    mock_api_app1_client_id = "app1client"
+    mock_api_app2_client_id = "app2client"
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
+      == toset(["gateway", "mock-api"])
+    )
+    error_message = "Both containers are in the task, so the assertions below hold of each."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
+      try(c.linuxParameters.capabilities.drop == ["ALL"], false)
+    ])
+    error_message = "Every container drops ALL capabilities (#786): neither process needs one, and the gateway binds a port above 1024, so not even NET_BIND_SERVICE."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
+      !can(c.linuxParameters.capabilities.add)
+    ])
+    error_message = "No container adds a capability back (#786): Fargate allows only SYS_PTRACE, and neither process needs it."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
+      try(c.linuxParameters.initProcessEnabled == true, false)
+    ])
+    error_message = "Every container runs an init process (#786), which forwards SIGTERM to the process and reaps zombies, the SSM agent's children among them."
+  }
+}
+
 run "the_log_group_carries_the_contract_s_name_and_an_explicit_retention" {
   command = plan
 
@@ -2259,11 +2307,14 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 #
 # A digest is a literal, so a Phase 1 change that is meant to alter either object fails here too.
 # That is the point: the author then says, in the same change, that the Phase 1 plan moved. The
-# failing assertion prints the new digest as its "actual" value. It moved once: #347 put
+# failing assertion prints the new digest as its "actual" value. It has moved twice. First #347 put
 # stopTimeout = 30 on the gateway container, whichever the inputs, because F1's shutdown relations
 # hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
 # so a task behaves as before, but the definition's bytes changed, the next apply registers a new
-# revision and rolls the service once; the digest below is the definition with that one key.
+# revision and rolls the service once. Then #786 gave the container linuxParameters, dropping every
+# capability and running an init process, whichever the inputs (the run on both containers above);
+# that too registers a new revision and rolls the service once. The digest below is the definition
+# with both.
 #
 # Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
 # any environment value on the default changed, or one added or removed (Session__MaxSessions to
@@ -2283,8 +2334,8 @@ run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
   }
 
   assert {
-    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "c5e7e8285b7e7ca075c6d778a906442971f31a8a29b1a8bcee288e8b4e5a1144"
-    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout, byte for byte."
+    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "a0c1c4426cdf49e9140ce1b2a0acaacf5116a06e236cd01a0fa77bfbb0d39108"
+    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout and #786's linuxParameters, byte for byte."
   }
 
   assert {
