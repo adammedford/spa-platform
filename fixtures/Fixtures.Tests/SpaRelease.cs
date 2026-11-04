@@ -40,7 +40,7 @@ internal sealed partial record SpaRelease(string AppId, string Root)
             return null;
         }
 
-        Match attribute = Regex.Match(main.Value, $"\\b{Regex.Escape(name)}=\"([^\"]*)\"");
+        Match attribute = Regex.Match(main.Value, $"\\b{Regex.Escape(name)}=\"([^\"]*)\"", RegexOptions.None, RegexTimeout.Value);
         return attribute.Success ? attribute.Groups[1].Value : null;
     }
 
@@ -48,9 +48,9 @@ internal sealed partial record SpaRelease(string AppId, string Root)
     internal string ContentHash(string relativePath) =>
         Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(Path.Combine(Root, relativePath))))[..8];
 
-    [GeneratedRegex("<script\\b[^>]*\\bsrc=\"([^\"]+)\"")]
+    [GeneratedRegex("<script\\b[^>]*\\bsrc=\"([^\"]+)\"", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex ScriptSrc();
 
-    [GeneratedRegex("<main\\b[^>]*\\bid=\"app\"[^>]*>")]
+    [GeneratedRegex("<main\\b[^>]*\\bid=\"app\"[^>]*>", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex MainElement();
 }

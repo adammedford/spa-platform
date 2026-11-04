@@ -201,6 +201,6 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
         Assert.Equal("Yarp.ReverseProxy", TheCall.ProxySpan.Source.Name);
     }
 
-    [GeneratedRegex(@"^00-(?<trace>[0-9a-f]{32})-(?<parent>[0-9a-f]{16})-(?<flags>[0-9a-f]{2})$")]
+    [GeneratedRegex(@"^00-(?<trace>[0-9a-f]{32})-(?<parent>[0-9a-f]{16})-(?<flags>[0-9a-f]{2})$", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Traceparent();
 }

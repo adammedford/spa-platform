@@ -31,6 +31,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Telemetry | [`telemetry.md`](telemetry.md) | G1a | Everyone |
 | Records and interfaces | `src/Platform.Abstractions` (task I-3) | G1a, except the identity interfaces at G1b | Workstreams 2, 3, 4, 6 |
 | Test id register | [`test-ids.md`](test-ids.md) | Never; a row is added by a decided change request (#322) | Everyone, `.claude/workflows/gate-evidence.js`, workstream 6 |
+| Gate register | [`gates.md`](gates.md) | Never; a gate's row is added by a decided change request (#364) | `.claude/workflows/gate-evidence.js`, and the session that tags a gate |
 | Test doubles, and the stage host | `src/Platform.Testing` (task I-3; #145) | A double with the interface it stands in for; the stage host, the captured log and the raw sender when #145 lands | Everyone |
 
 The integrator writes every file in this table. Workstreams 1 and 6 propose the infrastructure
@@ -133,9 +134,9 @@ Two more things the schemas deliberately do not decide:
   runtime upgrade that changes this ceiling must update the contract schema, validator and the
   test proving the proxy applies the contracted value through the applicable freeze/gate process.
 
-  **Task 2.1b remains pending.** The shared schema already rejects values above the ceiling,
-  including through the app-definition schema's reference. The validator still carries its older
-  `TimeSpan` model bound; ticket 49 removes it and reports the schema maximum under the existing
-  `integer-out-of-range` issue id. Until then oversized timeouts are schema errors. The proxy's
-  ceiling test must also assert that it applies the contracted maximum (ADR-0015 decision 3).
-  Change request `changes/2.1-registry-schemas-and-jsonschema-net.md` retains the original measurement.
+  **Task 2.1b.** The shared schema rejects values above the ceiling, including through the
+  app-definition schema's reference, and the validator reports them under the existing
+  `integer-out-of-range` issue id with the ceiling read from the schema's `maximum`. The proxy's
+  ceiling test reads the same `maximum` and asserts that the proxy applies it as written
+  (ADR-0015 decision 3). Change request `changes/2.1-registry-schemas-and-jsonschema-net.md`
+  retains the original measurement.

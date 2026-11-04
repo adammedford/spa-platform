@@ -34,12 +34,17 @@ health_check_path = "/"
 # never the assumed-role session ARN `aws sts get-caller-identity` prints.
 additional_teardown_principal_arns = []
 
-# Continuity (#347 Q7). Phase 1 and G3 run with these three unset: sessions in
-# memory, no shared key ring, and so a deployment that signs every user out.
-# The G6 sitting (#348) sets the first two, which is the cutover to the durable
-# store (#332 D6): the DynamoDB table and the cell's own ring prefix, which the
-# module holds to exactly /spa-platform/<cell>/data-protection/. The key id
-# stays empty at G6 (the account's aws/ssm key; no customer-managed key).
+# Continuity (#347 Q7). Phase 1 and G3 run with these four unset: one task with
+# a public address, sessions in memory, no shared key ring, and so a deployment
+# that signs every user out. The G6 sitting (#348) sets the first three. The
+# switch is the two-task cell (#332 D6): two tasks in two private subnets, one
+# NAT gateway and the S3 and DynamoDB gateway endpoints, about $70.50 a month
+# for the whole cell left running (#347 Q10), so tear it down the same day. The
+# store and the ring prefix are the cutover to the durable store, which the
+# switch needs; the module holds the prefix to exactly
+# /spa-platform/<cell>/data-protection/. The key id stays empty at G6 (the
+# account's aws/ssm key; no customer-managed key).
+# multi_task                       = true
 # session_store                    = "dynamodb"
 # data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
 # data_protection_kms_key_id       = ""

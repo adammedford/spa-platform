@@ -101,8 +101,12 @@ public sealed class RuleIdsTests
         Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ParseRuleIds(["## Other section"]));
     }
 
+    // The match timeout is MA0009's (ADR-0035 batch 1, #611): the input is a short constant, from
+    // RuleIds or this test's own InlineData, so a match that runs a second is a pattern gone
+    // wrong, and the timeout fails the test instead of hanging the run.
     private static bool IsRuleId(string id) =>
-        Regex.IsMatch(id, @"\A[a-z]+\.[a-z]+(?:-[a-z]+)*\z", RegexOptions.CultureInvariant);
+        Regex.IsMatch(
+            id, @"\A[a-z]+\.[a-z]+(?:-[a-z]+)*\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     public static TheoryData<string> EveryRuleId() => new(RuleIds.All);
 

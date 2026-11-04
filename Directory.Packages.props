@@ -73,4 +73,14 @@
     <PackageVersion Include="JsonSchema.Net" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- The admitted analyzer packages (ADR-0035 decision 9; #607). Directory.Build.props references
+       each in every project; each enters at its own DLL defaults, and the root .globalconfig holds
+       its per-id overrides. An upgrade can bring a rule that errors by default, so the pins sweep
+       trials this family against the whole solution. Confirmed on nuget.org on 30 October 2026. -->
+  <ItemGroup Label="Analyzers">
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.317" />
+    <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.12.1" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
+  </ItemGroup>
+
 </Project>

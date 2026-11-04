@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -f \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\" || exec python3 -I \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\""
+            "command": "g=$(git -C \"$CLAUDE_PROJECT_DIR\" --no-pager show refs/remotes/origin/main:tools/main_checkout_guard.py </dev/null 2>/dev/null) && [ -n \"$g\" ] && exec python3 -I -c 'import sys; exec(compile(sys.argv[1], sys.argv[2], \"exec\"), {\"__name__\": \"__main__\", \"__file__\": sys.argv[2]})' \"$g\" \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\"; test ! -f \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\" || exec python3 -I \"$CLAUDE_PROJECT_DIR/tools/main_checkout_guard.py\""
           }
         ]
       }

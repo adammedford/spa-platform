@@ -23,6 +23,7 @@ public sealed class PublicSurfaceTests
         "AccessTokenResult",
         "AccessTokenResult+ProviderUnavailable",
         "AccessTokenResult+SessionEnded",
+        "AccessTokenResult+StoreUnavailable",
         "AccessTokenResult+Token",
         "AccessTokenResult+Unauthenticated",
         "ApiDefinition",

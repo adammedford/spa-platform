@@ -134,6 +134,45 @@ override_resource {
   values          = { id = "sg-task" }
 }
 
+# The two-task shape's private subnets and route tables (#347), known at plan so a run can check that
+# the service sits in the one and the endpoints sit on the other. On the default inputs neither
+# instance exists, and an override of an instance the plan does not hold changes nothing.
+override_resource {
+  target          = aws_subnet.private["us-east-1a"]
+  override_during = plan
+  values          = { id = "subnet-1a" }
+}
+
+override_resource {
+  target          = aws_subnet.private["us-east-1b"]
+  override_during = plan
+  values          = { id = "subnet-1b" }
+}
+
+override_resource {
+  target          = aws_route_table.private["us-east-1a"]
+  override_during = plan
+  values          = { id = "rtb-1a" }
+}
+
+override_resource {
+  target          = aws_route_table.private["us-east-1b"]
+  override_during = plan
+  values          = { id = "rtb-1b" }
+}
+
+override_resource {
+  target          = aws_eip.nat[0]
+  override_during = plan
+  values          = { id = "eipalloc-0" }
+}
+
+override_resource {
+  target          = aws_nat_gateway.egress[0]
+  override_during = plan
+  values          = { id = "nat-0" }
+}
+
 # The log group and the two repositories, which the execution role's two grants are scoped to.
 override_resource {
   target          = aws_cloudwatch_log_group.gateway
@@ -199,8 +238,11 @@ variables {
 # made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
-# It is also where "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01) is held
-# statically rather than only against a deployed account.
+# It holds one part of "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01)
+# statically rather than only against a deployed account: no instance or bastion type can be
+# declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
+# named below with the input that creates each, so this set cannot tell a gated one from an ungated
+# one; the platform root's tripwire holds both to their gates, at no instance on the default inputs.
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
@@ -246,14 +288,21 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       # session_store = "dynamodb". P-01 admits this one gated declaration and no other database
       # (change request issue-338-p-01-dynamodb-tripwire, decision 1).
       "aws_dynamodb_table",
+      # Continuity (#347, #332 D6), network.tf: the two-task cell's egress, planned only under
+      # multi_task. The Elastic IP is the NAT gateway's address, not the task's; the NAT gateway
+      # carries what has no gateway endpoint; the two gateway endpoints carry S3 and DynamoDB past
+      # it. P-01 admits the one gated NAT gateway (change request #583).
+      "aws_eip",
+      "aws_nat_gateway",
+      "aws_vpc_endpoint",
     ])
-    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a NAT gateway, a bastion and a database; the platform root's tests count the rest (P-01)."
+    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a bastion, and a NAT gateway and a database but the two gated ones (#583, issue-338); the platform root's tests count the rest (P-01)."
   }
 
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
   # JSON-syntax file and calls no child module. Terraform loads *.tf.json beside *.tf
   # (https://developer.hashicorp.com/terraform/language/files), and a module block brings in
-  # resources of any type with no resource line here. Either would carry a NAT gateway past the
+  # resources of any type with no resource line here. Either would carry an instance past the
   # allowlist with every run green.
   assert {
     condition     = length(fileset(path.module, "*.tf.json")) == 0
@@ -599,10 +648,11 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
 # Continuity (#347, #332 F1). A roll replaces a task in three steps, in this order: ECS deregisters
 # the target and waits out the target group's deregistration delay, then sends SIGTERM, then after
 # the container's stopTimeout sends SIGKILL. The two numbers are F1's, 30 and 30, pinned exactly:
-# the drain covers the 21 s a refresh is bounded by (ProviderDeadline 10 + LeaseMargin 11, G1 on
-# #332), and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363). Mutations that turn this
-# run red: deregistration_delay left to the provider's default, or 300; stopTimeout 25 or absent;
-# stopTimeout on the mock API too; minimum healthy 50.
+# requests drain from the target for 30 s before SIGTERM, a drain that promises no refresh's
+# completion, and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363), which F1 sets above
+# the refresh holder's 20 s durable-write deadline (#332 F1; P2-3's second amendment, decision 2).
+# Mutations that turn this run red: deregistration_delay left to the provider's default, or 300;
+# stopTimeout 25 or absent; stopTimeout on the mock API too; minimum healthy 50.
 run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_task_always_serving" {
   command = plan
 
@@ -616,7 +666,7 @@ run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_
   # comparison is to "30": an integer here would error rather than fail.
   assert {
     condition     = aws_lb_target_group.gateway.deregistration_delay == "30"
-    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, which covers the 21 s a refresh is bounded by. The provider's default is 300 s, which only slows a roll."
+    error_message = "The target group's deregistration delay is exactly 30 s (#332 F1): the drain before SIGTERM, during which requests in flight drain from the task; it promises no refresh's completion. The provider's default is 300 s, which only slows a roll."
   }
 
   assert {
@@ -2274,5 +2324,184 @@ run "a_ring_under_memory_carries_the_ring_and_no_table" {
       ], "Session__TableName")
     )
     error_message = "A ring with the memory store sets DataProtection__ParameterPrefix and no Session__TableName."
+  }
+}
+
+# --- Continuity (#347, #332 D6): the two-task shape, behind multi_task --------------------------
+#
+# One switch sets the whole shape (#347 Q4), so these runs hold both of its sides: on the default
+# inputs the cell is Phase 1's one public task with none of the private half, and under the switch it
+# is two tasks over two private subnets in two zones with no public address, one NAT gateway with its
+# Elastic IP in the first zone's public subnet, a private route table per zone routing out through
+# it, and the S3 and DynamoDB gateway endpoints on both tables. The expected subnets are worked by
+# hand from vpc_cidr 10.20.0.0/16: /24s at cidrsubnet indices 2 and 3 (#347 Q11), after the public
+# subnets' 0 and 1.
+
+# Mutations that turn this run red: any gated declaration's count or for_each left unconditional;
+# desired_count 2 unconditionally; assign_public_ip = false unconditionally; rebalancing set on the
+# defaults.
+run "on_the_default_inputs_the_cell_is_one_public_task_with_no_private_half" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_subnet.private) == 0 && length(aws_eip.nat) == 0 && length(aws_nat_gateway.egress) == 0
+      && length(aws_route_table.private) == 0 && length(aws_route.private_egress) == 0
+      && length(aws_route_table_association.private) == 0 && length(aws_vpc_endpoint.gateway) == 0
+    )
+    error_message = "On the default inputs the cell plans no private subnet, Elastic IP, NAT gateway, private route table, route, association or gateway endpoint (#347): Phase 1's network is unchanged."
+  }
+
+  assert {
+    condition     = aws_ecs_service.gateway.desired_count == 1 && aws_ecs_service.gateway.network_configuration[0].assign_public_ip && aws_ecs_service.gateway.availability_zone_rebalancing != "ENABLED"
+    error_message = "On the default inputs the service runs one task with a public address and leaves rebalancing to ECS (#347): Phase 1's compute is unchanged."
+  }
+}
+
+# Mutations that turn this run red: the private subnets at indices 0 and 1, or in one zone, or with
+# map_public_ip_on_launch true; a NAT gateway per zone, or in a private subnet; a route to the
+# internet gateway; an association left off; an endpoint on one table, or of the Interface type, or a
+# third endpoint; the NAT gateway given no allocation_id; desired_count 1; the service left in the public subnets, or with a public address;
+# rebalancing off; the task's egress opened beyond 443.
+run "under_multi_task_two_tasks_sit_in_two_private_subnets_in_two_zones_behind_one_nat_gateway_and_two_gateway_endpoints" {
+  command = plan
+
+  variables {
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      { for zone, s in aws_subnet.private : zone => s.cidr_block }
+      == { "us-east-1a" = "10.20.2.0/24", "us-east-1b" = "10.20.3.0/24" }
+      && alltrue([for zone, s in aws_subnet.private : s.availability_zone == zone && !s.map_public_ip_on_launch])
+    )
+    error_message = "Under multi_task the cell has two private subnets, 10.20.2.0/24 in us-east-1a and 10.20.3.0/24 in us-east-1b, neither giving a public address on launch (#347 Q11)."
+  }
+
+  assert {
+    condition = (
+      length(aws_eip.nat) == 1 && aws_eip.nat[0].domain == "vpc"
+      && length(aws_nat_gateway.egress) == 1
+      && aws_nat_gateway.egress[0].subnet_id == "subnet-0a"
+      && aws_nat_gateway.egress[0].allocation_id == "eipalloc-0"
+    )
+    error_message = "Under multi_task the cell has one NAT gateway, with its own Elastic IP, in the first zone's public subnet (#347 Q2): zone failure is out of G6's scope (#332 F15)."
+  }
+
+  assert {
+    condition = (
+      length(aws_route_table.private) == 2
+      && { for zone, r in aws_route.private_egress : zone => [r.route_table_id, r.destination_cidr_block, r.nat_gateway_id] }
+      == { "us-east-1a" = ["rtb-1a", "0.0.0.0/0", "nat-0"], "us-east-1b" = ["rtb-1b", "0.0.0.0/0", "nat-0"] }
+      && { for zone, a in aws_route_table_association.private : zone => [a.subnet_id, a.route_table_id] }
+      == { "us-east-1a" = ["subnet-1a", "rtb-1a"], "us-east-1b" = ["subnet-1b", "rtb-1b"] }
+    )
+    error_message = "Under multi_task each private subnet has its own route table, whose default route is the one NAT gateway (#347 Q11): a second NAT gateway, or a regional one, is then a new gateway and a route change."
+  }
+
+  assert {
+    condition = (
+      { for name, e in aws_vpc_endpoint.gateway : name => [e.service_name, e.vpc_endpoint_type, e.route_table_ids] }
+      == {
+        "s3"       = ["com.amazonaws.us-east-1.s3", "Gateway", toset(["rtb-1a", "rtb-1b"])]
+        "dynamodb" = ["com.amazonaws.us-east-1.dynamodb", "Gateway", toset(["rtb-1a", "rtb-1b"])]
+      }
+    )
+    error_message = "Under multi_task the S3 and DynamoDB gateway endpoints sit on both private route tables (#347 Q15), and there is no other endpoint."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.gateway.desired_count == 2
+      && aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-1a", "subnet-1b"])
+      && !aws_ecs_service.gateway.network_configuration[0].assign_public_ip
+      && aws_ecs_service.gateway.availability_zone_rebalancing == "ENABLED"
+    )
+    error_message = "Under multi_task the service runs two tasks over the two private subnets with no public address, with availability-zone rebalancing on (#347 Q14)."
+  }
+
+  assert {
+    condition     = aws_lb.cell.subnets == toset(["subnet-0a", "subnet-0b"])
+    error_message = "Under multi_task the load balancer stays in the public subnets."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.task_https_out.from_port == 443
+      && aws_vpc_security_group_egress_rule.task_https_out.to_port == 443
+      && aws_vpc_security_group_egress_rule.task_https_out.ip_protocol == "tcp"
+    )
+    error_message = "Under multi_task the task's egress stays 443 alone: the NAT gateway changes the route out, not what the task may send."
+  }
+}
+
+# Q13: the gateway trusts X-Forwarded-For from the load balancer's subnets alone, so no private
+# subnet, where the tasks now sit, is a trusted network. Mutations that turn this run red: the trusted
+# networks built from every subnet, or from the service's subnets.
+run "under_multi_task_no_private_subnet_is_a_trusted_network" {
+  command = plan
+
+  variables {
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      toset([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if startswith(e.name, "ForwardedHeaders__TrustedNetworks__")
+      ])
+      == toset(["10.20.0.0/24", "10.20.1.0/24"])
+    )
+    error_message = "Under multi_task ForwardedHeaders:TrustedNetworks is still the two public subnets the load balancer sits in, and names no private subnet (#347 Q13)."
+  }
+}
+
+# Two tasks on the memory store hold two session sets, so the switch needs the durable store (#347
+# Q12). Both of multi_task's validations sit on the one variable, so this run keeps vpc_cidr at /16,
+# which the other passes. Mutations that turn this run red: the store validation removed, or its
+# condition made !var.multi_task || var.session_store != "nope".
+run "multi_task_without_dynamodb_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    multi_task = true
+  }
+
+  expect_failures = [var.multi_task]
+}
+
+# Four /24 subnets under the switch need /22 (#583): a /23 holds Phase 1's two and is refused with the
+# switch on, the durable store set so that only the range can be what fails. Mutations that turn this
+# run red: the range validation removed, or its floor made <= 23.
+run "multi_task_with_a_23_is_refused_at_plan" {
+  command = plan
+
+  variables {
+    vpc_cidr                         = "10.20.0.0/23"
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  expect_failures = [var.multi_task]
+}
+
+# The refusal names both inputs, read from the source as the session_store refusal's is above.
+run "the_multi_task_refusal_names_both_inputs" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for m in regexall("(?s)error_message\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", one(regexall("(?ms)^variable \"multi_task\" \\{.*?^\\}", file("${path.module}/variables.tf")))) :
+      strcontains(m[0], "multi_task") && strcontains(m[0], "session_store")
+    ])
+    error_message = "The refusal of multi_task = true without the durable store names both multi_task and session_store (#347 Q12)."
   }
 }

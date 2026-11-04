@@ -114,7 +114,7 @@ public sealed class LogoutTests
     /// <summary>The provider's answer to the browser: where it redirected.</summary>
     private static async Task<Uri> FollowAsync(string location)
     {
-        using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
         using HttpResponseMessage answer = await browser.GetAsync(new Uri(location), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, answer.StatusCode);
         return answer.Headers.Location!;

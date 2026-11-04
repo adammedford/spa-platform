@@ -130,7 +130,7 @@ public sealed class ProxyRouteTests
         await using EchoUpstreamListener listener = await orders.ListenAsync(Ct);
         await using ProxyHost gateway = await ProxyHost.StartAsync(
             Ct, TestApps.Entry("app1", apis: [TestApps.Api("orders", listener.BaseAddress.AbsoluteUri)]));
-        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
 
         HttpResponseMessage response = await client.SendAsync(
             gateway.Request(HttpMethod.Get, "app1.spa-poc.test", "/api/orders/items"), Ct);

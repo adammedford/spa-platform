@@ -93,10 +93,10 @@ public sealed partial class LoginTests
         switch (tampering)
         {
             case "no correlation cookie":
-                await profile.Context.ClearCookiesAsync(new() { NameRegex = new Regex("^" + Regex.Escape(Prefix("corr.*"))) });
+                await profile.Context.ClearCookiesAsync(new() { NameRegex = new Regex("^" + Regex.Escape(Prefix("corr.*")), RegexOptions.None, RegexTimeout.Span) });
                 break;
             case "no nonce cookie":
-                await profile.Context.ClearCookiesAsync(new() { NameRegex = new Regex("^" + Regex.Escape(Prefix("nonce.*"))) });
+                await profile.Context.ClearCookiesAsync(new() { NameRegex = new Regex("^" + Regex.Escape(Prefix("nonce.*")), RegexOptions.None, RegexTimeout.Span) });
                 break;
             default:
                 // One character of the protected state changed.

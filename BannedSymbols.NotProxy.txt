@@ -1,0 +1,3 @@
+// Banned in every strict-tier project except Platform.Proxy (ADR-0035 decision 10). Owner: integrator.
+// The mechanical part of "no hand-written OAuth protocol code": a hand-built bearer or Basic header.
+M:System.Net.Http.Headers.AuthenticationHeaderValue.#ctor(System.String,System.String);only Platform.Proxy builds an Authorization header: no hand-written OAuth protocol code
