@@ -677,6 +677,50 @@ try {
     }
   }
 
+  // A held cell in the pre-#794 spelling '<file> (companion)' is held on the whole-file candidate
+  // whose path or basename is <file> (#801): on #791 the cell named no candidate's test, now the bare
+  // path, so the row had no file, its red run read as caught elsewhere, and it held twice although
+  // each verdict said merge. Red on any test of the file it reproduces with no caught cell and
+  // merges. A cell scoping one check, and a (companion) cell with no whole-file candidate for its
+  // file, are matched as before: red only on another test they hold.
+  checks++
+  {
+    const F = 'tools/overnight_answers_tests.py'
+    const H1 = sha('1'); const H2 = sha('2')
+    const BREAK = 'tools/overnight_answers.py covered_questions: dropped the author check'
+    const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
+    const heldRecord = (cell) => ({ author_association: 'OWNER', created_at: '2026-11-03T08:00:00Z', html_url: 'https://github.com/o/r/pull/211#issuecomment-1',
+      body: `## Review\n\nHead ${H1}.\n\n## Mutations\n\n| Test | What was broken | Failed of total | Result | Log file |\n| --- | --- | --- | --- | --- |\n| ${cell} | ${BREAK} | 1 of 18 | did-not-fail: the project went red on another test | /log/mutation.txt |\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H1} against ${FORK}: hold` })
+    const comp = (test, project = F, file = F) => ({ test, project, file, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
+    const range = { 211: { from: H1, ancestor: true, commits: [H2], merges: [], changedFiles: ['tools/overnight_answers.py'], error: '' } }
+    const verdictOf = async (cell, cands) => {
+      env = run({ prs: [211] }, { 211: pr(211, [F, 'tools/overnight_answers.py'], { head: H2, commits: [H2], comments: [heldRecord(cell)], candidates: cands }) },
+        { range, earlier: { 211: [{ finding: 'the companion did not fail with the author check dropped', held: true, answered: true, how: 'its own run went red' }] }, mutate: Object.fromEntries([cell, ...cands.map((c) => c.test)].map((t) => [t, { ...row('reproduced', 1, 18), failingNames: RED }])) })
+      result = await execute(env)
+      return resultOf(211, result)
+    }
+    for (const [cell, whole] of [
+      ['overnight_answers_tests.py (companion)', F],
+      ['overnight_answers_tests.py (companion)', 'overnight_answers_tests.py'],
+      [`${F} (companion)`, F],
+    ]) {
+      const c = await verdictOf(cell, [comp(whole)])
+      const m = (c.mutations || []).find((x) => x.kind === 'held') || {}
+      if (m.test !== whole || m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 211 with the held cell ${JSON.stringify(cell)} and the whole-file candidate ${JSON.stringify(whole)} red on ${RED[0]}: held row ${JSON.stringify({ test: m.test, result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected ${whole} reproduced with no caught cell and merge`)
+      if (!(env.mutations.find((x) => x.test === whole) || { prompt: '' }).prompt.includes(BREAK)) fail(`PR 211 with the held cell ${JSON.stringify(cell)}: the mutation of ${whole} is not told the held record's break`)
+    }
+    for (const [cell, cands] of [
+      ['overnight_answers_tests.py (check: every Confirm comment counts)', [comp(F)]],
+      ['overnight_answers_tests.py (companion)', []],
+      ['overnight_answers_tests.py (companion)', [comp(F, 'tools', F)]],
+      ['other_tests.py (companion)', [comp(F)]],
+    ]) {
+      const c = await verdictOf(cell, cands)
+      const m = (c.mutations || []).find((x) => x.kind === 'held' && x.test === cell) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 211 with the held cell ${JSON.stringify(cell)} and candidates ${JSON.stringify(cands.map((x) => [x.test, x.project]))} red only on another test: held row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected the cell held as before, did-not-fail and hold`)
+    }
+  }
+
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
   //     still posted, its record names the head the inventory read, and the return flags the move,
   //     per pull request and at run level, so the operator runs again.
