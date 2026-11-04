@@ -170,12 +170,13 @@ Off them it does not, and this section records the finding of #353 (raised from 
 record) here rather than in a second request (#349 Q17).
 
 Two inputs widen the task role, and they are independent conditions in `infra/modules/cell/iam.tf`,
-as the store and the ring are in the gateway (P2-2 decision 5):
+as the store and the ring are in the gateway (P2-2 decision 16):
 
 - `session_store = "dynamodb"` (`local.session_store_is_dynamodb`) adds `ReadWriteSessions` (P2-1
-  Decision 7);
+  item 5's operations table, and Decision 7 for the lease item's `PutItem` and `DeleteItem`);
 - a non-empty `data_protection_parameter_prefix` (`local.key_ring_enabled`) adds `ReadWriteKeyRing`
-  and `TagKeyRingOnCreate` (P2-2 decision 12, #274), whichever the store.
+  and `TagKeyRingOnCreate` (P2-2 decision 12 for the ring's two actions; the tag grant is #274's,
+  which decision 17 deferred), whichever the store.
 
 So a memory-store cell with a ring prefix changes P-03 as surely as a `dynamodb` one. The fourth
 combination does not plan: `var.session_store`'s validation refuses `dynamodb` with no prefix
@@ -184,7 +185,7 @@ combination does not plan: `var.session_store`'s validation refuses `dynamodb` w
 
 | Case | Inputs | The task role's statements | The run that holds the set |
 | --- | --- | --- | --- |
-| Default | `memory`, no prefix | `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages`: P-03's sentence | `under_memory_the_cell_is_phase_1_s_unchanged` |
+| Default | `memory`, no prefix | `ReadRegistryAndReleases`, `ReadClientSecrets`, `SessionManagerMessages`: P-03's sentence | `under_memory_the_cell_is_phase_1_s_unchanged`; the sentence itself is held by the P-03 runs, `the_task_role_reads_this_cell_s_bucket_prefixes_and_no_others`, `the_task_role_reads_this_cell_s_client_secret_path_and_no_wider_path`, `the_task_role_holds_exactly_the_four_ssmmessages_permissions` and `the_task_role_holds_no_unrecognised_statement` |
 | Memory plus ring | `memory`, the cell's prefix | the default's three, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `a_ring_under_memory_carries_the_ring_and_no_table` |
 | DynamoDB plus ring | `dynamodb`, the cell's prefix | the default's three, `ReadWriteSessions`, `ReadWriteKeyRing`, `TagKeyRingOnCreate` | `under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants` |
 
@@ -219,8 +220,9 @@ statements only; the ring's two are the same `dynamic "statement"` blocks on `lo
 whichever the store, so the DynamoDB run's assertions on them are the ring's in both cases.
 
 Nothing in this request edits P-03. It asks the integrator, deciding the tripwire, to record P-03's
-Phase 2 reading beside it: the sentence on the default inputs, and behind it, per case, the grants
-above, held by the runs named.
+Phase 2 reading beside it: the sentence on the default inputs, and behind it, per case, the statements
+above: the DynamoDB-plus-ring run holds each grant's actions, resources and conditions, and the
+memory-plus-ring run holds its statement set alone.
 
 ## Why this is a request rather than an edit
 
