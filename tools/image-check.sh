@@ -165,6 +165,10 @@ echo "image-check: runtime: $runtimes, read with \`dotnet --list-runtimes\` in t
   || fail "the gateway container's file system could not be exported to look for a shell."
 tar -tf "$work/rootfs.tar" > "$work/rootfs.txt" 2> /dev/null \
   || fail "the gateway container's exported file system could not be listed to look for a shell."
+# A listing that read nothing would read as a file system with no shell (CODING_STANDARDS.md, "A check
+# fails closed"), so it must first name the file the Dockerfile itself puts there, the entry point.
+grep -E '^(\./)?app/Gateway\.dll$' "$work/rootfs.txt" > /dev/null \
+  || fail "the gateway container's exported file system does not list app/Gateway.dll, so it cannot show whether the image has a shell."
 if grep -E '^(\./)?(usr/)?bin/sh$' "$work/rootfs.txt" > /dev/null; then
   fail "the gateway image has a shell at /bin/sh; its runtime stage builds on the chiseled base, which ships none."
 fi

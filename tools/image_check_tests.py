@@ -337,5 +337,68 @@ class ImageCheckRuntimeReadingTests(unittest.TestCase):
         self.assertNotIn("image-check: pass:", result.stdout)
 
 
+# A docker whose container starts and whose image passes every check after the export: it sets
+# DOTNET_EnableDiagnostics=0 and answers every label. Its `export` writes the tar at EXPORT, which
+# holds one file and neither app/Gateway.dll nor bin/sh, as a listing that read the wrong thing or
+# nothing would.
+FAKE_DOCKER_THAT_EXPORTS = """#!/bin/bash
+case "$1" in
+  image)
+    case "$4" in
+      *Env*) echo "DOTNET_EnableDiagnostics=0" ;;
+      *Labels*) echo set ;;
+      *) echo 1654 ;;
+    esac
+    exit 0 ;;
+  run)
+    for arg in "$@"; do
+      if [ "$arg" = --list-runtimes ]; then
+        echo "Microsoft.NETCore.App 10.0.14 [/usr/share/dotnet/shared/Microsoft.NETCore.App]"
+        exit 0
+      fi
+    done
+    echo fake-container; exit 0 ;;
+  inspect) echo true; exit 0 ;;
+  logs) echo "Application started. Press Ctrl+C to shut down."; exit 0 ;;
+  export) cat EXPORT; exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+class ImageCheckShellListingTests(unittest.TestCase):
+    """The shell check reads the exported listing, so a listing that does not name the gateway's own
+    entry point fails rather than reading as an image with no shell (CODING_STANDARDS.md, "A check
+    fails closed"; the #781 review). Mutation: dropping the app/Gateway.dll guard lets this case's
+    image reach `image-check: pass:`, which fails it."""
+
+    def test_a_listing_without_the_gateway_fails_rather_than_reading_as_no_shell(self):
+        tree = Tree(self)
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        root = pathlib.Path(scratch.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep", "awk"):
+            found = shutil.which(tool)
+            self.assertIsNotNone(found, f"{tool} is not on PATH")
+            (bin_dir / tool).symlink_to(found)
+        (root / "content").mkdir()
+        (root / "content" / "elsewhere.txt").write_text("not the gateway\n")
+        export = root / "export.tar"
+        subprocess.run(["tar", "-cf", str(export), "-C", str(root / "content"), "elsewhere.txt"], check=True)
+        docker = bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER_THAT_EXPORTS.replace("EXPORT", shlex.quote(str(export))))
+        docker.chmod(0o755)
+        env = {"PATH": str(bin_dir), "HOME": scratch.name, "LC_ALL": "C"}
+        result = subprocess.run(["/bin/bash", str(SCRIPT)], cwd=tree.dir, env=env, capture_output=True,
+                                text=True, stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: the gateway container's exported file system does not list "
+                         "app/Gateway.dll, so it cannot show whether the image has a shell.",
+                         last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+
+
 if __name__ == "__main__":
     runner.main()
