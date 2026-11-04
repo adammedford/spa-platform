@@ -758,9 +758,19 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const byTest = new Map(candidates.map((c) => [c.test, c]))
   // Newest first, so a test two records held on is mutated by the latest one's break; one a later
   // record reproduced is answered and drops out.
+  // A held cell in the spelling the inventory gave a whole companion before #794, '<file>
+  // (companion)', is held on the whole-file candidate whose path or basename is <file> (#801): on
+  // #791 that cell named no candidate's test, now the bare path, so its row had no file and its red
+  // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file:
+  // a cell that scopes one check is matched by the test it names, as before.
+  const wholeFor = (cell) => {
+    const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
+    return f ? candidates.filter((c) => c.file && c.project === c.file && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+  }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
-    const named = candidates.filter((c) => names(h.test, c.test))
+    const byName = candidates.filter((c) => names(h.test, c.test))
+    const named = byName.length ? byName : wholeFor(h.test)
     const answered = (test) => h.later.some((t) => t === test || names(t, test))
     return named.length ? named.filter((c) => !answered(c.test)).map((c) => ({ ...c, ...base }))
       : answered(h.test) ? [] : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
