@@ -11,10 +11,10 @@ ARG TARGETARCH
 WORKDIR /src
 
 # The build files first, so a source change does not re-resolve every package. The two analyzer
-# configs and the banned-symbol lists come with them, so the image publishes under the analysis
-# every other build runs (ADR-0035 decision 14; #673): Directory.Build.props switches analysis on
-# only where .globalconfig is (#606). The line is src/Gateway/Dockerfile's own, character for
-# character.
+# configs come with them, so the image publishes under the analysis every other build runs
+# (ADR-0035 decision 14; #673): Directory.Build.props switches analysis on only where .globalconfig
+# is (#606). The line is src/Gateway/Dockerfile's own, character for character, so the
+# banned-symbol lists come too, though the relaxed tier this project is in attaches none (#608).
 COPY global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt ./
 COPY fixtures/MockApi/MockApi.csproj fixtures/MockApi/
 
