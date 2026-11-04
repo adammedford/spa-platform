@@ -88,6 +88,16 @@ and reports last. The tools in a case's bin directory are links to wrappers writ
 run, because on the Mac this was measured on a newly written file costs about 45 ms more the first
 time it runs; the doubles are still each case's own.
 
+**The closing-reference rule is a shared table** (#745). .claude/workflows/review-queue.js applies
+land.sh's rule to a description before its review spends an agent (#688), a copy in JavaScript,
+since a workflow script runs nothing. The rows of .claude/workflows/fixtures/closing-references.json
+are what both answer, and this companion and review-queue_tests.mjs each run every row against
+their own copy, so a change to the rule in one file and not the other fails one of them. A change
+to the table earns this companion through the line below, and every workflow companion through
+its directory.
+
+Checkout inputs: .claude/workflows/fixtures/closing-references.json
+
 Run: python3 -I tools/land_tests.py
 """
 
@@ -108,6 +118,9 @@ import unittest
 from typing import NamedTuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The closing-reference rows land.sh and .claude/workflows/review-queue.js both answer (#745).
+CLOSING_TABLE = ROOT / ".claude" / "workflows" / "fixtures" / "closing-references.json"
+CLOSING_ROWS = json.loads(CLOSING_TABLE.read_text())["rows"]
 spec = importlib.util.spec_from_file_location("companion_runner", ROOT / "tools" / "companion_runner.py")
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
@@ -1590,12 +1603,53 @@ class ClosesTests(LandTestCase):
                 self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head},
                                  case.origin_refs())
 
+    def assertRowAnswered(self, row: dict):
+        """One row of the shared table (#745): its commits on the branch, oldest first, its
+        description on the pull request, and land.sh's answer the row's."""
+        case = MergingCase(self, commits=tuple(row["commits"]), description=row["description"])
+        result = case.run(PR, *case.with_body, "--subject", self.SUBJECT)
+        if "otherRepository" in row:
+            self.assertRefused(case, result, f"closes {row['otherRepository']}, the owner/repo#n form",
+                               READS_HEAD)
+            self.assertTrue(any("Write Closes #n" in line for line in result.land_lines()),
+                            result.stderr)
+            self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head},
+                             case.origin_refs())
+        elif row["unnamed"]:
+            self.assertClosesRefused(case, result, *(f"#{n}" for n in row["unnamed"]))
+        else:
+            self.assertEqual(0, result.status, result.stderr)
+            self.assertEqual([], result.land_lines())
+            self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
+
+    def test_the_shared_table_is_whole(self):
+        # A row answers one way, a ticket as digits, and carries no merge: land.sh's side builds
+        # its commits as non-merge commits, so a row that meant a merge would test nothing.
+        self.assertGreater(len(CLOSING_ROWS), 0)
+        for row in CLOSING_ROWS:
+            with self.subTest(why=row.get("why")):
+                self.assertEqual({"why", "description", "commits"}, set(row) - {"unnamed", "otherRepository"})
+                self.assertEqual(1, len({"unnamed", "otherRepository"} & set(row)))
+                self.assertTrue(row["commits"] and all(isinstance(m, str) for m in row["commits"]))
+                for n in row.get("unnamed", []):
+                    self.assertRegex(n, r"^[0-9]+$")
+
     def test_a_head_whose_commits_cannot_be_read_is_refused(self):
         # The double's head is a sha origin does not hold, so the fetch for it fails.
         case = Case(self, description="Closes #352")
         result = case.run(PR, *case.with_body, "--subject", "Merge task 9.9: x")
         self.assertRefused(case, result, f"could not read the commits of #{PR} up to {HEAD}",
                            READS_HEAD)
+
+
+# One case for each row of the shared table, so the rows run at the same time as any other cases
+# do; the name carries the row's index, which a failure is looked up by in the table.
+for index, row in enumerate(CLOSING_ROWS):
+    def test_row(self, row=row):
+        self.assertRowAnswered(row)
+    test_row.__doc__ = f"Row {index} of {CLOSING_TABLE.name}: {row['why']}."
+    setattr(ClosesTests, f"test_shared_table_row_{index:02d}", test_row)
+del index, row, test_row
 
 
 class DecisionCitationTests(LandTestCase):

@@ -228,7 +228,11 @@ full_sha='^[0123456789abcdef]{40}$'
 # A merge is left out because its message names what it joins, which a rebuild can keep after the
 # commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
 # not a description, which can change after it. .claude/workflows/review-queue.js applies this same
-# rule before its review spends any agent on the head (#688), so a change to it here changes that copy.
+# rule before its review spends any agent on the head (#688), in a JavaScript copy, and a table holds
+# the two in step (#745): .claude/workflows/fixtures/closing-references.json lists descriptions,
+# commit messages and what the rule answers, tools/land_tests.py runs this script on every row and
+# review-queue_tests.mjs runs that one on every row. A change to the rule here changes that copy and
+# the table in the same commit, or one of the companions fails.
 #
 # The form docs/agents/landing-work.md -> "Land it" asks for, and .claude/workflows/morning.js
 # reads, is one `Closes #n` to a line. The check reads what GitHub reads (#578): any of its closing
