@@ -12,7 +12,7 @@ namespace Platform.Testing.Tests;
 /// The captured log (#140, #145): every line a host logged, as records and, when a console formatter
 /// is configured, as the lines stdout would carry. Each test names the mutation that turns it red.
 /// </summary>
-public sealed class CapturedLogTests
+public sealed partial class CapturedLogTests
 {
     [Fact]
     public async Task LinesFor_reads_the_Rule_property_whatever_the_template_says()
@@ -86,6 +86,27 @@ public sealed class CapturedLogTests
         Assert.Empty(host.Log.Json);
     }
 
+    [Fact]
+    public void A_template_line_carries_its_method_s_event_id_and_an_ad_hoc_line_none()
+    {
+        // Mutation: record the line without the eventId the logger is handed. The event id is the
+        // only thing that tells a [LoggerMessage] line from an ad hoc call with the same template:
+        // both leave the same Rule and {OriginalFormat} state (#540).
+        CapturedLog log = new();
+        ILogger<CapturedLogTests> logger = log.CreateLogger<CapturedLogTests>();
+
+        LogRefusedByTemplate(logger, "api.unknown");
+        logger.LogWarning("refused rule={Rule}", "api.unknown");
+
+        Assert.Collection(log.LinesFor("api.unknown"),
+            template => Assert.Equal(nameof(LogRefusedByTemplate), template.EventId.Name),
+            adHoc =>
+            {
+                Assert.Null(adHoc.EventId.Name);
+                Assert.Equal(0, adHoc.EventId.Id);
+            });
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private sealed class FirstFormatter() : ConsoleFormatter("first")
@@ -101,4 +122,7 @@ public sealed class CapturedLogTests
         public override void Write<TState>(in LogEntry<TState> logEntry, IExternalScopeProvider? scopeProvider, TextWriter textWriter) =>
             textWriter.WriteLine("second:" + logEntry.Formatter(logEntry.State, logEntry.Exception));
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "refused rule={Rule}")]
+    private static partial void LogRefusedByTemplate(ILogger logger, string rule);
 }

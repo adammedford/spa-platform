@@ -114,6 +114,11 @@ FAMILIES = [
      "members": {"Microsoft.Extensions.TimeProvider.Testing": ["TimeProvider.Testing", "fake clock"]}},
     {"id": "mvc-testing", "name": "The MVC test host", "frameworkWide": False, "reportOnly": False,
      "members": {"Microsoft.AspNetCore.Mvc.Testing": ["Mvc.Testing"]}},
+    # #607: Directory.Build.props references each in every project, and an upgrade can bring a rule
+    # that errors by default, so the family trials the whole solution (ADR-0035 decision 9).
+    {"id": "analyzers", "name": "The analyzer packages", "frameworkWide": True, "reportOnly": False,
+     "members": {"Meziantou.Analyzer": ["Meziantou"], "Microsoft.VisualStudio.Threading.Analyzers": ["VS Threading"],
+                 "Microsoft.CodeAnalysis.BannedApiAnalyzers": ["BannedApiAnalyzers"]}},
     {"id": "sdk", "name": "The SDK", "frameworkWide": False, "reportOnly": True, "members": {}},
 ]
 TERRAFORM_FAMILY = {"id": "terraform", "name": "Terraform providers", "frameworkWide": False, "reportOnly": False, "members": {}}

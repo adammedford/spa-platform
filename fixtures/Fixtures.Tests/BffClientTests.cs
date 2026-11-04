@@ -252,7 +252,7 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
 
         /// <summary>"anything but `GET`, `HEAD` and `OPTIONS`": the methods that carry no token.</summary>
         public static IReadOnlyList<string> SafeMethods =>
-            [.. Regex.Matches(HeaderRow.Groups["on"].Value.Split("anything but")[1], "`([A-Z]+)`").Select(m => m.Groups[1].Value)];
+            [.. Regex.Matches(HeaderRow.Groups["on"].Value.Split("anything but")[1], "`([A-Z]+)`", RegexOptions.None, RegexTimeout.Value).Select(m => m.Groups[1].Value)];
 
         /// <summary>Every <c>code</c> the Errors table gives a 401.</summary>
         public static IReadOnlyList<string> UnauthorizedCodes =>
@@ -261,10 +261,10 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
         private static Match Require(Match match, string what) =>
             match.Success ? match : throw new InvalidOperationException($"contracts/http-contract.md: {what}.");
 
-        [GeneratedRegex(@"^\| `(?<header>X-[A-Za-z-]+)` \| (?<on>[^|]+) \| [^|]*`(?<field>[A-Za-z]+)` in the `GET /bff/session` response", RegexOptions.Multiline)]
+        [GeneratedRegex(@"^\| `(?<header>X-[A-Za-z-]+)` \| (?<on>[^|]+) \| [^|]*`(?<field>[A-Za-z]+)` in the `GET /bff/session` response", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
         private static partial Regex HeaderRowPattern();
 
-        [GeneratedRegex(@"^\| 401 \| `([a-z_]+)` \|", RegexOptions.Multiline)]
+        [GeneratedRegex(@"^\| 401 \| `([a-z_]+)` \|", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
         private static partial Regex UnauthorizedRow();
     }
 }

@@ -450,7 +450,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         Answer challenge = await SendAsync(app, start, cookies, headers: Navigation);
         Assert.Equal(302, challenge.Status);
 
-        using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false });
+        using HttpClient browser = new(new HttpClientHandler { AllowAutoRedirect = false, CheckCertificateRevocationList = true });
         using HttpResponseMessage authorize = await browser.GetAsync(new Uri(challenge.Location), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
 

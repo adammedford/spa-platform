@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Text.RegularExpressions;
+using Gateway.TestHarness;
 using Microsoft.Playwright;
 
 namespace Gateway.E2ETests.Stack;
@@ -65,6 +66,6 @@ internal static partial class Redacted
     }
 
     /// <summary>A scheme, <c>://</c>, and everything up to whitespace, a quote or an angle bracket.</summary>
-    [GeneratedRegex("""[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+""")]
+    [GeneratedRegex("""[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+""", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex AbsoluteUrl();
 }

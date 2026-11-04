@@ -100,8 +100,8 @@ locals {
     # names the value itself -- "The ALB subnets, in CIDR form"
     # (contracts/platform-config.schema.json -> ForwardedHeaders.TrustedNetworks) -- so it is the
     # subnets the load balancer sits in, which is where its addresses come from (alb.tf). The cell's
-    # whole VPC range would also trust every unallocated address in it, and only two subnets out of
-    # the range are allocated.
+    # whole VPC range would also trust every address outside those two: the unallocated ones and,
+    # under multi_task, the private subnets the tasks sit in.
     { for index, cidr in local.alb_subnet_cidrs : "ForwardedHeaders__TrustedNetworks__${index}" => cidr },
     local.issuer_environment,
     # Continuity (#338). Each is present only behind its input, so the default inputs add no key and
@@ -160,11 +160,16 @@ locals {
     # order: the target group's deregistration delay (alb.tf, 30 s) drains it first, then ECS sends
     # SIGTERM, then after stopTimeout SIGKILL. The gateway's own ShutdownTimeout, the time the process
     # gives its in-flight work after SIGTERM, is 25 s, a Platform.Hosting constant (#363) this module
-    # names and does not read. The relations F1 rests on: the drain (30) covers the 21 s a refresh is
-    # bounded by (G1 on #332), ShutdownTimeout (25) covers it too, and stopTimeout (30) is at least
-    # ShutdownTimeout, so the process ends its shutdown on its own terms and is never killed through
-    # it. On the gateway alone: the mock API holds no session and no lease. 30 is also Fargate's
-    # default, written down because F1 depends on it.
+    # names and does not read. The relations F1 rests on: ShutdownTimeout (25) exceeds the refresh
+    # holder's 20 s durable-write deadline, timed from its acquire's send (the 21 s lease less 1 s of
+    # skew), so a successful refresh admitted before the host is told to stop writes its rotated
+    # token before the host stops; and stopTimeout (30) is at least ShutdownTimeout, so the process
+    # ends its shutdown on its own terms and is never killed through it. The durable write is the
+    # promise, not every request's completion: F3b's failed or unknown write and F4's check-to-send
+    # pause are its exceptions, and a loser's wait is F2's and F3's, which no number here bounds
+    # (#332 F1; P2-3's second amendment, decision 2). The drain (alb.tf) promises no refresh's
+    # completion. On the gateway alone: the mock API holds no session and no lease. 30 is also
+    # Fargate's default, written down because F1 depends on it.
     # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
     stopTimeout = 30
 
@@ -270,7 +275,16 @@ resource "aws_ecs_service" "gateway" {
   name            = local.service_name
   cluster         = aws_ecs_cluster.cell.id
   task_definition = aws_ecs_task_definition.gateway.arn
-  desired_count   = 1
+  desired_count   = var.multi_task ? 2 : 1
+
+  # Two tasks over two private subnets in two zones (#347 Q14). Fargate takes no placement strategy
+  # and spreads tasks across zones on a best effort; rebalancing starts a task in the zone with
+  # fewest and stops one in the zone with most when the spread goes uneven. Set explicitly because
+  # an update leaves a service that never had a value DISABLED. #348 shows one task per zone on
+  # the deployed cell.
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement.html#fargate-launch-type
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-rebalancing.html
+  availability_zone_rebalancing = var.multi_task ? "ENABLED" : null
 
   # Fargate by launch type rather than by capacity provider: the cell has no EC2 capacity to fall
   # back to, so a capacity-provider strategy would be a second way of saying the same thing.
@@ -284,8 +298,13 @@ resource "aws_ecs_service" "gateway" {
   enable_execute_command = true
 
   # Continuity (#347). One task always serves during a roll: the replacement is started, and healthy
-  # in the target group, before a task is deregistered and drained. These are ECS's defaults, written
-  # down because F1 rests on them: at minimum healthy 50 a one-task service would be stopped first.
+  # in the target group, before a task is deregistered and drained. These are ECS's defaults for a
+  # replica service, written down because F1 rests on them. ECS keeps desiredCount x
+  # minimumHealthyPercent/100 tasks running, rounded up, and starts up to desiredCount x
+  # maximumPercent/100, rounded down
+  # (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeploymentConfiguration.html). So
+  # 100 keeps every task serving at any count; 50 would keep the one task of a one-task cell, by the
+  # rounding, but would let a two-task cell stop one of its two before its replacement is healthy.
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
@@ -312,13 +331,16 @@ resource "aws_ecs_service" "gateway" {
   health_check_grace_period_seconds = 60
 
   network_configuration {
-    subnets         = [for subnet in aws_subnet.public : subnet.id]
+    subnets         = [for subnet in(var.multi_task ? aws_subnet.private : aws_subnet.public) : subnet.id]
     security_groups = [aws_security_group.task.id]
 
-    # The cell has no NAT gateway, so this public address is the task's only route out, to Cognito,
-    # S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security group
-    # accepts the gateway's port from the ALB security group alone (test P-06).
-    assign_public_ip = true
+    # Phase 1's cell has no NAT gateway, so this public address is the task's only route out, to
+    # Cognito, S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security
+    # group accepts the gateway's port from the ALB security group alone (test P-06). Under
+    # multi_task the tasks sit in the private subnets with no address, and go out through the NAT
+    # gateway and the two gateway endpoints (network.tf); P-06's second sentence then reads as "the
+    # task has no public address" (#583).
+    assign_public_ip = !var.multi_task
   }
 
   load_balancer {
