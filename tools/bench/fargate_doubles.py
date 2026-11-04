@@ -114,6 +114,7 @@ def world(plans=None, **changes) -> dict:
         "service_gone_after": None,              # describe-services names no service from this restart on
         "list_tasks_fail_at_poll": None,         # this list-tasks call (1-based) fails ThrottlingException
         "list_tasks_garbage_at_poll": None,      # this list-tasks call (1-based) exits 0 with no JSON
+        "update_service_fail_at": None,          # this restart's (1-based) update-service fails ThrottlingException
     }
     document.update(changes)
     return document
@@ -303,6 +304,9 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
             and options.get("force-new-deployment") is True and set(options) == {"cluster", "service", "force-new-deployment", "output"}:
         if document["restart"] >= len(document["plans"]):
             raise Unexpected("a restart the world has no plan for")
+        if document["update_service_fail_at"] == document["restart"] + 1:
+            save(case, document)
+            return fail("ThrottlingException")
         index = document["restart"]
         entry = document["plans"][index]
         document["restart"] += 1

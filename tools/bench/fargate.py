@@ -64,19 +64,24 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
 **Endings** (#286 Q148; Q8):
   0  ten clean restarts
   2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
-     update-service (no Region, no outputs document for it, no credentials, a missing tool, the
-     service not stable on gatewayImage); nothing is written
+     update-service is sent (no Region, no outputs document for it, no credentials, a missing tool,
+     the service not stable on gatewayImage); nothing is written
   3  a breach: the scheduler stopped the new task for health, past the T0 + 60 s hard bound. No
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
   4  incomplete: a deployment not stable within the waiter's bound, an expected log line absent
      after a bounded wait, the probe never reaching the new task, another stop, or any other
-     failure once restart 1's update-service was issued; the files hold the restarts so far,
-     marked incomplete with the reason
+     failure once restart 1's update-service was sent, a failure of that call itself included,
+     since the service may have changed; the files hold the restarts so far, marked incomplete
+     with the reason
 
 **Secrecy** (Q7). No ARN, repository URI or account id reaches the .txt, the .json or stderr: tasks
 by id, an AWS error by its code, and every line written passed through redact(), which replaces
-each of the three with a placeholder.
+each of the three with a placeholder. One exception: a twelve-digit run touching a letter or a digit
+is taken for part of a longer identifier (a digest, a task id) and kept, so another account's id is
+masked only where it stands alone; the caller's own is masked anywhere. Nothing this script reads
+puts another account's id against a letter: ARNs and repository URIs are replaced first, and an AWS
+error is reduced to its code.
 """
 
 from __future__ import annotations
@@ -137,11 +142,12 @@ _TWELVE = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 
 def redact(text: str, account: Optional[str] = None) -> str:
     """Every ECR repository URI becomes <repository> (an image keeps its @digest), every ARN <arn>
-    and every twelve-digit run standing alone <account id>, which an account id always is (the
-    rule tunnel.sh's session filter keeps), so an account other than the caller's, or one redacted
-    before the caller's is known, is still masked. A run inside a longer run of digits or letters,
-    as in a sha256 digest or a task id, is no account id and is kept. The repository goes first, while its host still starts
-    with the account; then the account itself, in case it sits inside a longer run of digits."""
+    and every twelve-digit run standing alone <account id> (the rule tunnel.sh's session filter
+    keeps), so an account other than the caller's, or one redacted before the caller's is known,
+    is still masked where it stands alone. A run touching a letter or a digit, as in a sha256
+    digest or a task id, is taken for part of a longer identifier and kept, even when it is another
+    account's id (the Secrecy paragraph's one exception). The repository goes first, while its host
+    still starts with the account; then the caller's account itself, masked wherever it sits."""
     text = _REPOSITORY.sub("<repository>", text)
     if account:
         text = text.replace(account, "<account id>")
@@ -941,17 +947,19 @@ def main(argv: List[str]) -> int:
             try:
                 bench.restart(index)
             except Refused as refusal:
-                if index == 1 and "deployment" not in bench.restarts[-1]:
+                if index == 1 and bench.updates_issued == 0:
                     bench.restarts.pop()
                     err(str(refusal), bench.account)
                     return EXIT_USAGE
-                # update-service was issued, so this is no refusal before restart 1 (Q8): what was
+                # update-service was sent, so this is no refusal before restart 1 (Q8): what was
                 # measured is written, marked incomplete.
                 raise Incomplete(str(refusal)) from refusal
             except AwsError as error:
-                # Before restart 1's update-service nothing has changed on the service, so this is
-                # preflight's ending (Endings: 2, nothing written), not an incomplete run.
-                if index == 1 and "deployment" not in bench.restarts[-1]:
+                # Before restart 1's update-service is sent nothing has changed on the service, so
+                # this is preflight's ending (Endings: 2, nothing written), not an incomplete run.
+                # A failure of that call itself is past this point (Endings: 4): updates_issued
+                # counts the call before it is sent, and one predicate decides all three cases.
+                if index == 1 and bench.updates_issued == 0:
                     bench.restarts.pop()
                     err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
                     return EXIT_USAGE

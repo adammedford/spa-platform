@@ -432,6 +432,34 @@ class Endings(CaseBase):
         self.assertNotIn("Traceback", run.stderr)
         self.assertNoSecrets(run)
 
+    def test_any_other_failure_once_restart_1s_update_service_is_out_writes_the_restart_and_exits_4(self):
+        # The new task's createdAt is read after update-service was sent: the service may have
+        # changed, so this is no failure before restart 1 (Endings: 4), and restart 1 is kept.
+        plans = [plan() for _ in range(10)]
+        plans[0] = plan(bad_created_at=True)
+        run = run_case(world(plans))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual("an unexpected ValueError", run.json["reason"])
+        self.assertEqual([False], [r["complete"] for r in run.json["restarts"]])
+        self.assertIsNotNone(run.txt)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
+    def test_a_failed_update_service_on_restart_1_writes_the_restart_and_exits_4(self):
+        # The call was sent, so the service may have changed (Endings: 4): the same predicate as
+        # any other failure past that point, not the exit 2 of a failure before it.
+        run = run_case(world(update_service_fail_at=1))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual("an AWS call failed (ThrottlingException)", run.json["reason"])
+        self.assertEqual([False], [r["complete"] for r in run.json["restarts"]])
+        self.assertIsNotNone(run.txt)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
     def test_an_aws_failure_on_restart_1_before_its_update_service_exits_2_and_writes_nothing(self):
         # Preflight's list-tasks is the first; restart 1's, before its update-service, the second.
         run = run_case(world(list_tasks_fail_at_poll=2))
@@ -600,7 +628,8 @@ class Arithmetic(unittest.TestCase):
 
     def test_redact_masks_any_twelve_digit_run_without_the_known_account(self):
         # The fallback: with no account known (main()'s first err() calls) or another account's id
-        # in the text, every twelve-digit run still becomes <account id>.
+        # in the text, every twelve-digit run standing alone still becomes <account id>. One that
+        # touches a letter or a digit is kept (test_redact_keeps_a_twelve_digit_run_inside_a_hex_id).
         other = "999988887777"
         for account in (None, ACCOUNT):
             with self.subTest(account=account):
@@ -612,7 +641,6 @@ class Arithmetic(unittest.TestCase):
     def test_redact_keeps_a_twelve_digit_run_inside_a_hex_id(self):
         # A sha256 digest (and a task id) can hold twelve digits in a row; that is no account id.
         digest = "sha256:" + "f" + "123456789012" + "e" * 51
-        self.assertEqual(71, len(digest))
         other = "999988887777"
         for account in (None, ACCOUNT):
             with self.subTest(account=account):
