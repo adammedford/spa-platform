@@ -27,9 +27,12 @@ end, its night-wide number unique across the issue (ADR-0021 decision 2). A ques
 number when `#<n>` appears anywhere in it, matched whole, so #35 is not found in #352 nor in a
 decision URL's `#issuecomment-`. The heading's own ticket number selects nothing by itself
 (#531): a question is listed when its own text, its `(#<ticket> Q<k>)` source tag included, names
-a given number. Every question the night posts opens with that tag, so a ticket the landing closes
-has its questions listed, which is what the landing wants; a question under a heading naming #<n>
-whose text and tag name no given number is not.
+a given number. A question a ticket's grill numbered opens with that tag, so a ticket the landing
+closes has those questions listed, which is what the landing wants; a question under a heading
+naming #<n> whose text and tag name no given number is not. That includes the questions the night
+posts untagged, with the night-wide number alone: a status note's question and a partial's choice
+question (.claude/workflows/overnight.js step 1b, #632) are listed only when their own text names
+a given number.
 
 A Confirm comment is one by the human's account whose body begins `Confirm`, read as
 .claude/workflows/morning.js reads it ("the questions, read here", readConfirmations): its first
