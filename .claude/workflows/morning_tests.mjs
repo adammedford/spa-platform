@@ -1505,6 +1505,21 @@ try {
     if (JSON.stringify(sentTitles(tied)) !== JSON.stringify([F_TIE_R])) fail(`#514: with a comment and a review record in one second, the morning sent ${JSON.stringify(sentTitles(tied))}, expected the review's row only`)
     if (!advanced(tied, S1)) fail(`#514: the same-second records did not read as complete:\n${windowOf(tied)}`)
 
+    // The index picks the latest record by latestRecordOf's account rule too (#744): a record posted
+    // after the owner's from an account the repository did not let in, as a comment or as a COMMENTED
+    // review, is no record, so the owner's is the one fetched and filed and coverage completes. Were the
+    // index to pick the outsider's, latestRecordOf would refuse its body downstream and the owner's row
+    // would go unfiled, the checkpoint kept.
+    const F_MEMBER = 'A finding the repository\'s own account carried'
+    const F_OUT_C = 'A finding an outsider\'s later comment carried'
+    const F_OUT_R = 'A finding an outsider\'s later review carried'
+    const outsiders = { prs: [{ number: 761, state: 'OPEN', mergedAt: '', comments: [rec(761, 61, '2026-10-29T13:00:00Z', F_MEMBER), { ...rec(761, 62, '2026-10-29T14:00:00Z', F_OUT_C), author_association: 'NONE' }], reviews: [{ ...rec(761, 63, '2026-10-29T15:00:00Z', F_OUT_R, true), author_association: 'CONTRIBUTOR' }] }], filed: [] }
+    const outRun = await execute(newRepo(), { date: DATE }, { followUps: outsiders, handovers: PRIOR, startedAt: S1 })
+    const fetched = outRun.labels.filter((l) => l.startsWith('followups-batch:')).flatMap((l) => (jsonAfter(outRun.prompt(l), 'RECORDS') || []).map((r) => r.url))
+    if (JSON.stringify(fetched) !== JSON.stringify([`${PRL(761)}#issuecomment-61`])) fail(`#744: with an outsider's comment and review after the owner's record, the record reader was asked for ${JSON.stringify(fetched)}, expected the owner's record only`)
+    if (JSON.stringify(sentTitles(outRun)) !== JSON.stringify([F_MEMBER])) fail(`#744: with an outsider's records after the owner's, the morning sent ${JSON.stringify(sentTitles(outRun))}, expected the owner's row only`)
+    if (!advanced(outRun, S1)) fail(`#744: an outsider's records after the owner's did not read as complete coverage:\n${windowOf(outRun)}`)
+
     // Box 8: reader output missing a PR's state, or carrying a malformed timestamp, is incomplete.
     const F_OK = 'A finding beside the malformed one'
     const good = { number: 732, state: 'MERGED', mergedAt: '2026-10-29T14:00:00Z', comments: [rec(732, 32, '2026-10-29T13:00:00Z', F_OK)], reviews: [] }
