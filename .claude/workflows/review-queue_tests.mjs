@@ -1632,6 +1632,44 @@ try {
     if (!/parents/.test(env.prompts['inventory:601'] || '') || !/--format=%P/.test(env.prompts['inventory:601'] || '')) fail('the inventory prompt does not ask for each commit\'s parent count from git log --format=%P')
   }
 
+  // The closing-reference rule is land.sh's, row for row (#745). The script's copy was kept in step
+  // with tools/land.sh by a comment alone, and when #578 widened land.sh's rule to every closing
+  // keyword anywhere in a line and refused the owner/repo#n form, the copy still read only a Closes
+  // at a line's start, so a `Fixes #n` no commit names passed the review and was refused at the
+  // landing. fixtures/closing-references.json is the table both answer: tools/land_tests.py runs
+  // land.sh against every row, and this runs the script end to end on every row, one pull request
+  // each with its commits as one-parent commits. A row naming tickets stops its pull request at stage
+  // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form
+  // stops it naming that form and asking for Closes #n; a row naming none is reviewed to its verdict.
+  checks++
+  {
+    const table = path.join(here, 'fixtures', 'closing-references.json')
+    let rows = []
+    try { rows = JSON.parse(fs.readFileSync(table, 'utf8')).rows } catch (e) { fail(`the shared table ${table} did not read: ${e.message}`) }
+    if (!Array.isArray(rows) || !rows.length) fail(`the shared table ${table} has no rows`)
+    const C1 = sha('e')
+    const SERVED = {}
+    const numbers = rows.map((_, i) => 700 + i)
+    rows.forEach((row, i) => {
+      SERVED[numbers[i]] = pr(numbers[i], ['docs/z.md'], { description: row.description, commitMessages: row.commits.map((message) => ({ sha: C1, message, parents: 1 })) })
+    })
+    const env = run({ prs: numbers }, SERVED)
+    const result = await execute(env)
+    rows.forEach((row, i) => {
+      const n = numbers[i]
+      const r = resultOf(n, result)
+      const what = `row ${i} (${row.why}) as PR ${n}`
+      const stops = row.otherRepository ? `closes: the description closes ${row.otherRepository}, the owner/repo#n form` : row.unnamed.length ? `closes: the description closes ${row.unnamed.map((t) => '#' + t).join(', ')}, which` : ''
+      if (stops) {
+        if (r.outcome !== 'failed' || !String(r.stage).startsWith(stops)) fail(`${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected a stop beginning ${JSON.stringify(stops)}`)
+        if (row.otherRepository && !/Write Closes #n/.test(String(r.stage))) fail(`${what}: the stage ${JSON.stringify(r.stage)} does not ask for Closes #n`)
+        const ran = env.calls.filter((c) => c.split(':')[1] === String(n) && !c.startsWith('inventory:'))
+        if (ran.length) fail(`${what}: stopped at closes, but ${ran.join(', ')} ran`)
+        if (env.posted.some((p) => p.n === n)) fail(`${what}: stopped at closes, but a comment was posted`)
+      } else if (r.outcome === 'failed' || r.verdict !== 'merge') fail(`${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, verdict ${r.verdict}, expected a review that reaches its verdict`)
+    })
+  }
+
   // The return leads with one line per request (#294): the completion notice cuts the return short,
   // and on #287's runs the verdict and the mutation rows were past the cut. summary is the first
   // field, one line per pull request with its number, head, verdict, record URL, verified finding and

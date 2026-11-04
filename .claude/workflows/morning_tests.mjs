@@ -1505,6 +1505,23 @@ try {
     if (JSON.stringify(sentTitles(tied)) !== JSON.stringify([F_TIE_R])) fail(`#514: with a comment and a review record in one second, the morning sent ${JSON.stringify(sentTitles(tied))}, expected the review's row only`)
     if (!advanced(tied, S1)) fail(`#514: the same-second records did not read as complete:\n${windowOf(tied)}`)
 
+    // The index picks the latest record by latestRecordOf's account rule too (#744): a record posted
+    // after the owner's from an account the repository did not let in, as a comment or as a COMMENTED
+    // review, is no record, so the owner's is the one fetched and filed and coverage completes. Were the
+    // index to pick the outsider's, latestRecordOf would refuse its body downstream and the owner's row
+    // would go unfiled, the checkpoint kept.
+    const F_MEMBER = 'A finding the repository\'s own account carried'
+    const F_OUT_C = 'A finding an outsider\'s later comment carried'
+    const F_OUT_R = 'A finding an outsider\'s later review carried'
+    const outsiders = { prs: [{ number: 761, state: 'OPEN', mergedAt: '', comments: [rec(761, 61, '2026-10-29T13:00:00Z', F_MEMBER), { ...rec(761, 62, '2026-10-29T14:00:00Z', F_OUT_C), author_association: 'NONE' }], reviews: [{ ...rec(761, 63, '2026-10-29T15:00:00Z', F_OUT_R, true), author_association: 'CONTRIBUTOR' }] }], filed: [] }
+    const outRun = await execute(newRepo(), { date: DATE }, { followUps: outsiders, handovers: PRIOR, startedAt: S1 })
+    const fetched = outRun.labels.filter((l) => l.startsWith('followups-batch:')).flatMap((l) => (jsonAfter(outRun.prompt(l), 'RECORDS') || []).map((r) => r.url))
+    if (JSON.stringify(fetched) !== JSON.stringify([`${PRL(761)}#issuecomment-61`])) fail(`#744: with an outsider's comment and review after the owner's record, the record reader was asked for ${JSON.stringify(fetched)}, expected the owner's record only`)
+    if (JSON.stringify(sentTitles(outRun)) !== JSON.stringify([F_MEMBER])) fail(`#744: with an outsider's records after the owner's, the morning sent ${JSON.stringify(sentTitles(outRun))}, expected the owner's row only`)
+    if (!advanced(outRun, S1)) fail(`#744: an outsider's records after the owner's did not read as complete coverage:\n${windowOf(outRun)}`)
+    // Nor is an outsider's record counted: the window line's counts read only the owner's comment.
+    if (!windowOf(outRun).includes('1 issue-comment records since, 0 COMMENTED-review records since')) fail(`#744: the window line counts an outsider's records:\n${windowOf(outRun)}`)
+
     // Box 8: reader output missing a PR's state, or carrying a malformed timestamp, is incomplete.
     const F_OK = 'A finding beside the malformed one'
     const good = { number: 732, state: 'MERGED', mergedAt: '2026-10-29T14:00:00Z', comments: [rec(732, 32, '2026-10-29T13:00:00Z', F_OK)], reviews: [] }
@@ -1522,6 +1539,21 @@ try {
       if (windowOf(r).startsWith('Follow-ups window: checkpoint advanced')) fail(`#514 box 8: ${what} advanced the checkpoint:\n${windowOf(r)}`)
       if (!windowOf(r).includes('coverage incomplete') || !names.test(windowOf(r))) fail(`#514 box 8: ${what} is not reported incomplete:\n${windowOf(r)}`)
       if (!(env.filed || []).some((i) => i.title === F_OK)) fail(`#514 box 8: beside ${what}, the well-formed PR's finding was not filed`)
+    }
+    // A discovery start earlier than the checkpoint (a clock read that went backwards, or a boundary
+    // recorded from a clock ahead of this one) would move the checkpoint back if advanced to, so judgeWindow
+    // refuses it: the checkpoint is kept, the line names both times, and what was read is still filed
+    // (#743). A start equal to the checkpoint is no regression, since windows overlap by design, and advances.
+    {
+      const EARLY = '2026-10-29T09:59:59Z'
+      const env = newRepo()
+      const r = await execute(env, { date: DATE }, { handovers: PRIOR, startedAt: EARLY, followUps: { prs: [good], filed: [] } })
+      if (!keptAt(r, CP)) fail(`#743: a discovery start before the checkpoint did not keep the checkpoint at ${CP}:\n${windowOf(r)}`)
+      if (!windowOf(r).includes('coverage incomplete')) fail(`#743: a discovery start before the checkpoint reads as complete coverage:\n${windowOf(r)}`)
+      if (!windowOf(r).includes(`the discovery start ${EARLY} is before the checkpoint ${CP}`)) fail(`#743: the window line does not name the discovery start that is before the checkpoint:\n${windowOf(r)}`)
+      if (!(env.filed || []).some((i) => i.title === F_OK)) fail('#743: beside a discovery start before the checkpoint, the finding that was read was not filed')
+      const same = await execute(newRepo(), { date: DATE }, { handovers: PRIOR, startedAt: CP, followUps: { prs: [good], filed: [] } })
+      if (!advanced(same, CP)) fail(`#743: a discovery start equal to the checkpoint did not advance:\n${windowOf(same)}`)
     }
 
     // Box 9: with no checkpoint, the morning backfills every PR into main, not the open ones only.

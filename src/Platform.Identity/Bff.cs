@@ -29,7 +29,7 @@ internal static class Bff
 
     /// <summary>
     /// <c>GET /bff/session</c>: the user, the session's expiry and the antiforgery request token, or 401
-    /// with a problem body and never a redirect. The claims are the three the ticket keeps (task 3.5), and
+    /// with a problem body and never a redirect, or 503 under <c>auth.store</c> when the read fails (#727). The claims are the three the ticket keeps (task 3.5), and
     /// no token the session holds is ever written here (N-23).
     /// </summary>
     private static async Task SessionAsync(HttpContext context)
@@ -39,7 +39,19 @@ internal static class Bff
         // It carries the antiforgery request token, which is per user, so no cache keeps it.
         context.Response.Headers.CacheControl = "no-store";
 
-        if (await SessionOfAsync(context, app) is not { } record)
+        SessionRecord? record;
+        try
+        {
+            record = await SessionOfAsync(context, app);
+        }
+        catch (SessionStoreUnavailableException e)
+        {
+            // auth.store (#727): the read failed, so whether there is a session is unknown; nothing is cleared.
+            await StoreFailure.EndAsync(context, e.Operation);
+            return;
+        }
+
+        if (record is null)
         {
             // An answer for no cookie, a rejection for a dead one, which KeyOf has noted; one body.
             await Problems.WriteAsync(context, Problems.Unauthenticated);
@@ -83,14 +95,26 @@ internal static class Bff
 
         AppSessions sessions = context.RequestServices.GetRequiredService<AppSessions>();
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
-        if (sessions.KeyOf(context, session, refusesDeadSession: false) is { } key)
+        try
         {
-            // Released before the sign-out, whose ungated removal needs no gate and should wait on none.
-            using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
-            await turn.EndAsync();
+            if (sessions.KeyOf(context, session, refusesDeadSession: false) is { } key)
+            {
+                // Released before the sign-out, whose ungated removal needs no gate and should wait on none.
+                using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
+                await turn.EndAsync();
+            }
+
+            // Inside the try: the sign-out's removal reads the record first, and the cookie handler
+            // expires the cookie only once that removal has returned.
+            await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
+        }
+        catch (SessionStoreUnavailableException e)
+        {
+            // auth.store (#727): the discard did not complete, so no login starts and no cookie is cleared.
+            await StoreFailure.EndAsync(context, e.Operation);
+            return;
         }
 
-        await context.SignOutAsync(SchemeNames.Cookie(app.AppId));
         await context.ChallengeAsync(SchemeNames.Oidc(app.AppId), new AuthenticationProperties { RedirectUri = returnUrl });
     }
 
@@ -103,9 +127,10 @@ internal static class Bff
     /// The F11 exception to contracts/http-contract.md's "always removes the session" (#386, recorded on
     /// #332): a remove the session store cannot confirm by <c>StoreDeadline</c> is reported on one line by
     /// <see cref="SessionEnd"/> as not confirmed, and this logout still clears both cookies and redirects
-    /// as usual (#386 Q187, Q191). A store read that fails before the remove keeps F17's 500 with both
-    /// cookies intact (Q188). <c>GET /bff/login</c>'s discard and the token source's end on
-    /// <c>invalid_grant</c> take no such exception and keep F17's 500 (Q189).
+    /// as usual (#386 Q187, Q191). A store read that fails before the remove, under the session's gate,
+    /// ends under <c>auth.store</c> with both cookies intact (Q188, #727); the cookie handler's own read is
+    /// <c>UsePlatformShellGate</c>'s to end. <c>GET /bff/login</c>'s discard and the token source's end on
+    /// <c>invalid_grant</c> take no F11 exception and end under <c>auth.store</c> too (Q189, #727).
     /// </summary>
     private static async Task LogoutAsync(HttpContext context)
     {
@@ -116,7 +141,17 @@ internal static class Bff
         // cookies still cleared, so the request ends in no rejection and carries no rule id.
         if (context.RequestServices.GetRequiredService<AppSessions>().KeyOf(context, session, refusesDeadSession: false) is { } key)
         {
-            await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(context, app, key);
+            try
+            {
+                await context.RequestServices.GetRequiredService<SessionEnd>().EndAsync(context, app, key);
+            }
+            catch (SessionStoreUnavailableException e)
+            {
+                // The read under the gate failed (SessionEnd catches only its remove, F11): auth.store,
+                // with neither cookie cleared and no provider logout (#727).
+                await StoreFailure.EndAsync(context, e.Operation);
+                return;
+            }
         }
 
         context.RequestServices.GetRequiredService<ICsrfTokens>().Clear(context);

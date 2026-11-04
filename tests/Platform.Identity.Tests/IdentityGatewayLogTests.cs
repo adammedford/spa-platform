@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,5 +36,24 @@ public sealed class IdentityGatewayLogTests
             && line.Category == typeof(OpenIdConnectHandler).FullName
             && line.Message.StartsWith("MessageReceived: ", StringComparison.Ordinal)
             && line.Message.Contains("code=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_apps_derived_handlers_log_under_the_framework_handlers_categories()
+    {
+        // #727's derived handlers (PlatformHandlers.cs) hand their base the framework handler's category,
+        // so Platform.Telemetry's Microsoft.AspNetCore.Authentication floor (N-16) still holds their lines.
+        // Mutation: give either handler the plain logger factory in place of FrameworkCategory, and its
+        // lines are written under the derived type's name: this test goes red for each.
+        CapturedLog log = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton(log.Provider));
+
+        await gateway.LoginAsync(App1);
+
+        Assert.Contains(log.Lines, line => line.Category == typeof(CookieAuthenticationHandler).FullName);
+        Assert.Contains(log.Lines, line => line.Category == typeof(OpenIdConnectHandler).FullName);
+        Assert.DoesNotContain(log.Lines, line =>
+            line.Category == typeof(PlatformCookieHandler).FullName || line.Category == typeof(PlatformOidcHandler).FullName);
     }
 }

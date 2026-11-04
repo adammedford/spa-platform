@@ -25,6 +25,13 @@ never the checkout"). It reads:
   inside the solution is a finding: the central file forbids it. The spike projects sit outside the
   solution and pin their own versions; they are read into `spikes` as part of the evidence record
   and never proposed for a move;
+- every tracked file named `Dockerfile`: each `FROM` that names an image, with its tag and the
+  `@sha256:` digest beside it, into `baseImages`, as the `base-images` family (#781). The family is
+  report-only, like the SDK's: a digest is moved by a commit to its Dockerfile, and no registry is
+  read here, so each row is `not-checked`. A `FROM` with no digest is a finding, `unpinned-base-image`,
+  since its tag floats and two builds of one commit can build on different layers. A `FROM` naming
+  an earlier stage, or `scratch`, names no base. The `families` command leaves this family out, as
+  the sweep's arguments do: no Check or Trial agent reads it, and the table carries its rows;
 - every tracked Markdown file outside `.scratch/`, for a line that names a pin (by its id or an
   alias below) and its pinned version. Each is a document a move makes stale (#82, user story 8). A
   line under docs/adr/ is also an evidence tie: the decision record citing a run or a constant at
@@ -61,7 +68,7 @@ and `behind-patch` (the same major and minor); otherwise `current`. A prerelease
 `not-checked` is a pin with no version list, or, in render, a family outside the run's scope.
 
 **render** prints the report table from inventory JSON: one row per pin in family order, then the
-SDK row and any Terraform rows. The same JSON renders to the same bytes.
+SDK row, a row per base image and any Terraform rows. The same JSON renders to the same bytes.
 
 Exit codes: 0 done, 2 bad arguments or unreadable input, 3 nuget.org unreachable (a halt).
 """
@@ -121,6 +128,9 @@ FAMILIES = [
                  "Microsoft.CodeAnalysis.BannedApiAnalyzers": ["BannedApiAnalyzers"]}},
     {"id": "sdk", "name": "The SDK", "frameworkWide": False, "reportOnly": True, "members": {}},
 ]
+# Not in FAMILIES, which the pins-sweep workflow is held to: the base images are read from the
+# Dockerfiles, not the pins file, and nothing in the sweep checks or trials them (#781).
+BASE_IMAGE_FAMILY = {"id": "base-images", "name": "Base images", "frameworkWide": False, "reportOnly": True, "members": {}}
 TERRAFORM_FAMILY = {"id": "terraform", "name": "Terraform providers", "frameworkWide": False, "reportOnly": False, "members": {}}
 FRAMEWORK_PIN = "Microsoft.AspNetCore.Authentication.OpenIdConnect"
 DECISION = re.compile(r"\b(D-\d+)\b")
@@ -479,6 +489,47 @@ def lock_files(tree: Tree, provider_versions):
     return rows
 
 
+# A Dockerfile's FROM: optional flags such as --platform, the image, and an optional stage name.
+# https://docs.docker.com/reference/dockerfile/#from
+FROM_LINE = re.compile(r"^FROM\s+(?:--\S+\s+)*(?P<ref>\S+)(?:\s+AS\s+(?P<stage>\S+))?\s*$", re.I)
+
+
+def split_reference(ref: str):
+    """An image reference as (image, tag, digest): `repo[:tag][@sha256:hex]`. A colon after the last
+    slash is the tag's, so a registry's port is never read as one."""
+    name, _, digest = ref.partition("@")
+    slash = name.rfind("/")
+    colon = name.rfind(":")
+    if colon > slash:
+        return name[:colon], name[colon + 1:], digest
+    return name, "", digest
+
+
+def base_images(tree: Tree):
+    """Each base image every tracked Dockerfile names, and a finding for each with no digest."""
+    rows, findings = [], []
+    for path in tree.paths:
+        if posixpath.basename(path) != "Dockerfile":
+            continue
+        stages = set()
+        text = re.sub(r"\\\n", " ", tree.read(path))
+        for line in text.splitlines():
+            m = FROM_LINE.match(line.strip())
+            if not m:
+                continue
+            ref, stage = m.group("ref"), (m.group("stage") or "")
+            if ref.lower() not in stages and ref.lower() != "scratch":
+                image, tag, digest = split_reference(ref)
+                rows.append({"dockerfile": path, "stage": stage, "image": image, "tag": tag, "digest": digest,
+                             "status": "not-checked"})
+                if not digest:
+                    findings.append({"kind": "unpinned-base-image", "dockerfile": path,
+                                     "image": f"{image}:{tag}" if tag else image})
+            if stage:
+                stages.add(stage.lower())
+    return rows, findings
+
+
 def sdk_row(tree: Tree, releases, framework):
     floor, roll = "", ""
     if tree.has("global.json"):
@@ -544,7 +595,7 @@ def inventory(a):
     families = []
     tests = [p for p in direct if is_test(p)]
     framework = next((p["pinned"] for p in pins if p["id"] == FRAMEWORK_PIN), "")
-    table = FAMILIES + ([TERRAFORM_FAMILY] if a.terraform else [])
+    table = FAMILIES + [BASE_IMAGE_FAMILY] + ([TERRAFORM_FAMILY] if a.terraform else [])
     for f in table:
         members = [p for p in pins if p["family"] == f["id"]]
         if f["members"] and not members:
@@ -556,10 +607,17 @@ def inventory(a):
                          "reportOnly": f["reportOnly"], "frameworkWide": f["frameworkWide"],
                          "trialScope": scope, "smoke": f["frameworkWide"],
                          "status": min(statuses, key=PRECEDENCE.index) if statuses else "not-checked"})
+    images, unpinned = base_images(tree)
+    findings.extend(unpinned)
     out = {"commit": tree.commit, "pins": pins, "families": families, "transitives": transitives,
-           "findings": findings, "spikes": spikes(tree), "sdk": sdk_row(tree, releases, framework)}
+           "findings": findings, "spikes": spikes(tree), "sdk": sdk_row(tree, releases, framework),
+           "baseImages": images}
     sdk_family = next(f for f in families if f["id"] == "sdk")
     sdk_family["status"] = out["sdk"]["status"]
+    # Its members are the images by tag, and its scope the Dockerfiles naming them.
+    base = next(f for f in families if f["id"] == BASE_IMAGE_FAMILY["id"])
+    base["members"] = [f"{r['image']}:{r['tag']}" if r["tag"] else r["image"] for r in images]
+    base["trialScope"] = sorted({r["dockerfile"] for r in images})
     if a.terraform:
         out["terraform"] = lock_files(tree, load_json(a.provider_versions) if a.provider_versions else {})
         tf = next(f for f in families if f["id"] == "terraform")
@@ -603,6 +661,12 @@ def render(data, scope=None) -> str:
         if s.get("securityRelease"):
             note = f"security release {s['securityRelease']}; " + note
         rows.append(f"| SDK (global.json) | {cell(s.get('floor'))} ({cell(s.get('rollForward'))}) | {cell(newest)} | {status} | every project | {cell(note)} |")
+    for b in data.get("baseImages", []) or []:
+        ref = f"{b['image']}:{b['tag']}" if b.get("tag") else b["image"]
+        where = f"{b['dockerfile']}, {b['stage']}" if b.get("stage") else b["dockerfile"]
+        note = "no registry read; the digest moves with a commit to the Dockerfile" if b.get("digest") else "unpinned: the tag floats"
+        rows.append(f"| {cell(ref)} ({cell(where)}) | {cell(b.get('digest') or 'unpinned')} | ? | {b.get('status', 'not-checked')} | "
+                    f"{cell(posixpath.dirname(b['dockerfile']))} | {cell(note)} |")
     for t in data.get("terraform", []) or []:
         status = t["status"] if scope is None or "terraform" in scope else "not-checked"
         rows.append(f"| {cell(t['provider'])} ({cell(t['lockFile'])}) | {cell(t['pinned'])} | {cell(t.get('newest') or '?')} | {status} | {cell(posixpath.dirname(t['lockFile']))} | {cell('constraint ' + t.get('constraints', ''))} |")

@@ -146,17 +146,20 @@ export const meta = {
 // low Spec finding quoting its sentence, which the comment carries beside the head comparison's and
 // the verdict weighs but does not re-take. It carries; it does not hold.
 //
-// A Closes line no commit names (#688). tools/land.sh refuses a description whose Closes #n names a
-// ticket no non-merge commit since the fork point names as #n or issue-n (#566), so a merge record on
-// such a head clears what the landing then refuses (#683's record on 3982a6f, which cost an empty
-// commit and a delta review). The inventory reports each commit's parent count beside its message,
-// and after the skip of a recorded head the script applies land.sh's rule to the description and the
-// messages: a ticket no commit with fewer than two parents names fails the pull request at stage
-// closes, before any range or axis agent runs, with each #n named and land.sh's remedy (name it in the
-// commit that did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n).
-// A missing parent count counts as a merge, so the check fails closed. Nothing is posted, and once the
-// head or description is fixed the review runs again on the final head. land.sh stays the gate, since
-// a description can change after a review.
+// A closing reference no commit names (#688). tools/land.sh refuses a description whose closing
+// reference, `Closes #n` or any other form GitHub closes a ticket on (#578), names a ticket no
+// non-merge commit since the fork point names as #n or issue-n (#566), so a merge record on such a
+// head clears what the landing then refuses (#683's record on 3982a6f, which cost an empty commit and
+// a delta review). The inventory reports each commit's parent count beside its message, and after the
+// skip of a recorded head the script applies land.sh's rule to the description and the messages: a
+// ticket no commit with fewer than two parents names fails the pull request at stage closes, before
+// any range or axis agent runs, with each #n named and land.sh's remedy (name it in the commit that
+// did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n), and the
+// owner/repo#n form fails it there too, naming the form and asking for Closes #n. A missing parent
+// count counts as a merge, so the check fails closed. Nothing is posted, and once the head or
+// description is fixed the review runs again on the final head. land.sh stays the gate, since a
+// description can change after a review. The copy of land.sh's rule is held to it by a shared table
+// of rows both test companions run (#745), described where the rule is written below.
 //
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
@@ -1017,27 +1020,44 @@ const laterDateFindings = (inv) => {
   return found
 }
 
-// ---------------------------------------------------------------- a Closes line no commit names
-// The tickets a Closes line names that tools/land.sh would refuse (#688), by land.sh's rule (#566):
-// every line of the description that reads, after optional whitespace, the keyword in any case,
-// whitespace, # and digits, whatever follows them; and n is named only where #n, or issue-n with no
-// letter, digit or underscore before it, appears with no digit after it in the message of a commit
-// whose parent count is an integer below 2, as git log --no-merges keeps. A commit with no parent
-// count does not count, so the check fails closed. Each ticket is named once, in the order given.
-const CLOSES_LINE = /^\s*closes\s+#(\d+)/i
-const unnamedCloses = (inv) => {
-  const tickets = []
-  for (const line of String(inv.description || '').split('\n')) {
-    const m = CLOSES_LINE.exec(line)
-    if (m && !tickets.includes(m[1])) tickets.push(m[1])
+// ---------------------------------------------------------------- a closing reference no commit names
+// What tools/land.sh would refuse in a description (#688), by land.sh's rule (#566, #578), copied
+// because a workflow script runs nothing. The copy is held to land.sh's by a table, not by this
+// comment (#745): fixtures/closing-references.json beside this script holds rows of a description,
+// commit messages and the answer, review-queue_tests.mjs runs this script on every row and
+// tools/land_tests.py runs land.sh on every row, so a change here or there that the other file
+// does not make fails a companion. Change the rule in both files and the table together.
+// The rule, as land.sh's comment gives it. A closing reference is one of GitHub's closing keywords
+// (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved) in any case, with no
+// letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
+// after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
+// POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
+// owner/repo#n, GitHub's form for another repository's ticket, refuses the description whatever
+// else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
+// holding one, the last on that line, which is the match land.sh's greedy prefix finds. Otherwise
+// each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
+// with no digit after it in the message of a commit whose parent count is an integer below 2, as git
+// log --no-merges keeps; a commit with no parent count does not count, so the check fails closed.
+// The tickets are named in the description's order, once for each time they are written, as land.sh
+// names them.
+const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
+const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+)', 'gi')
+const closingReferences = (inv) => {
+  const lines = String(inv.description || '').split('\n')
+  for (const line of lines) {
+    const forms = [...line.matchAll(OTHER_REPOSITORY)]
+    if (forms.length) return { otherRepository: forms[forms.length - 1][1], unnamed: [] }
   }
+  const tickets = lines.flatMap((line) => [...line.matchAll(CLOSING_REFERENCE)].map((m) => m[1]))
   const messages = (inv.commitMessages || [])
     .filter((c) => c && Number.isInteger(c.parents) && c.parents < 2 && typeof c.message === 'string')
     .map((c) => c.message)
-  return tickets.filter((n) => {
+  const unnamed = tickets.filter((n) => {
     const named = new RegExp('(?:#' + n + '|(?<![A-Za-z0-9_])issue-' + n + ')(?!\\d)')
     return !messages.some((msg) => named.test(msg))
   })
+  return { otherRepository: '', unnamed }
 }
 
 // ---------------------------------------------------------------- a rebuilt head
@@ -1100,8 +1120,12 @@ const reviewOne = async (n, res, at) => {
     return { ...res, outcome: 'skipped', stage: '', verdict: latest.verdict, recordUrl: latest.url, skippedBecauseRecorded: true }
   }
 
-  // A Closes line land.sh would refuse stops the pull request before any other agent runs (#688).
-  const unnamed = unnamedCloses(inv)
+  // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
+  const { otherRepository, unnamed } = closingReferences(inv)
+  if (otherRepository) {
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+  }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')
     log(`#${n}: the description closes ${list}, which no non-merge commit names; stopped before the review`)

@@ -119,6 +119,7 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 - AGENTS.md's rules hold: owner paths only (OWNERSHIP.md); an integrator need is a change request, an issue labelled change-request (#408), never an edit and never a file; never log a secret, token, cookie, code or state value.
 - Read contracts/pipeline.md before touching the composed gateway. Its stage order changed at G1b (ADR-0018: UsePlatformTelemetry first); outside that table a stage is named by its entry point, never numbered (CODING_STANDARDS.md).
 - Never run \`dotnet build-server shutdown\`, \`dotnet nuget locals --clear\`, or anything that deletes outside your worktree.
+- Docker Desktop installs \`docker\` in \`~/.docker/bin\`, which your non-login Bash PATH leaves out: begin every Bash call that runs docker with \`export PATH="$HOME/.docker/bin:$PATH" &&\`, since the shell's state resets after every call, and call docker absent only when neither \`command -v docker\` nor \`~/.docker/bin/docker\` finds it, as tools/image-check.sh looks. On 2026-11-02 the lanes for #731 and #732 were skipped for a docker that was installed there (#742).
 - If you start a process by hand (a gateway, the mock API), bind only the port you are given (ASPNETCORE_HTTP_PORTS), and kill it before you return.
 - Commit messages end with the attribution line "${TRAILER}" (or the one this session's own attribution reminder names, if it differs). Never push.`
 
