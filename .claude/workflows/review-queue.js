@@ -727,8 +727,14 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// A unittest subtest prints a parameters parenthesis after the class one, 'test_x (pkg.Class)
+// (k='v')', and is read without it (#793): on #792 the greedy parenthesis took both groups, the
+// name read as the bare test_x, and a candidate Class.test_x red on its own subtest read as caught
+// elsewhere.
 const dotted = (f, withClass = true) => {
-  const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+  const [, head, all] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+  const sub = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*\(.*$/.exec(all || '')
+  const inner = sub ? sub[1] : all
   if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
   return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
 }
@@ -811,8 +817,16 @@ const mutationRow = (n, m, i, got) => {
   // stays as reported. A failing name is the named test when it ends in the named test's whole dotted
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
-  // fails closed to the verdict's check (#695). dotted() above reads each name.
-  const isNamed = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
+  // fails closed to the verdict's check (#695). dotted() above reads each name. A test that names its
+  // whole file, a Python companion listed as one candidate such as 'x_tests.py (companion)' whose
+  // bare name, the text before its first space or '(', is its file's or project's basename, or a test
+  // that is its project path, owns every test in that file: any failing name is its own (#793). On
+  // #791 no failing name could match the cell, so the companion red on its own test read as caught
+  // elsewhere and held.
+  const base = (p) => (p || '').split('/').pop()
+  const bare = (/^[^\s(]*/.exec((m.test || '').trim()) || [''])[0]
+  const wholeFile = !!bare && (bare === base(m.file) || bare === base(m.project) || m.test === m.project)
+  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
