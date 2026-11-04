@@ -46,7 +46,10 @@ TG_ARN = f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/spa-poc/0
 ALB = f"internal-spa-poc-1234567890.{REGION}.elb.amazonaws.com"
 STATE_CANARY = "STATECANARY0123456789"
 COOKIE_CANARY = "COOKIECANARY9876543210"
-SECRETS = (ACCOUNT, STATE_CANARY, COOKIE_CANARY, IMAGE.split("@")[0], "arn:aws")
+# The repository canary is the URI without its account label, so it fails on its own once the
+# account has been redacted out of a URI that was not.
+REPOSITORY_TAIL = IMAGE.split("@")[0].split(".", 1)[1]
+SECRETS = (ACCOUNT, STATE_CANARY, COOKIE_CANARY, REPOSITORY_TAIL, "arn:aws")
 APP_HOST = "app1.spa-poc.test:8443"
 BASE_S = 1792557666           # 2026-10-21T04:41:06Z, startup_tests.py's worked instant
 
@@ -109,6 +112,7 @@ def world(plans=None, **changes) -> dict:
         "next_task": 100,
         "initially_stable": True,
         "service_gone_after": None,              # describe-services names no service from this restart on
+        "list_tasks_fail_at_poll": None,         # this list-tasks call (1-based) fails ThrottlingException
     }
     document.update(changes)
     return document
@@ -268,6 +272,9 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
     elif shape == "ecs list-tasks" and options.get("cluster") == CLUSTER and options.get("service-name") == SERVICE \
             and options.get("desired-status") in (None, "RUNNING") and set(options) <= {"cluster", "service-name", "desired-status", "output"}:
         document["list_polls"] += 1
+        if document["list_tasks_fail_at_poll"] == document["list_polls"]:
+            save(case, document)
+            return fail("ThrottlingException")
         listed = []
         for task in document["tasks"].values():
             if task["desired"] != "RUNNING":

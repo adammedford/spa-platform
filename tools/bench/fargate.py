@@ -26,7 +26,9 @@ revision, and nothing else changes. Before restart 1 the service must be stable 
 the ECS services-stable waiter, then one deployment, rolloutState COMPLETED, and the running task's
 gateway image digest the document's. The new task is the one whose startedBy is the PRIMARY
 deployment's id from update-service's answer, polled with describe-tasks while the old deployment's
-task still runs beside it. A restart ends stable again, the old task's 300 s drain included.
+task still runs beside it. A restart ends stable again, the old task's drain and stop included:
+the target group's deregistration delay, 30 s (infra/modules/cell/alb.tf, #347), then SIGTERM and
+up to the container's stopTimeout, 30 s (ecs.tf).
 
 **Clocks.** Three, never mixed without a label:
   task           the gateway's own log lines' `ts` and the metadata endpoint's StartedAt, both
@@ -49,8 +51,11 @@ prints: nothing on the cell calls /healthz during the run. "ready" labels no dep
 
 **The hop and the 302** (#286 Q139; Q7, Q10). Before each restart the script opens its own
 AWS-StartPortForwardingSessionToRemoteHost session to albDnsName:443 through the task about to be
-replaced, which outlives the new target's first checks and its drain; tools/scripts/tunnel.sh is not
-used, since its hop can be the task being measured. Once the new target is healthy it sends a
+replaced, which outlives the new target's first checks: that task is deregistered once the new
+target is healthy and stops after the 30 s drain and up to the 30 s stopTimeout, so the forward
+lasts about 30 to 60 s past target healthy, the default probe loop's own bound (--probe-attempts
+30 x --probe-interval 2.0 s). tools/scripts/tunnel.sh is not used, since its hop can be the task
+being measured. Once the new target is healthy it sends a
 cookieless navigation to app1's registry host through that forward, TLS verified against the
 authority certs.sh issued, until a 302 lands in the new task's stream. It reads the status line and
 nothing else: the 302 is the OpenID Connect challenge, whose Location holds state and whose
@@ -58,8 +63,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
 
 **Endings** (#286 Q148; Q8):
   0  ten clean restarts
-  2  a usage error or a refusal before restart 1 (no Region, no outputs document for it, no
-     credentials, a missing tool, the service not stable on gatewayImage); nothing is written
+  2  a usage error, a refusal or a failed AWS call before restart 1's update-service (no Region,
+     no outputs document for it, no credentials, a missing tool, the service not stable on
+     gatewayImage); nothing is written
   3  a breach: the scheduler stopped the new task for health, past the T0 + 60 s hard bound. No
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
@@ -69,7 +75,8 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
      marked incomplete with the reason
 
 **Secrecy** (Q7). No ARN, repository URI or account id reaches the .txt, the .json or stderr: tasks
-by id, an AWS error by its code, and every line written passed through redact().
+by id, an AWS error by its code, and every line written passed through redact(), which replaces
+each of the three with a placeholder.
 """
 
 from __future__ import annotations
@@ -124,13 +131,17 @@ class AwsError(Exception):
 # --- secrecy ---------------------------------------------------------------------------------------
 
 _ARN = re.compile(r"arn:aws[a-zA-Z-]*:[^\s\"',)]*")
+_REPOSITORY = re.compile(r"(?<![0-9])[0-9]{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/[^\s\"',)@:]*")
 _TWELVE = re.compile(r"(?<![0-9])[0-9]{12}(?![0-9])")
 
 
 def redact(text: str, account: Optional[str] = None) -> str:
-    """Every ARN becomes <arn> and every twelve-digit run <account id>, which an account id always
-    is (the rule tunnel.sh's session filter keeps). The account itself is replaced first in case it
-    sits inside a longer run of digits."""
+    """Every ECR repository URI becomes <repository> (an image keeps its @digest), every ARN <arn>
+    and every twelve-digit run <account id>, which an account id always is (the rule tunnel.sh's
+    session filter keeps), so an account other than the caller's, or one redacted before the
+    caller's is known, is still masked. The repository goes first, while its host still starts
+    with the account; then the account itself, in case it sits inside a longer run of digits."""
+    text = _REPOSITORY.sub("<repository>", text)
     if account:
         text = text.replace(account, "<account id>")
     return _TWELVE.sub("<account id>", _ARN.sub("<arn>", text))
@@ -902,8 +913,12 @@ def main(argv: List[str]) -> int:
     bench = Bench(options, region, names, say=lambda message: print(redact(f"{PROGRAM}: {message}", bench.account), flush=True))
     try:
         bench.preflight()
-        bench.say(f"ten restarts, about an hour: each runs two tasks side by side and the old one drains for 300 s "
-                  f"before the service is stable (#305 Q12)")
+        # Q12's "about an hour" rested on the provider's 300 s drain; alb.tf sets 30 s (#347). A
+        # restart now is the new task's pull and start (about 30 s), up to the T0 + 60 s third check,
+        # the probe, the 30 s drain, up to the 30 s stopTimeout, the waiter's 15 s polls and the exec
+        # read: about three minutes, so about half an hour for ten.
+        bench.say(f"ten restarts, about half an hour: each runs two tasks side by side, and the old one drains for "
+                  f"30 s and stops before the service is stable (#305 Q12, alb.tf's deregistration delay)")
     except Refused as refusal:
         err(str(refusal), bench.account)
         return EXIT_USAGE
@@ -924,6 +939,14 @@ def main(argv: List[str]) -> int:
                 # update-service was issued, so this is no refusal before restart 1 (Q8): what was
                 # measured is written, marked incomplete.
                 raise Incomplete(str(refusal)) from refusal
+            except AwsError as error:
+                # Before restart 1's update-service nothing has changed on the service, so this is
+                # preflight's ending (Endings: 2, nothing written), not an incomplete run.
+                if index == 1 and "deployment" not in bench.restarts[-1]:
+                    bench.restarts.pop()
+                    err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
+                    return EXIT_USAGE
+                raise
     except Breach as breach:
         row = breach.row
         ending, code = "breach", EXIT_BREACH

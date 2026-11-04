@@ -31,8 +31,9 @@ reads the thing it guards"): the cluster, the service, the gateway container and
 the locals in infra/modules/cell/ecs.tf.
 
 **Canaries.** The account id is in every ARN the doubles hand out (task, task definition, target
-group, the stop reason's target group); the 302 carries a `state` and a cookie. No output may hold
-any of them.
+group, the stop reason's target group) and in the gateway image's repository URI; the 302 carries a
+`state` and a cookie. No output may hold any of them, nor the repository URI with its account
+label redacted, nor "arn:aws".
 
 Run: python3 -I tools/bench/fargate_tests.py
 """
@@ -64,7 +65,7 @@ doubles = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(doubles)
 ACCOUNT, REGION, CLUSTER, SERVICE, GATEWAY = doubles.ACCOUNT, doubles.REGION, doubles.CLUSTER, doubles.SERVICE, doubles.GATEWAY
 LOG_GROUP, DIGEST, IMAGE, TG_ARN, ALB = doubles.LOG_GROUP, doubles.DIGEST, doubles.IMAGE, doubles.TG_ARN, doubles.ALB
-SECRETS, APP_HOST = doubles.SECRETS, doubles.APP_HOST
+SECRETS, APP_HOST, REPOSITORY_TAIL = doubles.SECRETS, doubles.APP_HOST, doubles.REPOSITORY_TAIL
 plan, world, task_id, save = doubles.plan, doubles.world, doubles.task_id, doubles.save
 
 
@@ -218,8 +219,8 @@ class TenCleanRestarts(CaseBase):
 
     def test_prints_the_expected_length_before_restart_1(self):
         first_update = self.result.stdout.index("restart 1/10")
-        self.assertIn("ten restarts, about an hour", self.result.stdout[:first_update])
-        self.assertIn("drains for 300 s", self.result.stdout[:first_update])
+        self.assertIn("ten restarts, about half an hour", self.result.stdout[:first_update])
+        self.assertIn("drains for 30 s and stops", self.result.stdout[:first_update])
 
     def test_the_new_task_is_the_primary_deployments_while_two_deployments_overlap(self):
         # The world lists a decoy task of another deployment first, and the old task beside the new
@@ -323,6 +324,12 @@ class TenCleanRestarts(CaseBase):
         self.assertIn("platform version 1.4.0", facts)
         self.assertIn(f"Region {REGION}", facts)
         self.assertIn("clocks: task", self.result.txt)
+        # The facts, on the .txt's line and in the .json, name the image by digest alone: no
+        # account id, raw or redacted, and no repository URI, raw, account-redacted or replaced.
+        for where, text in (("the facts line", facts), ("the .json's facts", json.dumps(self.result.json["facts"]))):
+            for absent in (ACCOUNT, "<account id>", REPOSITORY_TAIL, "<repository>", "arn:aws", "<arn>"):
+                self.assertNotIn(absent, text, f"{absent!r} is in {where}")
+            self.assertNotRegex(text, r"(?<![0-9])[0-9]{12}(?![0-9])", f"a twelve-digit run is in {where}")
 
     def test_nothing_written_holds_a_secret(self):
         self.assertNoSecrets(self.result)
@@ -412,6 +419,17 @@ class Endings(CaseBase):
         self.assertEqual("an unexpected ValueError", run.json["reason"])
         self.assertEqual([True, False], [r["complete"] for r in run.json["restarts"]])
         self.assertNotIn("Traceback", run.stderr)
+        self.assertNoSecrets(run)
+
+    def test_an_aws_failure_on_restart_1_before_its_update_service_exits_2_and_writes_nothing(self):
+        # Preflight's list-tasks is the first; restart 1's, before its update-service, the second.
+        run = run_case(world(list_tasks_fail_at_poll=2))
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertEqual(2, len(run.aws("ecs", "list-tasks")))
+        self.assertIn("an AWS call failed before restart 1 (ThrottlingException)", run.stderr)
         self.assertNoSecrets(run)
 
     def test_refusals_before_restart_1_exit_2_and_write_nothing(self):
@@ -545,6 +563,24 @@ class Arithmetic(unittest.TestCase):
         self.assertNotIn("arn:aws", text)
         # A deployment id's nineteen digits are not an account id.
         self.assertEqual("ecs-svc/2000000000000000001", fargate.redact("ecs-svc/2000000000000000001"))
+
+    def test_redact_masks_any_twelve_digit_run_without_the_known_account(self):
+        # The fallback: with no account known (main()'s first err() calls) or another account's id
+        # in the text, every twelve-digit run still becomes <account id>.
+        other = "999988887777"
+        for account in (None, ACCOUNT):
+            with self.subTest(account=account):
+                text = fargate.redact(f"role in {other}, trusted by {other}.", account)
+                self.assertEqual("role in <account id>, trusted by <account id>.", text)
+        self.assertEqual("ecs-svc/2000000000000000001 <account id>",
+                         fargate.redact(f"ecs-svc/2000000000000000001 {other}"))
+
+    def test_redact_replaces_a_repository_uri_and_keeps_the_digest(self):
+        for account in (None, ACCOUNT):
+            with self.subTest(account=account):
+                text = fargate.redact(f"image {IMAGE} pulled", account)
+                self.assertEqual(f"image <repository>@{DIGEST} pulled", text)
+                self.assertNotIn(REPOSITORY_TAIL, text)
 
 
 class TheDoubles(unittest.TestCase):
