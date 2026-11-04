@@ -75,36 +75,48 @@ public sealed class DependencyUnavailableContractTests
     public void A_refused_asset_read_is_404_and_a_refused_shell_500_as_issue_381_decided()
     {
         // Mutation: write the draft's 503 store_unavailable for a refused read, and this fails on both
-        // answers; drop the shell's answer, and it fails on shell_unavailable.
+        // answers; drop the shell's answer, and it fails on shell_unavailable; drop "never the key", the
+        // shell's Error clause or the Snapshot cell, and it fails on each.
         string row = Row(TableHeading, "The object store refuses a read");
 
         Assert.Contains("`404` `not_found`", row);
         Assert.Contains("`500` `shell_unavailable`", row);
         Assert.Contains("`Cache-Control: private, no-store`", row);
         Assert.Contains("`read_refused`", row);
+        Assert.Contains("never the key", row);
+        Assert.Contains("one Error naming the app, the release and that the store refused", row);
+        Assert.Equal("Stays", Cells(TableHeading, "The object store refuses a read")[3]);
     }
 
     [Fact]
     public void Parameter_store_unreadable_at_a_cold_start_leaves_the_gateway_not_ready_and_every_host_unknown()
     {
-        // Mutation: say /readyz answers 200 or the app paths answer 503, and this fails.
+        // Mutation: say /readyz answers 200 or the app paths answer 503, and this fails; change the
+        // Logged clause for the revision or the Snapshot cell, and it fails on that.
         string row = Row(TableHeading, "Parameter Store cannot be read at a cold start");
 
         Assert.Contains("`/readyz` stays `503`", row);
         Assert.Contains("`404` `not_found`", row);
         Assert.Contains("never the value", row);
+        Assert.Contains("one Error per poll that the revision is not applied", row);
+        Assert.Equal(
+            "There is none, and each poll reads the document again",
+            Cells(TableHeading, "Parameter Store cannot be read at a cold start")[3]);
     }
 
     [Fact]
     public void A_session_store_at_its_bound_ends_the_session_nearest_its_expiry()
     {
         // Mutation: write the draft's Information line, which MemorySessionStore does not log, and this
-        // fails on "Nothing"; say the login is refused, and it fails on the answer.
-        string row = Row(TableHeading, "The in-memory session store is at `Session:MaxSessions`");
+        // fails on the Logged cell; say the login is refused, and it fails on the answer; say the newest
+        // session is ended, and it fails on the eviction rule.
+        IReadOnlyList<string> cells = Cells(TableHeading, "The in-memory session store is at `Session:MaxSessions`");
 
-        Assert.Contains("The login succeeds", row);
-        Assert.Contains("`401` `unauthenticated`", row);
-        Assert.Contains("Nothing", row);
+        Assert.Contains("The login succeeds", cells[1]);
+        Assert.Contains("the session nearest its expiry, an expired one first, is ended", cells[1]);
+        Assert.Contains("that session's next request is `401` `unauthenticated`", cells[1]);
+        Assert.Equal("Nothing at the eviction", cells[2]);
+        Assert.Equal("Stays", cells[3]);
     }
 
     [Fact]
@@ -121,12 +133,15 @@ public sealed class DependencyUnavailableContractTests
         Assert.DoesNotContain("store_unavailable", section);
     }
 
-    private static string Row(string heading, string firstCell)
+    private static string Row(string heading, string firstCell) => string.Join(" | ", Cells(heading, firstCell));
+
+    /// <summary>The cells of the one row whose first cell starts with <paramref name="firstCell"/>: dependency, answer, logged, snapshot.</summary>
+    private static IReadOnlyList<string> Cells(string heading, string firstCell)
     {
         IReadOnlyList<IReadOnlyList<string>> rows = Rows(Section(ContractFiles.ReadText("http-contract.md"), heading));
         IReadOnlyList<string>[] matched = [.. rows.Where(row => row[0].StartsWith(firstCell, StringComparison.Ordinal))];
         Assert.True(matched.Length == 1, $"'{heading}' has {matched.Length} rows starting '{firstCell}'.");
-        return string.Join(" | ", matched[0]);
+        return matched[0];
     }
 
     /// <summary>The section's table rows, the header first and the separator left out, each as its trimmed cells.</summary>
