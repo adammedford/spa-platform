@@ -66,7 +66,8 @@ The rules, as the collect step states them:
 - touches (#665): the Touches line's paths, as tools/ticket_shape.py's touches() reads them; null
   when the body has no Touches line, [] for one naming no path. The workflow waits a ticket's
   implement behind an earlier ticket of the night whose paths overlap its own, and waits a ticket
-  with no readable path behind every earlier ticket of its lane. A parser that cannot read the line
+  with no readable path behind every ticket ahead of it in its lane's downstream-first order
+  (#706 Q1 (b)). A parser that cannot read the line
   refuses the answer, as a ticket-shape check that cannot judge does.
 - n: plan rows in the plan's order, then `issue-<number>` tickets by number.
 

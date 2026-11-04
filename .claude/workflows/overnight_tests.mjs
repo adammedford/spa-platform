@@ -31,7 +31,9 @@
 // merge still under its gate; and a run of its own, on tickets whose Touches paths overlap, proves the path waits:
 // equal paths and directory containment wait, a textual prefix does not, waits point backwards by n, a failed
 // predecessor releases its waiter, no readable path waits on its lane, a cycle with a blocked-by edge is dropped, and
-// each wait is reported with its paths and clocked minutes (#665). Five more short runs on synthetic tickets check that
+// each wait is reported with its paths and clocked minutes (#665); one more, where the lane's downstream-first order is
+// not n's, proves that a ticket with no readable path waits on the tickets ahead of it in that order, and that a wait
+// whose clock dies is reported unmeasured, never zero (#706 Q1 (b)). Five more short runs on synthetic tickets check that
 // a lane runs first the ready ticket with the most of tonight's tickets downstream, counted transitively, across lanes,
 // once per ticket and only over tickets a lane runs, ties by n (#662). One more short run has an agent die on the
 // account's usage limit, and checks that the run halts naming the reset, counts that death as no failure, lists the
@@ -145,8 +147,8 @@ const reviewCalls = {}     // id -> review calls so far, so a ticket's first and
 const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 // Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
-// above keep their meaning: a ticket with no readable path would wait on every earlier ticket of its lane. Check 33
-// runs a ticket set of its own whose paths overlap.
+// above keep their meaning: a ticket with no readable path would wait on every ticket ahead of it in its lane. Checks
+// 40 and 41 run ticket sets of their own whose paths overlap.
 for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
@@ -1706,7 +1708,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 // 40. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
 //     to start its implement until every earlier ticket by n, in any lane, whose paths are equal to or a directory
 //     holding its own has settled with any outcome; a textual prefix alone is no overlap; a ticket with no readable
-//     path waits on every earlier ticket of its lane, saying why; a wait that would close a cycle with a blocked-by edge
+//     path waits on every ticket ahead of it in its lane, saying why (here the lane's order is n's; check 41 has
+//     one where it is not); a wait that would close a cycle with a blocked-by edge
 //     is dropped; each wait is logged in the confirmed form and reported with its paths and elapsed minutes; and a
 //     conflict before any gate has passed back-merges the run base.
 {
@@ -1786,7 +1789,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!hasLine(waitLine(9, 8, 'docs, docs/x.md'))) fail(`#665: ${id(9)} did not wait on ${id(8)}, the earlier ticket by n`)
     if (waitsBehind(8, 9)) fail(`#665: ${id(8)} waited on ${id(9)}, a later ticket by n`)
     after(9, 8, 'backwards by n'); after(8, 10, 'its blocker')
-    // No readable path: every earlier ticket of its lane, and none of another lane's, with the reason.
+    // No readable path: every ticket ahead of it in its lane (by n here), and none of another lane's, with the reason.
     const reason = `every path: ${id(11)} has no readable Touches path (no Touches line, or one naming no path)`
     // Not behind issue-1001: it failed and settled before the lane was free to take issue-1011, so that wait cost nothing.
     if (!hasLine(waitLine(11, 8, reason)) || waitsBehind(11, 1)) fail(`#665: ${id(11)}, with no readable path, did not wait on every earlier ticket of its lane naming why: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(11))).map((l) => l.text)))
@@ -1875,6 +1878,83 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (!res.includes(`tip=${RUN_BASE_665}, the run base`) || !res.includes(`merge --no-ff ${RUN_BASE_665}\``)) fail('#665: a conflict before any gate passed does not back-merge the run base')
       if (res.includes(`tip=\`git -C ${fixture.args.repo} rev-parse`)) fail('#665: a conflict before any gate passed still reads the branch\'s tip as its back-merge')
     }
+  }
+}
+
+// 41. A ticket with no readable Touches path waits on the tickets ahead of it in its lane's run order, downstream first
+//     and then by n, not on every lower-n ticket of its lane (#706 Q1 (b)). One lane, the integrator's: P (n 1) has
+//     a path and nothing downstream; M (n 2) has no readable path and D downstream, so the lane takes M first; X (n 4)
+//     has no path and nothing downstream, so it comes after P by n; Q (n 5) has a path and comes last. D sits in another
+//     lane. M waits on nothing; P waits on M while M is in review and integrating (the predecessor held in flight); X
+//     waits on M and P, and its logged wait names P alone, since M has settled by then and a settled one costs no
+//     wait; Q waits on X. P's end clock dies, so its wait is reported unmeasured: minutes null, never zero (#659 Q10).
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${2000 + n}`, slug: `q${n}`, issue: 2000 + n, url: `https://example.invalid/${2000 + n}`,
+    title: `Lane order ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${2000 + n}`
+  const set = [
+    T(1, 'integrator', ['p/a.txt']),            // P: a path, nothing downstream
+    T(2, 'integrator', []),                     // M: no readable path, D downstream
+    T(3, 'ws6-verification', ['d/d.txt'], [id(2)]),   // D: needs M
+    T(4, 'integrator', []),                     // X: no readable path, nothing downstream
+    T(5, 'integrator', ['q/q.txt']),            // Q: a path, after X
+  ]
+  const ev = [], logged = [], prompts = []
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    // P's end clock dies, as an agent that returns nothing does.
+    if (kind === 'clock') return tid === id(1) && edge === 'end' ? null : { epoch: tick * 6 }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    ev.push({ at: tick, kind, id: tid, edge: 'start' })
+    await sleep(kind === 'implement' ? 20 : 40)   // review and integrate outlast an implement, so a ticket stays in flight
+    ev.push({ at: tick, kind, id: tid, edge: 'end' })
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the lane-order path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const orderTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(orderTick)
+  if (r === STALLED) fail('#706 Q1 (b): the lane-order path-wait run did not finish: a wait never released, or two waits formed a cycle')
+  else {
+    const startOf = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).at
+    const settledAt = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.at))
+    const waitsBehind = (w, b) => logged.some((l) => l.text.startsWith(`${id(w)}: waiting to start behind ${id(b)} (`))
+    const reason = (x) => `every path: ${id(x)} has no readable Touches path (no Touches line, or one naming no path)`
+    const waitLine = (w, b, why) => `${id(w)}: waiting to start behind ${id(b)} (${why})`
+    const hasLine = (s) => logged.some((l) => l.text === s)
+    const waits = Object.fromEntries((r.pathWaits || []).map((w) => [w.id, w]))
+    for (const x of [1, 2, 3, 4, 5].map(id)) if (!(r.integrated || []).includes(x)) fail(`#706 Q1 (b): ${x} did not integrate: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    // M runs first: with no readable path it waits on nothing ahead of it in its lane's order, P included.
+    if (waitsBehind(2, 1) || waits[id(2)]) fail(`#706 Q1 (b): ${id(2)}, with no readable path and the most downstream, waited behind ${id(1)}, a lower-n ticket behind it in its lane's order`)
+    if (!(startOf(id(2)) < startOf(id(1)))) fail(`#706 Q1 (b): ${id(2)} started at ${startOf(id(2))}, not before ${id(1)} at ${startOf(id(1))}: the lane did not take its downstream-first ticket first`)
+    // P waits on M, held in flight: logged with M's reason, and P starts only once M has settled.
+    if (!hasLine(waitLine(1, 2, reason(2))) || !waits[id(1)]) fail(`#706 Q1 (b): ${id(1)} did not wait behind ${id(2)}, the ticket ahead of it in its lane with no readable path: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(1))).map((l) => l.text)))
+    if (!(startOf(id(1)) >= settledAt(id(2)))) fail(`#706 Q1 (b): ${id(1)} started at ${startOf(id(1))}, before ${id(2)} settled at ${settledAt(id(2))}`)
+    // Then by n: X waits on P, which has the lower n and no more downstream, and the settled M costs it no logged wait.
+    if (!hasLine(waitLine(4, 1, reason(4)))) fail(`#706 Q1 (b): ${id(4)}, with no readable path, did not wait behind ${id(1)}, ahead of it in its lane by n`)
+    if (waits[id(4)] && waits[id(4)].behind.some((b) => b.id === id(2))) fail(`#706 Q1 (b): ${id(4)}'s wait names ${id(2)}, which had settled before its lane was free to take ${id(4)}`)
+    if (!(startOf(id(4)) >= settledAt(id(1))) || !(startOf(id(4)) >= settledAt(id(2)))) fail(`#706 Q1 (b): ${id(4)} started at ${startOf(id(4))}, before a ticket ahead of it in its lane settled`)
+    if (!(startOf(id(5)) >= settledAt(id(4)))) fail(`#706 Q1 (b): ${id(5)} started at ${startOf(id(5))}, before ${id(4)}, ahead of it with no readable path, settled at ${settledAt(id(4))}`)
+    // A clock that dies leaves the wait unmeasured, never zero, and the log says "not measured".
+    const p = waits[id(1)]
+    if (p && (p.minutes !== null || p.endEpoch !== null)) fail(`#659 Q10: ${id(1)}'s end clock died, but its wait reads ${p.minutes} minutes (endEpoch ${p.endEpoch}), not null`)
+    if (p && !logged.some((l) => l.text.startsWith('path waits: ') && l.text.includes(`\n  ${id(1)} behind ${id(2)}: not measured`))) fail(`#659 Q10: the path waits log line does not say ${id(1)}'s wait is not measured: ` + JSON.stringify((logged.find((l) => l.text.startsWith('path waits: ')) || {}).text))
+    const rep = prompts.find((x) => x.label === 'report')
+    const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+    const sw = sum && (sum.pathWaits || []).find((w) => w.id === id(1))
+    if (p && (!sw || sw.minutes !== null)) fail(`#659 Q10: the report's results do not carry ${id(1)}'s unmeasured wait as minutes null: ${JSON.stringify(sw)}`)
   }
 }
 
