@@ -28,7 +28,8 @@ namespace Platform.Identity;
 /// catches that here, for the remove alone, logs one line saying the removal is not confirmed, and lets
 /// the logout go on as usual: both cookies cleared and the provider's logout, so nothing on the wire
 /// changes (#386 Q187, Q191). A store read that fails before the remove, the cookie handler's or the
-/// one under the gate, is not caught and keeps F17's 500 (#386 Q188). The end then marks the request's
+/// one under the gate, is not caught here: the logout endpoint, or for the cookie handler's read
+/// <c>UsePlatformShellGate</c>, ends it under <c>auth.store</c> with both cookies intact (#386 Q188, #727). The end then marks the request's
 /// session ended (<see cref="AppSessions.MarkEnded"/>), so the cookie handler's sign-out makes no store
 /// call of its own (#386 Q192).
 /// </summary>
@@ -43,7 +44,8 @@ internal sealed partial class SessionEnd(
 
     public async Task EndAsync(HttpContext context, AppDefinition app, string key)
     {
-        // Entered outside the catch below: a read under the gate that fails keeps F17's 500 (#386 Q188).
+        // Entered outside the catch below: a read under the gate that fails reaches the logout endpoint,
+        // which ends it under auth.store with both cookies intact (#386 Q188, #727).
         using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
 
         // A record that is gone, or is not this app's and this client's, is owned by no turn and left

@@ -391,4 +391,11 @@ internal abstract record RefreshOutcome
     /// with <see cref="Platform.Abstractions.AccessTokenResult.ProviderUnavailable"/> too (T-D6).
     /// </summary>
     public sealed record Unavailable : RefreshOutcome;
+
+    /// <summary>
+    /// No pass held the refresh lease long enough to refresh within two times to live: the store's
+    /// bound (#332 D2). The session stands, and a waiter fails with
+    /// <see cref="Platform.Abstractions.AccessTokenResult.StoreUnavailable"/> too (#729, part 4; #727).
+    /// </summary>
+    public sealed record AtStoreBound : RefreshOutcome;
 }
